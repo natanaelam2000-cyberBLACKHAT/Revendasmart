@@ -1,3 +1,4 @@
+console.log("TESTE ALTERAÇÃO");
 import { Layout } from "@/components/layout";
 import { useState, useMemo, useEffect } from "react";
 import { Plus, Edit2, Trash2, ChevronRight, Filter, Package } from "lucide-react";
