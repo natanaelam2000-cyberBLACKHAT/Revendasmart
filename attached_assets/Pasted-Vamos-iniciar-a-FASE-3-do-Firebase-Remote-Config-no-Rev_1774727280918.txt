@@ -1,0 +1,88 @@
+Vamos iniciar a FASE 3 do Firebase Remote Config no RevendaSmart.
+
+Objetivo:
+Aplicar de forma real as flags restantes já definidas no Remote Config, aproveitando a infraestrutura pronta (listener real-time + activate + Context + hooks), sem criar feature fake e sem quebrar fluxos atuais.
+
+Escopo desta fase:
+1. Aplicar onboarding_v2_enabled de forma real
+2. Aplicar insights_enabled de forma real
+3. Preparar referral_program_enabled sem inventar UI completa, apenas se houver base existente
+4. Validar build ao final
+5. Entregar resumo executivo honesto
+
+Regras importantes:
+- não criar feature fictícia só para “usar a flag”
+- se não existir base real para uma feature, marcar como PENDENTE
+- manter fallback seguro quando a flag estiver false
+- não mexer em lógica crítica financeira, auth, ownership ou segurança
+- usar a infraestrutura já pronta:
+  - useFeatureEnabled(...)
+  - useRemoteFlag(...)
+  - RemoteConfigProvider
+- diferenciar claramente:
+  - IMPLEMENTADO
+  - PARCIAL
+  - PENDENTE
+
+Execução esperada:
+
+PARTE 1 — onboarding_v2_enabled
+1. Auditar client/src/pages/onboarding.tsx e componentes relacionados
+2. Ver se já existe estrutura suficiente para uma V2 real:
+   - nova ordem de blocos
+   - dicas extras
+   - variação de texto/layout
+   - stepper melhorado
+3. Se existir base suficiente:
+   - aplicar a flag onboarding_v2_enabled para alternar entre experiência atual e experiência V2 real
+4. Se não existir uma V2 completa:
+   - implementar uma melhoria real, pequena e segura, por exemplo:
+     - bloco adicional de dicas
+     - checklist inicial
+     - card “como aproveitar melhor”
+     - orientação extra no final
+   - essa melhoria deve aparecer apenas quando onboarding_v2_enabled=true
+5. Não reescrever tudo do onboarding sem necessidade
+
+PARTE 2 — insights_enabled
+1. Auditar dashboard.tsx e verificar se existe base de dados para insights reais
+2. Procurar dados já disponíveis que permitam mostrar insights simples e verdadeiros, como:
+   - produto com menor estoque
+   - total de clientes cadastrados
+   - total de vendas recentes
+   - produto com maior preço
+   - quantidade de cobranças pendentes
+3. Se houver base real:
+   - criar uma seção de insights simples no dashboard
+   - exibir somente quando insights_enabled=true
+4. Se não houver base suficiente:
+   - não inventar números
+   - marcar como PENDENTE com justificativa técnica
+
+PARTE 3 — referral_program_enabled
+1. Verificar se já existe alguma base visual, rota, card, CTA ou estrutura
+2. Se existir algo real:
+   - aplicar a flag
+3. Se não existir:
+   - não criar sistema de referral falso
+   - no máximo preparar ponto de extensão pequeno e honesto
+   - marcar como PENDENTE
+
+Critérios de sucesso:
+- onboarding_v2_enabled controla uma diferença real na UI
+- insights_enabled controla uma seção real e útil no dashboard, se houver dados verdadeiros
+- nenhuma feature inventada ou enganosa
+- build passa sem erros
+- resumo final tecnicamente honesto
+
+Entrega esperada:
+- arquivos alterados
+- flags realmente aplicadas
+- o que ficou parcial
+- o que ficou pendente
+- testes manuais sugeridos
+- riscos remanescentes
+
+Importante:
+Comece auditando onboarding.tsx e dashboard.tsx antes de implementar.
+Priorize profundidade e honestidade técnica.

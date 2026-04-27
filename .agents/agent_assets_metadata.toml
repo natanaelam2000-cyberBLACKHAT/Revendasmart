@@ -1,0 +1,26 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "fPDZaulaPryCN8sfQ7Kht"
+uri = "file://client/public/icons/icon-1024x1024.png"
+type = "image"
+title = "RevendaSmart official app icon high resolution"
+
+[[generated]]
+id = "wgoW7XEUeIuTEGL-XYGqf"
+uri = "file://client/public/icons/icon-512x512.png"
+type = "image"
+title = "RevendaSmart app icon 512x512 medium resolution"
+
+[[generated]]
+id = "nC4RncFau8Vc_NKvjyR8F"
+uri = "file://client/public/icons/icon-256x256.png"
+type = "image"
+title = "RevendaSmart app icon 256x256 medium-small"
+
+[[generated]]
+id = "7iECEGtqFD_I941lTUFGL"
+uri = "file://client/public/icons/icon-192x192.png"
+type = "image"
+title = "RevendaSmart app icon 192x192 Android"

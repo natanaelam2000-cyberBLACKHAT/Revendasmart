@@ -1,0 +1,93 @@
+Quero seguir com esta estratégia de analytics no RevendaSmart:
+
+OBJETIVO
+Manter o tracking customizado atual em /analytics_events/ como telemetria interna opcional
+E, em paralelo, implementar o Firebase Analytics oficial para Web para os eventos principais do produto.
+
+IMPORTANTE
+Não quero substituir tudo.
+Quero manter os dois níveis:
+
+1. Telemetria interna opcional
+- /analytics_events/
+- útil para debug interno
+- útil para auditoria crua
+- útil para rastrear contexto mais detalhado se necessário
+
+2. Firebase Analytics oficial
+- usar a integração correta do Firebase Analytics para Web
+- usar getAnalytics()
+- usar logEvent()
+- usar isso para os eventos principais do produto
+
+==================================================
+FASE 1 — MANTER O CUSTOM TRACKING
+==================================================
+
+Quero preservar o que já foi feito em /analytics_events/.
+Mas quero deixar claro no código que isso é:
+- telemetria interna
+- event logging customizado
+- opcional
+- complementar ao Analytics oficial
+
+Se necessário:
+- ajustar nomes/comentários para deixar isso claro
+- evitar confusão com “Analytics oficial”
+
+==================================================
+FASE 2 — IMPLEMENTAR FIREBASE ANALYTICS OFICIAL PARA WEB
+==================================================
+
+Quero implementar o Firebase Analytics oficial corretamente no frontend web.
+
+O que quero:
+- inicialização correta no projeto
+- integração limpa
+- sem quebrar a arquitetura atual
+- usar eventos principais do produto
+
+==================================================
+EVENTOS PRINCIPAIS A IMPLEMENTAR NO ANALYTICS OFICIAL
+==================================================
+
+Quero começar por estes eventos:
+
+- login
+- sign_up
+- product_created
+- client_created
+- sale_registered
+- payment_link_generated
+- payment_link_copied
+- catalog_link_shared
+- ad_shared
+- ad_text_copied
+
+Se algum nome precisar ser adaptado para ficar melhor no Analytics oficial, pode ajustar, mas mantendo coerência com o produto.
+
+==================================================
+REGRAS IMPORTANTES
+==================================================
+
+- não remover /analytics_events/
+- não quebrar o build
+- não criar arquitetura confusa
+- não duplicar lógica desnecessariamente
+- manter separação clara entre:
+  - telemetria interna customizada
+  - analytics oficial do Firebase
+
+Quero código organizado e com nomes claros.
+
+==================================================
+ENTREGA FINAL
+==================================================
+
+No final quero:
+1. como ficou separada a telemetria customizada do Analytics oficial
+2. quais arquivos foram alterados
+3. onde o Firebase Analytics oficial foi inicializado
+4. quais eventos principais foram instrumentados
+5. confirmação de build
+6. recomendação da próxima etapa depois disso

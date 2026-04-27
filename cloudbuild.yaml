@@ -1,0 +1,65 @@
+# Cloud Build pipeline — builds Docker image and deploys to Cloud Run
+# Trigger: push to main branch (configure in Cloud Build console)
+#
+# Required substitutions (set in Cloud Build trigger):
+#   _REGION           — e.g. us-central1
+#   _SERVICE_NAME     — e.g. revendasmart-backend
+#   _PROJECT_ID       — your GCP project ID
+#
+# Required secrets must be created in Secret Manager before first deploy.
+# See CLOUD_RUN_MIGRATION.md → Section C for secret setup commands.
+
+steps:
+  # Step 1: Build Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$COMMIT_SHA'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}:latest'
+      - '.'
+    id: 'build-image'
+
+  # Step 2: Push image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$COMMIT_SHA'
+    id: 'push-image'
+    waitFor: ['build-image']
+
+  # Step 3: Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_SERVICE_NAME}'
+      - '--image=gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$COMMIT_SHA'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--port=8080'
+      - '--memory=512Mi'
+      - '--cpu=1'
+      - '--concurrency=80'
+      - '--min-instances=0'
+      - '--max-instances=10'
+      - '--timeout=300s'
+      # Secrets from Secret Manager (format: ENV_VAR=secret-name:latest)
+      - '--set-secrets=MERCADOPAGO_ACCESS_TOKEN=MERCADOPAGO_ACCESS_TOKEN:latest,MERCADOPAGO_CLIENT_ID=MERCADOPAGO_CLIENT_ID:latest,MERCADOPAGO_CLIENT_SECRET=MERCADOPAGO_CLIENT_SECRET:latest,MERCADOPAGO_TOKEN_ENCRYPTION_KEY=MERCADOPAGO_TOKEN_ENCRYPTION_KEY:latest,MERCADOPAGO_WEBHOOK_SECRET=MERCADOPAGO_WEBHOOK_SECRET:latest,FIREBASE_PROJECT_ID=FIREBASE_PROJECT_ID:latest,FIREBASE_CLIENT_EMAIL=FIREBASE_CLIENT_EMAIL:latest,FIREBASE_PRIVATE_KEY=FIREBASE_PRIVATE_KEY:latest'
+      # Non-sensitive env vars (can be plain text)
+      - '--set-env-vars=NODE_ENV=production,PORT=8080,FRONTEND_URL=https://revendasmart.vercel.app,PREMIUM_PRICE_BRL=19.9'
+      # APP_BASE_URL and MERCADOPAGO_REDIRECT_URI must be updated after first deploy
+      # Use a second deploy step or update manually in Cloud Run console
+    id: 'deploy-cloud-run'
+    waitFor: ['push-image']
+
+images:
+  - 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/${_SERVICE_NAME}:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'

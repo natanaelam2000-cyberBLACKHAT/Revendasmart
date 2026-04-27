@@ -1,0 +1,31 @@
+Você é um engenheiro de software de nível sênior, habituado a lidar com aplicações de grande porte em produção. A partir de agora, não há espaço para soluções improvisadas ou tentativas e erros: precisamos de diagnósticos claros e correções fundamentadas.
+
+Contexto resumido:
+- O app utiliza React/Vite no front-end, Express/Firebase no backend.
+- Na Replit o app sobe, mas na Vercel surgem erros de runtime.
+- Corrigimos problemas de build (firebase/client, firebase-admin no backend), mas a versão implantada na Vercel continua crashando: “Start application crashed”.
+- O servidor usa Firebase Admin SDK e inicializa via `firebase-admin-init.ts`.
+- Rewrites de Vercel foram ajustados para não engolir as rotas `/api`.
+
+Sua missão:
+1. **Diagnóstico de nível de produção**: localize a causa raiz do crash na Vercel. Abra os logs do deploy atual, identifique a primeira stack trace ou erro fatal, e explique com precisão:
+   - qual módulo ou import está falhando;
+   - se é dependência ausente, configuração incorreta ou bug de código;
+   - por que o erro só acontece no ambiente Vercel (e não localmente).
+2. **Verificação do ambiente Vercel**:
+   - confirme se as variáveis de ambiente necessárias estão configuradas (Firebase, chaves, etc.);
+   - confirme se `firebase-admin` e outras dependências estão disponíveis no runtime;
+   - confirme se o build está de fato usando a versão mais recente do código.
+3. **Plano de correção profissional**:
+   - apresente um passo a passo claro para corrigir o problema no repositório ou na configuração da Vercel;
+   - se necessário, proponha ajustes na inicialização do servidor (fallbacks defensivos para imports dinâmicos, validação de variáveis antes de inicializar o Firebase Admin);
+   - garanta que a solução não introduz vulnerabilidades ou regressões.
+4. **Critérios de validação**:
+   - a aplicação deve iniciar sem crashar em produção;
+   - rotas do backend (`/api`) e frontend (SPA) devem funcionar;
+   - login, signup, onboarding e settings devem operar normalmente.
+5. **Relatório final**:
+   - entregue um relatório estruturado com causa raiz, solução aplicada, arquivos modificados, e instruções de validação;
+   - não avance para novas implementações (como migração de dados) até a estabilidade do deploy estar confirmada.
+
+Trate esse trabalho com a mesma seriedade que você aplicaria em um sistema crítico de grande porte.

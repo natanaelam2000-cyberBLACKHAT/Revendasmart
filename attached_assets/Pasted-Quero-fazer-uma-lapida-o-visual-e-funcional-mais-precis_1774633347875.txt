@@ -1,0 +1,157 @@
+Quero fazer uma lapidação visual e funcional mais precisa em 2 áreas do RevendaSmart. O objetivo agora não é só corrigir bug, é melhorar a experiência e deixar a interface equilibrada, bonita e prática no mobile.
+
+ÁREAS:
+1. Registrar Venda
+2. Gerar Link de Pagamento
+
+==================================================
+1) REGISTRAR VENDA — FECHAMENTO DA VENDA
+==================================================
+
+PROBLEMA ATUAL
+A tela ainda está visualmente desequilibrada:
+- a opção “À vista” continua parecendo maior / mais pesada visualmente
+- a opção “A prazo” continua com outro comportamento visual
+- o bloco todo de fechamento ainda parece irregular
+- quero uma aparência mais premium, organizada e proporcional
+
+O que quero:
+- revisar o layout completo do bloco “Fechamento da venda”
+- deixar “À vista” e “A prazo” com o MESMO peso visual
+- os dois botões devem ter:
+  - mesma altura
+  - mesma largura
+  - mesmo alinhamento
+  - mesma centralização
+  - mesmo espaçamento interno
+  - mesma borda / radius
+- evitar que um estado pareça visualmente muito maior que o outro
+
+QUERO UMA SOLUÇÃO MELHOR:
+- não quero só trocar tamanho de botão
+- quero reorganizar melhor o bloco para que:
+  - o layout de “À vista” fique elegante
+  - o layout de “A prazo” também fique elegante
+  - ambos pareçam parte da mesma estrutura
+- se precisar, use uma área fixa de detalhes para ambos os modos
+- o conteúdo abaixo dos botões deve manter o mesmo ritmo visual
+
+REVISAR:
+- espaçamento entre título, total, seletor de tipo e cards
+- altura dos cards internos
+- respiro lateral
+- distância entre o card verde/azul e o botão final
+- alinhamento do botão “Finalizar venda”
+
+OBJETIVO VISUAL:
+- tela mais premium
+- mais equilíbrio
+- mais coerência
+- menos sensação de “um modo ficou maior que o outro”
+
+IMPORTANTE:
+- não quebrar cálculo
+- não quebrar venda à vista
+- não quebrar venda a prazo
+- não mexer na lógica financeira além do necessário para layout
+
+==================================================
+2) COBRANÇA — MODAL “GERAR LINK DE PAGAMENTO”
+==================================================
+
+PROBLEMA ATUAL
+A modal está grande demais verticalmente.
+No mobile / viewport menor:
+- fica apertada
+- o botão final de concluir/gerar não aparece direito
+- a experiência fica ruim
+- falta funcionalidade visual
+- precisa ficar menor, mais elegante e mais usável
+
+O que quero:
+- reduzir a altura visual da modal
+- melhorar distribuição dos campos
+- deixar a modal mais compacta sem perder clareza
+- garantir que a ação principal (gerar link / concluir) fique visível ou muito acessível
+
+SOLUÇÃO DE UX QUE EU QUERO
+Revisar:
+- padding interno
+- altura dos inputs
+- espaçamento vertical entre campos
+- título/subtítulo
+- tamanho do cabeçalho
+- tamanho do close button
+- estrutura geral do formulário
+
+Se fizer sentido:
+- deixar a área dos campos rolável e o rodapé fixo
+ou
+- deixar botão de ação fixo no final da modal
+ou
+- reduzir espaços mortos para caber melhor
+
+O mais importante:
+- o botão principal precisa ficar funcional e fácil de alcançar
+- a modal precisa parecer mais limpa, compacta e profissional
+- não quero uma modal enorme que exige rolagem ruim
+
+REVISAR CAMPOS:
+- Conta Mercado Pago
+- Cliente
+- Descrição do pagamento
+- Valor
+- Título interno
+
+Se houver excesso de espaço vertical, reduzir.
+
+==================================================
+3) REGRAS IMPORTANTES
+==================================================
+
+NÃO quero:
+- gambiarra
+- simplesmente diminuir fonte sem pensar no layout
+- quebrar responsividade
+- esconder botão de ação
+- solução improvisada
+
+Quero:
+- lapidação real de UX
+- visual premium
+- boa leitura
+- boa proporção
+- boa experiência em mobile
+
+==================================================
+4) DIAGNÓSTICO + IMPLEMENTAÇÃO
+==================================================
+
+Quero que você:
+1. identifique por que o bloco de venda ainda está desbalanceado visualmente
+2. identifique por que a modal de gerar link está excessivamente alta
+3. faça a correção com foco em UX
+4. valide build
+5. confirme que os fluxos continuam funcionando
+
+==================================================
+5) VALIDAÇÃO OBRIGATÓRIA
+==================================================
+
+Confirmar no final:
+- “À vista” e “A prazo” ficaram equilibrados visualmente
+- fechamento da venda ficou mais bonito e proporcional
+- modal de gerar link ficou menor e mais funcional
+- botão principal da modal ficou visível/acessível
+- build passou sem erro
+
+==================================================
+6) ENTREGA FINAL
+==================================================
+
+No final quero:
+- causa raiz do desequilíbrio visual da venda
+- causa raiz da modal grande demais
+- arquivos alterados
+- o que foi refinado
+- confirmação de build

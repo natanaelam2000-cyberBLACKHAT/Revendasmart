@@ -1,0 +1,171 @@
+Quero que você faça uma AUDITORIA TÉCNICA COMPLETA no app inteiro e me entregue um RELATÓRIO DETALHADO de tudo que não está funcionando, está inconsistente, está frágil ou está atrapalhando o funcionamento correto da aplicação.
+
+IMPORTANTE:
+Não quero correção agora.
+Não quero patch agora.
+Não quero solução apressada.
+Primeiro quero apenas diagnóstico técnico completo, com rastreio real da arquitetura e dos fluxos.
+
+OBJETIVO:
+Mapear todos os problemas que afetam estabilidade, autenticação, persistência, navegação, sincronização, carregamento de dados, experiência do usuário, deploy e funcionamento real no ambiente atual.
+
+ESCOPO DA AUDITORIA:
+Analise todo o projeto, incluindo frontend, backend, integrações, Firebase, Firestore, localStorage, rotas, hooks, providers, páginas, serviços, helpers, inicialização da aplicação e comportamento em produção.
+
+QUERO QUE VOCÊ INVESTIGUE E RELATE, NO MÍNIMO:
+
+1. AUTENTICAÇÃO
+- Verifique todo o fluxo de login, signup, logout, sessão persistida e recuperação de sessão.
+- Identifique qualquer mistura entre Firebase Auth, localStorage mock, sessão manual, fallback antigo ou lógica duplicada.
+- Liste arquivos, funções e trechos onde a autenticação está inconsistente.
+- Aponte conflitos entre fonte de verdade real e fonte de verdade legada.
+
+2. PERSISTÊNCIA DE DADOS
+- Verifique onde cada tipo de dado é salvo e lido:
+  - produtos
+  - clientes
+  - vendas
+  - parcelas
+  - posts
+  - configurações
+  - onboarding
+  - sessão
+- Separe claramente o que está em:
+  - localStorage
+  - Firestore
+  - estado em memória
+  - mocks
+- Identifique dados que somem ao trocar de domínio, atualizar página, trocar usuário ou fazer novo deploy.
+- Aponte dependências frágeis de localStorage que atrapalham o app em produção.
+
+3. MISTURA DE ARQUITETURA
+- Procure qualquer convivência entre arquitetura real e arquitetura mock.
+- Identifique funções antigas que ainda estão sendo usadas de forma indevida.
+- Liste imports problemáticos, duplicações de responsabilidade e caminhos legados que deveriam estar mortos mas continuam ativos.
+- Aponte funções que ainda dependem de estruturas antigas como rs:users ou similares.
+
+4. NAVEGAÇÃO E ROTAS
+- Verifique se o app redireciona corretamente após:
+  - login
+  - signup
+  - onboarding
+  - logout
+- Identifique loops, redirecionamentos incorretos, páginas órfãs, rotas protegidas mal implementadas e qualquer quebra de fluxo.
+- Informe se há rotas acessíveis sem autenticação quando não deveriam.
+- Informe se há rotas bloqueadas indevidamente.
+
+5. CARREGAMENTO DE DADOS
+- Verifique páginas que dependem de dados do usuário e podem abrir vazias, quebradas ou com estado incorreto.
+- Identifique telas que assumem existência de dados sem tratar estado inicial vazio.
+- Procure bugs de hydration, loading infinito, null/undefined, race conditions e hooks executando fora de ordem.
+- Aponte páginas que quebram em usuário novo.
+
+6. FIREBASE / FIRESTORE
+- Verifique se a integração com Firebase Auth está consistente em todo o projeto.
+- Verifique leitura e gravação no Firestore.
+- Identifique coleções e documentos realmente usados.
+- Aponte qualquer divergência entre estrutura esperada e estrutura real.
+- Verifique se existem falhas por permissões, ausência de documento, nome de coleção inconsistente ou campos divergentes.
+- Verifique o fluxo de onboarding_completed e user_settings.
+
+7. ESTADO GLOBAL / HOOKS / CONTEXTO
+- Analise hooks customizados, providers e contextos.
+- Identifique dependências quebradas, estado duplicado, dependência circular, uso incorreto de useEffect, caching frágil e invalidação ausente.
+- Aponte qualquer hook que use duas fontes de verdade ao mesmo tempo.
+- Identifique onde o estado do usuário pode ficar dessincronizado.
+
+8. EXPERIÊNCIA REAL DO USUÁRIO
+- Liste tudo que para o usuário final parece “app quebrado”, como:
+  - tela vazia
+  - botão que não responde
+  - loading sem fim
+  - erro silencioso
+  - mensagem errada
+  - dados que desaparecem
+  - cadastro que parece funcionar mas não funciona
+  - login aceito mas dashboard quebrado
+- Me diga quais problemas são mais graves na prática.
+
+9. PRODUÇÃO / VERCEL / AMBIENTE
+- Analise especificamente diferenças entre ambiente local/Replit e Vercel/produção.
+- Identifique tudo que funciona localmente mas quebra no deploy.
+- Verifique dependências de domínio, localStorage por domínio, variáveis de ambiente, rotas, build e comportamento pós-build.
+- Relate qualquer comportamento mascarado em desenvolvimento.
+
+10. CÓDIGO MORTO / TÉCNICO / DÍVIDA
+- Liste arquivos, funções, helpers, mocks, fluxos e imports que parecem obsoletos, redundantes ou perigosos.
+- Identifique pontos que hoje confundem a manutenção.
+- Aponte onde a arquitetura está contraditória.
+- Separe o que é:
+  - bug real
+  - risco técnico
+  - dívida técnica
+  - comportamento temporário aceitável
+  - comportamento incorreto crítico
+
+FORMATO EXATO DA RESPOSTA:
+Quero a resposta em formato de RELATÓRIO TÉCNICO, organizada assim:
+
+1. RESUMO EXECUTIVO
+- visão geral do estado do app
+- principais causas dos problemas
+- quais são os bloqueios mais graves
+
+2. MAPA DA ARQUITETURA REAL
+- autenticação
+- sessão
+- persistência
+- rotas
+- dados por módulo
+- fontes de verdade atuais
+
+3. LISTA DE PROBLEMAS ENCONTRADOS
+Para cada problema, informar:
+- título do problema
+- severidade: crítica / alta / média / baixa
+- impacto no app
+- causa raiz
+- arquivos envolvidos
+- funções envolvidas
+- comportamento atual
+- comportamento esperado
+- evidência técnica
+
+4. CONTRADIÇÕES DE ARQUITETURA
+- onde o app mistura abordagens incompatíveis
+- onde há duplicidade de responsabilidade
+- onde a arquitetura atual está se sabotando
+
+5. PROBLEMAS QUE AFETAM PRODUÇÃO
+- tudo que atrapalha funcionamento real na Vercel
+- diferenças entre domínio antigo e novo
+- tudo que some, quebra ou fica inconsistente em produção
+
+6. PRIORIDADE DE CORREÇÃO
+- ordenar do que mais bloqueia o app para o que menos bloqueia
+- sem corrigir ainda, apenas priorizar
+
+7. RISCOS OCULTOS
+- bugs que talvez ainda não explodiram, mas estão prestes a causar problema
+
+REGRAS IMPORTANTES:
+- Não invente.
+- Não assuma sem verificar.
+- Não simplifique demais.
+- Não me entregue resposta superficial.
+- Não me dê apenas opinião.
+- Quero rastreio real do código.
+- Cite arquivos, funções, fluxos e relações entre eles.
+- Se houver dúvida, explicite a dúvida.
+- Se algo não puder ser comprovado, diga claramente.
+- Diferencie fato confirmado de hipótese.
+
+ANTES DE TERMINAR:
+- Revise se ainda existe qualquer fluxo legado influenciando o app.
+- Revise se existe qualquer ponto onde o app depende de localStorage de forma perigosa.
+- Revise se existe qualquer divergência entre autenticação, sessão e dados do usuário.
+- Revise se existe qualquer tela que quebra para usuário novo.
+- Revise se existe qualquer trecho que localmente parece ok, mas em produção é frágil.
+
+ENTREGA FINAL:
+Quero um diagnóstico profundo, técnico, honesto e completo do estado atual do app, antes de qualquer correção.

@@ -1,0 +1,59 @@
+O catálogo ficou bem distante da referência enviada. Preciso de um refinamento forte para aproximar visualmente do modelo.
+
+Problemas da versão atual:
+- ficou com aparência de grid simples, não de catálogo premium
+- botão “Compartilhar” ficou grande demais e com estilo errado
+- botão “Adicionar” não apareceu como na referência
+- faltam selos e badges visuais (promo, gênero, estoque)
+- tipografia e preços estão sem a mesma hierarquia da referência
+- espaçamento e acabamento dos cards ainda estão fracos
+- filtros e barras superiores não estão fiéis ao layout desejado
+- há card quebrado / imagem falhando (ex.: “Teste 9”)
+
+Quero um refino visual forte, focando em fidelidade à referência.
+
+Ajustar:
+
+1) Estrutura do topo
+- cabeçalho “Catálogo”
+- barra superior suave para compartilhar catálogo
+- campo de busca mais refinado
+- duas linhas de filtros:
+  - linha 1: Todos / Feminino / Masculino / Unissex
+  - linha 2: categorias
+- manter visual delicado, limpo e premium
+
+2) Cards de produto
+Quero os cards mais próximos possível da referência:
+- imagem grande no topo
+- selos pequenos sobre a imagem (promo, gênero, etc.)
+- marca e categoria pequenas acima do nome
+- nome do produto com boa hierarquia
+- preço antigo riscado pequeno
+- preço atual destacado em rosa/vermelho suave
+- status de estoque discreto abaixo
+- botão “Compartilhar” pequeno e elegante
+- botão “Adicionar” destacado na parte inferior do card
+- cantos arredondados, sombra suave e melhor espaçamento interno
+
+3) Fidelidade visual
+- aproximar cores, proporções, espaçamento e hierarquia da referência
+- deixar com aparência comercial, bonita e vendável
+- não quero botão verde grande
+- quero os dois botões separados como no modelo:
+  - Compartilhar
+  - Adicionar
+
+4) Robustez
+- corrigir cards com imagem quebrada
+- se não tiver imagem, usar placeholder bonito e consistente
+- não deixar card estourado ou desalinhado
+
+5) Dados reais
+- manter usando Firestore
+- filtros e busca continuam funcionando de verdade
+
+Entregar:
+- diff resumido por arquivo
+- confirmação de build
+- dizer exatamente quais pontos visuais foram ajustados para aproximar da referência

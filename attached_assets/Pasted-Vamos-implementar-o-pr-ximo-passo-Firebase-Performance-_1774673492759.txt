@@ -1,0 +1,75 @@
+Vamos implementar o próximo passo: Firebase Performance Monitoring no RevendaSmart web.
+
+CONTEXTO
+O app é web.
+Quero implementar Firebase Performance Monitoring de forma correta, limpa e útil.
+Depois disso, vamos fazer outra auditoria geral no app inteiro para buscar gargalos, irregularidades e bugs.
+
+OBJETIVO
+Adicionar Firebase Performance Monitoring ao app web para medir:
+- carregamento inicial
+- page load
+- requisições HTTP/S
+- operações críticas do produto
+- possíveis gargalos reais de uso
+
+==================================================
+FASE 1 — INTEGRAÇÃO OFICIAL DO FIREBASE PERFORMANCE PARA WEB
+==================================================
+
+Quero usar a integração oficial do Firebase Performance Monitoring para web.
+
+O que quero:
+- inicialização correta junto da configuração do Firebase
+- sem quebrar auth, firestore, analytics, app check ou telemetria
+- estrutura organizada no código
+- build passando
+
+==================================================
+FASE 2 — MÉTRICAS AUTOMÁTICAS
+==================================================
+
+Quero garantir medição automática de:
+- page load
+- requisições HTTP/S
+- navegação e carregamento das páginas principais
+
+==================================================
+FASE 3 — CUSTOM TRACES ÚTEIS
+==================================================
+
+Quero adicionar traces úteis nas operações mais importantes do produto.
+
+Prioridade para:
+1. gerar link de pagamento
+2. registrar venda
+3. salvar configurações do catálogo
+4. criar cliente
+5. criar produto
+6. carregar catálogo público
+
+Quero traces simples, úteis e sem exagero.
+
+==================================================
+REGRAS IMPORTANTES
+==================================================
+
+- usar Firebase Performance Monitoring oficial para web
+- não criar arquitetura confusa
+- não exagerar na quantidade de traces
+- manter consistência com o restante do app
+- build precisa continuar passando
+- não quebrar fluxos que já funcionam
+
+==================================================
+ENTREGA FINAL
+==================================================
+
+No final quero:
+1. diagnóstico da integração de Performance para web
+2. arquivos alterados
+3. onde o Firebase Performance foi inicializado
+4. quais métricas automáticas ficaram ativas
+5. quais custom traces foram adicionados
+6. confirmação de build
+7. recomendação objetiva da auditoria geral que faremos em seguida

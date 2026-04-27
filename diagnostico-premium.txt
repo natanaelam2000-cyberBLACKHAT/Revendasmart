@@ -1,0 +1,2864 @@
+===== PROJECT =====
+/home/natanaelam2000/Revendasmart
+Your active configuration is: [cloudshell-31907]
+revendasmart-backend-prod
+revendasmart-backend-prod
+
+===== ROUTES =====
+import type { Express, Request, Response, NextFunction } from "express";
+import { createServer, type Server } from "http";
+import { storage } from "./storage";
+import { initializeFirebaseAdmin, getFirebaseAdmin } from "./firebase-admin-init";
+import { registerPaymentRoutes } from "./payments";
+import { registerConnectionRoutes } from "./mercadopago-connections";
+import { registerSubscriptionRoutes } from "./subscriptions";
+import { getGlobalConfig, setGlobalConfig } from "./subscriptions";
+
+// Helper: Structured error response with audit context
+function errorResponse(
+  res: Response,
+  statusCode: number,
+  errorType: string,
+  message: string,
+  context?: Record<string, any>
+) {
+  const timestamp = new Date().toISOString();
+  const errorId = Math.random().toString(36).substring(7);
+
+  console.error(`[${timestamp}] ERROR-ID: ${errorId}`, {
+    status: statusCode,
+    errorType,
+    message,
+    context,
+  });
+
+  return res.status(statusCode).json({
+    error: errorType,
+    message,
+    errorId,
+    timestamp,
+    ...(context && { context }),
+  });
+}
+
+// Middleware: verify Firebase ID token and attach uid to request
+async function requireAuth(req: Request, res: Response, next: NextFunction) {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith("Bearer ")) {
+      console.warn("[auth] Missing Authorization header for:", req.path);
+      return res.status(401).json({ error: "Unauthorized: missing token" });
+    }
+    const token = authHeader.slice(7);
+    const admin = getFirebaseAdmin();
+    const decoded = await admin.auth().verifyIdToken(token);
+    (req as any).firebaseUid = decoded.uid;
+    next();
+  } catch (e) {
+    console.warn("[auth] Token verification failed:", (e as any)?.message);
+    return res.status(401).json({ error: "Unauthorized: invalid token" });
+  }
+}
+
+// Middleware: verify the authenticated user owns the resource
+function requireOwnership(req: Request, res: Response, next: NextFunction) {
+  const firebaseUid = (req as any).firebaseUid;
+  const { userId } = req.params;
+
+  if (firebaseUid && userId && firebaseUid !== userId) {
+    return res.status(403).json({ error: "Forbidden: you can only access your own data" });
+  }
+
+  next();
+}
+
+// Middleware: verify admin role via Firebase custom claims (primary) + fallback for migration
+async function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  const firebaseUid = (req as any).firebaseUid;
+
+  const ADMIN_UIDS_LEGACY = new Set([
+    "natanaelam2000@gmail.com",
+  ]);
+
+  try {
+    const admin = getFirebaseAdmin();
+    const userRecord = await admin.auth().getUser(firebaseUid);
+    const isAdminClaim = userRecord.customClaims?.["admin"] === true;
+
+    if (isAdminClaim) {
+      console.log("[requireAdmin] Access granted via custom claim for:", firebaseUid);
+      next();
+      return;
+    }
+
+    if (ADMIN_UIDS_LEGACY.has(userRecord.email || "")) {
+      console.warn(
+        "[requireAdmin] MIGRATION: Using legacy email check (deprecated) for:",
+        userRecord.email,
+        "— Set custom claim to remove fallback"
+      );
+      next();
+      return;
+    }
+
+    console.warn("[requireAdmin] Access denied for non-admin user:", firebaseUid, "email:", userRecord.email);
+    return res.status(403).json({ error: "Forbidden: admin access required" });
+  } catch (e) {
+    console.error("[requireAdmin] Error checking admin status:", e);
+    return res.status(401).json({ error: "Unauthorized: could not verify admin status" });
+  }
+}
+
+// Rate limit map: tracks grant requests per admin
+const grantRateLimitMap = new Map<string, { count: number; resetAt: number }>();
+function checkGrantRateLimit(adminUid: string): boolean {
+  const now = Date.now();
+  const limit = grantRateLimitMap.get(adminUid);
+
+  if (!limit || now > limit.resetAt) {
+    grantRateLimitMap.set(adminUid, { count: 1, resetAt: now + 60000 });
+    return true;
+  }
+
+  if (limit.count >= 5) {
+    return false;
+  }
+
+  limit.count++;
+  return true;
+}
+
+export async function registerRoutes(
+  httpServer: Server,
+  app: Express
+): Promise<Server> {
+  await initializeFirebaseAdmin();
+
+  registerPaymentRoutes(app, requireAuth);
+  registerConnectionRoutes(app, requireAuth);
+  registerSubscriptionRoutes(app, requireAuth);
+
+  // GET /api/user/settings/:userId
+  app.get("/api/user/settings/:userId", requireAuth, requireOwnership, async (req, res) => {
+    const userId = req.params.userId;
+
+    try {
+      if (!userId) {
+        return res.status(400).json({ error: "userId required" });
+      }
+
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+
+      const settingsDoc = await db.collection("user_settings").doc(userId).get();
+      const settings = settingsDoc.exists ? settingsDoc.data() : {};
+
+      return res.json({
+        onboarding_completed: settings?.onboarding_completed === true,
+        settings,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      return errorResponse(
+        res,
+        500,
+        "SETTINGS_LOAD_FAILED",
+        msg,
+        { userId, errorName: error instanceof Error ? error.name : "UnknownError" }
+      );
+    }
+  });
+
+  // POST /api/user/settings/:userId
+  app.post("/api/user/settings/:userId", requireAuth, requireOwnership, async (req, res) => {
+    const userId = req.params.userId;
+    let body: any = req.body;
+    let referrerExists = false;
+
+    try {
+      console.log("[/api/user/settings POST] userId:", userId);
+      console.log("[/api/user/settings POST] body keys:", Object.keys(body || {}));
+
+      if (!userId) {
+        return res.status(400).json({ error: "userId required" });
+      }
+
+      if (!body || typeof body !== "object") {
+        return res.status(400).json({ error: "body must be an object" });
+      }
+
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+
+      if (body.referral_source) {
+        const referralSourceUid = body.referral_source;
+        console.log("[/api/user/settings POST] Validating referral_source:", referralSourceUid);
+
+        try {
+          const existingSettings = await db.collection("user_settings").doc(userId).get();
+          if (existingSettings.exists && existingSettings.data()?.referral_source) {
+            console.warn("[/api/user/settings POST] Referral already set, blocking reaplication:", {
+              existing: existingSettings.data()?.referral_source,
+              attempted: referralSourceUid,
+            });
+            return res.status(409).json({
+              error: "Referral source already set and cannot be changed",
+              referralValidation: {
+                result: "already_set",
+                existingReferralSource: existingSettings.data()?.referral_source,
+              },
+            });
+          }
+        } catch (e) {
+          console.warn("[/api/user/settings POST] Error checking existing referral:", (e as any)?.message);
+        }
+
+        const isValidFormat = /^[a-zA-Z0-9_-]{10,}$/.test(referralSourceUid);
+        if (!isValidFormat) {
+          console.warn("[/api/user/settings POST] Invalid referral format:", referralSourceUid);
+          return res.status(400).json({
+            error: "Invalid referral_source format",
+            referralValidation: { result: "invalid_format", referralSourceUid },
+          });
+        }
+
+        if (referralSourceUid === userId) {
+          console.warn("[/api/user/settings POST] Self-referral attempt blocked:", userId);
+          return res.status(400).json({
+            error: "Cannot refer yourself",
+            referralValidation: { result: "self_referral", userId },
+          });
+        }
+
+        try {
+          const referrerSettings = await db.collection("user_settings").doc(referralSourceUid).get();
+          if (referrerSettings.exists) {
+            console.log("[/api/user/settings POST] Referrer validated: found in user_settings");
+            referrerExists = true;
+          } else {
+            console.warn("[/api/user/settings POST] Referrer not found:", referralSourceUid);
+            return res.status(400).json({
+              error: "Referrer not found",
+              referralValidation: { result: "referrer_not_found", referralSourceUid },
+            });
+          }
+        } catch (e) {
+          console.warn("[/api/user/settings POST] Referrer existence check failed:", (e as any)?.message);
+          return res.status(500).json({
+            error: "Failed to validate referrer",
+            referralValidation: { result: "validation_error" },
+          });
+        }
+
+        body.referral_source = referralSourceUid;
+        body.referral_applied_at = body.referral_applied_at || new Date().toISOString();
+        body.referral_applied_by = "backend";
+        body.referral_immutable = true;
+        console.log("[/api/user/settings POST] Referral validated and marked for persistence as immutable");
+      }
+
+      console.log(`[/api/user/settings POST] Saving to Firestore: user_settings/${userId}`);
+      await db.collection("user_settings").doc(userId).set(body, { merge: true });
+      console.log("[/api/user/settings POST] Successfully saved to Firestore");
+
+      if (body.referral_source && referrerExists) {
+        const referralSourceUid = body.referral_source;
+        console.log("[/api/user/settings POST] Recording referral conversion for referrer:", referralSourceUid);
+
+
+        try {
+          const conversionResult = await db.runTransaction(async (transaction) => {
+            const referrerRef = db.collection("user_settings").doc(referralSourceUid);
+            const referrerDoc = await transaction.get(referrerRef);
+
+            const currentConversions = referrerDoc.exists ? (referrerDoc.data()?.referral_conversions || 0) : 0;
+            const currentReferredUsers = referrerDoc.exists ? (referrerDoc.data()?.referred_users || []) : [];
+
+            if (currentReferredUsers.includes(userId)) {
+              console.warn("[/api/user/settings POST] User already in referrer's list (transaction check), skipping:", userId);
+              return { status: "duplicate", userId, referralSourceUid };
+            }
+
+            const newConversions = currentConversions + 1;
+            const newReferredUsers = [...currentReferredUsers, userId];
+            const conversionTimestamp = new Date().toISOString();
+
+            const currentRewardEligible = referrerDoc.exists ? (referrerDoc.data()?.reward_eligible_conversions || 0) : 0;
+            const newRewardEligible = currentRewardEligible + 1;
+
+            transaction.update(referrerRef, {
+              referral_conversions: newConversions,
+              referred_users: newReferredUsers,
+              last_referral_conversion_at: conversionTimestamp,
+              reward_eligible_conversions: newRewardEligible,
+              reward_granted_count: referrerDoc.exists ? (referrerDoc.data()?.reward_granted_count || 0) : 0,
+            });
+
+            console.log("[/api/user/settings POST] Referral conversion + reward eligibility recorded for:", referralSourceUid, {
+              conversions: newConversions,
+              eligible: newRewardEligible,
+            });
+
+            return {
+              status: "counted",
+              userId,
+              referralSourceUid,
+              newConversions,
+              rewardEligible: newRewardEligible,
+              timestamp: conversionTimestamp,
+            };
+          });
+
+          if (conversionResult.status === "counted") {
+            console.log("[/api/user/settings POST] Telemetry: referral_conversion_counted");
+          } else if (conversionResult.status === "duplicate") {
+            console.log("[/api/user/settings POST] Telemetry: referral_conversion_skipped_duplicate");
+          }
+        } catch (e) {
+          console.warn("[/api/user/settings POST] Failed to record referral conversion (transaction):", (e as any)?.message);
+        }
+      }
+
+      const updatedDoc = await db.collection("user_settings").doc(userId).get();
+      const updatedSettings = updatedDoc.exists ? updatedDoc.data() : body;
+
+      return res.json({
+        success: true,
+        onboarding_completed: updatedSettings?.onboarding_completed === true,
+        settings: updatedSettings,
+        referralValidation: body.referral_source
+          ? { result: "success", referralSourceUid: body.referral_source }
+          : undefined,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      return errorResponse(
+        res,
+        500,
+        "SETTINGS_SAVE_FAILED",
+        msg,
+        { userId, bodyKeys: Object.keys(body || {}), errorName: error instanceof Error ? error.name : "UnknownError" }
+      );
+    }
+  });
+
+  // ============ FASE 3: MIGRATION ENDPOINTS ============
+
+  app.get("/api/user/migration-status/:userId", requireAuth, requireOwnership, async (req, res) => {
+    const userId = req.params.userId;
+
+    try {
+      const {
+        generateMigrationStatus,
+        validateFirebaseStorageSetup,
+      } = await import("./migration-helpers");
+      const {
+        readProductsFromStorage,
+        readClientsFromStorage,
+        readSalesFromStorage,
+        readInstallmentsFromStorage,
+        readPostsFromStorage,
+        listImagesFromIndexedDB,
+      } = await import("./migration-helpers");
+
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+
+      const settings = await db.collection("user_settings").doc(userId).get();
+      const hasSettings = settings.exists;
+
+      const storageSetup = await validateFirebaseStorageSetup();
+
+      return res.json({
+        ready: storageSetup.valid,
+        firebaseSetup: {
+          projectId: storageSetup.projectId,
+          bucket: storageSetup.bucket,
+          valid: storageSetup.valid,
+        },
+        firestore: {
+          hasSettings,
+        },
+        message: "Migration preparation status. Use dry-run endpoints to validate data.",
+        dryRunAvailable: true,
+        nextStep: "POST /api/user/data/validate (dry-run to check data integrity)",
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      return errorResponse(
+        res,
+        500,
+        "MIGRATION_STATUS_FAILED",
+        msg,
+        { userId, errorName: error instanceof Error ? error.name : "UnknownError" }
+      );
+    }
+  });
+
+  app.post("/api/user/data/validate/:userId", requireAuth, requireOwnership, async (req, res) => {
+    const userId = req.params.userId;
+
+    try {
+      const { data } = req.body;
+
+      if (!data) {
+        return res.status(400).json({ error: "Missing data in request body" });
+      }
+
+      const {
+        generateMigrationStatus,
+      } = await import("./migration-helpers");
+
+      const status = generateMigrationStatus(
+        data.products || [],
+        data.clients || [],
+        data.sales || [],
+        data.installments || [],
+        data.posts || [],
+        data.imageIds || []
+      );
+
+      return res.json({
+        success: true,
+        validation: status,
+        message: "Data validation completed (DRY RUN - no changes made)",
+        dryRun: true,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      return errorResponse(
+        res,
+        500,
+        "DATA_VALIDATION_FAILED",
+        msg,
+        { userId, errorName: error instanceof Error ? error.name : "UnknownError" }
+      );
+    }
+  });
+
+  // ============ REWARD GRANTING ============
+
+  app.post("/api/rewards/grant/:targetUserId", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const { targetUserId } = req.params;
+      const { count, reason } = req.body;
+      const adminUid = (req as any).firebaseUid;
+
+      if (!checkGrantRateLimit(adminUid)) {
+        return errorResponse(res, 429, "RATE_LIMITED", "Too many grant requests. Maximum 5 per minute.");
+      }
+
+      if (!targetUserId || !count || typeof count !== "number" || count <= 0) {
+        return errorResponse(res, 400, "INVALID_GRANT_REQUEST", "count must be a positive number");
+      }
+
+      if (!reason || typeof reason !== "string" || reason.trim().length === 0) {
+        return errorResponse(res, 400, "INVALID_GRANT_REQUEST", "reason must be non-empty string");
+      }
+
+      console.log("[/api/rewards/grant] Admin:", adminUid, "granting", count, "rewards to", targetUserId);
+
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+
+      const grantResult = await db.runTransaction(async (transaction) => {
+        const userRef = db.collection("user_settings").doc(targetUserId);
+        const userDoc = await transaction.get(userRef);
+
+        if (!userDoc.exists) {
+          throw new Error("User not found");
+        }
+
+        const currentEligible = userDoc.data()?.reward_eligible_conversions || 0;
+        const currentGranted = userDoc.data()?.reward_granted_count || 0;
+
+        if (count > currentEligible) {
+          throw new Error(`Cannot grant ${count} rewards. Only ${currentEligible} eligible.`);
+        }
+
+        const newEligible = currentEligible - count;
+        const newGranted = currentGranted + count;
+        const grantTimestamp = new Date().toISOString();
+
+        transaction.update(userRef, {
+          reward_eligible_conversions: newEligible,
+          reward_granted_count: newGranted,
+          reward_last_granted_at: grantTimestamp,
+          reward_last_granted_count: count,
+          reward_last_granted_reason: reason,
+          reward_last_granted_by: adminUid,
+        });
+
+        console.log("[/api/rewards/grant] Transaction completed:", {
+          targetUserId,
+          grantedCount: count,
+          newEligible,
+          newGranted,
+        });
+
+        return {
+          status: "granted",
+          targetUserId,
+          grantedCount: count,
+          newEligible,
+          newGranted,
+          timestamp: grantTimestamp,
+        };
+      });
+
+      return res.json({
+        success: true,
+        reward: grantResult,
+        message: `${count} recompensas concedidas com sucesso`,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      return errorResponse(
+        res,
+        error instanceof Error && error.message.includes("Cannot grant") ? 400 : 500,
+        "REWARD_GRANT_FAILED",
+        msg,
+        { targetUserId: req.params.targetUserId }
+      );
+    }
+  });
+
+  app.post("/api/user/images/migrate/:userId", requireAuth, requireOwnership, async (req, res) => {
+    const userId = req.params.userId;
+
+
+    try {
+      return res.status(202).json({
+        message: "Image migration endpoint prepared but not yet enabled",
+        status: "preparation",
+        instructions: {
+          step1: "Ensure Firebase Storage is configured",
+          step2: "Call POST /api/user/data/validate to check data integrity",
+          step3: "When ready, image migration will be executed here",
+        },
+        note: "This endpoint is safe to call - it performs no actual changes yet",
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      return errorResponse(
+        res,
+        500,
+        "IMAGE_MIGRATION_ENDPOINT_ERROR",
+        msg,
+        { userId, errorName: error instanceof Error ? error.name : "UnknownError" }
+      );
+    }
+  });
+
+  app.post("/api/user/products/migrate/:userId", requireAuth, requireOwnership, async (req, res) => {
+    return res.status(202).json({
+      message: "Product migration endpoint prepared but not yet enabled",
+      status: "preparation",
+    });
+  });
+
+  app.post("/api/user/clients/migrate/:userId", requireAuth, requireOwnership, async (req, res) => {
+    return res.status(202).json({
+      message: "Client migration endpoint prepared but not yet enabled",
+      status: "preparation",
+    });
+  });
+
+  app.post("/api/user/sales/migrate/:userId", requireAuth, requireOwnership, async (req, res) => {
+    return res.status(202).json({
+      message: "Sales migration endpoint prepared but not yet enabled",
+      status: "preparation",
+    });
+  });
+
+  app.post("/api/user/installments/migrate/:userId", requireAuth, requireOwnership, async (req, res) => {
+    return res.status(202).json({
+      message: "Installments migration endpoint prepared but not yet enabled",
+      status: "preparation",
+    });
+  });
+
+  app.post("/api/user/posts/migrate/:userId", requireAuth, requireOwnership, async (req, res) => {
+    return res.status(202).json({
+      message: "Posts migration endpoint prepared but not yet enabled",
+      status: "preparation",
+    });
+  });
+
+  // Public Legal Documents Routes
+  app.get("/api/legal/privacy-policy", (req, res) => {
+    const fs = require("fs");
+    const path = require("path");
+    try {
+      const filePath = path.resolve(process.cwd(), "dist/public/privacy-policy.md");
+      const content = fs.readFileSync(filePath, "utf8");
+      res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+      res.send(content);
+    } catch (error) {
+      res.status(404).json({ error: "Privacy Policy not found" });
+    }
+  });
+
+  app.get("/api/legal/terms-of-service", (req, res) => {
+    const fs = require("fs");
+    const path = require("path");
+    try {
+      const filePath = path.resolve(process.cwd(), "dist/public/terms-of-service.md");
+      const content = fs.readFileSync(filePath, "utf8");
+      res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+      res.send(content);
+    } catch (error) {
+      res.status(404).json({ error: "Terms of Service not found" });
+    }
+  });
+
+  // GET /api/plan/data/:userId
+  app.get("/api/plan/data/:userId", requireAuth, requireOwnership, async (req, res) => {
+    const userId = req.params.userId;
+
+    try {
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+
+      const planDocRef = db.collection("users").doc(userId).collection("planData").doc("main");
+      const planDocSnap = await planDocRef.get();
+
+      if (planDocSnap.exists) {
+        return res.status(200).json(planDocSnap.data());
+      }
+
+      return res.status(200).json({
+        currentPlan: "free",
+        premiumActive: false,
+        premiumExpiresAt: null,
+        premiumStartedAt: null,
+        premiumSource: null,
+        referralCode: null,
+        referralCount: 0,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      return errorResponse(res, 500, "PLAN_DATA_FETCH_ERROR", msg, { userId });
+    }
+  });
+
+  // POST /api/plan/initialize/:userId
+  // CORRIGIDO: só cria se NÃO existir. Não reseta plano premium existente.
+  app.post("/api/plan/initialize/:userId", requireAuth, requireOwnership, async (req, res) => {
+    const userId = req.params.userId;
+
+    try {
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+      const crypto = require("crypto");
+
+      const planDocRef = db.collection("users").doc(userId).collection("planData").doc("main");
+      const existingSnap = await planDocRef.get();
+
+      if (existingSnap.exists) {
+        console.log("[plan/initialize] Plan already exists, skipping reset for user:", userId);
+        return res.status(200).json({
+          success: true,
+          skipped: true,
+          message: "Plan already exists",
+          planData: existingSnap.data(),
+        });
+      }
+
+      const hash = crypto.createHash("md5").update(userId).digest("hex").substring(0, 9).toUpperCase();
+      const referralCode = `USER-${hash}`;
+
+      const payload = {
+        currentPlan: "free",
+        premiumActive: false,
+        premiumExpiresAt: null,
+        premiumStartedAt: null,
+        premiumSource: null,
+        referralCode,
+        referralCount: 0,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      await planDocRef.set(payload, { merge: true });
+
+      console.log("[plan/initialize] New plan created for user:", userId);
+      return res.status(200).json({
+        success: true,
+        skipped: false,
+        referralCode,
+        planData: payload,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      return errorResponse(res, 500, "PLAN_INITIALIZE_ERROR", msg, { userId });
+    }
+  });
+
+  // POST /api/referral/track-event
+  app.post("/api/referral/track-event", async (req, res) => {
+    try {
+      const { referredUID, referredEmail, referrerUID, referrerEmail, event } = req.body;
+
+      if (!referredUID || !referrerUID || !event) {
+        return res.status(400).json({ error: "Missing required fields" });
+      }
+
+      const { refCode } = req.body;
+      if (refCode && typeof refCode === "string") {
+        if (!refCode.startsWith("USER-")) {
+          return res.status(400).json({ error: "Invalid referral code format" });
+        }
+      }
+
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+
+      const eventId = db.collection("referralEvents").doc().id;
+      const eventRef = db.collection("referralEvents").doc(eventId);
+
+      await eventRef.set({
+        referredUID,
+        referredEmail,
+        referrerUID,
+        referrerEmail,
+        events: [
+          {
+            timestamp: admin.firestore.Timestamp.now(),
+            event,
+            status: "success",
+          },
+        ],
+        status: "pending",
+        validatedAt: null,
+        deviceId: req.body.deviceId || null,
+        ipAddress: req.ip || null,
+        accountAge: 0,
+        createdAt: admin.firestore.Timestamp.now(),
+        updatedAt: admin.firestore.Timestamp.now(),
+      });
+
+      console.log("[referral/track-event] Event tracked:", {
+        eventId,
+        referredUID,
+        referrerUID,
+        event,
+      });
+
+      return res.status(200).json({ eventId, status: "pending" });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      return errorResponse(res, 500, "REFERRAL_TRACK_ERROR", msg);
+    }
+  });
+
+  // POST /api/referral/validate-referral
+  app.post("/api/referral/validate-referral", async (req, res) => {
+    try {
+      const { referredUID, referrerUID } = req.body;
+
+      if (!referredUID || !referrerUID) {
+        return res.status(400).json({ error: "Missing required fields" });
+      }
+
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+
+      const eventsQuery = await db
+        .collection("referralEvents")
+        .where("referredUID", "==", referredUID)
+        .where("referrerUID", "==", referrerUID)
+        .get();
+
+      if (eventsQuery.empty) {
+        return res.status(404).json({ error: "Referral event not found" });
+      }
+
+      const eventDoc = eventsQuery.docs[0];
+      const eventData = eventDoc.data();
+
+      if (eventData.status !== "pending") {
+        return res.status(400).json({ error: "Referral already processed" });
+      }
+
+      await eventDoc.ref.update({
+        status: "valid",
+        validatedAt: admin.firestore.Timestamp.now(),
+        updatedAt: admin.firestore.Timestamp.now(),
+      });
+
+      const planDocRef = db.collection("users").doc(referrerUID).collection("planData").doc("main");
+      const planDocRef = db.collection("users").doc(referrerUID).collection("planData").doc("main");
+      const planSnap = await planDocRef.get();
+
+      if (planSnap.exists) {
+        const currentCount = planSnap.data()?.referralCount || 0;
+        const newCount = currentCount + 1;
+
+        await planDocRef.update({
+          referralCount: newCount,
+          updatedAt: admin.firestore.Timestamp.now(),
+        });
+
+        if (newCount === 3) {
+          const thirtyDaysFromNow = new Date();
+          thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
+
+          await planDocRef.update({
+            currentPlan: "premium",
+            premiumActive: true,
+            premiumExpiresAt: admin.firestore.Timestamp.fromDate(thirtyDaysFromNow),
+            premiumStartedAt: admin.firestore.Timestamp.now(),
+            premiumSource: "referral_reward",
+          });
+
+          console.log("[referral/validate] Premium granted via referral for user:", referrerUID);
+          return res.status(200).json({
+            status: "valid",
+            premiumGranted: true,
+            message: "Você ganhou 30 dias de Premium!",
+          });
+        }
+
+        console.log("[referral/validate] Referral count updated:", {
+          referrerUID,
+          newCount,
+        });
+        return res.status(200).json({
+          status: "valid",
+          premiumGranted: false,
+          referralCount: newCount,
+          remaining: 3 - newCount,
+        });
+      }
+
+      return res.status(200).json({ status: "valid", premiumGranted: false });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      return errorResponse(res, 500, "REFERRAL_VALIDATE_ERROR", msg);
+    }
+  });
+
+  // GET /api/admin/global-config
+  app.get("/api/admin/global-config", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const config = await getGlobalConfig();
+      return res.json({
+        premiumOpenAccess: config.premiumOpenAccess,
+        premiumOpenAccessUntil: config.premiumOpenAccessUntil ? new Date(config.premiumOpenAccessUntil).toISOString() : null,
+        premiumOpenAccessMessage: config.premiumOpenAccessMessage,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      return errorResponse(res, 500, "CONFIG_ERROR", msg);
+    }
+  });
+
+  // POST /api/admin/global-config
+  app.post("/api/admin/global-config", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { premiumOpenAccess, premiumOpenAccessUntil, premiumOpenAccessMessage } = req.body;
+
+      if (typeof premiumOpenAccess !== "boolean") {
+        return errorResponse(res, 400, "INVALID_REQUEST", "premiumOpenAccess must be boolean");
+      }
+
+      const config = {
+        premiumOpenAccess,
+        premiumOpenAccessUntil: premiumOpenAccessUntil ? new Date(premiumOpenAccessUntil) : null,
+        premiumOpenAccessMessage: premiumOpenAccessMessage || null,
+      };
+
+      await setGlobalConfig(config);
+
+      console.log("[admin/global-config] Updated successfully:", {
+        premiumOpenAccess: config.premiumOpenAccess,
+        expiresAt: config.premiumOpenAccessUntil?.toISOString() ?? null,
+      });
+
+      return res.json({
+        success: true,
+        message: premiumOpenAccess ? "Premium liberado globalmente!" : "Premium global desligado",
+        config: {
+          premiumOpenAccess: config.premiumOpenAccess,
+          premiumOpenAccessUntil: config.premiumOpenAccessUntil?.toISOString() ?? null,
+          premiumOpenAccessMessage: config.premiumOpenAccessMessage,
+        },
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      return errorResponse(res, 500, "CONFIG_UPDATE_ERROR", msg);
+    }
+  });
+
+  app.post("/api/admin/premium-grant", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { targetUserEmail, premiumExpiresAt, reason } = req.body ?? {};
+
+      if (!targetUserEmail || typeof targetUserEmail !== "string") {
+        return errorResponse(res, 400, "INVALID_REQUEST", "targetUserEmail is required");
+      }
+
+      const normalizedEmail = targetUserEmail.trim().toLowerCase();
+
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+
+      const authUser = await admin.auth().getUserByEmail(normalizedEmail);
+      const targetUserId = authUser.uid;
+
+      const planRef = db.collection("users").doc(targetUserId).collection("planData").doc("main");
+
+      const expiresAt = premiumExpiresAt ? new Date(premiumExpiresAt) : null;
+      if (expiresAt && Number.isNaN(expiresAt.getTime())) {
+        return errorResponse(res, 400, "INVALID_REQUEST", "premiumExpiresAt must be a valid date");
+      }
+
+      const payload = {
+        currentPlan: "premium",
+        premiumActive: true,
+        premiumSource: "admin",
+        premiumStartedAt: admin.firestore.FieldValue.serverTimestamp(),
+        premiumExpiresAt: expiresAt || null,
+        adminGrantReason: typeof reason === "string" ? reason : null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      console.log("[admin] premium-grant BEFORE", {
+        normalizedEmail,
+        targetUserId,
+        payload: {
+          ...payload,
+          premiumStartedAt: "[serverTimestamp]",
+          updatedAt: "[serverTimestamp]",
+        },
+      });
+
+      await planRef.set(payload, { merge: true });
+
+      const verifySnap = await planRef.get();
+      const verifyData = verifySnap.exists ? verifySnap.data() : null;
+
+      console.log("[admin] premium-grant AFTER", {
+        normalizedEmail,
+        targetUserId,
+        exists: verifySnap.exists,
+        verifyData,
+      });
+
+      return res.json({
+        success: true,
+        targetUserEmail: normalizedEmail,
+        targetUserId,
+        premiumExpiresAt: expiresAt ? expiresAt.toISOString() : null,
+        premiumSource: "admin",
+        verifyData,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      console.error("[admin] premium-grant ERROR", error);
+
+      return errorResponse(res, 500, "PREMIUM_GRANT_FAILED", msg, {
+        targetUserEmail: req.body?.targetUserEmail,
+      });
+    }
+  });
+
+  app.post("/api/admin/premium-revoke", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { targetUserEmail } = req.body ?? {};
+
+      if (!targetUserEmail || typeof targetUserEmail !== "string") {
+        return errorResponse(res, 400, "INVALID_REQUEST", "targetUserEmail is required");      return errorResponse(res, 500, "CONFIG_ERROR", msg);
+    }
+  });
+
+  // POST /api/admin/global-config
+  app.post("/api/admin/global-config", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { premiumOpenAccess, premiumOpenAccessUntil, premiumOpenAccessMessage } = req.body;
+
+      if (typeof premiumOpenAccess !== "boolean") {
+        return errorResponse(res, 400, "INVALID_REQUEST", "premiumOpenAccess must be boolean");
+      }
+
+      const config = {
+        premiumOpenAccess,
+        premiumOpenAccessUntil: premiumOpenAccessUntil ? new Date(premiumOpenAccessUntil) : null,
+        premiumOpenAccessMessage: premiumOpenAccessMessage || null,
+      };
+
+      await setGlobalConfig(config);
+
+      console.log("[admin/global-config] Updated successfully:", {
+        premiumOpenAccess: config.premiumOpenAccess,
+        expiresAt: config.premiumOpenAccessUntil?.toISOString() ?? null,
+      });
+
+      return res.json({
+        success: true,
+        message: premiumOpenAccess ? "Premium liberado globalmente!" : "Premium global desligado",
+        config: {
+          premiumOpenAccess: config.premiumOpenAccess,
+          premiumOpenAccessUntil: config.premiumOpenAccessUntil?.toISOString() ?? null,
+          premiumOpenAccessMessage: config.premiumOpenAccessMessage,
+        },
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      return errorResponse(res, 500, "CONFIG_UPDATE_ERROR", msg);
+    }
+  });
+
+  app.post("/api/admin/premium-grant", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { targetUserEmail, premiumExpiresAt, reason } = req.body ?? {};
+
+      if (!targetUserEmail || typeof targetUserEmail !== "string") {
+        return errorResponse(res, 400, "INVALID_REQUEST", "targetUserEmail is required");
+      }
+
+      const normalizedEmail = targetUserEmail.trim().toLowerCase();
+
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+
+      const authUser = await admin.auth().getUserByEmail(normalizedEmail);
+      const targetUserId = authUser.uid;
+
+      const planRef = db.collection("users").doc(targetUserId).collection("planData").doc("main");
+
+      const expiresAt = premiumExpiresAt ? new Date(premiumExpiresAt) : null;
+      if (expiresAt && Number.isNaN(expiresAt.getTime())) {
+        return errorResponse(res, 400, "INVALID_REQUEST", "premiumExpiresAt must be a valid date");
+      }
+
+      const payload = {
+        currentPlan: "premium",
+        premiumActive: true,
+        premiumSource: "admin",
+        premiumStartedAt: admin.firestore.FieldValue.serverTimestamp(),
+        premiumExpiresAt: expiresAt || null,
+        adminGrantReason: typeof reason === "string" ? reason : null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      console.log("[admin] premium-grant BEFORE", {
+        normalizedEmail,
+        targetUserId,
+        payload: {
+          ...payload,
+          premiumStartedAt: "[serverTimestamp]",
+          updatedAt: "[serverTimestamp]",
+        },
+      });
+
+      await planRef.set(payload, { merge: true });
+
+      const verifySnap = await planRef.get();
+      const verifyData = verifySnap.exists ? verifySnap.data() : null;
+
+      console.log("[admin] premium-grant AFTER", {
+        normalizedEmail,
+        targetUserId,
+        exists: verifySnap.exists,
+        verifyData,
+      });
+
+      return res.json({
+        success: true,
+        targetUserEmail: normalizedEmail,
+        targetUserId,
+        premiumExpiresAt: expiresAt ? expiresAt.toISOString() : null,
+        premiumSource: "admin",
+        verifyData,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      console.error("[admin] premium-grant ERROR", error);
+
+      return errorResponse(res, 500, "PREMIUM_GRANT_FAILED", msg, {
+        targetUserEmail: req.body?.targetUserEmail,
+      });
+    }
+  });
+
+  app.post("/api/admin/premium-revoke", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { targetUserEmail } = req.body ?? {};
+
+      if (!targetUserEmail || typeof targetUserEmail !== "string") {
+        return errorResponse(res, 400, "INVALID_REQUEST", "targetUserEmail is required");
+===== SUBSCRIPTIONS =====
+/**
+ * RevendaSmart — App Subscription Module
+ *
+ * Handles PREMIUM subscriptions for the RevendaSmart app itself.
+ * Uses the CENTRAL Mercado Pago account (MERCADOPAGO_ACCESS_TOKEN).
+ *
+ * ⚠️ SEPARATION: This module is COMPLETELY ISOLATED from server/payments.ts
+ *   - payments.ts → revendedoras' payment links to their clients (uses OAuth tokens)
+ *   - subscriptions.ts → RevendaSmart app subscription billing (uses central token)
+ *
+ * Endpoints:
+ *   POST /api/app-subscription/create      → Initiate subscription checkout
+ *   POST /api/app-subscription/cancel      → Cancel active subscription
+ *   GET  /api/app-subscription/status      → Get current subscription status
+ *   POST /api/app-subscription/webhook     → Receive MP preapproval events
+ */
+
+import type { Express, Request, Response } from "express";
+import * as crypto from "crypto";
+import { MercadoPagoConfig, PreApproval } from "mercadopago";
+import { getFirebaseAdmin } from "./firebase-admin-init";
+import type { SubscriptionStatus, GlobalConfig } from "../shared/monetization";
+import { DEFAULT_GLOBAL_CONFIG } from "../shared/monetization";
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+const CENTRAL_ACCESS_TOKEN = process.env.MERCADOPAGO_ACCESS_TOKEN?.trim() ?? "";
+const WEBHOOK_SECRET = process.env.MERCADOPAGO_WEBHOOK_SECRET ?? "";
+const APP_BASE_URL = process.env.APP_BASE_URL ?? "https://reseller-catalog-hub.replit.app";
+const FRONTEND_URL = process.env.FRONTEND_URL ?? "https://revendasmart.vercel.app";
+
+// Premium subscription price in BRL (monthly)
+const PREMIUM_PRICE_BRL = parseFloat(process.env.PREMIUM_PRICE_BRL ?? "19.90");
+const PREMIUM_PLAN_NAME = "RevendaSmart Premium";
+
+console.log(`[subscriptions] Initializing module`);
+console.log(`[subscriptions] MERCADOPAGO_ACCESS_TOKEN: ${CENTRAL_ACCESS_TOKEN ? "SET ✓" : "NOT SET ✗"}`);
+console.log(`[subscriptions] Token length: ${CENTRAL_ACCESS_TOKEN?.length}`);
+console.log(`[subscriptions] PREMIUM_PRICE_BRL: ${PREMIUM_PRICE_BRL}`);
+
+const mpClient = new MercadoPagoConfig({
+  accessToken: CENTRAL_ACCESS_TOKEN,
+  options: { timeout: 15000 },
+});
+
+console.log(`[subscriptions] MercadoPagoConfig created successfully`);
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function logSubError(op: string, uid: string | null, msg: string, ctx?: Record<string, any>) {
+  const eid = Math.random().toString(36).substring(7);
+  console.error(`[subscriptions] ERROR-${eid} op=${op} uid=${uid} msg=${msg}`, ctx ?? "");
+}
+
+/**
+ * NOTE: Removed PreApprovalPlan creation — Mercado Pago SDK simplification.
+ * PreApproval.create() with auto_recurring works without needing a separate plan.
+ * This avoids conflicts between plan config and PreApproval config.
+ */
+
+/**
+ * Update user's planData in Firestore based on subscription status.
+ */
+async function syncPlanDataFromSubscription(
+  uid: string,
+  subscriptionId: string,
+  subscriptionStatus: SubscriptionStatus,
+  paymentStatus?: string,
+  nextBillingDate?: string | null
+) {
+  const admin = getFirebaseAdmin();
+  const db = admin.firestore();
+  const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+
+  const isActive = subscriptionStatus === "authorized";
+
+  const update: Record<string, any> = {
+    subscriptionId,
+    subscriptionStatus,
+    paymentStatus: paymentStatus ?? null,
+    autoRenew: isActive,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  console.log(
+    `[syncPlanDataFromSubscription] Starting uid=${uid} status=${subscriptionStatus} isActive=${isActive}`
+  );
+
+  if (isActive) {
+    update.currentPlan = "premium";
+    update.premiumActive = true;
+    update.premiumSource = "subscription";
+    update.premiumExpiresAt = null;
+    update.premiumStartedAt = admin.firestore.FieldValue.serverTimestamp();
+    update.lastPaymentAt = admin.firestore.FieldValue.serverTimestamp();
+    update.canceledAt = null;
+    update.graceAccessActive = false;
+    update.graceAccessSource = null;
+    update.graceAccessExpiresAt = null;
+    update.graceAccessCooldownUntil = null;
+
+    if (nextBillingDate) {
+      update.nextBillingAt = new Date(nextBillingDate);
+    }
+
+    console.log(
+      `[syncPlanDataFromSubscription] 🎉 Activating PREMIUM currentPlan=${update.currentPlan} premiumActive=${update.premiumActive}`
+    );
+  } else if (subscriptionStatus === "cancelled" || subscriptionStatus === "paused") {
+    update.currentPlan = "free";
+    update.premiumActive = false;
+    update.premiumSource = null;
+    update.canceledAt = admin.firestore.FieldValue.serverTimestamp();
+    update.autoRenew = false;
+
+    console.log(
+      `[syncPlanDataFromSubscription] 📉 Deactivating subscription status=${subscriptionStatus}`
+    );
+  } else if (subscriptionStatus === "pending") {
+    // IMPORTANTE:
+    // NÃO resetar currentPlan/premiumActive/premiumSource aqui.
+    // Pending significa apenas aguardando primeiro pagamento.
+    // O usuário pode já ter premium manual/admin e isso não pode ser derrubado.
+    update.autoRenew = false;
+
+    console.log(
+      `[syncPlanDataFromSubscription] ⏳ Subscription pending, preserving existing premium state`
+    );
+  }
+
+  console.log(`[syncPlanDataFromSubscription] Update payload:`, JSON.stringify(update, null, 2));
+
+  await planRef.set(update, { merge: true });
+  console.log(`[syncPlanDataFromSubscription] ✅ SAVED to Firestore users/${uid}/planData/main`);
+  console.log(
+    `[syncPlanDataFromSubscription] Result: currentPlan=${update.currentPlan} premiumActive=${update.premiumActive} subscriptionStatus=${subscriptionStatus}`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Global Config Management (system/config)
+// ---------------------------------------------------------------------------
+
+export async function getGlobalConfig(): Promise<GlobalConfig> {
+  try {
+    const admin = getFirebaseAdmin();
+    const db = admin.firestore();
+    const configRef = db.collection("system").doc("config");
+    const configSnap = await configRef.get();
+
+    if (!configSnap.exists) {
+      console.log("[getGlobalConfig] No config found, returning defaults");
+      return DEFAULT_GLOBAL_CONFIG;
+    }
+
+    const data = configSnap.data();
+    return {
+      premiumOpenAccess: data?.premiumOpenAccess ?? false,
+      premiumOpenAccessUntil: data?.premiumOpenAccessUntil?.toDate() ?? null,
+      premiumOpenAccessMessage: data?.premiumOpenAccessMessage ?? null,
+    };
+  } catch (error) {
+    console.error("[getGlobalConfig] Error:", error);
+    return DEFAULT_GLOBAL_CONFIG;
+  }
+}
+
+export async function setGlobalConfig(config: GlobalConfig): Promise<void> {
+  const admin = getFirebaseAdmin();
+  const db = admin.firestore();
+  const configRef = db.collection("system").doc("config");
+
+  console.log("[setGlobalConfig] Updating system config:", {
+    premiumOpenAccess: config.premiumOpenAccess,
+    premiumOpenAccessUntil: config.premiumOpenAccessUntil
+      ? new Date(config.premiumOpenAccessUntil).toISOString()
+      : null,
+    premiumOpenAccessMessage: config.premiumOpenAccessMessage,
+  });
+
+  await configRef.set(
+    {
+      premiumOpenAccess: config.premiumOpenAccess,
+      premiumOpenAccessUntil: config.premiumOpenAccessUntil
+        ? new Date(config.premiumOpenAccessUntil)
+        : null,
+      premiumOpenAccessMessage: config.premiumOpenAccessMessage,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Route Registration
+// ---------------------------------------------------------------------------
+function addHours(date: Date, hours: number) {
+  return new Date(date.getTime() + hours * 60 * 60 * 1000);
+}
+
+export function registerSubscriptionRoutes(
+  app: Express,
+  requireAuth: (req: Request, res: Response, next: any) => void
+) {
+  console.log("[subscriptions] Routes registered: /api/app-subscription/{create,cancel,status,webhook}");
+
+  // --------------------------------------------------------------------------
+  // POST /api/app-subscription/create
+  // Creates a subscription for the authenticated user and returns checkout URL
+  // --------------------------------------------------------------------------
+  app.post("/api/app-subscription/create", requireAuth, async (req: Request, res: Response) => {
+    const uid = (req as any).firebaseUid as string;
+
+    if (!CENTRAL_ACCESS_TOKEN) {
+      const msg = "MERCADOPAGO_ACCESS_TOKEN is not configured";
+      console.error(`[subscriptions/create] ❌ CRITICAL: ${msg}`);
+      return res.status(500).json({
+      return res.status(500).json({
+        error: "MERCADOPAGO_NOT_CONFIGURED",
+        message: "Serviço de assinatura não está configurado. Por favor, contate suporte.",
+      });
+    }
+
+    console.log(`[subscriptions/create] START uid=${uid} token_set=${!!CENTRAL_ACCESS_TOKEN}`);
+
+    try {
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+
+      console.log(`[subscriptions/create] Step 1: fetching user from Firebase Auth`);
+      const userRecord = await admin.auth().getUser(uid);
+      const userEmail = userRecord.email ?? "";
+      console.log(`[subscriptions/create] User found: email=${userEmail}`);
+
+      console.log(`[subscriptions/create] Step 2: checking existing subscription in Firestore`);
+      const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+      const planSnap = await planRef.get();
+      const existingData = planSnap.data();
+
+      console.log(
+        `[subscriptions/create] Existing data: subscriptionId=${existingData?.subscriptionId}, status=${existingData?.subscriptionStatus}`
+      );
+
+      if (existingData?.subscriptionId && existingData?.subscriptionStatus === "authorized") {
+        console.log(`[subscriptions/create] Already subscribed, returning 400`);
+        return res.status(400).json({
+          error: "ALREADY_SUBSCRIBED",
+          message: "Você já tem uma assinatura Premium ativa.",
+          subscriptionId: existingData.subscriptionId,
+        });
+      }
+
+      console.log(`[subscriptions/create] Step 3: creating PreApproval with direct auto_recurring`);
+
+      const preApprovalPayload = {
+        reason: PREMIUM_PLAN_NAME,
+        payer_email: userEmail,
+        external_reference: uid,
+        auto_recurring: {
+          frequency: 1,
+          frequency_type: "months",
+          transaction_amount: PREMIUM_PRICE_BRL,
+          currency_id: "BRL",
+        },
+        back_url: `${FRONTEND_URL}/subscribe?status=success`,
+      };
+
+      console.log(
+        `[subscriptions/create] PreApproval payload:`,
+        JSON.stringify(preApprovalPayload, null, 2)
+      );
+      console.log(
+        `[subscriptions/create] Token check: ${!!CENTRAL_ACCESS_TOKEN}, token length: ${CENTRAL_ACCESS_TOKEN?.length}`
+      );
+
+      const preApproval = new PreApproval(mpClient);
+      const mpResponse = await preApproval.create({ body: preApprovalPayload as any });
+
+      const subscriptionId = (mpResponse as any)?.id;
+      const initPoint =
+        (mpResponse as any)?.init_point ||
+        (mpResponse as any)?.sandbox_init_point ||
+        (mpResponse as any)?.initPoint;
+
+      if (!subscriptionId) {
+        throw new Error("Mercado Pago não retornou subscriptionId");
+      }
+
+      console.log(
+        `[subscriptions/create] Step 4: saving pending subscription to Firestore subscriptionId=${subscriptionId}`
+      );
+
+      const graceExpiresAt = addHours(new Date(), 12);
+
+      await planRef.set(
+        {
+          subscriptionId,
+          subscriptionStatus: "pending",
+          paymentStatus: null,
+          autoRenew: false,
+
+          // IMPORTANTE:
+          // NÃO resetar currentPlan/premiumActive/premiumSource aqui.
+          // Esta rota só inicia uma intenção de assinatura pendente.
+          // Usuário com premium manual/admin não pode perder acesso aqui.
+
+          graceAccessActive: true,
+          graceAccessSource: "subscription_pending",
+          graceAccessStartedAt: admin.firestore.FieldValue.serverTimestamp(),
+          graceAccessExpiresAt: graceExpiresAt,
+          graceAccessCooldownUntil: null,
+          subscriptionIntentCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
+
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      console.log(`[subscriptions/create] ✅ SUCCESS uid=${uid} subscriptionId=${subscriptionId}`);
+
+      return res.json({
+        subscriptionId,
+        initPoint,
+        status: "pending",
+      });
+    } catch (error) {
+      const errorObj = error as any;
+      const msg = error instanceof Error ? error.message : String(error);
+      const name = error instanceof Error ? error.name : "UnknownError";
+      const stack = error instanceof Error ? error.stack : "";
+      const status = errorObj?.status || errorObj?.statusCode || errorObj?.response?.status;
+      const responseData = errorObj?.response?.data || errorObj?.data || {};
+      const responseBody = errorObj?.response?.body || "";
+      const cause = errorObj?.cause || "";
+      const fullError = errorObj?.errors || errorObj?.error || {};
+
+      console.error(`[subscriptions/create] ❌ ERROR uid=${uid}`);
+      console.error(`[subscriptions/create] Error Name: ${name}`);
+      console.error(`[subscriptions/create] Error Message: ${msg}`);
+      console.error(`[subscriptions/create] Error Status: ${status}`);
+      console.error(`[subscriptions/create] Error Stack: ${stack}`);
+      console.error(`[subscriptions/create] Error Cause: ${cause}`);
+      console.error(`[subscriptions/create] Response Data:`, JSON.stringify(responseData, null, 2));
+      console.error(`[subscriptions/create] Response Body:`, responseBody);
+      console.error(`[subscriptions/create] Full Error Object:`, JSON.stringify(fullError, null, 2));
+      console.error(`[subscriptions/create] Complete Error:`, error);
+
+      logSubError("create", uid, `${name}: ${msg}`, {
+        status,
+        responseData,
+        stack,
+        cause,
+        fullError,
+      });
+
+      let userMessage = "Erro ao criar assinatura";
+
+      if (responseData?.error?.message && typeof responseData.error.message === "string") {
+        userMessage = `Mercado Pago: ${responseData.error.message}`;
+      } else if (responseData?.error && typeof responseData.error === "string") {
+        userMessage = `Mercado Pago: ${responseData.error}`;
+      } else if (responseData?.message && typeof responseData.message === "string") {
+        userMessage = responseData.message;
+      } else if (msg && typeof msg === "string") {
+        userMessage = msg;
+      } else if (typeof responseData === "object" && Object.keys(responseData).length > 0) {
+        const errorStr = JSON.stringify(responseData);
+        if (errorStr.length < 200) {
+          userMessage = `Erro: ${errorStr}`;
+        } else {
+          userMessage = "Erro ao processar requisição. Verifique os logs.";
+        }
+      }
+
+      console.error(`[subscriptions/create] FINAL MESSAGE STRING: "${userMessage}"`);
+
+      return res.status(500).json({
+        error: "SUBSCRIPTION_CREATE_ERROR",
+        message: userMessage,
+        details: {
+          errorName: name,
+          status: status,
+          mpError: typeof responseData?.error === "string" ? responseData.error : undefined,
+        },
+      });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // POST /api/app-subscription/cancel
+  // Cancels the user's active subscription
+  // --------------------------------------------------------------------------
+  app.post("/api/app-subscription/cancel", requireAuth, async (req: Request, res: Response) => {
+    const uid = (req as any).firebaseUid as string;
+    try {
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+
+      const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+      const planSnap = await planRef.get();
+      const planData = planSnap.data();
+
+      if (!planData?.subscriptionId) {
+        return res.status(404).json({
+          error: "NO_SUBSCRIPTION",
+          message: "Nenhuma assinatura ativa encontrada.",
+        });
+      }
+
+      const { subscriptionId } = planData;
+
+      const preApproval = new PreApproval(mpClient);
+      await preApproval.update({
+        id: subscriptionId,
+        body: { status: "cancelled" },
+      });
+
+      await planRef.set(
+        {
+          subscriptionStatus: "cancelled",
+          currentPlan: "free",
+          premiumActive: false,
+          premiumSource: null,
+          autoRenew: false,
+          canceledAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      console.log(`[subscriptions] Cancelled subscription uid=${uid} subscriptionId=${subscriptionId}`);
+
+      return res.json({
+        success: true,
+        message: "Assinatura cancelada com sucesso. Você pode usar os recursos até o fim do período pago.",
+        subscriptionId,
+      });
+    } catch (error) {
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      logSubError("cancel", uid, msg);
+      return res.status(500).json({ error: "SUBSCRIPTION_CANCEL_ERROR", message: msg });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // GET /api/app-subscription/status
+  // Returns the user's current subscription status
+  // AUTOMATICALLY syncs from Mercado Pago if subscription exists
+  // --------------------------------------------------------------------------
+  app.get("/api/app-subscription/status", requireAuth, async (req: Request, res: Response) => {
+    const uid = (req as any).firebaseUid as string;
+    try {
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+
+      const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+      const planSnap = await planRef.get();
+
+      if (!planSnap.exists) {
+        return res.json({
+          subscriptionId: null,
+          subscriptionStatus: null,
+          currentPlan: "free",
+          premiumActive: false,
+          autoRenew: false,
+        });
+      }
+
+      const data = planSnap.data()!;
+
+      if (data.subscriptionId) {
+        try {
+          console.log(`[subscriptions/status] Checking MP for subscriptionId=${data.subscriptionId}`);
+          const preApproval = new PreApproval(mpClient);
+          const mpSub = await preApproval.get({ id: data.subscriptionId });
+
+          console.log(
+            `[subscriptions/status] MP status: ${mpSub.status}, Local status: ${data.subscriptionStatus}`
+          );
+
+          if (mpSub.status && mpSub.status !== data.subscriptionStatus) {
+            console.log(`[subscriptions/status] ✅ STATUS CHANGE DETECTED! Syncing from MP...`);
+
+            await syncPlanDataFromSubscription(
+              uid,
+              data.subscriptionId,
+              mpSub.status as SubscriptionStatus,
+              undefined,
+              (mpSub as any).next_payment_date ?? null
+            );
+
+            const updatedSnap = await planRef.get();
+            const updatedData = updatedSnap.data() ?? data;
+
+            return res.json({
+              subscriptionId: updatedData.subscriptionId ?? null,
+              subscriptionStatus: updatedData.subscriptionStatus ?? null,
+              currentPlan: updatedData.currentPlan ?? "free",
+              premiumActive: updatedData.premiumActive ?? false,
+              autoRenew: updatedData.autoRenew ?? false,
+              nextBillingAt: updatedData.nextBillingAt ?? null,
+              lastPaymentAt: updatedData.lastPaymentAt ?? null,
+              canceledAt: updatedData.canceledAt ?? null,
+              premiumPrice: PREMIUM_PRICE_BRL,
+              syncedAt: new Date().toISOString(),
+            });
+          }
+        } catch (mpErr) {
+          const err = mpErr as any;
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          console.warn(`[subscriptions/status] Could not sync from MP uid=${uid}: ${errorMsg}`);
+          console.warn(`[subscriptions/status] Returning local data instead`);
+        }
+      }
+
+      return res.json({
+        subscriptionId: data.subscriptionId ?? null,
+        subscriptionStatus: data.subscriptionStatus ?? null,
+        currentPlan: data.currentPlan ?? "free",
+        premiumActive: data.premiumActive ?? false,
+        autoRenew: data.autoRenew ?? false,
+        nextBillingAt: data.nextBillingAt ?? null,
+        lastPaymentAt: data.lastPaymentAt ?? null,
+        canceledAt: data.canceledAt ?? null,
+        premiumPrice: PREMIUM_PRICE_BRL,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      logSubError("status", uid, msg);
+      return res.status(500).json({ error: "SUBSCRIPTION_STATUS_ERROR", message: msg });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // POST /api/app-subscription/sync-now
+  // FORCE immediate sync from Mercado Pago
+  // --------------------------------------------------------------------------
+  app.post("/api/app-subscription/sync-now", requireAuth, async (req: Request, res: Response) => {
+    const uid = (req as any).firebaseUid as string;
+    console.log(`[subscriptions/sync-now] FORCE SYNC requested uid=${uid}`);
+
+    try {
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+
+      const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+      const planSnap = await planRef.get();
+
+      if (!planSnap.exists) {
+        console.warn(`[subscriptions/sync-now] No planData document found`);
+        return res.status(404).json({
+          error: "NO_PLAN_DATA",
+          message: "Nenhum plano encontrado. Você ainda não iniciou uma assinatura.",
+        });
+      }
+
+      const data = planSnap.data()!;
+
+      if (!data.subscriptionId) {
+        console.warn(`[subscriptions/sync-now] No subscriptionId found in planData`);
+        return res.status(404).json({
+          error: "NO_SUBSCRIPTION_ID",
+          message: "Nenhuma assinatura encontrada no seu plano. Inicie uma assinatura primeiro.",
+        });
+      }
+
+      console.log(`[subscriptions/sync-now] Found subscriptionId=${data.subscriptionId}, fetching from MP...`);
+
+      try {
+        const preApproval = new PreApproval(mpClient);
+        const mpSub = await preApproval.get({ id: data.subscriptionId });
+
+        const mpStatus = mpSub.status as SubscriptionStatus;
+        console.log(`[subscriptions/sync-now] ✅ MP returned status: ${mpStatus}`);
+        console.log(`[subscriptions/sync-now] Syncing to Firestore...`);
+
+        await syncPlanDataFromSubscription(
+          uid,
+          data.subscriptionId,
+          mpStatus,
+          undefined,
+          (mpSub as any).next_payment_date ?? null
+        );
+
+        const updatedSnap = await planRef.get();
+        const updatedData = updatedSnap.data()!;
+
+        console.log(
+          `[subscriptions/sync-now] ✅ SYNC COMPLETE: currentPlan=${updatedData.currentPlan}, premiumActive=${updatedData.premiumActive}`
+        );
+
+        return res.json({
+          success: true,
+          message: `Assinatura sincronizada! Status: ${mpStatus}`,
+          subscriptionId: updatedData.subscriptionId ?? null,
+          subscriptionStatus: updatedData.subscriptionStatus ?? null,
+          currentPlan: updatedData.currentPlan ?? "free",
+          premiumActive: updatedData.premiumActive ?? false,
+          autoRenew: updatedData.autoRenew ?? false,
+          nextBillingAt: updatedData.nextBillingAt ?? null,
+          syncedAt: new Date().toISOString(),
+        });
+      } catch (mpErr) {
+        const err = mpErr as any;
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        const status = err?.status || err?.statusCode || err?.response?.status;
+
+        console.error(`[subscriptions/sync-now] ❌ Error fetching from MP: ${errorMsg}`);
+        console.error(`[subscriptions/sync-now] Status: ${status}`);
+
+        return res.status(500).json({
+          error: "MP_SYNC_ERROR",
+          message: `Erro ao sincronizar com Mercado Pago: ${errorMsg}`,
+          subscriptionId: data.subscriptionId,
+        });
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      console.error(`[subscriptions/sync-now] ❌ CRITICAL ERROR: ${msg}`);
+      logSubError("sync-now", uid, msg);
+      return res.status(500).json({
+        error: "SYNC_ERROR",
+        message: msg,
+      });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // POST /api/app-subscription/recover
+  // Recover a paid subscription by searching Mercado Pago with external_reference (uid)
+  // --------------------------------------------------------------------------
+  app.post("/api/app-subscription/recover", requireAuth, async (req: Request, res: Response) => {
+    const uid = (req as any).firebaseUid as string;
+    console.log(`[subscriptions/recover] START uid=${uid}`);
+
+    try {
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+      const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+
+      console.log(`[subscriptions/recover] Searching Mercado Pago for subscriptions with external_reference=${uid}`);
+
+      const preApproval = new PreApproval(mpClient);
+      let foundSubscription: any = null;
+
+      try {
+        console.log(`[subscriptions/recover] ⚠️ Note: Mercado Pago SDK may not support direct search`);
+        console.log(`[subscriptions/recover] Alternative: Checking if subscription exists in local Firestore first`);
+
+        const planSnap = await planRef.get();
+        if (planSnap.exists && planSnap.data()?.subscriptionId) {
+          const existingId = planSnap.data()?.subscriptionId;
+          console.log(`[subscriptions/recover] Found existing subscriptionId in Firestore: ${existingId}`);
+
+          try {
+            const mpSub = await preApproval.get({ id: existingId });
+            foundSubscription = {
+              id: mpSub.id,
+              status: mpSub.status,
+              next_payment_date: (mpSub as any).next_payment_date,
+              last_modified_date: (mpSub as any).last_modified_date,
+            };
+            console.log(
+              `[subscriptions/recover] ✅ Found subscription on MP: ${foundSubscription.id}, status: ${foundSubscription.status}`
+            );
+          } catch (mpErr: any) {
+            console.warn(`[subscriptions/recover] Could not fetch from MP: ${mpErr.message}`);
+          }
+        } else {
+          console.warn(`[subscriptions/recover] No subscriptionId found in local Firestore`);
+          return res.status(404).json({
+            error: "NO_LOCAL_SUBSCRIPTION",
+            message: "Nenhuma assinatura encontrada localmente. Você pode precisar iniciar uma nova assinatura.",
+          });
+        }
+      } catch (searchErr: any) {
+        console.error(`[subscriptions/recover] Error searching for subscription: ${searchErr.message}`);
+      }
+
+      if (!foundSubscription) {
+        return res.status(404).json({
+          error: "NO_SUBSCRIPTION_ON_MP",
+          message: "Assinatura não encontrada no Mercado Pago.",
+        });
+      }
+
+      console.log(`[subscriptions/recover] 📝 Updating Firestore with recovered data`);
+
+      await syncPlanDataFromSubscription(
+        uid,
+        foundSubscription.id,
+        foundSubscription.status as SubscriptionStatus,
+        undefined,
+        foundSubscription.next_payment_date
+      );
+
+      const updatedSnap = await planRef.get();
+      const updatedData = updatedSnap.data();
+          subscriptionId: data.subscriptionId ?? null,
+          subscriptionStatus,
+          currentPlan,
+          premiumActive,
+          autoRenew: data?.autoRenew ?? false,
+          lastPaymentAt: data?.lastPaymentAt ?? null,
+          nextBillingAt: data?.nextBillingAt ?? null,
+          canceledAt: data?.canceledAt ?? null,
+          updatedAt: data?.updatedAt ?? null,
+        },
+        analysis: {
+          hasSubscription,
+          isAuthorized,
+          readSuccessful: true,
+          firebaseRulesActive: true,
+          message: isAuthorized
+            ? "✅ Assinatura ATIVA! Premium deve aparecer no app."
+            : hasSubscription
+            ? `⏳ Assinatura em status: ${subscriptionStatus}. Clique em 'Sincronizar' para atualizar.`
+            : "❌ Nenhuma assinatura encontrada.",
+        },
+      });
+    } catch (error) {
+      const err = error as any;
+      const errorMsg = err instanceof Error ? err.message : String(error);
+      const errorCode = err?.code ?? err?.name ?? "UNKNOWN";
+
+      console.error(`[subscriptions/diagnose] ❌ ERROR: ${errorMsg}`);
+      console.error(`[subscriptions/diagnose] Error Code: ${errorCode}`);
+
+      let diagnosis = "Erro desconhecido ao acessar Firestore.";
+      if (errorCode === "permission-denied" || errorMsg.includes("permission")) {
+        diagnosis =
+          "❌ FIRESTORE RULES NÃO PUBLICADAS! Vá para Firebase Console → Firestore → Rules → Publish. Veja DIAGNOSE_PERMISSION_DENIED.md";
+      } else if (errorCode === "not-found") {
+        diagnosis = "Documento não encontrado (erro raro).";
+      } else if (errorCode === "unauthenticated") {
+        diagnosis = "Você não está autenticado. Faça login novamente.";
+      }
+
+      return res.status(error instanceof Error && errorMsg.includes("permission") ? 403 : 500).json({
+        status: "error",
+        message: errorMsg,
+        errorCode,
+        diagnosis,
+        uid,
+        firebaseRulesActive: !errorMsg.includes("permission"),
+      });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // POST /api/app-subscription/webhook
+  // Receives Mercado Pago preapproval (subscription) webhooks
+  // --------------------------------------------------------------------------
+  app.post("/api/app-subscription/webhook", async (req: Request, res: Response) => {
+    res.status(200).json({ received: true });
+
+    try {
+      const body = req.body;
+      const type: string = body?.type ?? body?.action ?? "";
+      const dataId: string = body?.data?.id ?? body?.id ?? "";
+
+      console.log(`[subscriptions/webhook] ✅ WEBHOOK RECEIVED`);
+      console.log(`[subscriptions/webhook] Full payload:`, JSON.stringify(body, null, 2));
+      console.log(`[subscriptions/webhook] Type: ${type}, ID: ${dataId}`);
+
+      if (type !== "subscription_preapproval" && type !== "preapproval" && !type.includes("preapproval")) {
+        console.log(`[subscriptions/webhook] ⚠️ Ignoring non-subscription event: ${type}`);
+        return;
+      }
+
+      if (!dataId) {
+        console.warn("[subscriptions/webhook] ❌ No id in payload, skipping");
+        return;
+      }
+
+      console.log(`[subscriptions/webhook] Fetching from MP with token: ${!!CENTRAL_ACCESS_TOKEN}`);
+      const preApproval = new PreApproval(mpClient);
+      const mpSub = await preApproval.get({ id: dataId });
+
+      const subscriptionId = mpSub.id!;
+      const uid = (mpSub as any).external_reference;
+      const status = mpSub.status as SubscriptionStatus;
+      const nextBillingDate = (mpSub as any).next_payment_date ?? null;
+
+      console.log(
+        `[subscriptions/webhook] MP response: subscriptionId=${subscriptionId}, uid=${uid}, status=${status}`
+      );
+
+      if (!uid) {
+        console.warn(
+          `[subscriptions/webhook] ❌ No external_reference (uid) for subscriptionId=${subscriptionId}`
+        );
+        return;
+      }
+
+      console.log(
+        `[subscriptions/webhook] 📝 Calling syncPlanDataFromSubscription uid=${uid} subscriptionId=${subscriptionId} status=${status}`
+      );
+
+      await syncPlanDataFromSubscription(uid, subscriptionId, status, undefined, nextBillingDate);
+
+      console.log(
+        `[subscriptions/webhook] ✅ WEBHOOK COMPLETE uid=${uid} status=${status} (Premium: ${status === "authorized"})`
+      );
+    } catch (err) {
+      const errorObj = err as any;
+      const msg = err instanceof Error ? err.message : "Unknown";
+      const status = errorObj?.status || errorObj?.statusCode || errorObj?.response?.status;
+      const responseData = errorObj?.response?.data || errorObj?.data || {};
+
+      console.error(`[subscriptions/webhook] ❌ ERROR processing webhook`);
+      console.error(`[subscriptions/webhook] Error Message: ${msg}`);
+      console.error(`[subscriptions/webhook] Error Status: ${status}`);
+      console.error(`[subscriptions/webhook] Response Data:`, JSON.stringify(responseData, null, 2));
+      console.error(`[subscriptions/webhook] Full Error:`, err);
+    }
+  });
+}
+===== USEPLANDATA =====
+import { useCallback, useEffect, useState } from "react";
+import { getFirestore } from "firebase/firestore";
+import app from "@/lib/firebase";
+
+const db = getFirestore(app);
+import { getFirebaseAuth } from "@/lib/firebase";
+import {
+  PlanData,
+  PLANS,
+  generateReferralCode,
+  getEffectivePlan,
+  GlobalConfig,
+  DEFAULT_GLOBAL_CONFIG,
+} from "@shared/monetization";
+
+function mapPlanData(data: any, currentUid: string): PlanData {
+  return {
+    currentPlan: data.currentPlan ?? PLANS.FREE,
+    premiumActive: data.premiumActive ?? false,
+    premiumExpiresAt: data.premiumExpiresAt?.toDate?.() ?? null,
+    premiumStartedAt: data.premiumStartedAt?.toDate?.() ?? null,
+    premiumSource: data.premiumSource ?? null,
+    referralCode: data.referralCode ?? generateReferralCode(currentUid),
+    referralCount: data.referralCount ?? 0,
+    updatedAt: data.updatedAt?.toDate?.() ?? new Date(),
+
+    subscriptionId: data.subscriptionId ?? null,
+    subscriptionStatus: data.subscriptionStatus ?? null,
+    subscriptionPlanId: data.subscriptionPlanId ?? null,
+    autoRenew: data.autoRenew ?? false,
+    lastPaymentAt: data.lastPaymentAt?.toDate?.() ?? null,
+    nextBillingAt: data.nextBillingAt?.toDate?.() ?? null,
+    canceledAt: data.canceledAt?.toDate?.() ?? null,
+    paymentStatus: data.paymentStatus ?? null,
+  };
+}
+
+export function usePlanData() {
+  const [uid, setUid] = useState<string | null>(null);
+  const [planData, setPlanData] = useState<PlanData | null>(null);
+  const [globalConfig, setGlobalConfig] = useState<GlobalConfig>(DEFAULT_GLOBAL_CONFIG);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const auth = getFirebaseAuth();
+    if (!auth) {
+      setLoading(false);
+      return;
+    }
+
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUid(user?.uid || null);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!uid) {
+      setPlanData(null);
+      setGlobalConfig(DEFAULT_GLOBAL_CONFIG);
+      setLoading(false);
+      return;
+    }
+
+    const db = getFirestore();
+    const configRef = doc(db, "system", "config");
+    const planDocRef = doc(db, "users", uid, "planData", "main");
+
+    setLoading(true);
+    setError(null);
+
+    const unsubscribeConfig = onSnapshot(
+      configRef,
+      (configSnap) => {
+        if (configSnap.exists()) {
+          const data = configSnap.data();
+          setGlobalConfig({
+            premiumOpenAccess: data.premiumOpenAccess ?? false,
+            premiumOpenAccessUntil: data.premiumOpenAccessUntil?.toDate?.() ?? null,
+            premiumOpenAccessMessage: data.premiumOpenAccessMessage ?? null,
+          });
+        } else {
+          setGlobalConfig(DEFAULT_GLOBAL_CONFIG);
+        }
+      },
+      (err) => {
+        console.warn("[usePlanData] Could not load global config, using defaults:", err);
+        setGlobalConfig(DEFAULT_GLOBAL_CONFIG);
+      }
+    );
+
+    const unsubscribePlan = onSnapshot(
+      planDocRef,
+      (planDocSnap) => {
+        try {
+          if (planDocSnap.exists()) {
+            const data = planDocSnap.data();
+            setPlanData(mapPlanData(data, uid));
+          } else {
+            console.warn("[usePlanData] planData/main não encontrado para UID:", uid);
+            setPlanData(null);
+          }
+
+          setError(null);
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          console.error("[usePlanData] ❌ Error processing plan data:", err);
+
+          let userMessage = "Falha ao carregar dados do plano";
+          if (errorMsg.includes("Missing or insufficient permissions")) {
+            userMessage =
+              "Permissão negada ao carregar dados do plano. Entre em contato com suporte.";
+          } else if (errorMsg.toLowerCase().includes("auth")) {
+            userMessage = "Erro de autenticação. Faça login novamente.";
+          }
+
+          setError(userMessage);
+        } finally {
+          setLoading(false);
+        }
+      },
+      (err) => {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error("[usePlanData] ❌ Firestore snapshot error:", err);
+
+        let userMessage = "Falha ao carregar dados do plano";
+        if (errorMsg.includes("Missing or insufficient permissions")) {
+          userMessage =
+            "Permissão negada ao carregar dados do plano. Entre em contato com suporte.";
+        } else if (errorMsg.toLowerCase().includes("auth")) {
+          userMessage = "Erro de autenticação. Faça login novamente.";
+        }
+
+        setError(userMessage);
+        setLoading(false);
+      }
+    );
+
+    return () => {
+      unsubscribeConfig();
+      unsubscribePlan();
+    };
+  }, [uid]);
+
+  const refresh = useCallback(async () => {
+    if (!uid) return;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const db = getFirestore();
+
+      const configRef = doc(db, "system", "config");
+      const planDocRef = doc(db, "users", uid, "planData", "main");
+
+      const [configSnap, planSnap] = await Promise.all([getDoc(configRef), getDoc(planDocRef)]);
+
+      if (configSnap.exists()) {
+        const data = configSnap.data();
+        setGlobalConfig({
+          premiumOpenAccess: data.premiumOpenAccess ?? false,
+          premiumOpenAccessUntil: data.premiumOpenAccessUntil?.toDate?.() ?? null,
+          premiumOpenAccessMessage: data.premiumOpenAccessMessage ?? null,
+        });
+      } else {
+        setGlobalConfig(DEFAULT_GLOBAL_CONFIG);
+      }
+
+      if (planSnap.exists()) {
+        setPlanData(mapPlanData(planSnap.data(), uid));
+      } else {
+        console.warn("[usePlanData] refresh: planData/main não encontrado para UID:", uid);
+        setPlanData(null);
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error("[usePlanData] ❌ Error refreshing plan data:", err);
+
+      let userMessage = "Falha ao atualizar dados do plano";
+      if (errorMsg.includes("Missing or insufficient permissions")) {
+        userMessage =
+          "Permissão negada ao carregar dados do plano. Entre em contato com suporte.";
+      } else if (errorMsg.toLowerCase().includes("auth")) {
+        userMessage = "Erro de autenticação. Faça login novamente.";
+      }
+
+      setError(userMessage);
+    } finally {
+      setLoading(false);
+    }
+  }, [uid]);
+
+  const activePlan = getEffectivePlan(planData, globalConfig);
+
+  const shareLink = uid
+    ? `${typeof window !== "undefined" ? window.location.origin : ""}?ref=${
+        planData?.referralCode || generateReferralCode(uid)
+      }`
+    : null;
+
+  return {
+    planData,
+    globalConfig,
+    activePlan,
+    isPremium: activePlan === PLANS.PREMIUM,
+    referralCode: planData?.referralCode || (uid ? generateReferralCode(uid) : null),
+    shareLink,
+    referralCount: planData?.referralCount || 0,
+    loading,
+    error,
+    refresh,
+    subscriptionStatus: planData?.subscriptionStatus ?? null,
+    nextBillingAt: planData?.nextBillingAt ?? null,
+    canceledAt: planData?.canceledAt ?? null,
+    autoRenew: planData?.autoRenew ?? false,
+  };
+}
+===== APP =====
+import { Switch, Route, useLocation } from "wouter";
+import { queryClient } from "./lib/queryClient";
+import { QueryClientProvider } from "@tanstack/react-query";
+// import { Toaster } from "@/components/ui/toaster";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { useEffect, useState } from "react";
+import { getFirebaseAuth, logTelemetryEvent } from "@/lib/firebase";
+import { onAuthStateChanged } from "firebase/auth";
+import { useUserSettings } from "@/hooks/useUserSettings";
+import { getApiUrl } from "@/lib/api-config";
+
+import Dashboard from "@/pages/dashboard";
+import AddProduct from "@/pages/add-product";
+import Products from "@/pages/products";
+import Sell from "@/pages/sell";
+import Catalog from "@/pages/catalog";
+import Clients from "@/pages/clients";
+import ClientDetail from "@/pages/client-detail";
+import Billings from "@/pages/billings";
+import BillingCalendar from "@/pages/billing-calendar";
+import Marketing from "@/pages/marketing";
+import MonthlySales from "@/pages/monthly-sales";
+import ProductsSold from "@/pages/products-sold";
+import Onboarding from "@/pages/onboarding";
+import PublicCatalog from "@/pages/public-catalog";
+import Reports from "@/pages/reports";
+import Settings from "@/pages/settings";
+import SettingsMercadoPago from "@/pages/settings-mercadopago";
+import Admin from "@/pages/admin";
+import Subscribe from "@/pages/subscribe";
+import Login from "@/pages/login";
+import Signup from "@/pages/signup";
+import NotFound from "@/pages/not-found";
+import { MaintenanceBanner } from "@/components/MaintenanceBanner";
+import { RemoteConfigProvider } from "@/components/RemoteConfigProvider";
+
+function Router() {
+  const [location, setLocation] = useLocation();
+  const [authState, setAuthState] = useState<{ uid: string | null; loading: boolean }>({ uid: null, loading: true });
+  const { settings, loading: settingsLoading } = useUserSettings();
+
+  // Capture referral param on app initialization
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const referralUid = params.get('referral');
+      
+      if (referralUid && referralUid.trim()) {
+        // Log that referral link was opened
+        logTelemetryEvent("referral_link_opened", { referralUid, stage: "app_open" }).catch(() => {});
+        
+        // Validate and persist referral to localStorage
+        const isValidUid = /^[a-zA-Z0-9_-]{10,}$/.test(referralUid); // Basic UUID-like validation
+        if (isValidUid) {
+          try {
+            localStorage.setItem("rs:referral_source", referralUid);
+            logTelemetryEvent("referral_captured", { referralUid, stage: "app_open", result: "success" }).catch(() => {});
+          } catch (e) {
+            console.warn("Failed to save referral to localStorage:", e);
+          }
+        } else {
+          // Invalid referral format
+          logTelemetryEvent("referral_captured", { referralUid, stage: "app_open", result: "invalid" }).catch(() => {});
+        }
+        
+        // Consume the param from URL to prevent re-processing
+        const newUrl = window.location.pathname + window.location.hash;
+        window.history.replaceState({ path: newUrl }, '', newUrl);
+      }
+    }
+  }, []); // Run once on mount
+
+  // Monitor Firebase Auth state
+  useEffect(() => {
+    const auth = getFirebaseAuth();
+    if (!auth) {
+      setAuthState({ uid: null, loading: false });
+      return;
+    }
+
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      setAuthState({ uid: user?.uid || null, loading: false });
+      
+      // Initialize plan data on first login
+      if (user?.uid) {
+        try {
+          const token = await user.getIdToken();
+          await fetch(getApiUrl(`/api/plan/initialize/${user.uid}`), {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+          }).catch(err => console.log('[App] Plan init fetch error (expected if already exists):', err.message));
+        } catch (err) {
+          console.log('[App] Plan initialization error:', err);
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (authState.loading || settingsLoading) return;
+
+    const isPublicRoute =
+      location === "/login" ||
+      location === "/signup" ||
+      location.startsWith("/u/");
+
+    // Redirect unauthenticated users to login
+    if (!authState.uid && !isPublicRoute) {
+      setLocation("/login");
+      return;
+    }
+
+    // Guard: authenticated users who haven't completed onboarding
+    // must go through /onboarding before accessing any other route
+    if (authState.uid && !isPublicRoute && location !== "/onboarding") {
+      if (settings?.onboarding_completed !== true) {
+        setLocation("/onboarding");
+      }
+    }
+  }, [authState, settings, location, setLocation, settingsLoading]);
+
+  return (
+    <>
+      <MaintenanceBanner />
+      <Switch>
+        <Route path="/login" component={Login} />
+        <Route path="/signup" component={Signup} />
+        <Route path="/onboarding" component={Onboarding} />
+        <Route path="/u/:storeSlug" component={PublicCatalog} />
+
+        <Route path="/" component={Dashboard} />
+      <Route path="/products" component={Products} />
+      <Route path="/add" component={AddProduct} />
+      <Route path="/edit-product/:id" component={AddProduct} />
+      <Route path="/sale" component={Sell} />
+      <Route path="/catalog" component={Catalog} />
+      <Route path="/clients" component={Clients} />
+      <Route path="/clients/:id" component={ClientDetail} />
+      <Route path="/billings" component={Billings} />
+      <Route path="/billing-calendar" component={BillingCalendar} />
+      <Route path="/marketing" component={Marketing} />
+      <Route path="/monthly-sales" component={MonthlySales} />
+      <Route path="/products-sold" component={ProductsSold} />
+      <Route path="/social" component={Marketing} />
+      <Route path="/reports" component={Reports} />
+      <Route path="/settings" component={Settings} />
+      <Route path="/settings/mercadopago" component={SettingsMercadoPago} />
+      <Route path="/subscribe" component={Subscribe} />
+      <Route path="/admin" component={Admin} />
+
+      <Route component={NotFound} />
+    </Switch>
+    </>
+  );
+}function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <RemoteConfigProvider>
+        <TooltipProvider>
+          {/* <Toaster /> -- Disabled: causes insertBefore DOM error on initial render */}
+          <Router />
+        </TooltipProvider>
+      </RemoteConfigProvider>
+    </QueryClientProvider>
+  );
+}
+
+export default App;
+
+
+===== PLANSTATUSBADGE =====
+import { Sparkles, Share2, Copy } from "lucide-react";
+import { useState } from "react";
+import { useLocation } from "wouter";
+import { usePlanData } from "@/hooks/usePlanData";
+import { PLANS, isPremiumFromGlobalAccess } from "@shared/monetization";
+
+export function PlanStatusBadge() {
+  const {
+    planData,
+    globalConfig,
+    activePlan,
+    isPremium,
+    referralCode,
+    shareLink,
+    referralCount,
+    loading,
+    error,
+  } = usePlanData();
+
+  const [copied, setCopied] = useState(false);
+  const [, setLocation] = useLocation();
+
+  const isGlobalOnlyPremium = isPremiumFromGlobalAccess(globalConfig);
+  const hasDirectPremium = isPremium && !isGlobalOnlyPremium;
+
+  const handleCopyLink = () => {
+    if (shareLink) {
+      navigator.clipboard.writeText(shareLink);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const debugPlan = {
+    currentPlan: planData?.currentPlan ?? null,
+    premiumActive: planData?.premiumActive ?? null,
+    premiumSource: planData?.premiumSource ?? null,
+    subscriptionStatus: planData?.subscriptionStatus ?? null,
+    isPremium,
+    activePlan,
+    globalPremium: globalConfig?.premiumOpenAccess ?? false,
+    globalPremiumUntil: globalConfig?.premiumOpenAccessUntil
+      ? new Date(globalConfig.premiumOpenAccessUntil).toISOString()
+      : null,
+    firebaseProjectId: import.meta.env.VITE_FIREBASE_PROJECT_ID ?? null,
+    firebaseAuthDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN ?? null,
+    firebaseAppId: import.meta.env.VITE_FIREBASE_APP_ID ?? null,
+    apiBaseUrl: import.meta.env.VITE_API_BASE_URL ?? null,
+  };
+
+  if (loading) {
+    return (
+      <div className="space-y-2">
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-bold bg-gray-100 text-gray-700 animate-pulse">
+          <span>Carregando...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-2">
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-bold bg-red-100 text-red-700">
+          <span>Erro plano</span>
+        </div>
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700 font-medium">
+          {error}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="bg-white/80 border border-gray-200 rounded-lg p-3 text-[11px] text-gray-700 font-mono whitespace-pre-wrap break-all">
+        {JSON.stringify(debugPlan, null, 2)}
+      </div>
+
+      {isGlobalOnlyPremium && (
+        <div
+          className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700 font-medium"
+          data-testid="section-global-premium-active"
+        >
+          ✓ Premium temporariamente liberado!
+        </div>
+      )}
+
+      <div
+        className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-bold ${
+          isPremium ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-700"
+        }`}
+        data-testid="badge-plan-status"
+      >
+        {isPremium && <Sparkles className="w-3.5 h-3.5" />}
+        <span>{isPremium ? "Premium" : "Plano Grátis"}</span>
+      </div>
+
+      {!isPremium && activePlan === PLANS.FREE && (
+        <>
+          <button
+            onClick={() => setLocation("/subscribe")}
+            className="w-full flex items-center justify-center gap-2 bg-amber-500 text-white text-xs font-bold px-3 py-2 rounded-xl active:scale-95 transition-all shadow-sm"
+            data-testid="button-upgrade-premium"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            Assinar Premium — R$ 19,90/mês
+          </button>
+
+          <div
+            className="bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-2"
+            data-testid="section-referral-info"
+          >
+            <div className="text-xs font-bold text-blue-700">
+              Ou indique e ganhe Premium! ({referralCount}/3)
+            </div>
+
+            {referralCode && (
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={referralCode}
+                  readOnly
+                  className="flex-1 text-xs px-2 py-1 bg-white border border-blue-200 rounded text-blue-600 font-mono"
+                  data-testid="input-referral-code"
+                />
+                <button
+                  onClick={handleCopyLink}
+                  className="px-2 py-1 bg-blue-500 text-white rounded text-xs font-bold hover:bg-blue-600 active:scale-95 transition-all flex items-center gap-1"
+                  data-testid="button-copy-referral"
+                >
+                  {copied ? "✓" : <Copy className="w-3 h-3" />}
+                </button>
+              </div>
+            )}
+
+            {shareLink && (
+              <a
+                href={shareLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-700 p-1 rounded hover:bg-blue-100 transition-colors"
+                data-testid="link-share-referral"
+              >
+                <Share2 className="w-3 h-3" />
+                Compartilhar Link
+              </a>
+            )}
+          </div>
+        </>
+      )}
+
+      {hasDirectPremium && (
+        <div className="space-y-2">
+          <div
+            className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700 font-medium"
+            data-testid="section-premium-active"
+          >
+            ✓ Você tem acesso a todos os recursos Premium!
+          </div>
+
+          <button
+            onClick={() => setLocation("/subscribe")}
+            className="w-full text-xs text-muted-foreground border border-gray-100 rounded-lg p-2 active:scale-95 transition-all"
+            data-testid="button-manage-subscription"
+          >
+            Gerenciar assinatura
+          </button>
+        </div>
+      )}
+
+      {isGlobalOnlyPremium && (
+        <button
+          onClick={() => setLocation("/subscribe")}
+          className="w-full text-xs text-muted-foreground border border-gray-100 rounded-lg p-2 active:scale-95 transition-all"
+          data-testid="button-manage-subscription"
+        >
+          Gerenciar assinatura
+        </button>
+      )}
+    </div>
+  );
+}
+===== FIREBASE CLIENT =====
+import { initializeApp, FirebaseApp } from "firebase/app";
+import { getAuth, Auth, User } from "firebase/auth";
+import { initializeErrorLogging, logError, setUserContext } from "./error-logging";
+import { initializeInternalTelemetry } from "./internal-telemetry";
+import { initializeFirebaseAnalytics } from "./firebase-analytics";
+import { initializeFirebasePerformance } from "./firebase-performance";
+import { initializeRemoteConfig, fetchRemoteConfig } from "./remote-config";
+
+// Firebase configuration from Vite environment variables
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+};
+
+let app: FirebaseApp | null = null;
+let authInstance: Auth | null = null;
+let initError: string | null = null;
+
+/**
+ * Initialize Firebase safely
+ * Returns { app, auth, error }
+ * If config is invalid, returns error message without crashing
+ */
+function initializeFirebase() {
+  if (app !== null || initError !== null) {
+    return { app, auth: authInstance, error: initError };
+  }
+
+  try {
+    // Check if config is valid (all keys are required)
+    const requiredKeys = ["apiKey", "authDomain", "projectId", "appId"] as const;
+    for (const key of requiredKeys) {
+      if (!firebaseConfig[key]) {
+        throw new Error(`Missing Firebase config: ${key}`);
+      }
+    }
+
+    // Diagnóstico completo do ambiente Firebase carregado no frontend
+    const apiKey = firebaseConfig.apiKey;
+    const maskedApiKey = apiKey
+      ? `${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)}`
+      : "UNDEFINED";
+
+    console.log("[FIREBASE DEBUG] apiKey loaded from VITE_FIREBASE_API_KEY:", maskedApiKey);
+    console.log("[FIREBASE DEBUG] projectId:", firebaseConfig.projectId);
+    console.log("[FIREBASE DEBUG] authDomain:", firebaseConfig.authDomain);
+    console.log("[FIREBASE DEBUG] appId:", firebaseConfig.appId);
+    console.log("[FIREBASE DEBUG] storageBucket:", firebaseConfig.storageBucket);
+    console.log("[FIREBASE DEBUG] messagingSenderId:", firebaseConfig.messagingSenderId);
+
+    // Initialize Firebase
+    app = initializeApp(firebaseConfig);
+    authInstance = getAuth(app);
+
+    // Logs pós-init para garantir qual app/projeto está de pé
+    console.log("[FIREBASE DEBUG] initialized app name:", app.name);
+    // @ts-ignore
+    console.log("[FIREBASE DEBUG] initialized app projectId:", app.options?.projectId);
+    // @ts-ignore
+    console.log("[FIREBASE DEBUG] initialized app authDomain:", app.options?.authDomain);
+
+    // Initialize error logging after Firebase is initialized
+    try {
+      initializeErrorLogging(app);
+    } catch (err) {
+      console.warn("[Firebase] Error logging initialization failed, continuing without it");
+    }
+
+    // Initialize internal telemetry after Firebase is initialized
+    try {
+      initializeInternalTelemetry(app);
+    } catch (err) {
+      console.warn("[Firebase] Internal telemetry initialization failed, continuing without it");
+    }
+
+    // Initialize Firebase Analytics official
+    try {
+      initializeFirebaseAnalytics(app);
+    } catch (err) {
+      console.warn("[Firebase] Firebase Analytics initialization failed, continuing without it");
+    }
+
+    // Initialize Firebase Performance Monitoring
+    try {
+      initializeFirebasePerformance(app);
+    } catch (err) {
+      console.warn("[Firebase] Firebase Performance Monitoring initialization failed, continuing without it");
+    }
+
+    // Initialize Firebase Remote Config
+    try {
+      initializeRemoteConfig(app);
+    } catch (err) {
+      console.warn("[Firebase] Firebase Remote Config initialization failed, continuing without it");
+    }
+
+    return { app, auth: authInstance, error: null };
+  } catch (error: any) {
+    initError = error?.message || "Failed to initialize Firebase";
+    console.error("[Firebase] Initialization error:", initError);
+    return { app: null, auth: null, error: initError };
+  }
+}
+
+// Lazy initialization - only initialize when needed
+export function getFirebaseAuth(): Auth | null {
+  const { auth } = initializeFirebase();
+  return auth;
+}
+
+// Re-export Remote Config functions for convenience
+export {
+  isFeatureEnabled,
+  getFlag,
+  getAllFlags,
+  getMaintenanceInfo,
+  fetchRemoteConfig,
+  refreshRemoteConfig,
+  setupConfigUpdateListener,
+  unsubscribeFromConfigUpdates,
+} from "./remote-config";
+
+export function getFirebaseError(): string | null {
+  initializeFirebase();
+  return initError;
+}
+
+// Returns the currently signed-in Firebase user (null if not authenticated)
+export function getCurrentFirebaseUser(): User | null {
+  const { auth } = initializeFirebase();
+  return auth?.currentUser ?? null;
+}
+
+// Returns true if Firebase is configured and initialized
+export function isFirebaseConfigured(): boolean {
+  const { app } = initializeFirebase();
+  return app !== null;
+}
+
+// Get current user's ID token for API authorization
+export async function getFirebaseIdToken(): Promise<string | null> {
+  try {
+    const { auth } = initializeFirebase();
+    console.log("[getFirebaseIdToken] auth exists:", !!auth);
+
+    const user = auth?.currentUser;
+    console.log(
+      "[getFirebaseIdToken] currentUser exists:",
+      !!user,
+      user?.uid ? `uid=${user.uid}` : "no uid"
+    );
+
+    if (!user) {
+      console.log("[getFirebaseIdToken] No user, returning null");
+      return null;
+    }
+
+    const token = await user.getIdToken();
+    console.log(
+      "[getFirebaseIdToken] Token obtained:",
+      token ? `token=${token.substring(0, 20)}...` : "null"
+    );
+    return token;
+  } catch (e) {
+    console.warn("[getFirebaseIdToken] Failed to get ID token:", e);
+
+    // Log to Crashlytics
+    if (e instanceof Error) {
+      logError("firebase_id_token_error", e.message, {
+        error: e,
+        severity: "warning",
+      });
+    }
+
+    return null;
+  }
+}
+
+// Export error logging utilities for use in other modules
+export { logError, logEvent, setUserContext, clearUserContext } from "./error-logging";
+
+// Export internal telemetry utilities (for detailed debug/audit logging)
+export {
+  logTelemetryEvent,
+  setTelemetryUserId,
+  clearTelemetryUserId,
+  type InternalTelemetryEvents,
+} from "./internal-telemetry";
+
+// Export Firebase Analytics official utilities (for product analytics)
+export {
+  trackAnalyticsEvent,
+  setFirebaseAnalyticsUserId,
+  setFirebaseAnalyticsUserProperty,
+  type FirebaseAnalyticsEvents,
+} from "./firebase-analytics";
+
+// Export performance monitoring utilities for use in other modules
+export {
+  measureOperation,
+  measureSyncOperation,
+  createTrace,
+  withPerformanceTrace,
+} from "./firebase-performance";/**
+ * Configure API base URL for frontend requests
+ * Uses VITE_API_BASE_URL environment variable
+ * Falls back to window.location.origin in local development
+ */
+export function getApiBaseUrl(): string {
+  const viteApiBase = import.meta.env.VITE_API_BASE_URL;
+  
+  if (viteApiBase) {
+    console.log("[API Config] Using VITE_API_BASE_URL:", viteApiBase);
+    return viteApiBase;
+  }
+
+  // Fallback to current origin (works for local dev)
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5000';
+  console.log("[API Config] Using window.location.origin:", origin);
+  return origin;
+}
+
+/**
+ * Build full API URL from endpoint
+ * @param endpoint e.g., "/api/user/settings/{uid}"
+ */
+export function getApiUrl(endpoint: string): string {
+  const baseUrl = getApiBaseUrl();
+  return `${baseUrl}${endpoint}`;
+}
+
+===== FIREBASE ADMIN =====
+import admin from "firebase-admin";
+
+let firebaseAdmin: typeof admin | null = null;
+let initialized = false;
+
+export function initializeFirebaseAdmin() {
+  if (initialized && firebaseAdmin) return firebaseAdmin;
+
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n");
+
+  if (!projectId || !clientEmail || !privateKey) {
+    throw new Error("Missing Firebase Admin credentials in environment");
+  }
+
+  try {
+    if (!admin.apps.length) {
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          projectId,
+          clientEmail,
+          privateKey,
+        }),
+        projectId,
+      });
+    }
+
+    firebaseAdmin = admin;
+    initialized = true;
+    return firebaseAdmin;
+  } catch (error) {
+    console.error("[firebase-admin-init] Failed to initialize firebase-admin:", error);
+    throw error;
+  }
+}
+
+export function getFirebaseAdmin() {
+  if (!initialized || !firebaseAdmin) {
+    throw new Error("Firebase Admin not initialized");
+  }
+  return firebaseAdmin;
+}
+
+===== GREPS =====
+server/subscriptions.ts:  const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+server/subscriptions.ts:      const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+server/subscriptions.ts:      const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+server/subscriptions.ts:      const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+server/subscriptions.ts:      const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+server/subscriptions.ts:      const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+server/subscriptions.ts:      const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+server/routes.ts:      const planDocRef = db.collection("users").doc(userId).collection("planData").doc("main");
+server/routes.ts:      const planDocRef = db.collection("users").doc(userId).collection("planData").doc("main");
+server/routes.ts:      const planDocRef = db.collection("users").doc(referrerUID).collection("planData").doc("main");
+server/routes.ts:      const planRef = db.collection("users").doc(targetUserId).collection("planData").doc("main");
+server/routes.ts:  // POST /api/plan/initialize/:userId
+server/routes.ts:  app.post("/api/plan/initialize/:userId", requireAuth, requireOwnership, async (req, res) => {
+client/src/App.tsx:          await fetch(getApiUrl(`/api/plan/initialize/${user.uid}`), {
+server/subscriptions.ts:          currentPlan: "free",
+server/subscriptions.ts:          currentPlan: "free",
+server/routes.ts:        currentPlan: "free",
+server/routes.ts:        currentPlan: "free",
+server/subscriptions.ts:          premiumActive: false,
+server/subscriptions.ts:          premiumActive: false,
+server/routes.ts:        premiumActive: false,
+server/routes.ts:        premiumActive: false,
+server/subscriptions.ts:          premiumSource: null,
+server/routes.ts:        premiumSource: null,
+server/routes.ts:        premiumSource: null,
+
+===== DIST =====
+dist/public/index.html
+dist/public/opengraph.jpg
+dist/public/assets/index-BBGCSXig.css
+dist/public/assets/index-n90VMmg3.js
+dist/public/icons/icon-512x512.png
+dist/public/icons/icon-1024x1024.png
+dist/public/icons/icon-256x256.png
+dist/public/icons/icon-192x192.png
+dist/public/terms-of-service.md
+dist/public/manifest.json
+dist/public/sw.js
+dist/public/favicon.png
+dist/public/privacy-policy.md
+
+===== BUILD =====
+
+> rest-express@1.0.0 build
+> tsx script/build.ts
+
+building client...
+vite v7.3.1 building client environment for production...
+transforming...
+✓ 3489 modules transformed.
+[plugin vite:reporter] 
+(!) /home/natanaelam2000/Revendasmart/node_modules/firebase/firestore/dist/esm/index.esm.js is dynamically imported by /home/natanaelam2000/Revendasmart/client/src/pages/products.tsx but also statically imported by /home/natanaelam2000/Revendasmart/client/src/hooks/useCharges.ts, /home/natanaelam2000/Revendasmart/client/src/hooks/useClientsData.ts, /home/natanaelam2000/Revendasmart/client/src/hooks/useDashboardData.ts, /home/natanaelam2000/Revendasmart/client/src/hooks/useMPConnections.ts, /home/natanaelam2000/Revendasmart/client/src/hooks/usePlanData.ts, /home/natanaelam2000/Revendasmart/client/src/pages/add-product.tsx, /home/natanaelam2000/Revendasmart/client/src/pages/billings.tsx, /home/natanaelam2000/Revendasmart/client/src/pages/products.tsx, /home/natanaelam2000/Revendasmart/client/src/pages/sell.tsx, dynamic import will not move module into another chunk.
+
+rendering chunks...
+[meta-images] no Replit deployment domain found, skipping meta tag updates
+computing gzip size...
+../dist/public/index.html                     1.57 kB │ gzip:   0.62 kB
+../dist/public/assets/index-BBGCSXig.css    133.93 kB │ gzip:  20.61 kB
+../dist/public/assets/index-n90VMmg3.js   2,014.55 kB │ gzip: 574.30 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 11.70s
+building server...
+✘ [ERROR] Unexpected end of file
+
+    server/routes.ts:961:89:
+      961 │ ...nse(res, 400, "INVALID_REQUEST", "targetUserEmail is required");
+          ╵                                                                    ^
+
+1 error
+Error: Build failed with 1 error:
+server/routes.ts:961:89: ERROR: Unexpected end of file
+    at failureErrorWithLog (/home/natanaelam2000/Revendasmart/node_modules/esbuild/lib/main.js:1467:15)
+    at /home/natanaelam2000/Revendasmart/node_modules/esbuild/lib/main.js:926:25
+    at /home/natanaelam2000/Revendasmart/node_modules/esbuild/lib/main.js:878:52
+    at buildResponseToResult (/home/natanaelam2000/Revendasmart/node_modules/esbuild/lib/main.js:924:7)
+    at /home/natanaelam2000/Revendasmart/node_modules/esbuild/lib/main.js:951:16
+    at responseCallbacks.<computed> (/home/natanaelam2000/Revendasmart/node_modules/esbuild/lib/main.js:603:9)
+    at handleIncomingPacket (/home/natanaelam2000/Revendasmart/node_modules/esbuild/lib/main.js:658:12)
+    at Socket.readFromStdout (/home/natanaelam2000/Revendasmart/node_modules/esbuild/lib/main.js:581:7)
+    at Socket.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:563:12) {
+  errors: [Getter/Setter],
+  warnings: [Getter/Setter]
+}

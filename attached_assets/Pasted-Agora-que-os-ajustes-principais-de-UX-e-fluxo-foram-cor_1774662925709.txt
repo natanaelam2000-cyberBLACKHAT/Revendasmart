@@ -1,0 +1,96 @@
+Agora que os ajustes principais de UX e fluxo foram corrigidos, quero começar a implementar funções do Firebase com prioridade prática e sem abrir frentes demais.
+
+Quero seguir esta ordem:
+
+1. Crashlytics
+2. Analytics / Eventos
+3. App Check
+4. Remote Config
+
+Objetivo:
+- melhorar estabilidade
+- capturar erros reais de produção
+- medir uso real do app
+- proteger melhor o app
+- permitir ajustes futuros sem novo deploy
+
+==================================================
+FASE 1 — CRASHLYTICS
+==================================================
+
+Quero implementar Crashlytics primeiro.
+
+Objetivo:
+- capturar erros reais
+- registrar crashes e falhas importantes
+- facilitar diagnóstico em produção
+
+Quero que você:
+- avalie a arquitetura atual
+- veja o que precisa ser preparado
+- identifique os pontos mais importantes para captura de erro
+- implemente de forma segura e limpa
+
+==================================================
+FASE 2 — ANALYTICS / EVENTOS
+==================================================
+
+Depois quero implementar Analytics com eventos úteis do app.
+
+Quero medir principalmente:
+- cadastro criado
+- login realizado
+- produto criado
+- cliente criado
+- venda registrada
+- link de pagamento gerado
+- pagamento via catálogo iniciado
+- anúncio/copiar anúncio
+- compartilhamento de catálogo
+
+Quero eventos claros, úteis e coerentes com o produto.
+
+==================================================
+FASE 3 — APP CHECK
+==================================================
+
+Depois quero avaliar e implementar App Check.
+
+Objetivo:
+- proteger Firebase/backend
+- reduzir uso indevido
+- melhorar segurança do app
+
+==================================================
+FASE 4 — REMOTE CONFIG
+==================================================
+
+Depois quero preparar Remote Config para controlar:
+- features futuras
+- banners
+- comportamento de funções
+- liga/desliga sem novo deploy
+
+==================================================
+REGRAS IMPORTANTES
+==================================================
+
+- não implementar tudo de uma vez sem critério
+- seguir a ordem definida
+- explicar o que faz sentido de verdade para o RevendaSmart
+- evitar complexidade desnecessária
+- manter consistência com a arquitetura atual
+- validar build a cada etapa
+
+==================================================
+ENTREGA FINAL
+==================================================
+
+Quero começar pela FASE 1 agora.
+
+No final quero:
+1. diagnóstico da integração do Crashlytics
+2. arquivos alterados
+3. como ficou a captura de erros
+4. confirmação de build
+5. recomendação da próxima etapa depois disso

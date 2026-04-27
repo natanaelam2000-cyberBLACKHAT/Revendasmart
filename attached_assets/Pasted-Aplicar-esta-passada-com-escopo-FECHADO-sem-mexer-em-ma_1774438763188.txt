@@ -1,0 +1,72 @@
+Aplicar esta passada com escopo FECHADO, sem mexer em mais nada:
+
+Arquivos:
+- client/src/App.tsx
+- client/src/pages/login.tsx
+- client/src/pages/onboarding.tsx
+
+Objetivo:
+remover a dependência do fluxo principal em localStorage e usar apenas Firebase Auth real + settings reais do Firestore.
+
+Regras:
+- não mexer em layout.tsx
+- não mexer em products.tsx
+- não mexer em clients.tsx
+- não mexer em sell.tsx
+- não mexer em Vercel
+- não mexer em debug visual fora desses 3 arquivos
+
+Tarefas:
+
+1) App.tsx
+- remover uso de getCurrentUserId()
+- remover uso de getStored(STORAGE_KEYS.SETTINGS, ...)
+- o guard principal deve usar Firebase Auth real
+- o onboarding guard deve usar useUserSettings()
+- só redirecionar para /login quando auth real disser que não há usuário
+- se autenticado e onboarding_completed !== true, ir para /onboarding
+- se autenticado e onboarding_completed === true, permitir rota normal
+
+2) login.tsx
+- remover bootstrapUserData(...)
+- remover localStorage.setItem("rs:session", ...)
+- remover leitura getStored(STORAGE_KEYS.SETTINGS, ...)
+- após signInWithEmailAndPassword:
+  - usar user.uid
+  - obter token com user.getIdToken()
+  - buscar /api/user/settings/${uid}
+  - decidir rota por onboarding_completed real do Firestore
+    - true => "/"
+    - false/ausente => "/onboarding"
+
+3) onboarding.tsx
+- remover getStored
+- remover saveStored
+- remover STORAGE_KEYS
+- remover getCurrentUserId() de mock-data
+- usar Firebase Auth real para obter uid
+- obter token real
+- salvar onboarding somente via /api/user/settings/${uid}
+- em sucesso, setLocation("/")
+- não depender de localStorage como fonte principal
+
+Entrega:
+- diff resumido
+- linhas removidas de localStorage
+- como validar
+
+Depois da alteração, eu vou rodar estes comandos no terminal para validação:
+printf '\n===== App.tsx =====\n'
+sed -n '1,240p' client/src/App.tsx
+
+printf '\n===== login.tsx =====\n'
+sed -n '1,240p' client/src/pages/login.tsx
+
+printf '\n===== onboarding.tsx =====\n'
+sed -n '1,260p' client/src/pages/onboarding.tsx
+
+printf '\n===== busca localStorage no fluxo principal =====\n'
+grep -RInE 'getCurrentUserId|getStored\\(|saveStored\\(|bootstrapUserData|rs:session' client/src/App.tsx client/src/pages/login.tsx client/src/pages/onboarding.tsx
+
+printf '\n===== build =====\n'
+npm run build

@@ -1,0 +1,68 @@
+modules = ["nodejs-20", "web", "postgresql-16", "javascript", "nix"]
+run = "npm run dev"
+hidden = [".config", ".git", "generated-icon.png", "node_modules", "dist"]
+
+[nix]
+channel = "stable-24_05"
+packages = ["yakut", "nano", "firebase-tools"]
+
+[[ports]]
+localPort = 5000
+
+[[ports]]
+localPort = 9005
+externalPort = 80
+
+[env]
+PORT = "5000"
+
+[deployment]
+deploymentTarget = "autoscale"
+build = ["npm", "run", "build"]
+publicDir = "dist/public"
+run = ["node", "./dist/index.cjs"]
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run dev"
+waitForPort = 5000
+
+[agent]
+stack = "MOCKUP_JS"
+mockupState = "FULLSTACK"
+
+[userenv]
+
+[userenv.shared]
+VITE_FIREBASE_API_KEY = "AIzaSyC16JB49AvJVZ5oUU8aUuTH65LKen4iG_k"
+VITE_FIREBASE_AUTH_DOMAIN = "revenda-smart.firebaseapp.com"
+VITE_FIREBASE_PROJECT_ID = "revenda-smart"
+VITE_FIREBASE_STORAGE_BUCKET = "revenda-smart.firebasestorage.app"
+VITE_FIREBASE_MESSAGING_SENDER_ID = "764966803100"
+VITE_FIREBASE_APP_ID = "1:764966803100:web:5a84951bfae403cf767f59"
+FIREBASE_PROJECT_ID = "revenda-smart"
+FIREBASE_CLIENT_EMAIL = "firebase-adminsdk-fbsvc@revenda-smart.iam.gserviceaccount.com"
+FIREBASE_PRIVATE_KEY = 'BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC8NfR9EKjsmOBh\nyix4FGw975o6nOUXfCV9X+zum8ibmjRvduBhOuyWRKB1XfIHetWfOxcHKN0qESq9\nUzwJZ71k0Kn+VQGBqa2VOupAeUJNr37wtnd64fG4RlYS9tZY+K4hSJ7S0//xJZNZ\nT5PcXk+ixpvHPsKkdzUQUnHaV5hktZvhPk7I8Ii6QfxEFmurx6zqDhtrfc3N2Rls\nPhCkbwKetJmQxZvPIDmT0FXVJYw7GQZKBkrq6m131+K4c/URC6abdrfvC0b7HdV9\n8g1BKmvsTAq66keECbAnENuRMP9pJBDLf7KZJVDkukOuFi3V8vK0PkMJyiy/t4v4\nK/raL/6JAgMBAAECggEAHckdf9bCymwd7pFJXQOWZxg5PJdskL0+ovXVuvlVKShM\nA2vjx19vkQ8b+cG8C5T+o8F9O86AGdKNBK4HLVHeoPV+Qa2ARzNBhlbEOx81mrJw\nZiCVDhHIkv+GoF+yEnM1/jcjnifw3wqxpAu6UcDB3PfjhV0YVAuNjp9i50lqPl2o\nJNGVhVU1//CenDWWYaqG0u1Y/pvLcJsWmRTgOb/IwxnOrj6bW10yau4Xt2lClj6X\nu3XZx9SdCGJLsWEXUoIecwRhA4ROqkc0fVdUBH/927RxLsh5lEhsiU+zTZxComAX\nTICd+OSTFPMfp+fUwhnWHIESQfyx+HK5j3sqaY9RdQKBgQD1siVOY/cOp+9ROMFb\ndudh4JsxINxQ7rSZAeUSaPPAYv0HWz5RkfNMwCQwgTeqetCprbUbc/R/urvi+za3\n5NirEZMyxlNtFGFWcg6EtTyF6B8cWF0PeGwGD54ktBHKAKdWZb2GaWgI2o6uooB1\niqU5/YjQJZ/gV0vrjp6vd1+/TwKBgQDEGqJeUnYAL14Ig2zCsEiIPzH4CnP0kpBk\ngN8FOg7QuH+WjU0QtnPHIiJX23IXHFgs+MneicilzBExvvsF2BYYwm7DJ/pdynQG\njH9+evbAL3Hp51P0Wumw/ii1dzOfk78GhUFuyLmrji0UxNcz9srESA1TJ/xsOGMm\n61kibYYupwKBgElcF6eAUZQesGYf/BvDNPMUjUHt/dpsa6AD4NHOZHldFQ/NPp48\nZdjUxfl1m5lbclI3e4vm42n/53muaHgf7FGnvbu7W82F+EpHY+5b7uZMmH1uJNsp\nqZdlsmJjIaye5Vf2qNApSNbb6x5ZhuGRtCPMf70mfsYNSq3at6bMjdohAoGBAKxa\nvFoqH4wKFZtl5zE1vooBAOoARemu5zluCpWNcXgAsCKiDhmiQh/C4GxXcu7c+qKM\nBuCQOMl/kZ0nPXjlcoZQXQkpGeNVDKS011lSuYwwJu5tYlxhiwMEXsMfAUA/mqUg\neWHlCUq+quCWII6LWaspqIxtmG2FIaATOUQI/uYBAoGBAO1tPnIj2OxWYlDi7/XI\ngwxpIvUR9A7gdToxiVWlxHCgSsjkgJOoP2Eq+A7cNhjTtQ7pfkioRCYYIzMOQhwD\nrGjrK92d8qix+6dmmbQVYRSIie0W39wzShsJH3k2En608v0NV6zbF4kUr4LQlrMy\ngcz9qNYDXIdDA3oMyfhRYVEf\n-----END PRIVATE KEY-----'
+APP_BASE_URL = "https://reseller-catalog-hub.replit.app"
+FRONTEND_URL = "https://revendasmart.vercel.app"
+MERCADOPAGO_TOKEN_ENCRYPTION_KEY = "38005ed167ea6b1c10fc45f85516c954919de703cbed704bdd01ecbae7774864"
+MERCADOPAGO_CLIENT_ID = "4049517568237950"
+MERCADOPAGO_CLIENT_SECRET = "OHUcGfcy6SMnp4dLsynhurWR7DE4orOI"
+MERCADOPAGO_ACCESS_TOKEN = "APP_USR-4049517568237950-031116-3bba9147369a318e1a16009ffa01910c-178279905"
+MERCADOPAGO_REDIRECT_URI = "https://reseller-catalog-hub.replit.app/api/mercadopago/callback"

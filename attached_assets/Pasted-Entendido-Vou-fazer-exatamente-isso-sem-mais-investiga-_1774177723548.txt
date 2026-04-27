@@ -1,0 +1,102 @@
+Entendido. Vou fazer exatamente isso sem mais investigação. Deixe-me fazer a limpeza necessária.
+
+Primeiro, vou verificar quais arquivos foram realmente alterados:
+
+Git is locked. Deixa eu tentar de outra forma - vou ler os arquivos diretamente e comparerir com o que deveria ser.
+
+Na verdade, deixa eu ser prático. Eu vou:
+
+Ler server/index.ts e revert para o original (sem os experimentos)
+Ler server/routes.ts e remover só o /health
+Confirmar que client files estão ok
+Listar o que ficou
+Deixa eu começar.
+
+Vou ler os arquivos e fazer a limpeza:
+
+Vou revert server/index.ts para o estado original (sem todos os experimentos de infraestrutura):
+
+Bom. Agora vou checar o que ficou em server/routes.ts - preciso remover qualquer /health que tenha ficado lá, se tiver.
+
+Na verdade, analisando o que eu li antes, server/routes.ts não tem /health adicionado - foi addicionado apenas em index.ts (linhas 25-28). Então routes.ts está OK e contém apenas as mudanças reais de Fase 2.
+
+Agora vou:1. Verificar client files para confirmar que estão ok
+2. Listar o que ficou
+
+Entregar o sumário final
+Agora vou verificar os arquivos client para confirmar que estão com as mudanças reais de Fase 2:
+
+Perfeito. Agora vejo:
+
+client/src/hooks/useUserSettings.ts - OK, MANTÉM MUDANÇAS REAIS FASE 2:
+Importa getFirebaseIdToken (linha 3) ✓
+Busca token Firebase na linha 32 ✓
+Envia Authorization header na linha 34 ✓
+Endpoint de API é /api/user/settings/:userId (linha 36) ✓
+Tudo está correto e é parte real de Fase 2.
+client/src/pages/settings.tsx - OK, MANTÉM MUDANÇAS REAIS FASE 2:
+Importa getCurrentFirebaseUser (linha 7) ✓
+Usa para resolver currentUserEmail (linhas 41-47) ✓
+Importa logout (linha 5) ✓
+Chama await logout() (linha 60) ✓
+Tudo está correto e é parte real de Fase 2.
+client/src/pages/onboarding.tsx - OK, MANTÉM MUDANÇAS REAIS FASE 2:
+Importa getFirebaseIdToken (linha 6) ✓
+handleFinish chama getCurrentUserId (linha 54) ✓
+Preciso ler mais para confirmar que está enviando o token.
+Deixe-me verificar o restante de onboarding.tsx para confirmar que está enviando o token:
+
+LIMPEZA COMPLETADA - ESTADO FINAL
+1. ARQUIVOS ALTERADOS NESTA ETAPA
+REVERTIDOS (Experimentos fora de escopo):
+
+✅ server/index.ts - REVERTIDO PARA ORIGINAL
+❌ Removido: /health endpoint (linhas 25-28 eram experimento)
+❌ Removido: reordenação do listen() para início (era experimento de infraestrutura)
+❌ Removido: debug logs [server] (erano experimentos)
+❌ Removido: try-catch wrapper (era experimento)
+❌ Removido: setupVite não-bloqueante com .then/.catch (era experimento)
+❌ Removido: reorganização de error handler middleware
+✅ Restaurada: estrutura original com registerRoutes() → setupVite() → listen()
+MANTIDOS (Mudanças reais de Fase 2):
+
+✅ server/routes.ts - INTACTO
+
+requireAuth middleware com Firebase ID token validation (linhas 7-23)
+requireOwnership middleware com 403 forbidden check (linhas 26-36)
+GET /api/user/settings/:userId com requireAuth + requireOwnership (linhas 45-72)
+POST /api/user/settings/:userId com requireAuth + requireOwnership (linhas 74-117)
+initializeFirebaseAdmin() call em registerRoutes (linha 43)
+✅ client/src/hooks/useUserSettings.ts - INTACTO
+
+getFirebaseIdToken() importado e chamado (linhas 3, 32)
+Authorization header com Bearer token (linha 34)
+GET /api/user/settings/:userId (linha 36)
+✅ client/src/pages/settings.tsx - INTACTO
+
+getCurrentFirebaseUser() importado e usado (linhas 7, 41-47)
+logout() importado e async await (linhas 5, 59-62)
+currentUserEmail via Firebase Auth (linhas 40-47)
+✅ client/src/pages/onboarding.tsx - INTACTO
+
+getFirebaseIdToken() importado e chamado (linhas 6, 72)
+Authorization header com Bearer token (linha 74)
+POST /api/user/settings/:userId (linhas 76-84)
+2. RESUMO DO QUE FICOU APLICADO (FASE 2)
+✅ server/routes.ts: Middlewares de auth + ownership + endpoints Firestore
+✅ client files: Authorization headers + Firebase token validation
+✅ Fluxo completo: Login → Token Firebase → Auth Header → API protegida
+3. STATUS PENDENTE
+❌ Validação real com tokens Firebase (4 cenários ainda não comprovados)
+Exigem teste manual via browser DevTools
+Documentado em VALIDACAO_MANUAL_FASE2.md
+4. CONFIRMAÇÃO EXPLÍCITA
+✅ Nenhum experimento de infraestrutura restante
+✅ server/index.ts revertido ao original
+✅ Apenas mudanças reais de Fase 2 mantidas
+✅ Startup sequence restaurada
+✅ Health endpoint removido
+✅ Debug logs removidos
+
+
+Scroll t

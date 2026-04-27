@@ -1,0 +1,64 @@
+Há 2 bugs críticos restantes no fluxo de Add Product após a implementação multi-nicho.
+
+BUG 1 — SALVAR PRODUTO FALHA
+Sintoma:
+Ao preencher o formulário e clicar em “Salvar no Estoque”, o sistema mostra:
+“Erro ao salvar no servidor. Tente novamente.”
+
+Contexto:
+- Isso acontece após a nova arquitetura multi-nicho
+- O formulário agora inclui productType, categorias dinâmicas, marca híbrida e campos extras por nicho
+- Quero a causa raiz exata, não hipótese genérica
+
+BUG 2 — SELECT DE CATEGORIA AINDA ESTÁ QUEBRADO
+Sintoma:
+O campo Categoria mostra o valor atual (ex: “Camiseta”), mas ao clicar não exibe corretamente a lista completa de opções.
+Parece mostrar apenas o item selecionado, em vez de abrir todas as categorias disponíveis do nicho.
+
+Quero uma investigação técnica profunda dos dois problemas.
+
+O que você deve fazer:
+
+A. BUG DO SAVE
+1. localizar o submit handler de Add Product
+2. logar o payload final enviado ao backend
+3. verificar resposta HTTP real do servidor
+4. identificar se a falha é:
+   - schema/backend
+   - payload inválido
+   - campo undefined/null
+   - Firestore write
+   - autenticação/permissão
+   - incompatibilidade com a nova modelagem multi-nicho
+5. corrigir a causa raiz real
+6. melhorar a mensagem de erro para mostrar algo mais útil durante debug
+
+B. BUG DO SELECT DE CATEGORIA
+1. localizar o componente exato usado no campo Categoria
+2. verificar como as opções estão sendo montadas
+3. comparar o array de categorias esperado vs o array realmente renderizado
+4. verificar se o problema está em:
+   - options
+   - value
+   - controlled component
+   - wrapper customizado
+   - renderização do dropdown
+   - filtro indevido
+5. corrigir para que todas as categorias do nicho apareçam corretamente
+
+Regras:
+- não fazer redesign
+- não trocar arquitetura sem necessidade
+- corrigir de forma cirúrgica
+- provar a causa raiz dos 2 bugs
+- não encerrar sem validar manualmente o fluxo
+
+Entregue no final:
+A. causa raiz do erro ao salvar
+B. causa raiz do select de categoria
+C. arquivos alterados
+D. correções aplicadas
+E. confirmação de teste:
+   - categoria abre com todas as opções
+   - produto salva com sucesso
+   - produto multi-nicho continua compatível

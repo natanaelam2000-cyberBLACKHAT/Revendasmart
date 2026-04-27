@@ -1,0 +1,138 @@
+Agora quero que você faça uma SEGUNDA CAMADA DE AUDITORIA, usando como base o relatório completo que você acabou de gerar.
+
+Seu papel neste momento NÃO é repetir o diagnóstico anterior.
+Seu papel agora é atuar como revisor crítico, auditor de consistência e priorizador executivo-técnico da análise já produzida.
+
+OBJETIVO:
+Revisar o relatório anterior com máxima severidade para:
+1. validar se as conclusões realmente fazem sentido
+2. identificar pontos onde a análise ficou genérica, superficial ou pouco acionável
+3. aprofundar os problemas mais perigosos
+4. transformar o diagnóstico em prioridades reais de decisão
+5. separar com mais rigor o que é bloqueador, o que é importante e o que é apenas melhoria futura
+
+CONTEXTO:
+O relatório anterior deve ser tratado como a base principal.
+Você deve partir dele para fazer uma análise complementar mais dura, mais precisa e mais estratégica.
+Não reescreva tudo do zero.
+Trabalhe em cima do que já foi encontrado.
+
+MODO DE ATUAÇÃO:
+Atue simultaneamente como:
+- revisor crítico do relatório anterior
+- arquiteto de software sênior
+- auditor técnico de produto
+- QA lead
+- especialista em UX de app/SaaS
+- avaliador de prontidão para lançamento
+
+REGRAS DESTA SEGUNDA ETAPA:
+1. Não repita grandes blocos do primeiro relatório sem necessidade.
+2. Questione conclusões frouxas, vagas ou genéricas.
+3. Se algum problema foi citado no primeiro relatório sem detalhamento suficiente, detalhe agora.
+4. Se alguma recomendação foi genérica demais, transforme em ação objetiva.
+5. Se algum ponto foi classificado de forma branda demais, reclassifique com mais rigor.
+6. Se houver inconsistência entre partes do primeiro relatório, destaque.
+7. Se perceber ausência de algum tema importante, adicione.
+8. Priorize profundidade, clareza e capacidade de decisão.
+9. Seja direto, técnico e honesto.
+
+O QUE EU QUERO NESTA SEGUNDA ANÁLISE:
+
+A. TESTE DE CONSISTÊNCIA DO RELATÓRIO ANTERIOR
+- Quais conclusões do primeiro relatório estão sólidas
+- Quais estão corretas, mas ainda superficiais
+- Quais estão vagas demais
+- Quais parecem pouco sustentadas
+- Quais áreas importantes ainda ficaram subanalisadas
+- Quais riscos podem ter sido subestimados
+
+B. RECLASSIFICAÇÃO DE GRAVIDADE
+Pegue os principais achados do primeiro relatório e reclassifique com rigor.
+Para cada um, diga se ele é:
+- bloqueador imediato
+- crítico
+- alto
+- médio
+- baixo
+Explique por que essa gravidade é a mais correta.
+
+C. ANÁLISE DOS VERDADEIROS BLOQUEADORES
+Quero uma separação clara entre:
+- o que realmente impede avanço técnico
+- o que impede closed testing de qualidade
+- o que impede publicação séria na Play Store
+- o que não impede avanço, mas piora a qualidade
+- o que é melhoria futura e não deve confundir prioridade agora
+
+D. VALIDAÇÃO DE PRONTIDÃO REAL
+Com base no relatório anterior, responda com rigor:
+- o sistema está pronto para continuar avançando?
+- está pronto para estabilização?
+- está pronto para closed testing?
+- está pronto para screenshots honestas de Play Store?
+- está pronto para publicação pública?
+- está pronto para crescer sem gerar caos técnico?
+Para cada resposta, explique o motivo.
+
+E. PRESSÃO SOBRE A ARQUITETURA E A CONFIABILIDADE
+Quero que você pressione especialmente:
+- fonte única de verdade dos dados
+- consistência entre autenticação, sessão e dados persistidos
+- segurança de rotas e isolamento por usuário
+- robustez de persistência
+- riscos de estado inconsistente
+- riscos de comportamento “parece funcionar, mas quebra”
+- gargalos de manutenção e crescimento
+
+F. PRESSÃO SOBRE UX E QUALIDADE DE PRODUTO
+Quero que você aprofunde especialmente:
+- sensação de confiança do usuário
+- risco de erro humano
+- fluxos confusos
+- pontos que parecem MVP improvisado
+- partes do produto que parecem sólidas
+- partes do produto que ainda não parecem prontas para exposição pública
+- se o app transmite valor real ou ainda parece parcialmente montado
+
+G. PLANO DE DECISÃO FINAL
+Com base no relatório 1 + nesta revisão crítica, entregue:
+1. O que deve ser corrigido obrigatoriamente antes de encerrar a fase de PC
+2. O que seria altamente recomendável corrigir agora
+3. O que pode ser empurrado para depois sem comprometer a base
+4. O que deve ser totalmente congelado por enquanto
+5. O que já está bom o suficiente para seguir
+
+H. TOP 15 AÇÕES REAIS
+Monte uma lista com as 15 ações mais importantes de verdade, em ordem de prioridade.
+Para cada ação, informe:
+- objetivo
+- problema que resolve
+- impacto
+- urgência
+- se exige PC ou não
+- se bloqueia Play Store
+- se bloqueia closed testing
+
+I. VEREDITO REVISADO
+No final, faça um veredito ainda mais direto que o primeiro relatório:
+- Qual é a situação real do sistema hoje?
+- Qual é o núcleo do problema atual?
+- O que mais ameaça o produto?
+- O que seria um erro estratégico fazer agora?
+- O que é a decisão mais inteligente antes de encerrar essa fase?
+
+FORMATO DE SAÍDA OBRIGATÓRIO:
+1. Revisão crítica do relatório anterior
+2. Pontos subestimados ou superficiais
+3. Reclassificação dos achados
+4. Bloqueadores reais vs melhorias
+5. Validação de prontidão
+6. Plano final de decisão
+7. Top 15 ações priorizadas
+8. Veredito revisado e definitivo
+
+REGRA FINAL:
+Não alivie a análise só porque o primeiro relatório já foi extenso.
+Quero que esta segunda etapa funcione como uma revisão de diretoria técnica:
+menos descrição genérica, mais pressão, mais priorização, mais clareza do que realmente importa.

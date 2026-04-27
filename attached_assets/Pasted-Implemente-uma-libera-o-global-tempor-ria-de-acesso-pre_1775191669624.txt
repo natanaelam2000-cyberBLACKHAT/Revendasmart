@@ -1,0 +1,136 @@
+Implemente uma liberação global temporária de acesso premium, controlada pelo admin, sem corromper o planData real dos usuários, E resolva junto o problema atual de premium/subscribe que ainda está instável.
+
+CONTEXTO
+- Já existe estrutura de monetização com planData, assinatura e lógica premium/grátis.
+- Já existe painel admin e global config.
+- O objetivo agora é permitir que, no lançamento inicial, todos usem os recursos premium por 1 a 2 meses, sem cobrança, mas sem transformar permanentemente todos em premium no banco.
+- Essa liberação precisa ser centralizada, reversível e segura.
+- Além disso, ainda existe um problema real no fluxo atual:
+  1. conta admin já passou a aparecer como premium
+  2. conta que comprou premium ainda não está 100% confiável
+  3. users/{uid}/planData/main da conta comprada chegou a não existir no Firestore
+  4. /subscribe já teve crash por hook fora de ordem e duplicação de função
+  5. a lógica precisa ficar resiliente para não rebaixar usuário comprado para grátis por ausência/inconsistência temporária de planData
+
+OBJETIVO PRINCIPAL
+Criar uma flag administrativa global, por exemplo:
+- premiumOpenAccess: boolean
+- premiumOpenAccessUntil: timestamp | null
+- premiumOpenAccessMessage: string | null
+
+Quando ativa:
+- todos os usuários devem ter acesso às funções premium
+- limites do plano grátis não devem bloquear
+- telas e CTAs de upgrade devem ser ocultados ou adaptados
+- planData individual não deve ser sobrescrito para premium por causa disso
+
+Quando desativada:
+- volta a lógica normal de assinatura/plano
+- cada usuário volta ao seu estado real
+
+REQUISITOS DE IMPLEMENTAÇÃO
+
+1. MODELAGEM GLOBAL
+Salvar a configuração em um ponto central, por exemplo:
+- Firestore: system/config
+ou equivalente já existente no projeto
+
+Campos esperados:
+- premiumOpenAccess: true/false
+- premiumOpenAccessUntil: Date|null
+- premiumOpenAccessMessage: string|null
+
+2. PAINEL ADMIN
+Adicionar no admin uma seção simples para controlar isso:
+- toggle para ligar/desligar premiumOpenAccess
+- campo opcional para data limite
+- campo opcional para mensagem
+- salvar sem redesign grande
+- usar a infraestrutura administrativa já existente
+
+3. LÓGICA CENTRAL DE ACESSO
+A liberação global deve entrar de forma centralizada na lógica premium.
+Quero uma função/critério central que considere:
+- admin
+- assinatura válida
+- premium manual
+- premiumOpenAccess global
+
+Se a flag global estiver ativa e ainda válida:
+- hasPremiumAccess deve ser true para todos
+
+4. LIMITES DO PLANO GRÁTIS
+Enquanto premiumOpenAccess estiver ativo:
+- limites de produtos/clientes/etc do plano grátis não podem bloquear
+- helpers e gates devem respeitar o acesso global
+- nada de duplicar regra em vários lugares se der para centralizar
+
+5. TELA DE UPGRADE / SUBSCRIBE
+Enquanto premiumOpenAccess estiver ativo:
+- esconder ou adaptar CTA de “Assinar Premium”
+- mostrar mensagem do tipo:
+  “Premium temporariamente liberado”
+- não criar checkout durante esse período, a não ser que exista motivo explícito de manter assinatura disponível
+- preferir comportamento seguro: não incentivar cobrança enquanto open access estiver ativo
+
+6. NÃO CORROMPER planData
+Muito importante:
+- não atualizar currentPlan de todos para premium só por causa da flag global
+- não setar premiumActive=true em massa por causa da flag global
+- o acesso global deve ser interpretado em runtime, não persistido como premium individual
+
+7. PREMIUM MANUAL
+Adicionar também no admin a possibilidade de conceder premium manualmente para um usuário específico, sem depender da assinatura.
+Quero algo simples e seguro:
+- localizar usuário
+- marcar premium manual
+- registrar source/admin
+- idealmente com duração opcional
+- isso deve continuar funcionando mesmo quando a flag global for desligada
+
+8. RESOLVER O PROBLEMA ATUAL DO PREMIUM
+Além da liberação global, corrigir de forma definitiva o problema atual do fluxo premium:
+
+8.1 Conta comprada não pode ser rebaixada para grátis por ausência temporária de planData
+- hoje já houve caso de users/{uid}/planData/main não existir
+- isso não pode fazer o frontend assumir grátis de forma agressiva
+- revisar client/src/hooks/usePlanData.ts
+- aplicar fallback seguro
+- se planData estiver ausente, não concluir imediatamente que o usuário é free
+- preferir estado neutro/seguro e tentativa de recuperação/sincronização antes de renderizar “Plano Grátis”
+
+8.2 /subscribe precisa continuar estável
+- manter corrigido o problema de hook fora de ordem
+- garantir que não exista hook abaixo de return condicional
+- garantir que não exista duplicação residual de função
+- garantir que admin, usuário premium manual e usuário com assinatura válida consigam abrir /subscribe sem crash
+
+8.3 Fonte de verdade única
+- dashboard
+- subscribe
+- PlanStatusBadge
+- gates e limites
+todos devem usar a mesma decisão central de acesso premium
+
+8.4 Comportamento esperado final
+- admin deve ver premium ativo
+- usuário com premium manual deve ver premium ativo
+- usuário com assinatura válida deve ver premium ativo
+- usuário com premiumOpenAccess global ativo deve ver premium ativo temporário
+- usuário free sem nenhuma dessas condições deve ver plano grátis
+- ausência temporária de planData não pode mais produzir downgrade visual indevido
+
+9. COMPATIBILIDADE
+Não quebrar a monetização já existente.
+Não fazer redesign grande.
+Não mexer fora do escopo sem necessidade.
+
+ENTREGUE NO FINAL
+A. como ficou a modelagem da liberação global
+B. onde a flag é salva
+C. como ela afeta a lógica de premium/grátis
+D. como ficam limites e upgrade enquanto estiver ativa
+E. como foi resolvido o problema atual da conta premium / planData ausente
+F. como foi garantida a estabilidade da rota /subscribe
+G. arquivos alterados
+H. riscos remanescentes, se houver

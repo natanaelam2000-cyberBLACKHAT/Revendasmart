@@ -1,0 +1,67 @@
+Vamos iniciar o PACOTE P1 de robustez estrutural.
+
+Objetivo:
+Reduzir riscos técnicos restantes sem abrir novas features, focando em localStorage sensível, error boundary global e preparação para RBAC mais forte com custom claims.
+
+PARTE 1 — localStorage sanitização / redução de risco
+Escopo:
+1. Auditar usos atuais de localStorage, com foco especial em:
+   - public-catalog.tsx
+   - settings sync
+   - referral capture
+   - qualquer leitura de dados potencialmente sensíveis
+2. Classificar cada uso como:
+   - seguro
+   - aceitável temporariamente
+   - arriscado
+3. Corrigir o que for mais crítico e de baixo/médio risco agora
+4. Prioridade:
+   - evitar leitura indevida de dados de outro usuário
+   - evitar depender de localStorage como fonte de verdade em áreas sensíveis
+   - preservar compatibilidade com o fluxo atual
+
+PARTE 2 — Error Boundary global
+Escopo:
+1. Auditar App.tsx e estrutura de rotas
+2. Implementar um Error Boundary global para evitar tela quebrada sem fallback
+3. Exibir fallback UI simples e honesta:
+   - mensagem amigável
+   - botão para recarregar
+   - sem detalhes técnicos desnecessários para o usuário
+4. Se fizer sentido, adicionar logging do erro no boundary
+
+PARTE 3 — Preparação de custom claims
+Escopo:
+1. Auditar a implementação atual de requireAdmin e a checagem no frontend
+2. Mapear claramente o que falta para migrar de email hardcoded para Firebase custom claims
+3. Se for seguro e pequeno, preparar a estrutura no código
+4. Se não der para concluir sem risco agora, deixar mapeado com clareza no resumo
+
+PARTE 4 — Tipagem / fragilidade
+Escopo:
+1. Identificar os pontos com maior risco entre os usos de any
+2. Corrigir apenas os casos mais perigosos e localizados
+3. Não fazer refactor grande neste passo
+
+Regras:
+- não abrir features novas
+- não mexer em pagamentos sem necessidade
+- não quebrar auth/signup
+- build obrigatório ao final
+- diferenciar claramente:
+  - resolvido
+  - mitigado
+  - apenas mapeado
+
+Entrega esperada:
+A. melhorias aplicadas no localStorage
+B. error boundary implementado ou preparado
+C. custom claims mapeado/preparado
+D. pontos de tipagem corrigidos ou identificados
+E. arquivos alterados
+F. build final
+G. resumo executivo honesto
+
+Importante:
+Comece pela auditoria de localStorage e App.tsx.
+Priorize segurança, resiliência e baixo risco.
