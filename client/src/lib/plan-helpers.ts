@@ -10,10 +10,12 @@ export function checkProductLimit(
   openAccess = false
 ): { allowed: boolean; limit: number } {
 
+  // ADMIN / PREMIUM = ILIMITADO
   if (openAccess || plan === "premium" || plan === "admin") {
     return { allowed: true, limit: Infinity };
   }
 
+  // fallback segurança
   if (!plan) {
     return { allowed: true, limit: Infinity };
   }
