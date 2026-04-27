@@ -37,20 +37,6 @@ service cloud.firestore {
         allow update: if userOwnsResource(uid);
         allow delete: if userOwnsResource(uid);
       }
-
-      // SUBCOLLECTION: productsSnap
-      // Current app product catalog writes and reads this collection.
-      match /productsSnap/{productId} {
-        allow read: if userOwnsResource(uid);
-        allow create: if userOwnsResource(uid)
-          && request.resource.data.keys().hasAll(['name', 'salePrice'])
-          && request.resource.data.name is string
-          && request.resource.data.name.size() > 0
-          && request.resource.data.salePrice is number
-          && request.resource.data.salePrice > 0;
-        allow update: if userOwnsResource(uid);
-        allow delete: if userOwnsResource(uid);
-      }
       
       // SUBCOLLECTION: clients
       // User can only read/write their own clients

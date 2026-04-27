@@ -49,22 +49,19 @@ export default function Products() {
 
       // Usar onSnapshot para leitura em tempo real
       const firestore = getFirestore();
-   const readPath = `users/${user.uid}/products`;
+   const readPath = `users/${user.uid}/productsSnap`;
       console.log("[products] firestore read path:", readPath);
 
       // Cleanup previous snapshot listener if exists
       if (unsubscribeSnapshot) unsubscribeSnapshot();
 
     unsubscribeSnapshot = onSnapshot(
-  collection(firestore, "users", user.uid, "products"),
+  collection(firestore, "users", user.uid, "productsSnap"),
         (snapshot) => {
           console.log("[products] firestore docs count:", snapshot.size);
           console.log("[products] firestore doc ids:", snapshot.docs.map(d => d.id));
           const remoteProducts = snapshot.docs
-            .map(d => ({
-              ...d.data(),
-              id: d.id,
-            } as Product))
+            .map(d => d.data() as Product)
             .filter(p => p && typeof p === 'object' && p.id);
           setProducts(remoteProducts);
           setError("");
@@ -100,15 +97,14 @@ export default function Products() {
   const categories = useMemo(() => {
     const cats = new Set<string>();
     products.forEach(p => {
-      const category = p.category?.trim();
-      if (category) cats.add(category);
+      if (p.category) cats.add(p.category);
     });
     return ["Todas", ...Array.from(cats).sort()];
   }, [products]);
 
   const filteredProducts = useMemo(() => {
     if (selectedCategory === "Todas") return products;
-    return products.filter(p => p.category?.trim() === selectedCategory);
+    return products.filter(p => p.category === selectedCategory);
   }, [products, selectedCategory]);
 
   const [deleteConfirm, setDeleteConfirm] = useState<{ show: boolean; productId?: string }>({ show: false });
@@ -138,7 +134,7 @@ export default function Products() {
 
       // Delete product from Firestore
       const { deleteDoc, doc } = await import('firebase/firestore');
-      await deleteDoc(doc(firestore, "users", auth.currentUser.uid, "products", id));
+      await deleteDoc(doc(firestore, "users", auth.currentUser.uid, "productsSnap", id));
       
       // onSnapshot will automatically update products list
       setError(""); // Clear any previous errors

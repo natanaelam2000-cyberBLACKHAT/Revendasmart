@@ -171,7 +171,7 @@ const [, setLocation] = useLocation();
       const auth = getFirebaseAuth();
       if (auth?.currentUser) {
         const firestore = getFirestore();
-        getDoc(doc(firestore, "users", auth.currentUser.uid, "products", id))
+        getDoc(doc(firestore, "users", auth.currentUser.uid, "productsSnap", id))
           .then(docSnap => {
             if (docSnap.exists()) {
               const product = docSnap.data() as Product;
@@ -311,7 +311,7 @@ const [, setLocation] = useLocation();
       let storagePath = formData.storagePath || "";
       const file = selectedFileRef.current;
       const firestore = getFirestore(); 
-const productRef = doc(collection(firestore, "users", uid, "products"));
+const productRef = doc(collection(firestore, "users", uid, "productsSnap"));
 const productId = id || productRef.id;
 
 
@@ -375,7 +375,7 @@ const productId = id || productRef.id;
       if (id) {
         try {
           console.log("[add-product] Updating product:", id);
-          await setDoc(doc(firestore, "users", uid, "products", id), { ...productData, id });
+          await setDoc(doc(firestore, "users", uid, "productsSnap", id), { ...productData, id });
           console.log("[add-product] Product updated successfully:", id);
         } catch (writeErr) {
           const errorMsg = (writeErr as Error)?.message || "unknown error";
@@ -394,7 +394,7 @@ if (!uid) {
 }
 
 const productsSnap = await getDocs(
-  collection(firestore, "users", uid, "products")
+  collection(firestore, "users", uid, "productsSnap")
 );
 
 const productCount = productsSnap.size;
@@ -411,11 +411,11 @@ if (!allowed) {
           console.log("[add-product] Creating product:", productId);
           await measureOperation("product_creation", async () => {
   await setDoc(
-    doc(firestore, "users", uid, "products", productId),
+    doc(firestore, "users", uid, "productsSnap", productId),
     newProduct
   );
 
-  const docRef = doc(firestore, "users", uid, "products", productId);
+  const docRef = doc(firestore, "users", uid, "productsSnap", productId);
   const docSnap = await getDoc(docRef);
 
   if (!docSnap.exists()) {

@@ -52,7 +52,7 @@ export function useDashboardData(): DashboardData {
       const firestore = getFirestore();
       const uid = user.uid;
 
-      // Subscribe to products saved by add-product/products/public-catalog.
+      // Subscribe to products
       const unsubscribeProducts = onSnapshot(
         collection(firestore, "users", uid, "products"),
         (snapshot) => {
