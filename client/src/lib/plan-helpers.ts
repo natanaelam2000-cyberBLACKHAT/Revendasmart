@@ -25,7 +25,6 @@ export function checkProductLimit(
 
   return { allowed, limit };
 }
-}  if (openAccess) return { allowed: true, limit: Infinity };
   const allowed = canAddProduct(plan, currentCount);
   const limit = PLAN_CONFIG[plan].limits.products;
   return { allowed, limit };
