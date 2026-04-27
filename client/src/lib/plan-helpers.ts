@@ -4,8 +4,27 @@ import { PLAN_CONFIG, PlanType, canAddProduct, canAddClient, canUseFeature, isPr
  * Client-side plan validation helpers
  */
 
-export function checkProductLimit(plan: PlanType, currentCount: number, openAccess = false): { allowed: boolean; limit: number } {
-  if (openAccess) return { allowed: true, limit: Infinity };
+export function checkProductLimit(
+  plan: PlanType,
+  currentCount: number,
+  openAccess = false
+): { allowed: boolean; limit: number } {
+
+  // 🔥 LIBERA TUDO (DEV / ADMIN / DEBUG)
+  if (openAccess || plan === "premium" || plan === "admin") {
+    return { allowed: true, limit: Infinity };
+  }
+
+  // 🔥 fallback de segurança (caso plan venha undefined)
+  if (!plan) {
+    return { allowed: true, limit: Infinity };
+  }
+
+  const allowed = canAddProduct(plan, currentCount);
+  const limit = PLAN_CONFIG[plan]?.limits?.products || 9999;
+
+  return { allowed, limit };
+}  if (openAccess) return { allowed: true, limit: Infinity };
   const allowed = canAddProduct(plan, currentCount);
   const limit = PLAN_CONFIG[plan].limits.products;
   return { allowed, limit };

@@ -777,6 +777,29 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
             </div>
             
             {/* CATEGORIA — dinâmica por nicho */}
+{/* Público */}
+<div className="space-y-1.5 mt-4">
+  <label className="text-[10px] font-bold text-muted-foreground uppercase px-1">
+    Público
+  </label>
+
+  <div className="flex gap-2">
+    {["masculino", "feminino", "unisex"].map(g => (
+      <button
+        key={g}
+        type="button"
+        onClick={() => setFormData({ ...formData, gender: g })}
+        className={`px-4 py-2 rounded-full text-xs font-bold ${
+          formData.gender === g
+            ? "bg-primary text-white"
+            : "bg-white border text-muted-foreground"
+        }`}
+      >
+        {g}
+      </button>
+    ))}
+  </div>
+</div>
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-muted-foreground uppercase px-1 flex justify-between">
                 Categoria
