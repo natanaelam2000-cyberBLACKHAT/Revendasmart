@@ -18,14 +18,7 @@ export function checkProductLimit(
   // fallback segurança
   if (!plan) {
     return { allowed: true, limit: Infinity };
-  }
-
-  const allowed = canAddProduct(plan, currentCount);
-  const limit = PLAN_CONFIG[plan]?.limits?.products || 9999;
-
-  return { allowed, limit };
-}
-  const allowed = canAddProduct(plan, currentCount);
+  }  const allowed = canAddProduct(plan, currentCount);
   const limit = PLAN_CONFIG[plan].limits.products;
   return { allowed, limit };
 }
@@ -35,7 +28,6 @@ export function checkClientLimit(plan: PlanType, currentCount: number, openAcces
   const allowed = canAddClient(plan, currentCount);
   const limit = PLAN_CONFIG[plan].limits.clients;
   return { allowed, limit };
-}
 
 export function checkChargesFeature(plan: PlanType, openAccess = false): boolean {
   if (openAccess) return true;
