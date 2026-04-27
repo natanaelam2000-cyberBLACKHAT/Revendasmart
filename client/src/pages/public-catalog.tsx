@@ -54,10 +54,10 @@ if (!userData?.uid) {
       setTargetUser(userData);
       setSettings({ ...defaultSettings, ...userData });
 
-      const productsRef = collection(db, "users", userData.uid, "productsSnap");
-      const productsSnap = await getDocs(productsRef);
+      const productsRef = collection(db, "users", userData.uid, "products");
+      const productDocs = await getDocs(productsRef);
 
-      const productsList = productsSnap.docs.map(doc => ({
+      const productsList = productDocs.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as Product[];

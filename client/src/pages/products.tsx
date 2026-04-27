@@ -49,19 +49,22 @@ export default function Products() {
 
       // Usar onSnapshot para leitura em tempo real
       const firestore = getFirestore();
-   const readPath = `users/${user.uid}/productsSnap`;
+   const readPath = `users/${user.uid}/products`;
       console.log("[products] firestore read path:", readPath);
 
       // Cleanup previous snapshot listener if exists
       if (unsubscribeSnapshot) unsubscribeSnapshot();
 
     unsubscribeSnapshot = onSnapshot(
-  collection(firestore, "users", user.uid, "productsSnap"),
+  collection(firestore, "users", user.uid, "products"),
         (snapshot) => {
           console.log("[products] firestore docs count:", snapshot.size);
           console.log("[products] firestore doc ids:", snapshot.docs.map(d => d.id));
           const remoteProducts = snapshot.docs
-            .map(d => d.data() as Product)
+            .map(d => ({
+              ...d.data(),
+              id: d.id
+            } as Product))
             .filter(p => p && typeof p === 'object' && p.id);
           setProducts(remoteProducts);
           setError("");
@@ -134,7 +137,7 @@ export default function Products() {
 
       // Delete product from Firestore
       const { deleteDoc, doc } = await import('firebase/firestore');
-      await deleteDoc(doc(firestore, "users", auth.currentUser.uid, "productsSnap", id));
+      await deleteDoc(doc(firestore, "users", auth.currentUser.uid, "products", id));
       
       // onSnapshot will automatically update products list
       setError(""); // Clear any previous errors

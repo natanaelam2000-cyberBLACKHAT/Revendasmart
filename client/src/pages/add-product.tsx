@@ -171,7 +171,7 @@ const [, setLocation] = useLocation();
       const auth = getFirebaseAuth();
       if (auth?.currentUser) {
         const firestore = getFirestore();
-        getDoc(doc(firestore, "users", auth.currentUser.uid, "productsSnap", id))
+        getDoc(doc(firestore, "users", auth.currentUser.uid, "products", id))
           .then(docSnap => {
             if (docSnap.exists()) {
               const product = docSnap.data() as Product;
@@ -311,14 +311,14 @@ const [, setLocation] = useLocation();
       let storagePath = formData.storagePath || "";
       const file = selectedFileRef.current;
       const firestore = getFirestore(); 
-const productRef = doc(collection(firestore, "users", uid, "productsSnap"));
+const productRef = doc(collection(firestore, "users", uid, "products"));
 const productId = id || productRef.id;
 
 
       if (file) {
         try {
           const safeName = file.name.replace(/\s+/g, "_");
-          storagePath = `users/${uid}/productsSnap/${productId}/${safeName}`;
+          storagePath = `users/${uid}/products/${productId}/${safeName}`;
           const storage = getStorage();
           const storageRef = ref(storage, storagePath);
         await uploadBytes(storageRef, file);
@@ -375,7 +375,7 @@ const productId = id || productRef.id;
       if (id) {
         try {
           console.log("[add-product] Updating product:", id);
-          await setDoc(doc(firestore, "users", uid, "productsSnap", id), { ...productData, id });
+          await setDoc(doc(firestore, "users", uid, "products", id), { ...productData, id });
           console.log("[add-product] Product updated successfully:", id);
         } catch (writeErr) {
           const errorMsg = (writeErr as Error)?.message || "unknown error";
@@ -385,7 +385,7 @@ const productId = id || productRef.id;
           throw writeErr;
         }
       } else {
-        // Validate plan limits for new "productsSnap"
+        // Validate plan limits for new products.
         console.log("[DEBUG] activePlan:", activePlan);
         console.log("[DEBUG] checkProductLimit exists:", checkProductLimit);
 if (!uid) {
@@ -393,11 +393,11 @@ if (!uid) {
   return;
 }
 
-const productsSnap = await getDocs(
-  collection(firestore, "users", uid, "productsSnap")
+const productDocs = await getDocs(
+  collection(firestore, "users", uid, "products")
 );
 
-const productCount = productsSnap.size;
+const productCount = productDocs.size;
 
 const { allowed } = checkProductLimit(activePlan, productCount);
 
@@ -411,11 +411,11 @@ if (!allowed) {
           console.log("[add-product] Creating product:", productId);
           await measureOperation("product_creation", async () => {
   await setDoc(
-    doc(firestore, "users", uid, "productsSnap", productId),
+    doc(firestore, "users", uid, "products", productId),
     newProduct
   );
 
-  const docRef = doc(firestore, "users", uid, "productsSnap", productId);
+  const docRef = doc(firestore, "users", uid, "products", productId);
   const docSnap = await getDoc(docRef);
 
   if (!docSnap.exists()) {
@@ -581,7 +581,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
   return (
     <Layout title={id ? "Editar Produto" : "Novo Produto"}>
       <div className="px-6 py-4 pb-32">
-        <button onClick={() => setLocation("/productsSnap")} className="flex items-center gap-2 text-muted-foreground mb-6 font-medium">
+        <button onClick={() => setLocation("/products")} className="flex items-center gap-2 text-muted-foreground mb-6 font-medium">
           <ChevronLeft className="w-4 h-4" /> Voltar
         </button>
 

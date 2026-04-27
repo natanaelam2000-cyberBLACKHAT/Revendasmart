@@ -45,12 +45,12 @@ async function audit() {
     const firestore = admin.firestore();
 
     // Get Products
-    const productsSnap = await firestore
+    const productDocs = await firestore
       .collection("users")
       .doc(TARGET_UID)
       .collection("products")
       .get();
-    const products = productsSnap.docs.map(d => ({ id: d.id, ...d.data() })) as Product[];
+    const products = productDocs.docs.map(d => ({ id: d.id, ...d.data() })) as Product[];
     console.log(`✅ Products count: ${products.length}`);
 
     // Get Sales
