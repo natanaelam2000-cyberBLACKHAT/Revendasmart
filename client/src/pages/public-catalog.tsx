@@ -17,7 +17,7 @@ export default function PublicCatalog() {
   // NOTE: In production, this should query Firestore directly for security:
   // const catalogQuery = await db.collection('user_settings').where('catalogSlug', '==', storeSlug).limit(1).get();
  
-
+const [selectedGender, setSelectedGender] = useState("todos");
 const db = getFirestore();
 
 const [targetUser, setTargetUser] = useState<any>(null);
@@ -86,7 +86,14 @@ if (!userData?.uid) {
   }
 
   const storeDisplayName = settings?.storeName || "Minha Loja";
+const filteredProducts = products.filter(p => {
+  const gender = p.gender || "unisex";
 
+  return (
+    selectedGender === "todos" ||
+    gender === selectedGender
+  );
+});
   return (
     <div className="min-h-screen bg-background pb-24 max-w-md mx-auto relative shadow-2xl flex flex-col">
       <header className="px-6 pt-12 pb-8 bg-white border-b border-border/50 sticky top-0 z-40">
@@ -102,9 +109,27 @@ if (!userData?.uid) {
       </header>
 
       <main className="flex-1 p-6 space-y-6">
-        <div className="grid grid-cols-1 gap-6">
+
+  {/* 🔥 FILTRO DE GÊNERO */}
+  <div className="flex gap-2 overflow-x-auto pb-2">
+    {["todos", "masculino", "feminino", "unisex"].map(g => (
+      <button
+        key={g}
+        onClick={() => setSelectedGender(g)}
+        className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap ${
+          selectedGender === g
+            ? "bg-primary text-white"
+            : "bg-white border"
+        }`}
+      >
+        {g}
+      </button>
+    ))}
+  </div>
+
+  <div className="grid grid-cols-1 gap-6">
           {products.length > 0 ? (
-            products.map((product: Product) => {
+            filteredProducts.map((product: Product) => {
               if (!product) return null;
               return (
                 <div key={product.id || Math.random()} className="bg-white rounded-[2.5rem] overflow-hidden border border-border/50 shadow-sm flex flex-col">

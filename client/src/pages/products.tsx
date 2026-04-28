@@ -1,3 +1,4 @@
+const [genderFilter, setGenderFilter] = useState("todos");
 console.log("TESTE ALTERAÇÃO");
 import { Layout } from "@/components/layout";
 import { useState, useMemo, useEffect } from "react";
@@ -107,9 +108,18 @@ export default function Products() {
   }, [products]);
 
   const filteredProducts = useMemo(() => {
-    if (selectedCategory === "Todas") return products;
-    return products.filter(p => p.category === selectedCategory);
-  }, [products, selectedCategory]);
+  return products.filter(p => {
+    const gender = p.gender || "unisex";
+
+    const matchGender =
+      genderFilter === "todos" || gender === genderFilter;
+
+    const matchCategory =
+      selectedCategory === "Todas" || p.category === selectedCategory;
+
+    return matchGender && matchCategory;
+  });
+}, [products, selectedCategory, genderFilter]);
 
   const [deleteConfirm, setDeleteConfirm] = useState<{ show: boolean; productId?: string }>({ show: false });
 
@@ -150,7 +160,7 @@ export default function Products() {
   };
 
   return (
-    <Layout title="Produtos">
+    <Layout title="ESTOQUE">
       <div className="p-6 pb-32">
         <div className="flex gap-3 mb-6">
           <Link href="/add">
@@ -163,6 +173,21 @@ export default function Products() {
         <div className="mb-8">
           <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground ml-4 mb-2 block flex items-center gap-2">
             <Filter className="w-3 h-3" /> Filtrar por categoria
+<div className="flex gap-2 mb-3">
+  {["todos", "masculino", "feminino", "unisex"].map(g => (
+    <button
+      key={g}
+      onClick={() => setGenderFilter(g)}
+      className={`px-3 py-1 rounded-full text-xs ${
+        genderFilter === g
+          ? "bg-primary text-white"
+          : "bg-white border"
+      }`}
+    >
+      {g}
+    </button>
+  ))}
+</div>
           </label>
           <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar px-1">
             {categories.map(cat => (
@@ -180,7 +205,6 @@ export default function Products() {
             ))}
           </div>
         </div>
-
         <div className="space-y-4">
           {error ? (
             <div className="text-center py-20 bg-red-50 rounded-[2.5rem] border border-red-200">
