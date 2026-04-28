@@ -85,8 +85,20 @@ if (!userData?.uid) {
     );
   }
 
-  const storeDisplayName = settings?.storeName || "Minha Loja";
-const filteredProducts = products.filter(p => {
+const storeDisplayName = settings?.storeName || "Minha Loja";
+
+const filteredProducts = (products || []).filter(p => {
+  if (!p) return false;
+
+  const gender = p.gender || "unisex";
+
+  return (
+    selectedGender === "todos" ||
+    gender === selectedGender
+  );
+});
+  if (!p) return false;
+
   const gender = p.gender || "unisex";
 
   return (
@@ -128,8 +140,8 @@ const filteredProducts = products.filter(p => {
   </div>
 
   <div className="grid grid-cols-1 gap-6">
-          {products.length > 0 ? (
-            filteredProducts.map((product: Product) => {
+          {filteredProducts.length > 0 ? (
+            (Array.isArray(filteredProducts) ? filteredProducts : []).map((product: Product) => {
               if (!product) return null;
               return (
                 <div key={product.id || Math.random()} className="bg-white rounded-[2.5rem] overflow-hidden border border-border/50 shadow-sm flex flex-col">
@@ -184,7 +196,7 @@ const filteredProducts = products.filter(p => {
                         disabled={product.stock !== undefined && product.stock <= 0}
                         onClick={() => {
                           const msg = `Olá! Vi seu catálogo e tenho interesse no produto: ${product.name || 'este produto'}`;
-                          const cleanPhone = settings.whatsapp.replace(/\D/g, '');
+                          const cleanPhone = (settings.whatsapp || "").replace(/\D/g, '');
                           window.open(`https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`, '_blank');
                         }}
                         className="w-full bg-primary text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 uppercase tracking-widest text-xs shadow-lg shadow-primary/20 active:scale-95 transition-all mt-4 disabled:opacity-50 disabled:grayscale"
