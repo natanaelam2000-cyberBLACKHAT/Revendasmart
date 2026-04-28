@@ -306,8 +306,7 @@ const [, setLocation] = useLocation();
       }
 
       setDebugStatus({ uid: uid, saveAttempted: true, saveError: "" });
-let imageUrl = formData.imageUrl || ?.imageUrl || "";
-      let storagePath = formData.storagePath || "";
+let imageUrl = formData.imageUrl || "";      let storagePath = formData.storagePath || "";
       const file = selectedFileRef.current;
       const firestore = getFirestore(); 
 const productRef = doc(collection(firestore, "users", uid, "products"));
