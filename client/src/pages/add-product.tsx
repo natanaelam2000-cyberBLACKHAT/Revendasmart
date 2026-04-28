@@ -306,7 +306,7 @@ const [, setLocation] = useLocation();
       }
 
       setDebugStatus({ uid: uid, saveAttempted: true, saveError: "" });
-let imageUrl = formData.imageUrl || existingProduct?.imageUrl || "";
+let imageUrl = formData.imageUrl || ?.imageUrl || "";
       let storagePath = formData.storagePath || "";
       const file = selectedFileRef.current;
       const firestore = getFirestore(); 
@@ -330,8 +330,7 @@ const productId = id || productRef.id;
         }
       }
 
-      const productData = {
-  ...existingProduct,
+     const productData = {
   ...formData,
   gender: formData.gender || "unisex",
   imageUrl,
@@ -376,7 +375,7 @@ const productId = id || productRef.id;
       if (id) {
         try {
           console.log("[add-product] Updating product:", id);
-          await setDoc(
+     await setDoc(
   doc(firestore, "users", uid, "products", id),
   { ...productData, id },
   { merge: true }
