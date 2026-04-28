@@ -306,8 +306,7 @@ const [, setLocation] = useLocation();
       }
 
       setDebugStatus({ uid: uid, saveAttempted: true, saveError: "" });
-
-      let imageUrl = formData.imageUrl || "";
+let imageUrl = formData.imageUrl || existingProduct?.imageUrl || "";
       let storagePath = formData.storagePath || "";
       const file = selectedFileRef.current;
       const firestore = getFirestore(); 
@@ -332,11 +331,13 @@ const productId = id || productRef.id;
       }
 
       const productData = {
-        ...formData,
-        imageUrl: imageUrl || "",
-        storagePath: storagePath || "",
-        productType: activeNicho,
-      };
+  ...existingProduct,
+  ...formData,
+  gender: formData.gender || "unisex",
+  imageUrl,
+  storagePath,
+  productType: activeNicho,
+};
 
       // VALIDATION: Ensure required fields exist and are valid
       if (!productData.name || productData.name.trim().length === 0) {
@@ -375,7 +376,11 @@ const productId = id || productRef.id;
       if (id) {
         try {
           console.log("[add-product] Updating product:", id);
-          await setDoc(doc(firestore, "users", uid, "products", id), { ...productData, id });
+          await setDoc(
+  doc(firestore, "users", uid, "products", id),
+  { ...productData, id },
+  { merge: true }
+);
           console.log("[add-product] Product updated successfully:", id);
         } catch (writeErr) {
           const errorMsg = (writeErr as Error)?.message || "unknown error";
