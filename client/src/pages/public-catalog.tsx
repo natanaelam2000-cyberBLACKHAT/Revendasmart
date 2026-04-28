@@ -88,16 +88,7 @@ if (!userData?.uid) {
 const storeDisplayName = settings?.storeName || "Minha Loja";
 
 const filteredProducts = (products || []).filter(p => {
-  if (!p) return false;
-
-  const gender = p.gender || "unisex";
-
-  return (
-    selectedGender === "todos" ||
-    gender === selectedGender
-  );
-});
-  if (!p) return false;
+    if (!p) return false;
 
   const gender = p.gender || "unisex";
 
