@@ -4,6 +4,7 @@ import { PLAN_CONFIG, PlanType, canAddProduct, canAddClient, canUseFeature, isPr
  * Client-side plan validation helpers
  */
 
+  // fallback segurança
 export function checkProductLimit(
   plan: PlanType,
   currentCount: number,
@@ -15,11 +16,13 @@ export function checkProductLimit(
     return { allowed: true, limit: Infinity };
   }
 
-  // fallback segurança
   if (!plan) {
     return { allowed: true, limit: Infinity };
-  }  const allowed = canAddProduct(plan, currentCount);
-  const limit = PLAN_CONFIG[plan].limits.products;
+  }
+
+  const allowed = canAddProduct(plan, currentCount);
+  const limit = PLAN_CONFIG[plan]?.limits?.products || 9999;
+
   return { allowed, limit };
 }
 
@@ -28,7 +31,7 @@ export function checkClientLimit(plan: PlanType, currentCount: number, openAcces
   const allowed = canAddClient(plan, currentCount);
   const limit = PLAN_CONFIG[plan].limits.clients;
   return { allowed, limit };
-
+}
 export function checkChargesFeature(plan: PlanType, openAccess = false): boolean {
   if (openAccess) return true;
   return canUseFeature(plan, 'charges');
