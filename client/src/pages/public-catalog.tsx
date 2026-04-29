@@ -74,6 +74,8 @@ if (!userData?.uid) {
 
   // Fail-soft checks
   if (!targetUser || !settings?.enablePublicCatalog || settings?.disablePublicCatalog) {
+console.log("PRODUTOS:", products);
+console.log("GENDER ATUAL:", selectedGender);
     return (
       <div className="min-h-screen bg-background flex flex-col items-center justify-center p-6 text-center">
         <div className="w-20 h-20 bg-secondary rounded-full flex items-center justify-center mb-6">
@@ -87,16 +89,18 @@ if (!userData?.uid) {
 
 const storeDisplayName = settings?.storeName || "Minha Loja";
 
-const filteredProducts = (products || []).filter(p => {
-    if (!p) return false;
+const normalize = (v: any) =>
+  String(v || "").trim().toLowerCase();
 
-  const gender = p.gender || "unisex";
+const filteredProducts = (Array.isArray(products) ? products : []).filter(p => {
+  if (!p) return false;
 
-  return (
-    selectedGender === "todos" ||
-    gender === selectedGender
-  );
+  if (selectedGender === "todos") return true;
+
+  return normalize(p.gender) === normalize(selectedGender);
 });
+console.log("FILTRADOS:", filteredProducts);
+
   return (
     <div className="min-h-screen bg-background pb-24 max-w-md mx-auto relative shadow-2xl flex flex-col">
       <header className="px-6 pt-12 pb-8 bg-white border-b border-border/50 sticky top-0 z-40">
@@ -132,25 +136,28 @@ const filteredProducts = (products || []).filter(p => {
 
   <div className="grid grid-cols-1 gap-6">
           {filteredProducts.length > 0 ? (
-            (Array.isArray(filteredProducts) ? filteredProducts : []).map((product: Product) => {
-              if (!product) return null;
-              return (
-                <div key={product.id || Math.random()} className="bg-white rounded-[2.5rem] overflow-hidden border border-border/50 shadow-sm flex flex-col">
-                  <div className="aspect-square relative bg-secondary/30">
-                    <img 
-                      src={product.imageUrl || "https://images.unsplash.com/photo-1556229010-6c3f2c9ca5f8?q=80&w=200&auto=format&fit=crop"} 
-                      alt={product.name || "Produto"} 
-                      className="w-full h-full object-cover"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1556229010-6c3f2c9ca5f8?q=80&w=200&auto=format&fit=crop";
-                      }}
-                    />
-                    {(product.stock !== undefined && product.stock <= 0) && (
-                      <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center">
-                        <span className="bg-white text-black text-[10px] font-black px-4 py-2 rounded-full uppercase">Esgotado</span>
-                      </div>
-                    )}
-                  </div>
+  (Array.isArray(filteredProducts) ? filteredProducts : []).map((product) => {
+    if (!product) return null;
+
+    const image = product?.imageUrl || "/placeholder.png";
+    const name = product?.name || "Sem nome";
+    const price = Number(product?.salePrice || 0);
+
+    return (
+      <div key={product.id || Math.random()} className="bg-white rounded-2xl border p-4">
+
+        <img src={image} className="w-full h-40 object-cover rounded-xl mb-3" />
+
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">{product.category || "Geral"}</p>
+          <h3 className="font-bold">{name}</h3>
+          <p className="font-black">R$ {price.toFixed(2)}</p>
+        </div>
+
+      </div>
+    );
+  })
+) : (
                   
                   <div className="p-6 space-y-3">
                     <div className="flex justify-between items-start">

@@ -92,7 +92,16 @@ export default function Products() {
         }
       );
     });
+const normalize = (v: any) =>
+  String(v || "").trim().toLowerCase();
 
+const filteredProducts = (Array.isArray(products) ? products : []).filter(p => {
+  if (!p || typeof p !== "object") return false;
+
+  if (selectedGender === "todos") return true;
+
+  return normalize(p.gender) === normalize(selectedGender);
+});
     return () => {
       unsubscribeAuth();
       if (unsubscribeSnapshot) unsubscribeSnapshot();
@@ -158,7 +167,9 @@ export default function Products() {
       console.error("[products] Delete error:", err);
     }
   };
-
+if (!products) {
+  return <div>Carregando produtos...</div>;
+}
   return (
     <Layout title="ESTOQUE">
       <div className="p-6 pb-32">
@@ -218,7 +229,7 @@ export default function Products() {
               <p className="text-sm font-medium text-muted-foreground">Carregando produtos...</p>
             </div>
           ) : filteredProducts.length > 0 ? (
-            filteredProducts.map((product) => (
+            filteredProducts.map(...)
               <div key={product.id} className="bg-white p-5 rounded-[2rem] border border-border/50 shadow-sm flex items-center gap-4 group active:bg-secondary/30 transition-colors">
                 <ProductImageCard product={product} size="sm" />
                 

@@ -1,7 +1,30 @@
+import React from "react";
 console.log("ENV TEST:", import.meta.env);
 console.log("API KEY:", import.meta.env.VITE_FIREBASE_API_KEY);
 import { createRoot } from "react-dom/client";
 import App from "./App";
+class ErrorBoundary extends React.Component<any, any> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: any, info: any) {
+    console.error("Erro capturado:", error, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <div style={{ padding: 20 }}>Erro no app ⚠️</div>;
+    }
+
+    return this.props.children;
+  }
+}
 import "./index.css";
 import { APP_VERSION } from "./lib/mock-data";
 import React from "react";
