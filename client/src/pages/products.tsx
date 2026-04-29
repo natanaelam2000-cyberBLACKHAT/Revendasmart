@@ -287,8 +287,7 @@ const [genderFilter, setGenderFilter] = useState("todos");
         </div>
       </div>
     );
-  })
-) : (
+  })) : (
   <div className="text-center py-20 bg-white rounded-[2.5rem] border border-dashed border-border/60">
     <Package className="w-12 h-12 mx-auto mb-4 opacity-20" />
     <p className="text-sm font-medium text-muted-foreground">
@@ -300,7 +299,7 @@ const [genderFilter, setGenderFilter] = useState("todos");
       </a>
     </Link>
   </div>
-)
+)}  // 🔥 ESSA CHAVE ESTAVA FALTANDO
 
         {/* Delete Confirmation Modal */}
         {deleteConfirm.show && deleteConfirm.productId && (
