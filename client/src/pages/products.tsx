@@ -1,4 +1,4 @@
-const [genderFilter, setGenderFilter] = useState("todos");
+
 console.log("TESTE ALTERAÇÃO");
 import { Layout } from "@/components/layout";
 import { useState, useMemo, useEffect } from "react";
@@ -11,6 +11,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { getFirestore, collection, onSnapshot } from "firebase/firestore";
 
 export default function Products() {
+const [genderFilter, setGenderFilter] = useState("todos");
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>("");
@@ -92,16 +93,7 @@ export default function Products() {
         }
       );
     });
-const normalize = (v: any) =>
-  String(v || "").trim().toLowerCase();
 
-const filteredProducts = (Array.isArray(products) ? products : []).filter(p => {
-  if (!p || typeof p !== "object") return false;
-
-  if (selectedGender === "todos") return true;
-
-  return normalize(p.gender) === normalize(selectedGender);
-});
     return () => {
       unsubscribeAuth();
       if (unsubscribeSnapshot) unsubscribeSnapshot();
@@ -229,7 +221,12 @@ if (!products) {
               <p className="text-sm font-medium text-muted-foreground">Carregando produtos...</p>
             </div>
           ) : filteredProducts.length > 0 ? (
-            filteredProducts.map(...)
+            filteredProducts.map((product) => {
+  if (!product) return null;
+
+  return (
+  );
+})
               <div key={product.id} className="bg-white p-5 rounded-[2rem] border border-border/50 shadow-sm flex items-center gap-4 group active:bg-secondary/30 transition-colors">
                 <ProductImageCard product={product} size="sm" />
                 
