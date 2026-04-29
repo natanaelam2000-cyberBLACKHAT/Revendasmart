@@ -1,5 +1,5 @@
 
-console.log("TESTE ALTERAÇÃO");
+
 import { Layout } from "@/components/layout";
 import { useState, useMemo, useEffect } from "react";
 import { Plus, Edit2, Trash2, ChevronRight, Filter, Package } from "lucide-react";
@@ -169,11 +169,10 @@ const [genderFilter, setGenderFilter] = useState("todos");
             </a>
           </Link>
         </div>
-
-        <div className="mb-8">
-          <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground ml-4 mb-2 block flex items-center gap-2">
-            <Filter className="w-3 h-3" /> Filtrar por categoria
-<div className="flex gap-2 mb-3">
+<label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground ml-4 mb-2 block flex items-center gap-2">
+  <Filter className="w-3 h-3" /> Filtrar por categoria
+</label>
+        <div className="flex gap-2 mb-3">
   {["todos", "masculino", "feminino", "unisex"].map(g => (
     <button
       key={g}
@@ -188,8 +187,7 @@ const [genderFilter, setGenderFilter] = useState("todos");
     </button>
   ))}
 </div>
-          </label>
-          <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar px-1">
+                    <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar px-1">
             {categories.map(cat => (
               <button
                 key={cat}
