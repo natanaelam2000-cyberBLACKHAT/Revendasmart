@@ -159,9 +159,6 @@ const [genderFilter, setGenderFilter] = useState("todos");
       console.error("[products] Delete error:", err);
     }
   };
-if (!products) {
-  return <div>Carregando produtos...</div>;
-}
   return (
     <Layout title="ESTOQUE">
       <div className="p-6 pb-32">
@@ -225,77 +222,85 @@ if (!products) {
   if (!product) return null;
 
   return (
-  );
-})
-              <div key={product.id} className="bg-white p-5 rounded-[2rem] border border-border/50 shadow-sm flex items-center gap-4 group active:bg-secondary/30 transition-colors">
-                <ProductImageCard product={product} size="sm" />
-                
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <h3 className="font-bold text-sm truncate">{product.name || "Produto sem nome"}</h3>
-                    {(!product.stock || product.stock === 0) ? (
-                      <span className="bg-destructive/10 text-destructive text-[8px] font-black uppercase px-2 py-0.5 rounded-full">Sem estoque</span>
-                    ) : product.stock <= 2 ? (
-                      <span className="bg-amber-100 text-amber-700 text-[8px] font-black uppercase px-2 py-0.5 rounded-full">Estoque baixo</span>
-                    ) : null}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[9px] font-black text-muted-foreground uppercase tracking-widest bg-secondary px-2 py-0.5 rounded-full">
-                      {product.brand || "Geral"}
-                    </span>
-                    <span className="text-[10px] font-bold text-primary">
-                      R$ {(product.salePrice || 0).toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1">
-                    <p className={`text-[10px] font-bold ${product.stock <= 3 ? 'text-destructive' : 'text-green-600'}`}>
-                      Estoque: {product.stock || 0} un
-                    </p>
-                    {product.costPrice > 0 ? (
-                      <>
-                        <p className="text-[10px] font-medium text-muted-foreground">
-                          Lucro: <span className="text-black">R$ {(product.salePrice - product.costPrice).toFixed(2)}</span>
-                        </p>
-                        <p className="text-[10px] font-medium text-muted-foreground">
-                          Margem: <span className="text-black">{(( (product.salePrice - product.costPrice) / (product.salePrice || 1) ) * 100).toFixed(0)}%</span>
-                        </p>
-                      </>
-                    ) : (
-                      <>
-                        <p className="text-[10px] font-medium text-muted-foreground">Lucro: -</p>
-                        <p className="text-[10px] font-medium text-muted-foreground">Margem: -</p>
-                      </>
-                    )}
-                  </div>
-                </div>
+ <div
+        key={product.id}
+        className="bg-white p-5 rounded-[2rem] border border-border/50 shadow-sm flex items-center gap-4 group active:bg-secondary/30 transition-colors"
+      >
+        <ProductImageCard product={product} size="sm" />
 
-                <div className="flex gap-1">
-                  <Link href={`/edit-product/${product.id}`}>
-                    <a className="p-3 text-muted-foreground hover:text-primary transition-colors active:scale-90">
-                      <Edit2 className="w-4 h-4" />
-                    </a>
-                  </Link>
-                  <button 
-                    onClick={() => handleDelete(product.id)}
-                    className="p-3 text-muted-foreground hover:text-destructive transition-colors active:scale-90"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            ))
-          ) : (
-            <div className="text-center py-20 bg-white rounded-[2.5rem] border border-dashed border-border/60">
-              <Package className="w-12 h-12 mx-auto mb-4 opacity-20" />
-              <p className="text-sm font-medium text-muted-foreground">
-                Nenhum produto encontrado.
-              </p>
-              <Link href="/add">
-                <a className="text-primary text-xs font-bold uppercase tracking-widest mt-4 inline-block">Cadastrar Novo</a>
-              </Link>
-            </div>
-          )}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-0.5">
+            <h3 className="font-bold text-sm truncate">
+              {product.name || "Produto sem nome"}
+            </h3>
+          </div>
+
+         
+<div className="flex items-center gap-2">
+  <span className="text-[9px] font-black text-muted-foreground uppercase tracking-widest bg-secondary px-2 py-0.5 rounded-full">
+    {product.brand || "Geral"}
+  </span>
+
+  <span className="text-[10px] font-bold text-primary">
+    R$ {(product.salePrice || 0).toFixed(2)}
+  </span>
+</div>
+
+{/* 👇 COLOCA AQUI */}
+<div className="flex flex-wrap gap-x-3 gap-y-1 mt-1">
+  <p className={`text-[10px] font-bold ${product.stock <= 3 ? 'text-destructive' : 'text-green-600'}`}>
+    Estoque: {product.stock || 0} un
+  </p>
+
+  {product.costPrice > 0 ? (
+    <>
+      <p className="text-[10px] text-muted-foreground">
+        Lucro: R$ {((product.salePrice || 0) - (product.costPrice || 0)).toFixed(2)}
+      </p>
+      <p className="text-[10px] text-muted-foreground">
+        Margem: {(((product.salePrice - product.costPrice) / (product.salePrice || 1)) * 100).toFixed(0)}%
+      </p>
+    </>
+  ) : (
+    <>
+      <p className="text-[10px] text-muted-foreground">Lucro: -</p>
+      <p className="text-[10px] text-muted-foreground">Margem: -</p>
+    </>
+  )}
+</div>
+
+{/* 👇 BOTÕES */}
+<div className="flex gap-1 mt-2">
+  <Link href={`/edit-product/${product.id}`}>
+    <a className="p-2 text-muted-foreground hover:text-primary">
+      <Edit2 className="w-4 h-4" />
+    </a>
+  </Link>
+
+  <button
+    onClick={() => handleDelete(product.id)}
+    className="p-2 text-muted-foreground hover:text-destructive"
+  >
+    <Trash2 className="w-4 h-4" />
+  </button>
+</div>
         </div>
+      </div>
+    );
+  })
+) : (
+  <div className="text-center py-20 bg-white rounded-[2.5rem] border border-dashed border-border/60">
+    <Package className="w-12 h-12 mx-auto mb-4 opacity-20" />
+    <p className="text-sm font-medium text-muted-foreground">
+      Nenhum produto encontrado.
+    </p>
+    <Link href="/add">
+      <a className="text-primary text-xs font-bold uppercase tracking-widest mt-4 inline-block">
+        Cadastrar Novo
+      </a>
+    </Link>
+  </div>
+)
 
         {/* Delete Confirmation Modal */}
         {deleteConfirm.show && deleteConfirm.productId && (
