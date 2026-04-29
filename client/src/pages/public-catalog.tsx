@@ -135,7 +135,7 @@ console.log("FILTRADOS:", filteredProducts);
   </div>
 
   <div className="grid grid-cols-1 gap-6">
-          {filteredProducts.length > 0 ? (
+  {filteredProducts.length > 0 ? (
   (Array.isArray(filteredProducts) ? filteredProducts : []).map((product) => {
     if (!product) return null;
 
@@ -145,73 +145,30 @@ console.log("FILTRADOS:", filteredProducts);
 
     return (
       <div key={product.id || Math.random()} className="bg-white rounded-2xl border p-4">
-
         <img src={image} className="w-full h-40 object-cover rounded-xl mb-3" />
 
         <div className="space-y-2">
-          <p className="text-xs text-muted-foreground">{product.category || "Geral"}</p>
-          <h3 className="font-bold">{name}</h3>
-          <p className="font-black">R$ {price.toFixed(2)}</p>
-        </div>
+          <p className="text-xs text-muted-foreground">
+            {product.category || "Geral"}
+          </p>
 
+          <h3 className="font-bold">{name}</h3>
+
+          <p className="font-black">
+            R$ {price.toFixed(2)}
+          </p>
+        </div>
       </div>
     );
   })
 ) : (
-                  
-                  <div className="p-6 space-y-3">
-                    <div className="flex justify-between items-start">
-                      <div className="flex-1">
-                        <p className="text-[10px] font-black text-primary uppercase tracking-widest mb-1">{product.category || "Geral"}</p>
-                        <h3 className="text-lg font-bold leading-tight">{product.name || "Produto sem nome"}</h3>
-                        {product.brand && <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">{product.brand}</p>}
-                      </div>
-                      {settings?.showPrice && product.salePrice !== undefined && (
-                        <div className="text-right">
-                          <p className="text-xl font-black text-foreground">R$ {Number(product.salePrice).toFixed(2)}</p>
-                        </div>
-                      )}
-                    </div>
-
-                    {product.description && (
-                      <p className="text-xs text-muted-foreground line-clamp-3 leading-relaxed">
-                        {product.description}
-                      </p>
-                    )}
-
-                    {product.extras && Object.keys(product.extras).length > 0 && (
-                      <div className="flex flex-wrap gap-2 pt-2">
-                        {Object.entries(product.extras).map(([key, val]) => val && (
-                          <span key={key} className="bg-secondary/50 text-[9px] font-bold px-3 py-1.5 rounded-full uppercase text-muted-foreground">
-                            {val}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-
-                    {settings?.whatsapp && (
-                      <button 
-                        disabled={product.stock !== undefined && product.stock <= 0}
-                        onClick={() => {
-                          const msg = `Olá! Vi seu catálogo e tenho interesse no produto: ${product.name || 'este produto'}`;
-                          const cleanPhone = (settings.whatsapp || "").replace(/\D/g, '');
-                          window.open(`https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`, '_blank');
-                        }}
-                        className="w-full bg-primary text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 uppercase tracking-widest text-xs shadow-lg shadow-primary/20 active:scale-95 transition-all mt-4 disabled:opacity-50 disabled:grayscale"
-                      >
-                        <MessageSquare className="w-4 h-4" /> Comprar no WhatsApp
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })
-          ) : (
-            <div className="text-center py-20">
-              <Package className="w-12 h-12 text-muted-foreground/20 mx-auto mb-4" />
-              <p className="text-sm font-bold text-muted-foreground uppercase">Nenhum produto disponível</p>
-            </div>
-          )}
+  <div className="text-center py-20">
+    <Package className="w-12 h-12 text-muted-foreground/20 mx-auto mb-4" />
+    <p className="text-sm font-bold text-muted-foreground uppercase">
+      Nenhum produto disponível
+    </p>
+  </div>
+)}
         </div>
       </main>
 
