@@ -403,8 +403,8 @@ const productDocs = await getDocs(
 const productCount = productDocs.size;
 
 const safePlan = activePlan || "free";
-const { allowed } = checkProductLimit(safePlan, productCount);
-if (!allowed) {
+const { allowed } = checkProductLimit(plan, currentCount, true)
+;if (!allowed) {
   setShowLimitModal(true);
   setFormError("Limite de produtos atingido no plano.");
   return;
