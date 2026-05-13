@@ -1,4 +1,5 @@
-import { getFirebaseAuth } from "@/lib/firebase";
+import { getFirebaseApp } from "@/lib/firebase";
+import { getFirestore } from "firebase/firestore";
 import { useState, useEffect } from "react";
 import { getFirestore, collection, query, where, getDocs } from "firebase/firestore";
 import { useParams } from "wouter";
@@ -18,7 +19,8 @@ export default function PublicCatalog() {
   // const catalogQuery = await db.collection('user_settings').where('catalogSlug', '==', storeSlug).limit(1).get();
  
 const [selectedGender, setSelectedGender] = useState("todos");
-const db = getFirestore();
+const app = getFirebaseApp();
+const db = getFirestore(app);
 
 const [targetUser, setTargetUser] = useState<any>(null);
 const [products, setProducts] = useState<Product[]>([]);
