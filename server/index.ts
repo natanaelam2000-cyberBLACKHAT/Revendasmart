@@ -43,34 +43,45 @@ app.use(
 app.use(express.urlencoded({ extended: false }));
 
 // CORS Configuration
-const ALLOWED_ORIGINS = [
-  'https://revendasmart.vercel.app',
-  'http://localhost:5000',
-  'http://localhost:3000',
-  'http://127.0.0.1:5000',
-  'http://127.0.0.1:3000',
-];
-
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  
-  // Check if origin is allowed
-  if (origin && ALLOWED_ORIGINS.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
+
+  const allowedOrigins = [
+    "https://revendasmart.vercel.app",
+    "https://revendasmart-7210hr3iv-natanaelam2000-9106s-projects.vercel.app",
+    "http://localhost:3000",
+    "http://localhost:5000",
+  ];
+
+  if (
+    origin &&
+    (
+      allowedOrigins.includes(origin) ||
+      origin.includes("vercel.app")
+    )
+  ) {
+    res.header("Access-Control-Allow-Origin", origin);
   }
-  
-  // Allow specific headers
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  
-  // Allow specific methods
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  
-  // Handle preflight requests
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
+
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept, Authorization"
+  );
+
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, DELETE, OPTIONS"
+  );
+
+  res.header(
+    "Access-Control-Allow-Credentials",
+    "true"
+  );
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
   }
-  
+
   next();
 });
 
