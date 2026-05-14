@@ -1,15 +1,37 @@
-import { getFirebaseApp } from "@/lib/firebase";
-import { getFirestore } from "firebase/firestore";
 import { useState, useEffect } from "react";
-import { getFirestore, collection, query, where, getDocs } from "firebase/firestore";
 import { useParams } from "wouter";
-import { 
-  getUsers, getStored, STORAGE_KEYS, Product, AppSettings, defaultSettings 
-} from "@/lib/mock-data";
-import { 
-  ShoppingBag, MessageSquare, Package, Info, ChevronRight, Store, ExternalLink
+
+import {
+  getFirestore,
+  collection,
+  query,
+  where,
+  getDocs,
+} from "firebase/firestore";
+
+import {
+  ShoppingBag,
+  MessageSquare,
+  Package,
+  Info,
+  ChevronRight,
+  Store,
+  ExternalLink,
 } from "lucide-react";
-import { logError } from "@/lib/firebase";
+
+import {
+  getFirebaseApp,
+  getFirebaseAuth,
+} from "@/lib/firebase";
+
+import {
+  getUsers,
+  getStored,
+  STORAGE_KEYS,
+  Product,
+  AppSettings,
+  defaultSettings,
+} from "@/lib/mock-data";
 
 export default function PublicCatalog() {
   const { storeSlug } = useParams();
@@ -27,7 +49,7 @@ const [products, setProducts] = useState<Product[]>([]);
 const [settings, setSettings] = useState<AppSettings>(defaultSettings);
 
 useEffect(() => {
-    getFirebaseAuth(); // 👈 ESSENCIAL
+ const auth = getFirebaseAuth();
   async function loadCatalog() {
     try {
       const usersRef = collection(db, "user_settings");
