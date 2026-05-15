@@ -2,6 +2,7 @@ import React from "react";
 console.log("ENV TEST:", import.meta.env);
 console.log("API KEY:", import.meta.env.VITE_FIREBASE_API_KEY);
 import { createRoot } from "react-dom/client";
+import { PlanProvider } from "@/providers/plan-provider";
 import App from "./App";
 class ErrorBoundary extends React.Component<any, any> {
   constructor(props: any) {
@@ -140,7 +141,9 @@ if (isSafeMode) {
       if (!storedVersion) localStorage.setItem("app_version", APP_VERSION);
       createRoot(document.getElementById("root")!).render(
         <GlobalErrorBoundary>
-          <App />
+      <PlanProvider>
+  <App />
+</PlanProvider>
         </GlobalErrorBoundary>
       );
     }
