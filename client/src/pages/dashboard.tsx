@@ -240,12 +240,12 @@ const handleSubscribe = async () => {
 
     const data = await res.json();
 
-    if (data.checkoutUrl) {
-      window.location.href = data.checkoutUrl;
-    } else {
-      console.error(data);
-      alert("Erro ao iniciar pagamento");
-    }
+ if (data.initPoint) {
+  window.location.href = data.initPoint;
+} else {
+  console.error(data);
+  alert("Erro ao iniciar pagamento");
+}
   } catch (err) {
     console.error(err);
     alert("Erro ao conectar com servidor");
