@@ -998,5 +998,9 @@ if (!existingPlan.exists) {
     }
   });
 
-  return httpServer;
+ app.get("/debug-sentry", (_req, _res) => {
+  throw new Error("TESTE BACKEND SENTRY");
+});
+
+return httpServer;
 }
