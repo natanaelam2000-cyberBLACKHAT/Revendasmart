@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
@@ -6,7 +8,7 @@ import { registerPaymentRoutes } from "./payments";
 import { registerConnectionRoutes } from "./mercadopago-connections";
 import { registerSubscriptionRoutes } from "./subscriptions";
 import { getGlobalConfig, setGlobalConfig } from "./subscriptions";
-
+ import crypto from "crypto";
 // Helper: Structured error response with audit context
 function errorResponse(
   res: Response,
@@ -176,7 +178,7 @@ export async function registerRoutes(
   app.post("/api/user/settings/:userId", requireAuth, requireOwnership, async (req, res) => {
     try {
       const { userId } = req.params;
-      let body = req.body;
+      const body = req.body;
 
       console.log("[/api/user/settings POST] userId:", userId);
       console.log("[/api/user/settings POST] body keys:", Object.keys(body));
@@ -624,8 +626,7 @@ export async function registerRoutes(
 
   // Public Legal Documents Routes
   app.get("/api/legal/privacy-policy", (req, res) => {
-    const fs = require("fs");
-    const path = require("path");
+
     try {
       const filePath = path.resolve(process.cwd(), "dist/public/privacy-policy.md");
       const content = fs.readFileSync(filePath, "utf8");
@@ -637,8 +638,7 @@ export async function registerRoutes(
   });
 
   app.get("/api/legal/terms-of-service", (req, res) => {
-    const fs = require("fs");
-    const path = require("path");
+   
     try {
       const filePath = path.resolve(process.cwd(), "dist/public/terms-of-service.md");
       const content = fs.readFileSync(filePath, "utf8");
@@ -685,7 +685,7 @@ export async function registerRoutes(
       const { userId } = req.params;
       const admin = getFirebaseAdmin();
       const db = admin.firestore();
-      const crypto = require("crypto");
+     
 
       // Generate referral code from UID
       const hash = crypto.createHash("md5").update(userId).digest("hex").substring(0, 9).toUpperCase();
@@ -694,7 +694,10 @@ export async function registerRoutes(
       const planDocRef = db.collection("users").doc(userId).collection("planData").doc("main");
 
       // Set plan data with initial values
-      await planDocRef.set({
+      const existingPlan = await planDocRef.get();
+
+if (!existingPlan.exists) {
+  await planDocRef.set({
         currentPlan: "free",
         premiumActive: false,
         premiumExpiresAt: null,
@@ -703,7 +706,9 @@ export async function registerRoutes(
         referralCode,
         referralCount: 0,
         updatedAt: admin.firestore.Timestamp.now(),
-      });
+      }); 
+      }
+
 
       console.log("[plan/initialize] Plan initialized for user:", userId);
       return res.status(200).json({ referralCode });

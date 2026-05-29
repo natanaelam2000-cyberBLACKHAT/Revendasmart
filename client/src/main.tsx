@@ -4,6 +4,25 @@ console.log("API KEY:", import.meta.env.VITE_FIREBASE_API_KEY);
 import { createRoot } from "react-dom/client";
 import { PlanProvider } from "@/providers/plan-provider";
 import App from "./App";
+import * as Sentry from "@sentry/react";
+Sentry.init({
+  dsn: "https://cb0fe78d7082742f863354a079796fcd@o4511473504354304.ingest.us.sentry.io/4511473992335360",
+
+  integrations: [
+    Sentry.browserTracingIntegration(),
+    Sentry.replayIntegration(),
+  ],
+
+  tracesSampleRate: 0.1,
+  replaysSessionSampleRate: 0.05,
+  replaysOnErrorSampleRate: 1.0,
+
+  sendDefaultPii: false,
+});
+setTimeout(() => {
+  throw new Error("ERRO REAL TESTE SENTRY REVENDASMART");
+}, 3000);
+
 class ErrorBoundary extends React.Component<any, any> {
   constructor(props: any) {
     super(props);
@@ -28,7 +47,7 @@ class ErrorBoundary extends React.Component<any, any> {
 }
 import "./index.css";
 import { APP_VERSION } from "./lib/mock-data";
-import React from "react";
+
 
 // Announce patch version at startup
 console.log(`[SETTINGS PATCH ACTIVE ${APP_VERSION}] useUserSettings.ts with onAuthStateChanged and direct user.getIdToken()`);

@@ -69,9 +69,9 @@ setPersistence(authInstance, browserLocalPersistence)
     console.error("[Firebase] Persistence error:", err);
   });
     console.log("[FIREBASE DEBUG] initialized app name:", app.name);
-    // @ts-ignore
+   // @ts-expect-error Firebase compat issue
     console.log("[FIREBASE DEBUG] initialized app projectId:", app.options?.projectId);
-    // @ts-ignore
+   // @ts-expect-error Firebase compat issue
     console.log("[FIREBASE DEBUG] initialized app authDomain:", app.options?.authDomain);
 
     // Initialize error logging after Firebase is initialized

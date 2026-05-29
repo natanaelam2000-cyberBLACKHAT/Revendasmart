@@ -173,8 +173,8 @@ export default function Billings() {
     if (!client) return;
     const amount = (billing.amount - billing.paidAmount).toFixed(2);
     const date = format(parseISO(billing.dueDate), "dd/MM");
-    let message = "";
-    if (type === "reminder") {
+    let message: string;
+if (type === "reminder") {
       message = `Olá ${client.name}! Passando para lembrar da sua parcela de R$ ${amount} que vence dia ${date}. Pode enviar o comprovante por aqui? ✨`;
     } else if (type === "received") {
       message = `Olá ${client.name}! Recebi seu pagamento de R$ ${billing.paidAmount.toFixed(2)}. Saldo atualizado com sucesso! ✅`;

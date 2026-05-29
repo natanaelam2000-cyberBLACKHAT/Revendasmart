@@ -135,7 +135,9 @@ export default function AdminMetrics() {
         setPremiumOpenAccessUntil(data.config.premiumOpenAccessUntil ? String(data.config.premiumOpenAccessUntil).slice(0, 16) : "");
         setPremiumOpenAccessMessage(data.config.premiumOpenAccessMessage || "");
       }
-    } catch {}
+ } catch (e) {
+  console.error(e);
+}
   };
 
   const handleSaveGlobalConfig = async () => {

@@ -32,8 +32,7 @@ export interface InternalTelemetryEvents {
   user_signed_up: {
     provider: "email" | "google" | "facebook";
   };
-  user_logged_out: {};
-
+user_logged_out: Record<string, never>;
   // Products
   product_created: {
     productId: string;

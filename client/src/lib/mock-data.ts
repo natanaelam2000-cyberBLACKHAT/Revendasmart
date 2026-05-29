@@ -291,7 +291,9 @@ export const login = (credentials: Pick<User, 'email' | 'password'>) => {
   
   try {
     localStorage.setItem(AUTH_KEYS.SESSION, user.id);
-  } catch (e) {}
+  } catch (e) {
+  console.error(e);
+}
   return { success: true, user };
 };
 
@@ -375,7 +377,9 @@ export const logout = async () => {
     const users = getUsers().filter(u => u.id !== userId);
     try {
       localStorage.setItem(AUTH_KEYS.USERS, JSON.stringify(users));
-    } catch (e) {}
+    } catch (e) {
+  console.error(e);
+}
   }
 
   // Always clear the local session

@@ -123,7 +123,9 @@ export default function Onboarding() {
           try {
             const errorBody = await response.json();
             if (errorBody.error) errorDetails = errorBody.error;
-          } catch {}
+        } catch (e) {
+  console.error(e);
+}
           throw new Error(errorDetails);
         }
 

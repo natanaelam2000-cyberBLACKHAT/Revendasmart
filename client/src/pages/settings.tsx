@@ -399,7 +399,9 @@ export default function Settings() {
               onLoad={() => {
                 try {
                   logTelemetryEvent("growth_tab_viewed", { origin: "settings_nav" }).catch(() => {});
-                } catch (e) {}
+                } catch (e) {
+  console.error(e);
+}
               }}
             >
               <div className="p-6 bg-primary/5 rounded-[2rem] border border-primary/10 space-y-4">

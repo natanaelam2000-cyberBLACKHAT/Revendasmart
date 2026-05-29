@@ -241,7 +241,7 @@ const handleSubscribe = async () => {
     const data = await res.json();
 
  if (data.initPoint) {
-  window.location.href = data.initPoint;
+window.location.href = data.initPoint;
 } else {
   console.error(data);
   alert("Erro ao iniciar pagamento");

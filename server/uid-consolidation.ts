@@ -95,7 +95,7 @@ async function auditAllUids(): Promise<void> {
     }
 
     // Check if this UID has an Auth record (only auth UID will match)
-    let isAuthUser = uid === authUid;
+    const isAuthUser = uid === authUid;
 
     // Check user_settings
     let hasSettings = false;

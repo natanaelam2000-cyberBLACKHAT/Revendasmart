@@ -2,8 +2,16 @@ import { useState, useEffect, useMemo } from "react";
 import { useLocation } from "wouter";
 import { Layout } from "@/components/layout";
 import {
-  Sparkles, CheckCircle, XCircle, Loader2, ChevronLeft,
-  Star, Zap, ShoppingBag, Users, CreditCard, Infinity, AlertTriangle, Calendar, Gift
+  Star,
+  Zap,
+  ShoppingBag,
+  Users,
+  CreditCard,
+  Infinity as InfinityIcon,
+  AlertTriangle,
+  Calendar,
+  Gift, 
+  Sparkles,
 } from "lucide-react";
 import { getFirebaseIdToken, getCurrentFirebaseUser } from "@/lib/firebase";
 import { getApiUrl } from "@/lib/api-config";
@@ -27,13 +35,34 @@ function fmtDate(d: Date | string | null | undefined): string {
 // Premium Feature List
 // ---------------------------------------------------------------------------
 const PREMIUM_FEATURES = [
-  { icon: <Infinity className="w-4 h-4 text-amber-600" />, text: "Produtos ilimitados" },
-  { icon: <Users className="w-4 h-4 text-amber-600" />, text: "Clientes ilimitados" },
-  { icon: <CreditCard className="w-4 h-4 text-amber-600" />, text: "Cobranças via Mercado Pago" },
-  { icon: <ShoppingBag className="w-4 h-4 text-amber-600" />, text: "Múltiplos nichos de negócio" },
-  { icon: <Star className="w-4 h-4 text-amber-600" />, text: "Destaque de produtos" },
-  { icon: <Zap className="w-4 h-4 text-amber-600" />, text: "Catálogo profissional" },
-  { icon: <Sparkles className="w-4 h-4 text-amber-600" />, text: "Funções premium futuras" },
+  {
+    icon: <InfinityIcon className="w-4 h-4 text-amber-600" />,
+    text: "Produtos ilimitados",
+  },
+  {
+    icon: <Users className="w-4 h-4 text-amber-600" />,
+    text: "Clientes ilimitados",
+  },
+  {
+    icon: <CreditCard className="w-4 h-4 text-amber-600" />,
+    text: "Cobranças via Mercado Pago",
+  },
+  {
+    icon: <ShoppingBag className="w-4 h-4 text-amber-600" />,
+    text: "Múltiplos nichos de negócio",
+  },
+  {
+    icon: <Star className="w-4 h-4 text-amber-600" />,
+    text: "Destaque de produtos",
+  },
+  {
+    icon: <Zap className="w-4 h-4 text-amber-600" />,
+    text: "Catálogo profissional",
+  },
+  {
+    icon: <Gift className="w-4 h-4 text-amber-600" />,
+    text: "Funções premium futuras",
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -44,9 +73,6 @@ export default function Subscribe() {
   const [status, setStatus] = useState<PageStatus>("idle");
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
-  const [syncLoading, setSyncLoading] = useState(false);
-  const [diagnoseLoading, setDiagnoseLoading] = useState(false);
-  const [diagnoseMsg, setDiagnoseMsg] = useState<string>("");
 
   const { planData, globalConfig, isPremium, hasPremiumAccess, loading: planLoading, refresh, error: planError } = usePlanData();
   const isGlobalPremiumActive = isPremiumFromGlobalAccess(globalConfig);
@@ -75,10 +101,13 @@ export default function Subscribe() {
       // Clean URL
       window.history.replaceState({}, "", "/subscribe");
       (async () => {
-        try {
-          setStatus("loading");
-          await handleSyncNow();
-        } catch {
+      try {
+  setStatus("loading");
+
+  await refresh?.();
+
+  setStatus("success");
+} catch {
           setStatus("success");
           await refresh?.();
         }
@@ -189,130 +218,6 @@ export default function Subscribe() {
       console.error("[subscribe/handleSubscribe] Caught error:", msg);
       setErrorMsg(msg);
       setStatus("error");
-    }
-  }
-
-  async function handleDiagnose() {
-    setDiagnoseLoading(true);
-    setDiagnoseMsg("");
-    try {
-      const token = await getFirebaseIdToken();
-      if (!token) throw new Error("Sessão expirada. Faça login novamente.");
-
-      const apiUrl = getApiUrl("/api/app-subscription/diagnose");
-      const res = await fetch(apiUrl, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      const data = await res.json();
-      console.log("[subscribe/handleDiagnose] Response:", data);
-
-      let msg = data.message || "Diagnóstico executado";
-      if (data.diagnosis) {
-        msg = `${msg}\n\nDiagnóstico: ${data.diagnosis}`;
-      }
-      if (data.analysis?.message) {
-        msg = `${msg}\n\n${data.analysis.message}`;
-      }
-
-      setDiagnoseMsg(msg);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Erro ao diagnosticar.";
-      console.error("[subscribe/handleDiagnose] Error:", msg);
-      setDiagnoseMsg(`❌ Erro: ${msg}`);
-    } finally {
-      setDiagnoseLoading(false);
-    }
-  }
-
-  async function handleSyncNow() {
-    setSyncLoading(true);
-    setErrorMsg("");
-    try {
-      const token = await getFirebaseIdToken();
-      if (!token) throw new Error("Sessão expirada. Faça login novamente.");
-
-      console.log("[subscribe/handleSyncNow] Starting sync...");
-
-      const apiUrl = getApiUrl("/api/app-subscription/sync-now");
-      const res = await fetch(apiUrl, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      const data = await res.json();
-      console.log("[subscribe/handleSyncNow] Response:", data);
-
-      if (!res.ok) {
-        const errorMsg = data.message ?? `Erro: ${data.error || "desconhecido"}`;
-        throw new Error(errorMsg);
-      }
-
-      console.log("[subscribe/handleSyncNow] ✅ SUCCESS - Premium activated");
-      setStatus("success");
-      setErrorMsg("");
-      refresh?.();
-      
-      // Scroll to top to see status
-      setTimeout(() => {
-        window.scrollTo({ top: 0, behavior: "smooth" });
-      }, 500);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Erro ao sincronizar. Tente novamente.";
-      console.error("[subscribe/handleSyncNow] Error:", msg);
-      setErrorMsg(msg);
-    } finally {
-      setSyncLoading(false);
-    }
-  }
-
-  async function handleRecover() {
-    setSyncLoading(true);
-    setErrorMsg("");
-    try {
-      const token = await getFirebaseIdToken();
-      if (!token) throw new Error("Sessão expirada. Faça login novamente.");
-
-      console.log("[subscribe/handleRecover] Starting recovery...");
-
-      const apiUrl = getApiUrl("/api/app-subscription/recover");
-      const res = await fetch(apiUrl, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      const data = await res.json();
-      console.log("[subscribe/handleRecover] Response:", data);
-
-      if (!res.ok) {
-        const errorMsg = data.message ?? `Erro: ${data.error || "desconhecido"}`;
-        throw new Error(errorMsg);
-      }
-
-      console.log("[subscribe/handleRecover] ✅ SUCCESS - Subscription recovered");
-      setStatus("success");
-      setErrorMsg("");
-      refresh?.();
-      
-      // Scroll to top to see status
-      setTimeout(() => {
-        window.scrollTo({ top: 0, behavior: "smooth" });
-      }, 500);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Erro ao recuperar. Tente novamente.";
-      console.error("[subscribe/handleRecover] Error:", msg);
-      setErrorMsg(msg);
-    } finally {
-      setSyncLoading(false);
     }
   }
 
@@ -600,51 +505,7 @@ export default function Subscribe() {
           ))}
         </div>
 
-        {/* Firestore Error Message */}
-        {planError && (
-          <div className="bg-red-50 border border-red-200 rounded-2xl p-4 mb-4 flex items-start gap-3" data-testid="error-plan-data">
-            <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <p className="text-sm font-bold text-red-600">Erro ao carregar plano</p>
-              <p className="text-xs text-red-500 mt-1">{planError}</p>
-              <div className="flex gap-2 mt-2">
-                <button
-                  onClick={handleDiagnose}
-                  disabled={diagnoseLoading}
-                  className="text-xs text-red-600 font-bold underline hover:no-underline"
-                  data-testid="button-diagnose-error"
-                >
-                  {diagnoseLoading ? "Diagnosticando..." : "Diagnosticar"}
-                </button>
-                <button
-                  onClick={handleRecover}
-                  disabled={diagnoseLoading}
-                  className="text-xs text-blue-600 font-bold underline hover:no-underline"
-                  data-testid="button-recover-subscription"
-                >
-                  Recuperar assinatura
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Diagnosis Message */}
-        {diagnoseMsg && (
-          <div className={`rounded-2xl p-4 mb-4 flex items-start gap-3 border whitespace-pre-wrap text-xs ${
-            diagnoseMsg.includes("✅") 
-              ? "bg-green-50 border-green-200" 
-              : "bg-yellow-50 border-yellow-200"
-          }`} data-testid="diagnose-result">
-            <AlertTriangle className={`w-5 h-5 flex-shrink-0 mt-0.5 ${
-              diagnoseMsg.includes("✅") ? "text-green-500" : "text-yellow-600"
-            }`} />
-            <p className={diagnoseMsg.includes("✅") ? "text-green-700 font-medium" : "text-yellow-700"}>
-              {diagnoseMsg}
-            </p>
-          </div>
-        )}
-
+       
         {/* Subscription Creation Error Message */}
         {status === "error" && errorMsg && (
           <div className="bg-red-50 border border-red-200 rounded-2xl p-4 mb-4 flex items-start gap-3" data-testid="error-subscription">
@@ -684,47 +545,6 @@ export default function Subscribe() {
             <CheckCircle className="w-6 h-6 text-green-600 mx-auto mb-2" />
             <p className="text-sm font-bold text-green-700">Premium ativo</p>
             <p className="text-xs text-green-600 mt-1">Gerencie sua assinatura no dashboard.</p>
-          </div>
-        )}
-
-        {/* Pending payment state */}
-        {isPendingPayment && (
-          <div className="space-y-3">
-            <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 text-center">
-              <Loader2 className="w-6 h-6 text-blue-500 animate-spin mx-auto mb-2" />
-              <p className="text-sm font-bold text-blue-700">Pagamento pendente</p>
-              <p className="text-xs text-blue-500 mt-1">
-                Clique em "Sincronizar" se você já pagou, ou "Tentar novamente" se não.
-              </p>
-            </div>
-            
-            <button
-              onClick={handleSyncNow}
-              disabled={syncLoading}
-              className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-2xl text-sm active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60"
-              data-testid="button-sync-subscription"
-            >
-              {syncLoading ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Sincronizando...
-                </>
-              ) : (
-                <>
-                  <CheckCircle className="w-4 h-4" />
-                  Sincronizar Assinatura Paga
-                </>
-              )}
-            </button>
-            
-            <button
-              onClick={handleSubscribe}
-              disabled={status === "loading"}
-              className="w-full bg-amber-500 text-white font-bold py-3 rounded-2xl text-sm active:scale-95 transition-all disabled:opacity-60"
-              data-testid="button-retry-payment"
-            >
-              Tentar pagar novamente
-            </button>
           </div>
         )}
 

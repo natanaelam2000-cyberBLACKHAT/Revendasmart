@@ -1,23 +1,29 @@
+import "dotenv/config";
+import * as Sentry from "@sentry/node";
+
+Sentry.init({
+  dsn: "https://32752c8db032da58f02a989ae3e95805@o4511473504354304.ingest.us.sentry.io/4511474807144448",
+  environment: process.env.NODE_ENV || "development",
+  tracesSampleRate: 0.1,
+  sendDefaultPii: false,
+});
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
-import { createServer } from "http";
+import { createServer } from "http"
 
 // Global error handlers for uncaught exceptions
 process.on("uncaughtException", (err) => {
+  Sentry.captureException(err);
+
   console.error("[UNCAUGHT EXCEPTION] Stack:", err.stack);
   console.error("[UNCAUGHT EXCEPTION] Message:", err.message);
-  console.error("[UNCAUGHT EXCEPTION] Name:", err.name);
-  // Don't exit immediately — log and continue
-  // process.exit(1);
 });
 
-process.on("unhandledRejection", (reason, promise) => {
-  console.error("[UNHANDLED REJECTION] Promise:", promise);
-  console.error("[UNHANDLED REJECTION] Reason:", reason);
-  console.error("[UNHANDLED REJECTION] Reason Stack:", reason instanceof Error ? reason.stack : String(reason));
-  // Don't exit immediately — log and continue
-  // process.exit(1);
+process.on("unhandledRejection", (reason) => {
+  Sentry.captureException(reason);
+
+  console.error("[UNHANDLED REJECTION]", reason);
 });
 
 // Optional: Event loop and memory monitoring can be enabled on demand
@@ -144,18 +150,20 @@ app.get("/health", (_req, res) => {
     await registerRoutes(httpServer, app);
     console.log("[STARTUP] Routes registered successfully");
 
-    app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
-      const status = err.status || err.statusCode || 500;
-      const message = err.message || "Internal Server Error";
+    app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+  Sentry.captureException(err);
 
-      console.error("[ERROR]", err);
+  const status = err.status || err.statusCode || 500;
+  const message = err.message || "Internal Server Error";
 
-      if (res.headersSent) {
-        return next(err);
-      }
+  console.error("[ERROR]", err);
 
-      return res.status(status).json({ message });
-    });
+  if (res.headersSent) {
+    return next(err);
+  }
+
+  return res.status(status).json({ message });
+});
 
     if (process.env.NODE_ENV === "production") {
       serveStatic(app);
