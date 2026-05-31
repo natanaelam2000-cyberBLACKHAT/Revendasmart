@@ -1,8 +1,19 @@
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  lazy,
+  Suspense
+} from "react";
 import React, { useState, useEffect, useRef } from "react";
 import { Layout } from "@/components/layout";
 import { Camera, CheckCircle2, ChevronDown, ScanLine, Wand2, Sparkles, ChevronLeft, ImagePlus, AlertCircle } from "lucide-react";
 import { useLocation, useParams } from "wouter";
-import { BarcodeScanner } from "@/components/barcode-scanner";
+import { lazy } from "react";
+
+const BarcodeScanner = lazy(
+  () => import("@/components/barcode-scanner")
+);
 import { Product, defaultSettings } from "@/lib/mock-data";
 import { getFirebaseAuth, getFirebaseIdToken, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";
 import { 
@@ -899,9 +910,14 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         </form>
       </div>
 
-      {scanning && (
-        <BarcodeScanner onScan={handleBarcodeScan} onClose={() => setScanning(false)} />
-      )}
+   <Suspense fallback={<div>Carregando scanner...</div>}>
+  {scanning && (
+    <BarcodeScanner
+      onScan={handleScan}
+      onClose={() => setScanning(false)}
+    />
+  )}
+</Suspense>
     </Layout>
   );
 }

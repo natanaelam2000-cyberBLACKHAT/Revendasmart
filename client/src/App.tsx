@@ -3,31 +3,31 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 // import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useEffect, useState } from "react";
+import { useEffect, useState, lazy, Suspense } from "react";
 import { getFirebaseAuth, logTelemetryEvent } from "@/lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { getApiUrl } from "@/lib/api-config";
 
-import Dashboard from "@/pages/dashboard";
-import AddProduct from "@/pages/add-product";
-import Products from "@/pages/products";
-import Sell from "@/pages/sell";
-import Catalog from "@/pages/catalog";
-import Clients from "@/pages/clients";
-import ClientDetail from "@/pages/client-detail";
-import Billings from "@/pages/billings";
-import BillingCalendar from "@/pages/billing-calendar";
-import Marketing from "@/pages/marketing";
-import MonthlySales from "@/pages/monthly-sales";
-import ProductsSold from "@/pages/products-sold";
+const Dashboard = lazy(() => import("@/pages/dashboard"));
+const AddProduct = lazy(() => import("@/pages/add-product"));
+const Products = lazy(() => import("@/pages/products"));
+const Sell = lazy(() => import("@/pages/sell"));
+const Catalog = lazy(() => import("@/pages/catalog"));
+const Clients = lazy(() => import("@/pages/clients"));
+const ClientDetail = lazy(() => import("@/pages/client-detail"));
+const Billings = lazy(() => import("@/pages/billings"));
+const BillingCalendar = lazy(() => import("@/pages/billing-calendar"));
+const Marketing = lazy(() => import("@/pages/marketing"));
+const MonthlySales = lazy(() => import("@/pages/monthly-sales"));
+const ProductsSold = lazy(() => import("@/pages/products-sold"));
 import Onboarding from "@/pages/onboarding";
 import PublicCatalog from "@/pages/public-catalog";
-import Reports from "@/pages/reports";
-import Settings from "@/pages/settings";
-import SettingsMercadoPago from "@/pages/settings-mercadopago";
-import Admin from "@/pages/admin";
-import Subscribe from "@/pages/subscribe";
+const Reports = lazy(() => import("@/pages/reports"));
+const Settings = lazy(() => import("@/pages/settings"));
+const SettingsMercadoPago = lazy(() => import("@/pages/settings-mercadopago"));
+const Admin = lazy(() => import("@/pages/admin"));
+const Subscribe = lazy(() => import("@/pages/subscribe"));
 import Login from "@/pages/login";
 import Signup from "@/pages/signup";
 import NotFound from "@/pages/not-found";
@@ -163,7 +163,9 @@ function Router() {
       <RemoteConfigProvider>
         <TooltipProvider>
           {/* <Toaster /> -- Disabled: causes insertBefore DOM error on initial render */}
-          <Router />
+         <Suspense fallback={<div>Carregando...</div>}>
+  <Router />
+</Suspense>
         </TooltipProvider>
       </RemoteConfigProvider>
     </QueryClientProvider>

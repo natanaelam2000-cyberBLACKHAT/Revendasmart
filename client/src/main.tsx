@@ -1,6 +1,4 @@
 import React from "react";
-console.log("ENV TEST:", import.meta.env);
-console.log("API KEY:", import.meta.env.VITE_FIREBASE_API_KEY);
 import { createRoot } from "react-dom/client";
 import { PlanProvider } from "@/providers/plan-provider";
 import App from "./App";
@@ -10,7 +8,7 @@ Sentry.init({
 
   integrations: [
     Sentry.browserTracingIntegration(),
-    Sentry.replayIntegration(),
+   ,
   ],
 
   tracesSampleRate: 0.1,

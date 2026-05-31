@@ -1,5 +1,31 @@
 import { useEffect, useRef, useState } from 'react';
-import { BrowserMultiFormatReader } from '@zxing/library';
+useEffect(() => {
+  let codeReader: any;
+
+  async function startScanner() {
+    const { BrowserMultiFormatReader } =
+      await import("@zxing/library");
+
+    codeReader = new BrowserMultiFormatReader();
+
+    codeReader.decodeFromVideoDevice(
+      null,
+      videoRef.current!,
+      (result) => {
+        if (result) {
+          onScan(result.getText());
+          onClose();
+        }
+      }
+    );
+  }
+
+  startScanner();
+
+  return () => {
+    codeReader?.reset();
+  };
+}, [onScan, onClose]);
 import { X, Camera } from 'lucide-react';
 
 interface ScannerProps {

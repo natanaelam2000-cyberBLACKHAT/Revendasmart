@@ -555,6 +555,10 @@ app.post("/api/app-subscription/webhook", async (req: Request, res: Response) =>
 
     const preApproval = new PreApproval(mpClient);
     const mpSub = await preApproval.get({ id: subscriptionId });
+    console.log(
+  "[MP_SUB]",
+  JSON.stringify(mpSub, null, 2)
+);
 
     const uid = (mpSub as any).external_reference ?? null;
 
