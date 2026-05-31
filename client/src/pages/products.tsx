@@ -2,7 +2,15 @@
 
 import { Layout } from "@/components/layout";
 import { useState, useMemo, useEffect } from "react";
-import { Plus, Edit2, Trash2, ChevronRight, Filter, Package } from "lucide-react";
+import {
+  Plus,
+  Edit2,
+  Trash2,
+  ChevronRight,
+  Filter,
+  Package,
+  Search
+} from "lucide-react";
 import { Link } from "wouter";
 import { Product, deleteImage } from "@/lib/mock-data";
 import { ProductImageCard } from "@/components/ProductImageCard";
@@ -13,6 +21,7 @@ import { getFirestore, collection, onSnapshot } from "firebase/firestore";
 export default function Products() {
 const [genderFilter, setGenderFilter] = useState("todos");
   const [products, setProducts] = useState<Product[]>([]);
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>("");
   const [selectedCategory, setSelectedCategory] = useState("Todas");
@@ -110,6 +119,11 @@ const [genderFilter, setGenderFilter] = useState("todos");
 
   const filteredProducts = useMemo(() => {
   return products.filter(p => {
+    const matchSearch =
+      !search ||
+      p.name?.toLowerCase().includes(search.toLowerCase()) ||
+      p.brand?.toLowerCase().includes(search.toLowerCase());
+
     const gender = p.gender || "unisex";
 
     const matchGender =
@@ -118,9 +132,9 @@ const [genderFilter, setGenderFilter] = useState("todos");
     const matchCategory =
       selectedCategory === "Todas" || p.category === selectedCategory;
 
-    return matchGender && matchCategory;
+    return matchSearch && matchGender && matchCategory;
   });
-}, [products, selectedCategory, genderFilter]);
+}, [products, selectedCategory, genderFilter, search]);
 
   const [deleteConfirm, setDeleteConfirm] = useState<{ show: boolean; productId?: string }>({ show: false });
 
@@ -169,6 +183,16 @@ const [genderFilter, setGenderFilter] = useState("todos");
             </a>
           </Link>
         </div>
+        <div className="relative mb-4">
+  <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground" />
+  <input
+    type="text"
+    placeholder="Buscar produto..."
+    className="w-full bg-white border border-border rounded-full py-3 pl-11 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
+    value={search}
+    onChange={(e) => setSearch(e.target.value)}
+  />
+</div>
 <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground ml-4 mb-2 block flex items-center gap-2">
   <Filter className="w-3 h-3" /> Filtrar por categoria
 </label>

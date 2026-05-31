@@ -546,45 +546,6 @@ window.location.href = data.initPoint;
             </div>
           </div>
         )}
-
-        <div className="flex gap-3 mb-6">
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            <input 
-              type="text" 
-              placeholder="Buscar no estoque..." 
-              className="w-full bg-white border border-border rounded-full py-3 pl-11 pr-4 text-sm focus:outline-none"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
-          <div className="bg-white border border-border rounded-full h-[46px] w-[46px] flex items-center justify-center relative">
-            <Filter className="w-4 h-4" />
-            <select className="absolute inset-0 opacity-0" value={filterBrand} onChange={(e) => setFilterBrand(e.target.value)}>
-              {brands.map(b => <option key={b} value={b}>{b}</option>)}
-            </select>
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          {filteredProducts.map(product => (
-            <div key={product.id} className="bg-white p-3 rounded-3xl flex gap-4 shadow-sm border border-border/40 items-center">
-              <ProductImageCard product={product} size="md" />
-              <div className="flex-1 min-w-0">
-                <div className="flex justify-between items-start mb-1">
-                  <span className="text-[10px] font-black text-primary tracking-wider uppercase">{product.brand}</span>
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${product.stock <= settings.lowStockThreshold ? 'bg-destructive/10 text-destructive' : 'bg-green-100 text-green-700'}`}>
-                    {product.stock} un
-                  </span>
-                </div>
-                <h3 className="text-sm font-bold truncate mb-1">{product.name}</h3>
-                <div className="flex items-end gap-2">
-                  <span className="text-sm font-black">R$ {product.salePrice.toFixed(2)}</span>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
       </div>
     </Layout>
   );
