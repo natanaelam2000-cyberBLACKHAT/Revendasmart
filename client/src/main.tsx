@@ -19,9 +19,7 @@ Sentry.init({
 
   sendDefaultPii: false,
 });
-setTimeout(() => {
-  throw new Error("ERRO REAL TESTE SENTRY REVENDASMART");
-}, 3000);
+
 
 class ErrorBoundary extends React.Component<any, any> {
   constructor(props: any) {

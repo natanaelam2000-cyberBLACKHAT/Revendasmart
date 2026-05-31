@@ -403,12 +403,16 @@ const productDocs = await getDocs(
 const productCount = productDocs.size;
 
 const safePlan = activePlan || "free";
-const { allowed } = checkProductLimit(plan, currentCount, true)
-;if (!allowed) {
+console.log("[DEBUG] safePlan =", safePlan);
+console.log("[DEBUG] productCount =", productCount);
+const { allowed } = checkProductLimit(safePlan, productCount, true);
+
+if (!allowed) {
   setShowLimitModal(true);
   setFormError("Limite de produtos atingido no plano.");
   return;
 }
+
         const newProduct: Product = { ...productData, id: productId };
         try {
           console.log("[add-product] Creating product:", productId);
