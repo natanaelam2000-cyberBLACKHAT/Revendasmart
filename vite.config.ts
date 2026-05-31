@@ -1,3 +1,4 @@
+import { sentryVitePlugin } from "@sentry/vite-plugin";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -8,23 +9,21 @@ import { visualizer } from "rollup-plugin-visualizer";
 
 export default defineConfig({
   plugins: [
-    react(),
-    runtimeErrorOverlay(),
-    tailwindcss(),
-    metaImagesPlugin(),
-    ...(process.env.NODE_ENV !== "production" &&
-    process.env.REPL_ID !== undefined
-      ? [
-          await import("@replit/vite-plugin-cartographer").then((m) =>
-            m.cartographer(),
-          ),
-          await import("@replit/vite-plugin-dev-banner").then((m) =>
-            m.devBanner(),
-          ),
-        ]
-      : []),
-  ],
+  react(),
+  runtimeErrorOverlay(),
+  tailwindcss(),
+  metaImagesPlugin(),
 
+  ...(process.env.SENTRY_AUTH_TOKEN
+    ? [
+        sentryVitePlugin({
+          org: "revenda-smart",
+          project: "javascript-react",
+          authToken: process.env.SENTRY_AUTH_TOKEN,
+        }),
+      ]
+    : []),
+],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),
@@ -41,21 +40,22 @@ export default defineConfig({
 
   root: path.resolve(import.meta.dirname, "client"),
 
-  build: {
-    outDir: path.resolve(import.meta.dirname, "dist/public"),
-    emptyOutDir: true,
+ build: {
+  sourcemap: true,
+  outDir: path.resolve(import.meta.dirname, "dist/public"),
+  emptyOutDir: true,
 
-    rollupOptions: {
-      plugins: [
-        visualizer({
-          open: true,
-          filename: "dist/stats.html",
-          gzipSize: true,
-          brotliSize: true,
-        }),
-      ],
-    },
+  rollupOptions: {
+    plugins: [
+      visualizer({
+        open: true,
+        filename: "dist/stats.html",
+        gzipSize: true,
+        brotliSize: true,
+      }),
+    ],
   },
+},
 
   server: {
     host: "0.0.0.0",
