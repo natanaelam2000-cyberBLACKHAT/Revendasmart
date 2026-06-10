@@ -1,3 +1,4 @@
+import { RemoteConfigProvider } from "@/components/RemoteConfigProvider";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { PlanProvider } from "@/providers/plan-provider";
@@ -142,12 +143,14 @@ if (isSafeMode) {
       location.reload();
     } else {
       if (!storedVersion) localStorage.setItem("app_version", APP_VERSION);
-   createRoot(document.getElementById("root")!).render(
+  createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <GlobalErrorBoundary>
-      <PlanProvider>
-        <App />
-      </PlanProvider>
+      <RemoteConfigProvider>
+        <PlanProvider>
+          <App />
+        </PlanProvider>
+      </RemoteConfigProvider>
     </GlobalErrorBoundary>
   </React.StrictMode>
 );
