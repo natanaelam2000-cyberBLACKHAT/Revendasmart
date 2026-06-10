@@ -1,0 +1,20 @@
+
+> rest-express@1.0.0 dev
+> NODE_ENV=development tsx server/index.ts
+
+[mp-crypto] MERCADOPAGO_TOKEN_ENCRYPTION_KEY is not set — token encryption DISABLED
+[mp-crypto] Encryption key missing — tokens encrypted with insecure fallback
+[payments] MERCADOPAGO_ACCESS_TOKEN is not set — central account fallback will fail
+[subscriptions] Initializing module
+[subscriptions] MERCADOPAGO_ACCESS_TOKEN: NOT SET ✗
+[subscriptions] Token length: 0
+[subscriptions] PREMIUM_PRICE_BRL: 19.9
+[subscriptions] MercadoPagoConfig created successfully
+[STARTUP] Server initialization starting...
+[STARTUP] NODE_ENV: development
+[STARTUP] PORT: undefined
+[payments] Routes registered: /api/payments/{create-link,webhook,status,resync,delete}
+[mp-connections] Routes registered: /api/mercadopago/{start-auth,callback,revoke,connections,set-default}
+[STARTUP] Routes registered successfully
+[STARTUP] Vite dev server configured
+🚀 Server rodando na porta 8080

@@ -1,3 +1,4 @@
+import { RemoteConfigProvider } from "@/components/RemoteConfigProvider";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -160,14 +161,14 @@ function Router() {
 }function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <RemoteConfigProvider>
+    <>
         <TooltipProvider>
           {/* <Toaster /> -- Disabled: causes insertBefore DOM error on initial render */}
          <Suspense fallback={<div>Carregando...</div>}>
   <Router />
 </Suspense>
         </TooltipProvider>
-      </RemoteConfigProvider>
+     </>
     </QueryClientProvider>
   );
 }

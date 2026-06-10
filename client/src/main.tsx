@@ -2,21 +2,9 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { PlanProvider } from "@/providers/plan-provider";
 import App from "./App";
-import * as Sentry from "@sentry/react";
-Sentry.init({
-  dsn: "https://cb0fe78d7082742f863354a079796fcd@o4511473504354304.ingest.us.sentry.io/4511473992335360",
+// import * as Sentry from "@sentry/react";
 
-  integrations: [
-    Sentry.browserTracingIntegration(),
-   ,
-  ],
-
-  tracesSampleRate: 0.1,
-  replaysSessionSampleRate: 0.05,
-  replaysOnErrorSampleRate: 1.0,
-
-  sendDefaultPii: false,
-});
+// Sentry temporariamente desativado para diagnóstico
 
 
 class ErrorBoundary extends React.Component<any, any> {
@@ -154,13 +142,9 @@ if (isSafeMode) {
       location.reload();
     } else {
       if (!storedVersion) localStorage.setItem("app_version", APP_VERSION);
-      createRoot(document.getElementById("root")!).render(
-        <GlobalErrorBoundary>
-      <PlanProvider>
-  <App />
-</PlanProvider>
-        </GlobalErrorBoundary>
-      );
+     createRoot(document.getElementById("root")!).render(
+  <div>TESTE</div>
+);
     }
   } catch (e) {
     console.error("Critical error on boot", e);
