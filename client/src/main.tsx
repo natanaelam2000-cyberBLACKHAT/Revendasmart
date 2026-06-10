@@ -142,8 +142,14 @@ if (isSafeMode) {
       location.reload();
     } else {
       if (!storedVersion) localStorage.setItem("app_version", APP_VERSION);
-     createRoot(document.getElementById("root")!).render(
-  <div>TESTE</div>
+   createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <GlobalErrorBoundary>
+      <PlanProvider>
+        <App />
+      </PlanProvider>
+    </GlobalErrorBoundary>
+  </React.StrictMode>
 );
     }
   } catch (e) {
