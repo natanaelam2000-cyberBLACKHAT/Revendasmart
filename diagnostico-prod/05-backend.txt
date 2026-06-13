@@ -1,0 +1,41 @@
+=== BACKEND ROOT ===
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100   323  100   323    0     0   2716      0 --:--:-- --:--:-- --:--:--  2737
+HTTP/2 500 
+x-cloud-trace-context: c2f1a54a7de4c9f14c3032250fa098d3;o=1
+date: Sat, 13 Jun 2026 04:14:20 GMT
+content-type: text/html; charset=UTF-8
+server: Google Frontend
+content-length: 323
+
+
+<html><head>
+<meta http-equiv="content-type" content="text/html;charset=utf-8">
+<title>500 Server Error</title>
+</head>
+<body text=#000000 bgcolor=#ffffff>
+<h1>Error: Server Error</h1>
+<h2>The server encountered an error and could not complete your request.<p>Please try again in 30 seconds.</h2>
+<h2></h2>
+</body></html>
+=== BACKEND OPTIONS CORS ===
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100   302  100   302    0     0   3491      0 --:--:-- --:--:-- --:--:--  3511
+HTTP/2 503 
+date: Sat, 13 Jun 2026 04:14:20 GMT
+content-type: text/html; charset=UTF-8
+server: Google Frontend
+content-length: 302
+
+
+<html><head>
+<meta http-equiv="content-type" content="text/html;charset=utf-8">
+<title>503 Server Error</title>
+</head>
+<body text=#000000 bgcolor=#ffffff>
+<h1>Error: Server Error</h1>
+<h2>The service you requested is not available yet.<p>Please try again in 30 seconds.</h2>
+<h2></h2>
+</body></html>

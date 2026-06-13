@@ -1,0 +1,343 @@
+client/src/main.tsx:4:import { PlanProvider } from "@/providers/plan-provider";
+client/src/main.tsx:38:console.log(`[SETTINGS PATCH ACTIVE ${APP_VERSION}] useUserSettings.ts with onAuthStateChanged and direct user.getIdToken()`);
+client/src/components/layout.tsx:38:    { href: "/settings", icon: Settings, label: "Ajustes" },
+client/src/pages/settings-mercadopago.tsx:126:          data-testid="button-back-mp-settings"
+client/src/pages/settings-mercadopago.tsx:127:          onClick={() => setLocation("/settings")}
+client/src/pages/dashboard.tsx:15:import { useUserSettings } from "@/hooks/useUserSettings";
+client/src/pages/dashboard.tsx:24:  const { onboarding_completed, loading: settingsLoading, settings } = useUserSettings();
+client/src/pages/dashboard.tsx:41:    if (!settingsLoading && !onboarding_completed) {
+client/src/pages/dashboard.tsx:44:  }, [settingsLoading, onboarding_completed, setLocation]);
+client/src/pages/dashboard.tsx:105:      if (p.stock > 0 && p.stock <= settings.lowStockThreshold) {
+client/src/pages/dashboard.tsx:175:      link: "/settings?tab=growth",
+client/src/pages/dashboard.tsx:182:}, [products, settings, sales, clients]);
+client/src/pages/dashboard.tsx:216:      .filter(p => p.stock > 0 && p.stock <= settings.lowStockThreshold)
+client/src/pages/dashboard.tsx:219:  }, [products, settings.lowStockThreshold]);
+client/src/pages/dashboard.tsx:268:  if (settingsLoading || dataLoading) {
+client/src/pages/dashboard.tsx:324:            <h1 className="text-2xl font-bold text-foreground">{settings.storeName}</h1>
+client/src/pages/dashboard.tsx:325:            <p className="text-sm text-muted-foreground mb-6">Boas vendas, {settings.sellerName}!</p>
+client/src/pages/catalog.tsx:5:import { useUserSettings } from "@/hooks/useUserSettings";
+client/src/pages/catalog.tsx:18:  const { settings } = useUserSettings();
+client/src/pages/catalog.tsx:119:  const catalogUrl = `https://revendasmart.vercel.app/u/${settings?.catalog_slug || "seu-catalogo"}`;
+client/src/pages/catalog.tsx:128:    const catalogSlug = settings?.catalog_slug || "default";
+client/src/pages/catalog.tsx:246:    const catalogSlug = settings?.catalog_slug || "default";
+client/src/pages/login.tsx:46:      // Get ID token and fetch settings from Firestore
+client/src/pages/login.tsx:52:        const settingsUrl = getApiUrl(`/api/user/settings/${uid}`);
+client/src/pages/login.tsx:53:        const response = await fetch(settingsUrl, { headers });
+client/src/pages/login.tsx:57:          if (data.settings?.onboarding_completed === true) {
+client/src/pages/login.tsx:66:      } catch (settingsErr) {
+client/src/pages/login.tsx:67:        console.warn("[login] Failed to fetch settings, redirecting to onboarding:", settingsErr);
+client/src/pages/admin.tsx:129:      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ""}/api/admin/global-config`, {
+client/src/pages/admin.tsx:149:      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ""}/api/admin/global-config`, {
+client/src/pages/admin.tsx:271:        `${import.meta.env.VITE_API_BASE_URL || ""}/api/rewards/grant/${grantTargetUserId}`,
+client/src/pages/public-catalog.tsx:41:  // const catalogQuery = await db.collection('user_settings').where('catalogSlug', '==', storeSlug).limit(1).get();
+client/src/pages/public-catalog.tsx:49:const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+client/src/pages/public-catalog.tsx:55:      const usersRef = collection(db, "user_settings");
+client/src/pages/public-catalog.tsx:100:  if (!targetUser || !settings?.enablePublicCatalog || settings?.disablePublicCatalog) {
+client/src/pages/public-catalog.tsx:114:const storeDisplayName = settings?.storeName || "Minha Loja";
+client/src/pages/subscribe.tsx:16:import { getFirebaseIdToken, getCurrentFirebaseUser } from "@/lib/firebase";
+client/src/pages/subscribe.tsx:77:  const { planData, globalConfig, isPremium, hasPremiumAccess, loading: planLoading, refresh, error: planError } = usePlanData();
+client/src/pages/subscribe.tsx:80:    const subscriptionStatus = (planData?.subscriptionStatus ?? "").toLowerCase();
+client/src/pages/subscribe.tsx:81:    const paymentStatus = (planData?.paymentStatus ?? "").toLowerCase();
+client/src/pages/subscribe.tsx:82:    const premiumActive = !!planData?.premiumActive || isPremium || hasPremiumAccess;
+client/src/pages/subscribe.tsx:85:    const hasRecentPending = isPending && !!planData?.subscriptionId;
+client/src/pages/subscribe.tsx:88:  }, [planData, isPremium, isGlobalPremiumActive, hasPremiumAccess]);
+client/src/pages/subscribe.tsx:92:  const isCancelledSubscriber = planData?.subscriptionStatus === "cancelled";
+client/src/pages/subscribe.tsx:129:      const token = await getFirebaseIdToken();
+client/src/pages/subscribe.tsx:228:      const token = await getFirebaseIdToken();
+client/src/pages/subscribe.tsx:415:        {planData?.subscriptionId && (
+client/src/pages/subscribe.tsx:440:            {planData.nextBillingAt && isActiveSubscriber && (
+client/src/pages/subscribe.tsx:443:                <span>Próxima cobrança: {fmtDate(planData.nextBillingAt)}</span>
+client/src/pages/subscribe.tsx:446:            {planData.lastPaymentAt && isActiveSubscriber && (
+client/src/pages/subscribe.tsx:449:                <span>Último pagamento: {fmtDate(planData.lastPaymentAt)}</span>
+client/src/pages/subscribe.tsx:452:            {isCancelledSubscriber && planData.canceledAt && (
+client/src/pages/subscribe.tsx:455:                <span>Cancelada em: {fmtDate(planData.canceledAt)}</span>
+client/src/pages/marketing.tsx:8:import { useUserSettings } from "@/hooks/useUserSettings";
+client/src/pages/marketing.tsx:21:  const { settings: firestoreSettings } = useUserSettings();
+client/src/pages/marketing.tsx:22:  const settings = firestoreSettings || defaultSettings;
+client/src/pages/marketing.tsx:95:      if (settings.pixKey) text += `\n🔑 PIX: ${settings.pixKey}`;
+client/src/pages/marketing.tsx:96:      if (settings.paymentLink) text += `\n💳 Link de Pagamento: ${settings.paymentLink}`;
+client/src/pages/marketing.tsx:100:  }, [selectedProduct, selectedKit, template, priceOverride, note, ctaText, includePayment, settings]);
+client/src/pages/marketing.tsx:195:      gradient.addColorStop(0, settings.primaryColor || '#ec4899');
+client/src/pages/marketing.tsx:210:      ctx.fillStyle = settings.primaryColor || '#ec4899';
+client/src/pages/marketing.tsx:213:      ctx.fillText(settings.storeName.toUpperCase(), 540, 200);
+client/src/pages/marketing.tsx:229:        ctx.fillStyle = settings.primaryColor || '#ec4899';
+client/src/pages/marketing.tsx:243:        ctx.fillStyle = settings.primaryColor || '#ec4899';
+client/src/pages/marketing.tsx:396:                {(settings.pixKey || settings.paymentLink) && (
+client/src/pages/add-product.tsx:18:import { getFirebaseAuth, getFirebaseIdToken, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";
+client/src/pages/add-product.tsx:29:import { useUserSettings } from "@/hooks/useUserSettings";
+client/src/pages/add-product.tsx:100:  const { settings: firestoreSettings } = useUserSettings();
+client/src/pages/add-product.tsx:101:  const settings = firestoreSettings || defaultSettings;
+client/src/pages/add-product.tsx:105:  const businessTypes = toBusinessTypesArray(settings?.businessType, settings?.businessTypes);
+client/src/pages/settings.tsx:7:import { getCurrentFirebaseUser, getFirebaseIdToken, getFirebaseAuth, measureOperation, logTelemetryEvent } from "@/lib/firebase";
+client/src/pages/settings.tsx:11:import { useUserSettings } from "@/hooks/useUserSettings";
+client/src/pages/settings.tsx:35:  // Get settings from Firestore via hook
+client/src/pages/settings.tsx:36:  const { settings: firestoreSettings, loading: settingsLoading, error: settingsError } = useUserSettings();
+client/src/pages/settings.tsx:46:  // Sync Firestore settings to form ONLY on initial load
+client/src/pages/settings.tsx:50:    if (!settingsLoading && firestoreSettings && !hasInitialized.current) {
+client/src/pages/settings.tsx:54:  }, [settingsLoading]); // Only depend on loading state, not firestoreSettings
+client/src/pages/settings.tsx:99:      const response = await measureOperation("catalog_settings_save", async () => {
+client/src/pages/settings.tsx:100:        const token = await getFirebaseIdToken();
+client/src/pages/settings.tsx:104:        return await fetch(getApiUrl(`/api/user/settings/${firebaseUid}`), {
+client/src/pages/settings.tsx:118:        // Update form with returned settings to ensure sync
+client/src/pages/settings.tsx:119:        if (result.settings) {
+client/src/pages/settings.tsx:120:          setFormSettings(result.settings);
+client/src/pages/settings.tsx:129:      console.error("[settings] Save error:", err);
+client/src/pages/settings.tsx:184:            {settingsLoading ? "⏳ Carregando..." : "✓ Sincronizado"}
+client/src/pages/settings.tsx:240:                        data-testid={`settings-nicho-${nichoId}`}
+client/src/pages/settings.tsx:283:                  data-testid="button-go-to-mp-settings"
+client/src/pages/settings.tsx:284:                  onClick={() => setLocation("/settings/mercadopago")}
+client/src/pages/settings.tsx:367:                  checked={!!formSettings?.notification_settings?.enable_billing_reminders} 
+client/src/pages/settings.tsx:370:                    notification_settings: {
+client/src/pages/settings.tsx:371:                      ...(formSettings?.notification_settings || {}),
+client/src/pages/settings.tsx:384:                  value={formSettings?.notification_settings?.reminder_days_before_due || 1}
+client/src/pages/settings.tsx:387:                    notification_settings: {
+client/src/pages/settings.tsx:388:                      ...(formSettings?.notification_settings || {}),
+client/src/pages/settings.tsx:401:                  logTelemetryEvent("growth_tab_viewed", { origin: "settings_nav" }).catch(() => {});
+client/src/pages/settings.tsx:420:              {settingsLoading ? (
+client/src/pages/settings.tsx:480:              {settingsLoading ? (
+client/src/pages/settings.tsx:563:                        logTelemetryEvent("referral_link_copied", { origin: "settings_growth" }).catch(() => {});
+client/src/pages/settings.tsx:587:                        logTelemetryEvent("referral_share_initiated", { method, origin: "settings_growth" }).catch(() => {});
+client/src/pages/settings.tsx:616:                        logTelemetryEvent("referral_link_copied", { origin: "settings_growth" }).catch(() => {});
+client/src/pages/clients.tsx:14:  const [settings] = useState(() => defaultSettings);
+client/src/pages/clients.tsx:41:    const storeName = settings?.storeName || "minha-loja";
+client/src/pages/clients.tsx:42:    const slug = settings?.catalogSlug || storeName
+client/src/pages/billings.tsx:14:import { useUserSettings } from "@/hooks/useUserSettings";
+client/src/pages/billings.tsx:23:  const { settings: firestoreSettings } = useUserSettings();
+client/src/pages/billings.tsx:24:  const settings = firestoreSettings || defaultSettings;
+client/src/pages/billings.tsx:201:    if (!settings?.notification_settings?.enable_billing_reminders) return null;
+client/src/pages/billings.tsx:202:    const days = settings.notification_settings.reminder_days_before_due || 1;
+client/src/pages/billings.tsx:213:  }, [billings, settings]);
+client/src/pages/signup.tsx:54:          const settingsKey = `rs:${user.uid}:settings`;
+client/src/pages/signup.tsx:55:          const existingSettings = localStorage.getItem(settingsKey);
+client/src/pages/signup.tsx:57:            const settings = JSON.parse(existingSettings);
+client/src/pages/signup.tsx:58:            settings.referral_source = referralUid;
+client/src/pages/signup.tsx:59:            settings.referral_applied_at = new Date().toISOString();
+client/src/pages/signup.tsx:60:            localStorage.setItem(settingsKey, JSON.stringify(settings));
+client/src/pages/signup.tsx:65:          const settingsUrl = getApiUrl(`/api/user/settings/${user.uid}`);
+client/src/pages/signup.tsx:66:          const apiResponse = await fetch(settingsUrl, {
+client/src/pages/signup.tsx:136:        // Save store name to localStorage settings
+client/src/pages/signup.tsx:137:        const settingsKey = `rs:${user.uid}:settings`;
+client/src/pages/signup.tsx:138:        const existingSettings = localStorage.getItem(settingsKey);
+client/src/pages/signup.tsx:140:          const settings = JSON.parse(existingSettings);
+client/src/pages/signup.tsx:141:          settings.storeName = storeName || email.split('@')[0];
+client/src/pages/signup.tsx:142:          localStorage.setItem(settingsKey, JSON.stringify(settings));
+client/src/pages/onboarding.tsx:8:import { patchUserSettingsOptimistic, invalidateUserSettings } from "@/hooks/useUserSettings";
+client/src/pages/onboarding.tsx:99:      const settingsUrl = getApiUrl(`/api/user/settings/${uid}`);
+client/src/pages/onboarding.tsx:104:        const response = await fetch(settingsUrl, {
+client/src/pages/onboarding.tsx:135:        // CRITICAL: Patch settings in ALL hook instances BEFORE navigating.
+client/src/pages/onboarding.tsx:136:        // App.tsx uses useUserSettings() independently — it will NOT refetch on its own.
+client/src/App.tsx:10:import { useUserSettings } from "@/hooks/useUserSettings";
+client/src/App.tsx:28:const Settings = lazy(() => import("@/pages/settings"));
+client/src/App.tsx:29:const SettingsMercadoPago = lazy(() => import("@/pages/settings-mercadopago"));
+client/src/App.tsx:41:  const { settings, loading: settingsLoading } = useUserSettings();
+client/src/App.tsx:106:    if (authState.loading || settingsLoading) return;
+client/src/App.tsx:122:      if (settings?.onboarding_completed !== true) {
+client/src/App.tsx:126:  }, [authState, settings, location, setLocation, settingsLoading]);
+client/src/App.tsx:152:      <Route path="/settings" component={Settings} />
+client/src/App.tsx:153:      <Route path="/settings/mercadopago" component={SettingsMercadoPago} />
+client/src/providers/plan-provider.tsx:27:  planData: PlanData | null;
+client/src/providers/plan-provider.tsx:32:  planData: null,
+client/src/providers/plan-provider.tsx:36:export function PlanProvider({
+client/src/providers/plan-provider.tsx:41:  const [planData, setPlanData] =
+client/src/providers/plan-provider.tsx:67:          "planData",
+client/src/providers/plan-provider.tsx:86:              "[PlanProvider]",
+client/src/providers/plan-provider.tsx:108:        planData,
+client/src/lib/error-logging.ts:87:    const errorsRef = ref(database, "error_logs");
+client/src/lib/remote-config.ts:111:    remoteConfig.settings.minimumFetchIntervalMillis = 3600000; // 1 hour
+client/src/lib/remote-config.ts:112:    remoteConfig.settings.cacheTTL = 3600000;
+client/src/lib/firebase.ts:156:export async function getFirebaseIdToken(): Promise<string | null> {
+client/src/lib/firebase.ts:159:    console.log("[getFirebaseIdToken] auth exists:", !!auth);
+client/src/lib/firebase.ts:163:      "[getFirebaseIdToken] currentUser exists:",
+client/src/lib/firebase.ts:169:      console.log("[getFirebaseIdToken] No user, returning null");
+client/src/lib/firebase.ts:175:      "[getFirebaseIdToken] Token obtained:",
+client/src/lib/firebase.ts:180:    console.warn("[getFirebaseIdToken] Failed to get ID token:", e);
+client/src/lib/api-config.ts:3: * Uses VITE_API_BASE_URL environment variable
+client/src/lib/api-config.ts:7:  const viteApiBase = import.meta.env.VITE_API_BASE_URL;
+client/src/lib/api-config.ts:10:    console.log("[API Config] Using VITE_API_BASE_URL:", viteApiBase);
+client/src/lib/api-config.ts:22: * @param endpoint e.g., "/api/user/settings/{uid}"
+client/src/lib/nicho-config.ts:4: * Usado por: add-product, onboarding, settings, catalog
+client/src/lib/nicho-config.ts:259:  settings: { storeName?: string; storeNamesByNicho?: Record<string, string> } | undefined,
+client/src/lib/nicho-config.ts:262:  if (!settings) return '';
+client/src/lib/nicho-config.ts:264:  if (settings.storeNamesByNicho?.[nicho]) {
+client/src/lib/nicho-config.ts:265:    return settings.storeNamesByNicho[nicho];
+client/src/lib/nicho-config.ts:268:  return settings.storeName || '';
+client/src/lib/migration-utils.ts:92: * Read settings from localStorage for current user
+client/src/lib/migration-utils.ts:96:    const key = `rs:${userId}:settings`;
+client/src/lib/migration-utils.ts:102:    console.error("[migration-utils] Error reading settings:", e);
+client/src/lib/migration-utils.ts:208:    `rs:${userId}:settings`,
+client/src/lib/internal-telemetry.ts:10: * - Detailed internal logging to Firebase Realtime Database: /analytics_events/
+client/src/lib/internal-telemetry.ts:112:    origin: "dashboard_insight" | "settings_nav";
+client/src/lib/internal-telemetry.ts:115:    origin: "settings_growth" | "dashboard";
+client/src/lib/internal-telemetry.ts:119:    origin: "settings_growth";
+client/src/lib/internal-telemetry.ts:215:    const eventsRef = ref(database, "analytics_events");
+client/src/lib/migration-client.ts:6:import { getFirebaseIdToken } from "@/lib/firebase";
+client/src/lib/migration-client.ts:29:    const token = await getFirebaseIdToken();
+client/src/lib/migration-client.ts:76:    const token = await getFirebaseIdToken();
+client/src/lib/mock-data.ts:170:  notification_settings?: any;
+client/src/lib/mock-data.ts:171:  marketing_settings?: any;
+client/src/lib/mock-data.ts:271:    // Create initial settings for new user
+client/src/lib/mock-data.ts:272:    const scopedSettingsKey = `rs:${newUser.id}:settings`;
+client/src/lib/mock-data.ts:273:    const settingsWithNoBusiness = { 
+client/src/lib/mock-data.ts:279:    localStorage.setItem(scopedSettingsKey, JSON.stringify(settingsWithNoBusiness));
+client/src/lib/mock-data.ts:304:    // Check if user already has scoped settings
+client/src/lib/mock-data.ts:305:    const settingsKey = `rs:${userId}:settings`;
+client/src/lib/mock-data.ts:306:    const existingSettings = localStorage.getItem(settingsKey);
+client/src/lib/mock-data.ts:309:      // Create default settings for new user
+client/src/lib/mock-data.ts:314:      localStorage.setItem(settingsKey, JSON.stringify(newSettings));
+client/src/lib/mock-data.ts:358:    localStorage.setItem(`rs:${demoId}:settings`, JSON.stringify({ ...defaultSettings, storeName: demoUser.storeName }));
+client/src/lib/mock-data.ts:396:  SETTINGS: 'settings'
+client/src/lib/mock-data.ts:437:  notification_settings: {
+client/src/lib/mock-data.ts:441:  marketing_settings: {}
+client/src/hooks/useUserSettings.ts:17: * Optimistically patches settings in ALL active useUserSettings instances.
+client/src/hooks/useUserSettings.ts:22:  console.log("[useUserSettings] patchUserSettingsOptimistic:", Object.keys(patch));
+client/src/hooks/useUserSettings.ts:27: * Triggers a full refetch in ALL active useUserSettings instances.
+client/src/hooks/useUserSettings.ts:31:  console.log("[useUserSettings] invalidateUserSettings() — triggering refetch in all instances");
+client/src/hooks/useUserSettings.ts:38:  settings: AppSettings;
+client/src/hooks/useUserSettings.ts:45: * Custom hook to fetch user settings from Firestore via API.
+client/src/hooks/useUserSettings.ts:46: * Source: GET /api/user/settings/:userId (server/routes.ts)
+client/src/hooks/useUserSettings.ts:53:export function useUserSettings(): UseUserSettingsResult {
+client/src/hooks/useUserSettings.ts:54:  const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+client/src/hooks/useUserSettings.ts:93:  // Fetch settings when auth is ready OR refetchSignal bumps
+client/src/hooks/useUserSettings.ts:112:        const endpoint = `/api/user/settings/${currentUser.uid}?debug_auth=1&ts=${debugTs}`;
+client/src/hooks/useUserSettings.ts:115:        console.log("[useUserSettings] Fetching settings (refetchSignal=" + refetchSignal + ")");
+client/src/hooks/useUserSettings.ts:127:        const onbCompleted = data.settings?.onboarding_completed;
+client/src/hooks/useUserSettings.ts:128:        console.log("[useUserSettings] Settings loaded — onboarding_completed=", onbCompleted);
+client/src/hooks/useUserSettings.ts:131:          const mergedSettings = { ...defaultSettings, ...data.settings };
+client/src/hooks/useUserSettings.ts:137:        console.error("[useUserSettings] Failed to fetch settings:", errorMsg);
+client/src/hooks/useUserSettings.ts:145:          console.log("[useUserSettings] Loading complete");
+client/src/hooks/useUserSettings.ts:154:    settings,
+client/src/hooks/useUserSettings.ts:157:    onboarding_completed: settings.onboarding_completed === true
+client/src/hooks/usePlanData.ts:66:    planData: data,
+client/src/hooks/useMigrationStatus.ts:2:import { getFirebaseIdToken } from "@/lib/firebase";
+client/src/hooks/useMigrationStatus.ts:52:        const token = await getFirebaseIdToken();
+server/subscriptions.ts:79:function isRecentPending(planData: any): boolean {
+server/subscriptions.ts:80:if (!planData?.subscriptionStatus || normalizeStatus(planData.subscriptionStatus) !== "pending") return false;
+server/subscriptions.ts:81:const updatedAt = planData?.updatedAt?.toDate?.() ?? planData?.updatedAt ?? null;
+server/subscriptions.ts:88:function shouldBlockNewSubscription(planData: any): { blocked: boolean; reason: string } {
+server/subscriptions.ts:89:if (!planData) return { blocked: false, reason: "no_plan_data" };
+server/subscriptions.ts:90:if (planData.premiumActive) return { blocked: true, reason: "premium_active_true" };
+server/subscriptions.ts:91:if (isSubscriptionValid(planData.subscriptionStatus, planData.paymentStatus)) {
+server/subscriptions.ts:94:if (isRecentPending(planData)) return { blocked: true, reason: "recent_pending_subscription" };
+server/subscriptions.ts:106:function buildExistingSubscriptionResponse(planData: any, blockReason: string) {
+server/subscriptions.ts:110:subscriptionId: planData?.subscriptionId ?? null,
+server/subscriptions.ts:111:subscriptionStatus: planData?.subscriptionStatus ?? null,
+server/subscriptions.ts:112:paymentStatus: planData?.paymentStatus ?? null,
+server/subscriptions.ts:113:premiumActive: !!planData?.premiumActive,
+server/subscriptions.ts:114:currentPlan: planData?.currentPlan ?? "free",
+server/subscriptions.ts:195:Update user's planData in Firestore based on subscription and payment status.
+server/subscriptions.ts:202:const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+server/subscriptions.ts:236:const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+server/subscriptions.ts:354:    await db.collection("users").doc(uid).collection("planData").doc("main").set({
+server/subscriptions.ts:386:      const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+server/subscriptions.ts:455:      const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+server/subscriptions.ts:457:      const planData = planSnap.data();
+server/subscriptions.ts:459:      if (!planData?.subscriptionId) {
+server/subscriptions.ts:465:        id: planData.subscriptionId,
+server/subscriptions.ts:494:      const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+server/mercadopago-connections.ts:399:    return res.redirect(`${FRONTEND_URL}/settings/mercadopago?status=denied`);
+server/mercadopago-connections.ts:403:    return res.redirect(`${FRONTEND_URL}/settings/mercadopago?status=error&reason=missing_params`);
+server/mercadopago-connections.ts:413:      return res.redirect(`${FRONTEND_URL}/settings/mercadopago?status=error&reason=invalid_state`);
+server/mercadopago-connections.ts:423:        `${FRONTEND_URL}/settings/mercadopago?status=error&reason=invalid_state`
+server/mercadopago-connections.ts:497:      `${FRONTEND_URL}/settings/mercadopago?status=success&connectionId=${connRef.id}`
+server/mercadopago-connections.ts:505:      `${FRONTEND_URL}/settings/mercadopago?status=error&reason=server_error`
+server/uid-consolidation.ts:19:  settingsData?: any;
+server/uid-consolidation.ts:100:    // Check user_settings
+server/uid-consolidation.ts:102:    let settingsData: any = null;
+server/uid-consolidation.ts:104:      const settingsSnap = await db.collection("user_settings").doc(uid).get();
+server/uid-consolidation.ts:105:      hasSettings = settingsSnap.exists;
+server/uid-consolidation.ts:106:      settingsData = settingsSnap.exists ? settingsSnap.data() : null;
+server/uid-consolidation.ts:107:      console.log(`    user_settings: ${hasSettings ? "EXISTS" : "none"}`);
+server/uid-consolidation.ts:108:      if (settingsData) {
+server/uid-consolidation.ts:109:        console.log(`      businessName: ${settingsData.businessName || "(none)"}`);
+server/uid-consolidation.ts:110:        console.log(`      businessType: ${settingsData.businessType || "(none)"}`);
+server/uid-consolidation.ts:111:        console.log(`      onboarding_completed: ${settingsData.onboarding_completed}`);
+server/uid-consolidation.ts:114:      console.log(`    user_settings: ERROR — ${(err as Error).message}`);
+server/uid-consolidation.ts:134:      settingsData,
+server/uid-consolidation.ts:139:  // ─── 3. Check user_settings for UIDs not in "users" ─────────────────────
+server/uid-consolidation.ts:140:  console.log("\n── STEP 3: Scan 'user_settings' for any extra UIDs ──");
+server/uid-consolidation.ts:142:    const settingsDocs = await db.collection("user_settings").listDocuments();
+server/uid-consolidation.ts:143:    for (const settingsDocRef of settingsDocs) {
+server/uid-consolidation.ts:144:      const uid = settingsDocRef.id;
+server/uid-consolidation.ts:147:        console.log(`  Found UID in user_settings NOT in users: ${uid}`);
+server/uid-consolidation.ts:148:        const snap = await settingsDocRef.get();
+server/uid-consolidation.ts:151:        console.log(`    email in settings: ${data?.email || "(none)"}`);
+server/uid-consolidation.ts:154:          source: "user_settings only",
+server/uid-consolidation.ts:159:          settingsData: data,
+server/uid-consolidation.ts:165:    console.log(`  ✗ Error listing user_settings: ${(err as Error).message}`);
+server/uid-consolidation.ts:209:      console.log(`  - ${o.uid} (${o.productCount} products, ${o.saleCount} sales, ${o.clientCount} clients, settings: ${o.hasSettings})`);
+server/uid-consolidation.ts:267:  // Migrate user_settings
+server/uid-consolidation.ts:268:  console.log("\n  Migrating user_settings...");
+server/uid-consolidation.ts:270:    const srcSettings = await db.collection("user_settings").doc(sourceUid).get();
+server/uid-consolidation.ts:272:      const targetSettings = await db.collection("user_settings").doc(targetUid).get();
+server/uid-consolidation.ts:276:        await db.collection("user_settings").doc(targetUid).set(merged, { merge: true });
+server/uid-consolidation.ts:277:        console.log(`  ✓ user_settings: merged source into target`);
+server/uid-consolidation.ts:279:        await db.collection("user_settings").doc(targetUid).set(srcSettings.data()!);
+server/uid-consolidation.ts:280:        console.log(`  ✓ user_settings: copied from source`);
+server/uid-consolidation.ts:283:      console.log(`  user_settings: source has no settings doc — skip`);
+server/uid-consolidation.ts:286:    console.log(`  ✗ user_settings: ERROR — ${(err as Error).message}`);
+server/routes.ts:146:  // GET /api/user/settings/:userId - Load user settings from Firestore
+server/routes.ts:147:  app.get("/api/user/settings/:userId", requireAuth, requireOwnership, async (req, res) => {
+server/routes.ts:158:      const settingsDoc = await db.collection("user_settings").doc(userId).get();
+server/routes.ts:159:      const settings = settingsDoc.exists ? settingsDoc.data() : {};
+server/routes.ts:162:        onboarding_completed: settings?.onboarding_completed === true,
+server/routes.ts:163:        settings: settings
+server/routes.ts:177:  // POST /api/user/settings/:userId - Save user settings to Firestore
+server/routes.ts:178:  app.post("/api/user/settings/:userId", requireAuth, requireOwnership, async (req, res) => {
+server/routes.ts:183:      console.log("[/api/user/settings POST] userId:", userId);
+server/routes.ts:184:      console.log("[/api/user/settings POST] body keys:", Object.keys(body));
+server/routes.ts:201:        console.log("[/api/user/settings POST] Validating referral_source:", referralSourceUid);
+server/routes.ts:205:          const existingSettings = await db.collection("user_settings").doc(userId).get();
+server/routes.ts:207:            console.warn("[/api/user/settings POST] Referral already set, blocking reaplication:", {
+server/routes.ts:220:          console.warn("[/api/user/settings POST] Error checking existing referral:", (e as any)?.message);
+server/routes.ts:227:          console.warn("[/api/user/settings POST] Invalid referral format:", referralSourceUid);
+server/routes.ts:236:          console.warn("[/api/user/settings POST] Self-referral attempt blocked:", userId);
+server/routes.ts:246:          const referrerSettings = await db.collection("user_settings").doc(referralSourceUid).get();
+server/routes.ts:248:            console.log("[/api/user/settings POST] Referrer validated: found in user_settings");
+server/routes.ts:251:            console.warn("[/api/user/settings POST] Referrer not found:", referralSourceUid);
+server/routes.ts:259:          console.warn("[/api/user/settings POST] Referrer existence check failed:", (e as any)?.message);
+server/routes.ts:272:        console.log("[/api/user/settings POST] Referral validated and marked for persistence as immutable");
+server/routes.ts:275:      console.log(`[/api/user/settings POST] Saving to Firestore: user_settings/${userId}`);
+server/routes.ts:276:      await db.collection("user_settings").doc(userId).set(body, { merge: true });
+server/routes.ts:277:      console.log("[/api/user/settings POST] Successfully saved to Firestore");
+server/routes.ts:283:        console.log("[/api/user/settings POST] Recording referral conversion for referrer:", referralSourceUid);
+server/routes.ts:288:            const referrerRef = db.collection("user_settings").doc(referralSourceUid);
+server/routes.ts:297:              console.warn("[/api/user/settings POST] User already in referrer's list (transaction check), skipping:", userId);
+server/routes.ts:319:            console.log("[/api/user/settings POST] Referral conversion + reward eligibility recorded for:", referralSourceUid, { conversions: newConversions, eligible: newRewardEligible });
+server/routes.ts:332:            console.log("[/api/user/settings POST] Telemetry: referral_conversion_counted");
+server/routes.ts:335:            console.log("[/api/user/settings POST] Telemetry: referral_conversion_skipped_duplicate");
+server/routes.ts:339:          console.warn("[/api/user/settings POST] Failed to record referral conversion (transaction):", (e as any)?.message);
+server/routes.ts:346:      const updatedDoc = await db.collection("user_settings").doc(userId).get();
+server/routes.ts:352:        settings: updatedSettings,
+server/routes.ts:393:      const settings = await db.collection("user_settings").doc(userId).get();
+server/routes.ts:394:      const hasSettings = settings.exists;
+server/routes.ts:494:        const userRef = db.collection("user_settings").doc(targetUserId);
+server/routes.ts:515:        // Update user settings with audit metadata
+server/routes.ts:659:      const planDocRef = db.collection("users").doc(userId).collection("planData").doc("main");
+server/routes.ts:694:      const planDocRef = db.collection("users").doc(userId).collection("planData").doc("main");
+server/routes.ts:819:      const planDocRef = db.collection("users").doc(referrerUID).collection("planData").doc("main");
+server/routes.ts:939:      const planRef = db.collection("users").doc(targetUserId).collection("planData").doc("main");
+server/routes.ts:979:      const planRef = db.collection("users").doc(targetUserId).collection("planData").doc("main");
+shared/monetization.ts:99:// Firestore document: users/{uid}/planData/main
+shared/monetization.ts:139:export function isPremiumActive(planData: PlanData | null): boolean {
+shared/monetization.ts:140:  if (!planData) return false;
+shared/monetization.ts:144:  if (planData.subscriptionStatus === 'authorized') {
+shared/monetization.ts:149:    planData.premiumActive === true ||
+shared/monetization.ts:150:    planData.currentPlan === PLANS.PREMIUM ||
+shared/monetization.ts:151:    planData.premiumSource === 'admin' ||
+shared/monetization.ts:152:    planData.premiumSource === 'manual' ||
+shared/monetization.ts:153:    planData.premiumSource === 'direct_purchase' ||
+shared/monetization.ts:154:    planData.premiumSource === 'subscription' ||
+shared/monetization.ts:155:    planData.premiumSource === 'referral_reward';
+shared/monetization.ts:161:  if (!planData.premiumExpiresAt) {
+shared/monetization.ts:165:  return now < new Date(planData.premiumExpiresAt);
+shared/monetization.ts:168:export function getActivePlan(planData: PlanData | null): PlanType {
+shared/monetization.ts:169:  return isPremiumActive(planData) ? PLANS.PREMIUM : PLANS.FREE;
+shared/monetization.ts:173:  planData: PlanData | null,
+shared/monetization.ts:176:  if (isPremiumActive(planData)) {
+shared/monetization.ts:193:  planData: PlanData | null,
+shared/monetization.ts:196:  if (isPremiumActive(planData)) return false;
+shared/monetization.ts:217:  planData: PlanData | null,
+shared/monetization.ts:223:  return getActivePlan(planData);
+firestore.rules:78:    // ===== ROOT LEVEL: /user_settings/{userId} =====
+firestore.rules:79:    // User settings should be managed by backend API only
+firestore.rules:81:    match /user_settings/{userId} {

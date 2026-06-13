@@ -1,0 +1,24 @@
+=== GIT ===
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add/rm <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	deleted:    NODE_ENV=development
+	modified:   client/src/App.tsx
+	modified:   client/src/main.tsx
+	deleted:    rest-express@1.0.0
+	deleted:    serviceAccountKey.json
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	Revendasmart.zip
+	diagnostico-prod/
+
+no changes added to commit (use "git add" and/or "git commit -a")
+58a674a fix remote config provider
+00977e5 restore firebase.ts
+c5e8441 restore app after sentry diagnosis
+68d70bd temporary remove sentry react for diagnosis
+d0fc0c8 remove sentry frontend

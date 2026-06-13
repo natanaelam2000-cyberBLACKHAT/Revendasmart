@@ -1,0 +1,105 @@
+=== FIRESTORE RULES LOCAL ===
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===== HELPER FUNCTIONS =====
+    
+    function isAuthenticated() {
+      return request.auth != null && request.auth.uid != null;
+    }
+    
+    function userOwnsResource(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('admin', false) == true;
+    }
+    
+    // ===== FIRESTORE SECURITY RULES =====
+    
+    // ===== ROOT LEVEL: /users/{uid} =====
+    // Users collection itself should not be directly accessible
+    match /users/{uid} {
+      allow read, write: if false;
+      
+      // SUBCOLLECTION: products
+      // User can only read/write their own products
+      match /products/{productId} {
+        allow read: if userOwnsResource(uid);
+        allow create: if userOwnsResource(uid) 
+          && request.resource.data.keys().hasAll(['name', 'salePrice'])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.salePrice is number
+          && request.resource.data.salePrice > 0;
+        allow update: if userOwnsResource(uid);
+        allow delete: if userOwnsResource(uid);
+      }
+      
+      // SUBCOLLECTION: clients
+      // User can only read/write their own clients
+      match /clients/{clientId} {
+        allow read: if userOwnsResource(uid);
+        allow create: if userOwnsResource(uid)
+          && request.resource.data.keys().hasAll(['name'])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0;
+        allow update: if userOwnsResource(uid);
+        allow delete: if userOwnsResource(uid);
+      }
+      
+      // SUBCOLLECTION: charges
+      // User can only read their own charges
+      // Writes are backend-only (admin SDK)
+      match /charges/{chargeId} {
+        allow read: if userOwnsResource(uid);
+        allow create, update, delete: if false;
+      }
+      
+      // SUBCOLLECTION: sales
+      // User can only read their own sales
+      // Writes are backend-only
+      match /sales/{saleId} {
+        allow read: if userOwnsResource(uid);
+        allow create, update, delete: if false;
+      }
+      
+      // SUBCOLLECTION: mercadopago_connections
+      // User can read their own MP connections
+      // Writes are backend-only (OAuth flow)
+      match /mercadopago_connections/{connectionId} {
+        allow read: if userOwnsResource(uid);
+        allow create, update, delete: if false;
+      }
+    }
+    
+    // ===== ROOT LEVEL: /user_settings/{userId} =====
+    // User settings should be managed by backend API only
+    // No direct client access
+    match /user_settings/{userId} {
+      allow read, write: if false;
+    }
+    
+    // ===== ROOT LEVEL: /admin_users/{userId} =====
+    // Admin user metadata - no direct client access
+    match /admin_users/{userId} {
+      allow read, write: if false;
+    }
+    
+    // ===== ROOT LEVEL: /mercadopago_oauth_states/{nonce} =====
+    // OAuth state nonces - server-side only
+    // Used during OAuth callback flow (backend validation)
+    match /mercadopago_oauth_states/{nonce} {
+      allow read, write: if false;
+    }
+    
+    // ===== DEFAULT: Deny all other paths =====
+    // Explicit deny for any path not explicitly allowed
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

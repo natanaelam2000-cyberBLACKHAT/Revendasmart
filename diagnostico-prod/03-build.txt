@@ -1,0 +1,21 @@
+=== BUILD ===
+
+> rest-express@1.0.0 build
+> tsx script/build.ts
+
+building client...
+vite v7.3.5 building client environment for production...
+transforming...
+✓ 29 modules transformed.
+rendering chunks...
+[meta-images] no Replit deployment domain found, skipping meta tag updates
+computing gzip size...
+../dist/public/index.html                   1.61 kB │ gzip:  0.64 kB
+../dist/public/assets/index-Dl7_LHiK.css  133.79 kB │ gzip: 20.56 kB
+../dist/public/assets/index-Bf1cAM1n.js   197.58 kB │ gzip: 62.02 kB │ map: 934.01 kB
+✓ built in 2.40s
+building server...
+
+  dist/index.cjs  854.7kb
+
+⚡ Done in 672ms

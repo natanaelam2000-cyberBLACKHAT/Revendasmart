@@ -33,7 +33,7 @@ import Login from "@/pages/login";
 import Signup from "@/pages/signup";
 import NotFound from "@/pages/not-found";
 import { MaintenanceBanner } from "@/components/MaintenanceBanner";
-import { RemoteConfigProvider } from "@/components/RemoteConfigProvider";
+
 
 function Router() {
   const [location, setLocation] = useLocation();
