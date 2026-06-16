@@ -4,27 +4,19 @@ import { Package } from "lucide-react";
 
 interface ProductImageCardProps {
   product: Product | any;
-  size?: "sm" | "md" | "lg" | "full";
+  size?: "sm" | "md" | "lg" | "full" | "vitrine";
   objectFit?: "cover" | "contain";
   showFallback?: boolean;
+  className?: string;
 }
 
-/**
- * RESTORED: Original working image resolution logic from Products.tsx
- * This is the exact function that worked before the refactoring
- */
 const resolveProductImage = async (product: Product | any): Promise<string | null> => {
-  // Priority 1: imageUrl (Firebase Storage - always preferred)
   if (product?.imageUrl && String(product.imageUrl).trim()) {
     return product.imageUrl;
   }
-  
-  // Priority 2: image (alternative field name)
   if (product?.image && String(product.image).trim()) {
     return product.image;
   }
-  
-  // Priority 3: imageId (IndexedDB - legacy)
   if (product?.imageId) {
     try {
       const data = await getImage(product.imageId);
@@ -33,54 +25,64 @@ const resolveProductImage = async (product: Product | any): Promise<string | nul
       console.error("[ProductImageCard] Error loading from IndexedDB:", e);
     }
   }
-  
-  // No image available
   return null;
 };
 
 export const ProductImageCard = ({
   product,
   size = "md",
-  objectFit = "cover",
-  showFallback = true
+  objectFit = "contain",
+  showFallback = true,
+  className = ""
 }: ProductImageCardProps) => {
   const [src, setSrc] = useState<string | null>(null);
 
   useEffect(() => {
-    // Use the exact pattern that worked: call async function and use .then()
     resolveProductImage(product).then(setSrc);
   }, [product?.id, product?.imageUrl, product?.image, product?.imageId]);
 
-  const sizeClasses = {
-    sm: "w-12 h-12",
-    md: "w-16 h-16",
-    lg: "w-24 h-24",
-    full: "w-full h-full"
+  // Tamanhos e aspect ratios adaptados por tipo de produto
+  const sizeConfig = {
+    sm: { container: "w-12 h-12", aspectRatio: "aspect-square", fallback: "w-4 h-4" },
+    md: { container: "w-16 h-16", aspectRatio: "aspect-square", fallback: "w-6 h-6" },
+    lg: { container: "w-24 h-24", aspectRatio: "aspect-square", fallback: "w-8 h-8" },
+    full: { container: "w-full h-full", aspectRatio: "aspect-square", fallback: "w-8 h-8" },
+    vitrine: { container: "w-full", aspectRatio: "aspect-square", fallback: "w-8 h-8" }
   };
 
-  const fallbackClasses = {
-    sm: "w-4 h-4",
-    md: "w-6 h-6",
-    lg: "w-8 h-8",
-    full: "w-8 h-8"
-  };
+  const config = sizeConfig[size];
+
+  // Detectar tipo de produto para otimizar exibição
+  const productType = product?.productType?.toLowerCase() || "";
+  const productName = (product?.name || "").toLowerCase();
+  const category = (product?.category || "").toLowerCase();
+
+  const isVertical = productType.includes("roupa") || category.includes("roupa") || productName.includes("vestido") || productName.includes("calça");
+  const isHorizontal = productType.includes("bolsa") || category.includes("bolsa") || productName.includes("bolsa");
+  const isSmall = productType.includes("cosmético") || productType.includes("perfume") || category.includes("cosmético") || category.includes("perfume") || productName.includes("perfume");
+  const isTransparent = product?.image?.includes(".png") || product?.imageUrl?.includes(".png");
 
   return (
     <div
-      className={`${sizeClasses[size]} rounded-2xl bg-secondary/50 overflow-hidden flex-shrink-0 relative ${
-        size === "full" ? "flex items-center justify-center" : ""
-      }`}
+      className={`${config.container} ${config.aspectRatio} rounded-[1.5rem] bg-gradient-to-br from-[#F8F9FA] to-[#F1F3F5] overflow-hidden flex-shrink-0 relative flex items-center justify-center border border-border/20 ${className}`}
+      style={{
+        background: isTransparent ? "linear-gradient(135deg, #F8F9FA 0%, #F1F3F5 100%)" : "linear-gradient(135deg, #F8F9FA 0%, #F1F3F5 100%)"
+      }}
     >
       {src ? (
         <img
           src={src}
-          className={`w-full h-full object-${objectFit} mix-blend-multiply`}
+          className={`${
+            objectFit === "contain" ? "object-contain" : "object-cover"
+          } w-full h-full p-2 mix-blend-multiply`}
           alt={product?.name || "Produto"}
+          loading="lazy"
         />
       ) : showFallback ? (
-        <Package
-          className={`${fallbackClasses[size]} absolute inset-0 m-auto opacity-20`}
-        />
+        <div className="flex flex-col items-center justify-center gap-1">
+          <Package className={`${config.fallback} opacity-20`} />
+          <span className="text-[8px] font-black text-muted-foreground/20 uppercase">Sem Imagem</span>
+        </div>
       ) : null}
     </div>
   );
