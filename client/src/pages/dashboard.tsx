@@ -514,18 +514,8 @@ window.location.href = data.initPoint;
           </div>
         )}
 
-        {/* Top Selling Products Section - Premium Horizontal Scroll */}
-        {products.length === 0 ? (
-          <div className="mb-8 bg-white p-8 rounded-[2rem] border border-dashed border-border/60 text-center space-y-4" data-testid="empty-state-no-products">
-            <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto">
-              <Package className="w-8 h-8 text-primary/40" />
-            </div>
-            <div>
-              <p className="font-bold text-foreground mb-1">Nenhum produto cadastrado</p>
-              <p className="text-[11px] text-muted-foreground">Comece adicionando seus produtos para ver as análises aqui</p>
-            </div>
-          </div>
-        ) : topProducts.length > 0 ? (
+        {/* Top Selling Products Section - Compact Premium */}
+        {topProducts.length > 0 && (
           <div className="mb-8 space-y-4">
             <h2 className="text-[10px] font-black text-primary uppercase tracking-[0.2em] flex items-center gap-2">
               <TrendingUp className="w-3.5 h-3.5" /> Campeões de Venda
@@ -536,37 +526,36 @@ window.location.href = data.initPoint;
                 return product ? (
                   <div 
                     key={product.id} 
-                    className="min-w-[160px] bg-white rounded-[1.5rem] border border-border/50 shadow-sm overflow-hidden hover:shadow-md transition-all active:scale-95 flex flex-col"
+                    className="min-w-[130px] bg-white rounded-[1.5rem] border border-border/50 shadow-sm overflow-hidden hover:shadow-md transition-all active:scale-95 flex flex-col group"
                   >
-                    {/* Image Container - Larger & Prominent */}
-                    <div className="relative w-full aspect-square bg-gradient-to-br from-primary/5 to-primary/10 flex items-center justify-center overflow-hidden">
-                      <ProductImageCard product={product} size="full" objectFit="contain" className="!rounded-none" />
+                    {/* Image Container - Compacto */}
+                    <div className="relative w-full aspect-square bg-gradient-to-br from-primary/5 to-primary/10 flex items-center justify-center overflow-hidden group-hover:from-primary/10 group-hover:to-primary/15 transition-colors">
+                      <ProductImageCard product={product} size="full" objectFit="contain" className="!rounded-none group-hover:scale-110 transition-transform duration-300" />
                       
                       {/* Sales Rank Badge - Floating */}
                       {badge && (
-                        <div className={`absolute top-2 right-2 ${badge.color} px-2 py-1 rounded-full text-[10px] font-bold flex items-center gap-1 shadow-sm`}>
-                          <span>{badge.icon}</span>
-                          <span className="hidden sm:inline">{badge.label}</span>
+                        <div className={`absolute top-2 right-2 ${badge.color} px-2 py-1 rounded-full text-[10px] font-bold flex items-center gap-1 shadow-md backdrop-blur-sm`}>
+                          <span className="text-base leading-none">{badge.icon}</span>
                         </div>
                       )}
                     </div>
 
-                    {/* Info Container */}
-                    <div className="p-3 flex-1 flex flex-col justify-between">
-                      <div>
-                        <p className="text-[9px] font-black text-primary uppercase mb-1 truncate">{product.brand}</p>
-                        <p className="text-xs font-bold text-foreground truncate mb-2">{product.name}</p>
+                    {/* Info Container - Compacto */}
+                    <div className="p-2.5 flex-1 flex flex-col justify-between">
+                      <div className="min-h-[3rem] flex flex-col justify-center">
+                        <p className="text-[8px] font-black text-primary uppercase mb-0.5 truncate">{product.brand}</p>
+                        <p className="text-[10px] font-bold text-foreground truncate line-clamp-2">{product.name}</p>
                       </div>
                       
-                      {/* Stats */}
-                      <div className="space-y-1.5 border-t border-border/30 pt-2">
-                        <div className="flex justify-between items-center">
-                          <span className="text-[9px] text-muted-foreground">Vendas</span>
-                          <span className="text-xs font-bold text-primary">{quantity}x</span>
+                      {/* Stats Compactos */}
+                      <div className="space-y-1 border-t border-border/30 pt-2">
+                        <div className="flex justify-between items-center text-[9px]">
+                          <span className="text-muted-foreground">Vendas</span>
+                          <span className="font-bold text-primary">{quantity}x</span>
                         </div>
-                        <div className="flex justify-between items-center">
-                          <span className="text-[9px] text-muted-foreground">Total</span>
-                          <span className="text-xs font-bold text-green-600">R$ {(product.salePrice * quantity).toFixed(0)}</span>
+                        <div className="flex justify-between items-center text-[9px]">
+                          <span className="text-muted-foreground">Faturamento</span>
+                          <span className="font-bold text-green-600">R$ {(product.salePrice * quantity).toFixed(0)}</span>
                         </div>
                       </div>
                     </div>
@@ -575,7 +564,7 @@ window.location.href = data.initPoint;
               })}
             </div>
           </div>
-        ) : null}
+        )}
 
         {/* Low Stock Alerts Section - Premium Horizontal Scroll */}
         {lowStockProducts.length > 0 && (

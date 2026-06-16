@@ -238,7 +238,7 @@ export default function Catalog() {
             />
           </div>
 
-          <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2">
+          <div className="flex gap-2 overflow-x-auto hide-scrollbar pb-2">
             {categories.map(cat => (
               <button
                 key={cat}

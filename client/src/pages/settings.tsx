@@ -195,7 +195,7 @@ export default function Settings() {
           )}
         </div>
 
-        <div className="flex overflow-x-auto p-4 gap-2 bg-white border-b border-border/50 hide-scrollbar">
+        <div className="flex overflow-x-auto p-4 gap-2 bg-gradient-to-r from-white via-white to-white border-b border-border/50 hide-scrollbar sticky top-0 z-10">
           {[
             { id: 'profile', icon: Store, label: 'Perfil' },
             { id: 'catalog_config', icon: BookOpen, label: 'Link' },
@@ -209,7 +209,11 @@ export default function Settings() {
             <button 
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-full whitespace-nowrap text-[10px] font-black uppercase transition-all ${activeTab === tab.id ? 'bg-primary text-white shadow-md' : 'bg-secondary text-muted-foreground'}`}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl whitespace-nowrap text-[10px] font-black uppercase transition-all shadow-sm border ${
+                activeTab === tab.id 
+                  ? 'bg-primary text-white border-primary shadow-md' 
+                  : 'bg-white text-muted-foreground border-border/40 hover:border-primary/30'
+              }`}
             >
               <tab.icon className="w-3.5 h-3.5" /> {tab.label}
             </button>
