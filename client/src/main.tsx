@@ -144,7 +144,15 @@ if (isSafeMode) {
     } else {
       if (!storedVersion) localStorage.setItem("app_version", APP_VERSION);
  createRoot(document.getElementById("root")!).render(
-  <div>APP BOOT OK</div>
+  <React.StrictMode>
+    <GlobalErrorBoundary>
+      <RemoteConfigProvider>
+        <PlanProvider>
+          <App />
+        </PlanProvider>
+      </RemoteConfigProvider>
+    </GlobalErrorBoundary>
+  </React.StrictMode>
 );
     }
   } catch (e) {
