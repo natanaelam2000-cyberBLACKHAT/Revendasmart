@@ -18,6 +18,30 @@ import { usePlanData } from "@/hooks/usePlanData";
 import { getFirebaseAuth } from "@/lib/firebase";
 import { useFeatureEnabled } from "@/lib/remote-config-context";
 
+// Helper: Get stock badge for low stock products
+const getStockBadge = (stock: number, lowStockThreshold: number) => {
+  if (stock === 0) {
+    return { icon: "🔴", label: "Esgotado", color: "bg-red-100 text-red-700" };
+  } else if (stock <= 3) {
+    return { icon: "🟠", label: "Restam poucas", color: "bg-orange-100 text-orange-700" };
+  } else if (stock <= 5) {
+    return { icon: "🟡", label: "Atenção", color: "bg-yellow-100 text-yellow-700" };
+  }
+  return null;
+};
+
+// Helper: Get sales ranking badge
+const getSalesRankBadge = (index: number) => {
+  if (index === 0) {
+    return { icon: "🏆", label: "Mais vendido", color: "bg-yellow-100 text-yellow-700" };
+  } else if (index === 1) {
+    return { icon: "🥈", label: "Top venda", color: "bg-gray-100 text-gray-700" };
+  } else if (index === 2) {
+    return { icon: "🥉", label: "Destaque", color: "bg-orange-100 text-orange-700" };
+  }
+  return null;
+};
+
 export default function Dashboard() {
   // Call all hooks before any conditional returns
   const [location, setLocation] = useLocation();
@@ -217,6 +241,7 @@ export default function Dashboard() {
       .sort((a, b) => a.stock - b.stock)
       .slice(0, 3);
   }, [products, settings.lowStockThreshold]);
+
 const handleSubscribe = async () => {
   try {
     const user = getFirebaseAuth().currentUser;
@@ -489,7 +514,7 @@ window.location.href = data.initPoint;
           </div>
         )}
 
-        {/* Top Selling Products Section */}
+        {/* Top Selling Products Section - Premium Horizontal Scroll */}
         {products.length === 0 ? (
           <div className="mb-8 bg-white p-8 rounded-[2rem] border border-dashed border-border/60 text-center space-y-4" data-testid="empty-state-no-products">
             <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto">
@@ -505,44 +530,102 @@ window.location.href = data.initPoint;
             <h2 className="text-[10px] font-black text-primary uppercase tracking-[0.2em] flex items-center gap-2">
               <TrendingUp className="w-3.5 h-3.5" /> Campeões de Venda
             </h2>
-            <div className="space-y-3">
-              {topProducts.map(({ product, quantity }) => product && (
-                <div key={product.id} className="bg-white p-4 rounded-2xl border border-border/50 shadow-sm flex gap-3 items-start">
-                  <ProductImageCard product={product} size="md" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[10px] font-black text-primary uppercase mb-1">{product.brand}</p>
-                    <p className="text-sm font-bold truncate mb-1">{product.name}</p>
-                    <p className="text-xs text-muted-foreground">{quantity}x vendido</p>
+            <div className="flex gap-3 overflow-x-auto pb-2 hide-scrollbar -mx-6 px-6">
+              {topProducts.map(({ product, quantity }, index) => {
+                const badge = getSalesRankBadge(index);
+                return product ? (
+                  <div 
+                    key={product.id} 
+                    className="min-w-[160px] bg-white rounded-[1.5rem] border border-border/50 shadow-sm overflow-hidden hover:shadow-md transition-all active:scale-95 flex flex-col"
+                  >
+                    {/* Image Container - Larger & Prominent */}
+                    <div className="relative w-full aspect-square bg-gradient-to-br from-primary/5 to-primary/10 flex items-center justify-center overflow-hidden">
+                      <ProductImageCard product={product} size="full" objectFit="contain" className="!rounded-none" />
+                      
+                      {/* Sales Rank Badge - Floating */}
+                      {badge && (
+                        <div className={`absolute top-2 right-2 ${badge.color} px-2 py-1 rounded-full text-[10px] font-bold flex items-center gap-1 shadow-sm`}>
+                          <span>{badge.icon}</span>
+                          <span className="hidden sm:inline">{badge.label}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Info Container */}
+                    <div className="p-3 flex-1 flex flex-col justify-between">
+                      <div>
+                        <p className="text-[9px] font-black text-primary uppercase mb-1 truncate">{product.brand}</p>
+                        <p className="text-xs font-bold text-foreground truncate mb-2">{product.name}</p>
+                      </div>
+                      
+                      {/* Stats */}
+                      <div className="space-y-1.5 border-t border-border/30 pt-2">
+                        <div className="flex justify-between items-center">
+                          <span className="text-[9px] text-muted-foreground">Vendas</span>
+                          <span className="text-xs font-bold text-primary">{quantity}x</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-[9px] text-muted-foreground">Total</span>
+                          <span className="text-xs font-bold text-green-600">R$ {(product.salePrice * quantity).toFixed(0)}</span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className="text-sm font-bold">R$ {(product.salePrice * quantity).toFixed(2)}</p>
-                  </div>
-                </div>
-              ))}
+                ) : null;
+              })}
             </div>
           </div>
         ) : null}
 
-        {/* Low Stock Alerts Section */}
+        {/* Low Stock Alerts Section - Premium Horizontal Scroll */}
         {lowStockProducts.length > 0 && (
           <div className="mb-8 space-y-4">
             <h2 className="text-[10px] font-black text-destructive uppercase tracking-[0.2em] flex items-center gap-2">
               <AlertCircle className="w-3.5 h-3.5" /> Estoque Baixo
             </h2>
-            <div className="space-y-3">
-              {lowStockProducts.map(product => (
-                <div key={product.id} className="bg-white p-4 rounded-2xl border border-destructive/20 shadow-sm flex gap-3 items-start">
-                  <ProductImageCard product={product} size="md" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[10px] font-black text-primary uppercase mb-1">{product.brand}</p>
-                    <p className="text-sm font-bold truncate mb-1">{product.name}</p>
-                    <p className="text-xs text-destructive font-semibold">{product.stock} un</p>
+            <div className="flex gap-3 overflow-x-auto pb-2 hide-scrollbar -mx-6 px-6">
+              {lowStockProducts.map(product => {
+                const badge = getStockBadge(product.stock, settings.lowStockThreshold);
+                return (
+                  <div 
+                    key={product.id} 
+                    className="min-w-[160px] bg-white rounded-[1.5rem] border border-destructive/20 shadow-sm overflow-hidden hover:shadow-md transition-all active:scale-95 flex flex-col"
+                  >
+                    {/* Image Container - Larger & Prominent */}
+                    <div className="relative w-full aspect-square bg-gradient-to-br from-destructive/5 to-destructive/10 flex items-center justify-center overflow-hidden">
+                      <ProductImageCard product={product} size="full" objectFit="contain" className="!rounded-none" />
+                      
+                      {/* Stock Badge - Floating */}
+                      {badge && (
+                        <div className={`absolute top-2 right-2 ${badge.color} px-2 py-1 rounded-full text-[10px] font-bold flex items-center gap-1 shadow-sm`}>
+                          <span>{badge.icon}</span>
+                          <span className="hidden sm:inline">{badge.label}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Info Container */}
+                    <div className="p-3 flex-1 flex flex-col justify-between">
+                      <div>
+                        <p className="text-[9px] font-black text-primary uppercase mb-1 truncate">{product.brand}</p>
+                        <p className="text-xs font-bold text-foreground truncate mb-2">{product.name}</p>
+                      </div>
+                      
+                      {/* Stats */}
+                      <div className="space-y-1.5 border-t border-destructive/20 pt-2">
+                        <div className="flex justify-between items-center">
+                          <span className="text-[9px] text-muted-foreground">Estoque</span>
+                          <span className="text-xs font-bold text-destructive">{product.stock} un</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-[9px] text-muted-foreground">Preço</span>
+                          <span className="text-xs font-bold text-foreground">R$ {product.salePrice.toFixed(0)}</span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-right flex-shrink-0">
-                    <span className="text-[10px] font-bold bg-destructive/10 text-destructive px-2 py-1 rounded-full">Repor!</span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
