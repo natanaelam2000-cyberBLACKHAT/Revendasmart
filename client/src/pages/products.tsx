@@ -5,7 +5,6 @@ import {
   Trash2,
   Search,
   Share2,
-  DollarSign,
   AlertTriangle,
   Minus,
   Eye,
@@ -249,7 +248,7 @@ export default function Products() {
         {loading ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {[1, 2, 3, 4, 5, 6].map(i => (
-              <div key={i} className="h-96 bg-white rounded-[1.5rem] animate-pulse border border-border/20" />
+              <div key={i} className="h-72 bg-white rounded-[1.5rem] animate-pulse border border-border/20" />
             ))}
           </div>
         ) : error ? (
