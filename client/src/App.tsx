@@ -137,6 +137,7 @@ function Router() {
         <Route path="/" component={Dashboard} />
       <Route path="/products" component={Products} />
       <Route path="/add" component={AddProduct} />
+      <Route path="/add-product" component={AddProduct} />
       <Route path="/edit-product/:id" component={AddProduct} />
       <Route path="/sale" component={Sell} />
       <Route path="/catalog" component={Catalog} />

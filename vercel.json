@@ -4,7 +4,18 @@
   "rewrites": [
     {
       "source": "/u/:storeSlug",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": ".*(facebookexternalhit|Facebot|WhatsApp|Twitterbot|LinkedInBot|Slackbot|TelegramBot).*"
+        }
+      ],
       "destination": "https://revendasmart-backend-cc2743rkmq-uc.a.run.app/u/:storeSlug"
+    },
+    {
+      "source": "/u/:storeSlug",
+      "destination": "/index.html"
     },
     {
       "source": "/:path*",

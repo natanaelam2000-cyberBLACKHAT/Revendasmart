@@ -173,7 +173,7 @@ export default function Products() {
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-5 lg:py-7 space-y-4">
           <div className="flex items-center justify-between gap-4">
             <div><p className="text-xs font-bold text-primary uppercase tracking-wider">Produtos</p><h1 className="text-2xl lg:text-3xl font-black">Gestão de estoque</h1><p className="text-sm text-muted-foreground mt-1">{products.length} produtos · lucro potencial de R$ {stats.totalProfit.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p></div>
-            <Link href="/add"><a className="bg-primary text-white px-4 py-3 rounded-xl flex items-center gap-2 shadow-md text-xs font-black whitespace-nowrap"><Plus className="w-4 h-4" /> Novo produto</a></Link>
+            <Link href="/add-product"><a className="bg-primary text-white px-4 py-3 rounded-xl flex items-center gap-2 shadow-md text-xs font-black whitespace-nowrap"><Plus className="w-4 h-4" /> Novo produto</a></Link>
           </div>
           <div className="flex flex-col lg:flex-row gap-3 lg:items-center">
             <div className="relative flex-1"><Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground/50" /><input type="text" placeholder="Buscar por nome ou marca..." className="w-full bg-slate-50 border border-border/60 rounded-xl py-3 pl-11 pr-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
@@ -205,7 +205,7 @@ export default function Products() {
             description={search ? "Tente ajustar sua busca ou filtros" : "Você ainda não possui produtos cadastrados. Cadastre seu primeiro produto para começar a controlar seu estoque."}
             action={
               !search && (
-                <Link href="/add">
+                <Link href="/add-product">
                   <a className="w-full bg-primary text-white font-black py-3 rounded-2xl text-xs uppercase hover:shadow-lg transition-all active:scale-95">
                     Cadastrar Primeiro Produto
                   </a>

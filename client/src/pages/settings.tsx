@@ -8,6 +8,7 @@ import { getCurrentFirebaseUser, getFirebaseIdToken, getFirebaseAuth, measureOpe
 import { useLocation } from "wouter";
 import { getApiUrl } from "@/lib/api-config";
 import { QRCodeSVG } from "qrcode.react";
+import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { 
   Store, Palette, CreditCard, MessageSquare, Package, BookOpen, 
@@ -34,6 +35,28 @@ const InputField = ({ label, value, onChange, placeholder = "", type = "text", d
 const normalizeCatalogSlug = (value: string) => value.trim().toLowerCase().normalize("NFD")
   .replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
+async function compressLogo(file: File, maxSize = 512, quality = 0.82): Promise<Blob | null> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const image = new Image();
+      image.onload = () => {
+        const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+        const context = canvas.getContext("2d");
+        if (!context) return resolve(null);
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(resolve, "image/jpeg", quality);
+      };
+      image.onerror = () => resolve(null);
+      image.src = String(reader.result || "");
+    };
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+}
 export default function Settings() {
   // Get settings from Firestore via hook
   const { settings: firestoreSettings, loading: settingsLoading, error: settingsError } = useUserSettings();
@@ -70,6 +93,8 @@ export default function Settings() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
   const [openHelpIndex, setOpenHelpIndex] = useState<number | null>(null);
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const logoInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -184,6 +209,41 @@ export default function Settings() {
   };
 
 
+  const goToAccountMenu = () => {
+    setActiveTab("menu");
+    window.history.pushState({}, "", "/settings");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  };
+
+  const handleLogoChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !firebaseUid) return;
+    setIsUploadingLogo(true);
+    setSaveMessage("");
+    try {
+      const blob = await compressLogo(file);
+      if (!blob) throw new Error("Não foi possível processar a imagem.");
+      const storageRef = ref(getStorage(), `users/${firebaseUid}/branding/store-logo.jpg`);
+      await uploadBytes(storageRef, blob, { contentType: "image/jpeg" });
+      const storeLogo = await getDownloadURL(storageRef);
+      const nextSettings = { ...formSettings, storeLogo };
+      const token = await getFirebaseIdToken();
+      const response = await fetch(getApiUrl(`/api/user/settings/${firebaseUid}`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify(nextSettings),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      setFormSettings(nextSettings);
+      setSaveMessage("Logo atualizado com sucesso!");
+    } catch (error) {
+      console.error("[settings] Logo upload failed:", error);
+      setSaveMessage(`Erro ao salvar logo: ${error instanceof Error ? error.message : "erro desconhecido"}`);
+    } finally {
+      setIsUploadingLogo(false);
+    }
+  };
   const displayName = formSettings?.sellerName || currentUserEmail?.split("@")[0] || "Usuário";
   const accountMenu = [
     { title: "Minha Conta", subtitle: "Perfil e dados pessoais", icon: User, color: "bg-primary/10 text-primary", path: "/settings?tab=account" },
@@ -201,7 +261,11 @@ export default function Settings() {
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-10">
           <section className="bg-gradient-to-br from-primary to-primary/80 text-white rounded-[2rem] p-6 lg:p-8 shadow-xl shadow-primary/15 mb-6">
             <div className="flex items-center gap-4">
-              <div className="w-14 h-14 rounded-2xl bg-white/15 border border-white/20 flex items-center justify-center font-black text-2xl">R</div>
+              <button type="button" onClick={() => logoInputRef.current?.click()} disabled={isUploadingLogo} className="relative w-14 h-14 rounded-2xl bg-white/15 border border-white/20 flex items-center justify-center font-black text-2xl overflow-hidden disabled:opacity-60" aria-label="Alterar logo da loja">
+                {formSettings?.storeLogo ? <img src={formSettings.storeLogo} alt="Logo da loja" className="w-full h-full object-cover" /> : "R"}
+                <span className="absolute inset-x-0 bottom-0 bg-black/45 text-[8px] font-bold py-0.5">{isUploadingLogo ? "Enviando" : "Alterar"}</span>
+              </button>
+              <input ref={logoInputRef} type="file" accept="image/*" className="hidden" onChange={handleLogoChange} />
               <div><p className="text-sm font-bold text-white/75">RevendaSmart</p><h1 className="text-2xl lg:text-3xl font-black mt-1">Olá, {displayName}!</h1><p className="text-sm text-white/75 mt-1">Gerencie sua conta e sua loja.</p></div>
             </div>
           </section>
@@ -238,7 +302,7 @@ export default function Settings() {
         </div>
 
         <div className="px-4 sm:px-6 lg:px-8 pt-4 max-w-4xl mx-auto w-full">
-          <button onClick={() => setLocation("/settings")} className="inline-flex items-center gap-2 text-sm font-bold text-muted-foreground hover:text-primary"><ArrowLeft className="w-4 h-4" /> Voltar para Conta</button>
+          <button onClick={goToAccountMenu} className="inline-flex items-center gap-2 text-sm font-bold text-muted-foreground hover:text-primary"><ArrowLeft className="w-4 h-4" /> Voltar para Conta</button>
         </div>
 
         <div className="flex-1 w-full max-w-4xl mx-auto p-4 sm:p-6 lg:p-8 pb-32 space-y-6">
