@@ -20,6 +20,7 @@ import { getFirebaseAuth, logTelemetryEvent } from "@/lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 import { getFirestore, collection, onSnapshot, doc, updateDoc, deleteDoc } from "firebase/firestore";
 import { useUserSettings } from "@/hooks/useUserSettings";
+import { Layout } from "@/components/layout";
 
 export default function Products() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -166,7 +167,8 @@ export default function Products() {
   };
 
   return (
-    <div className="min-h-full bg-slate-50 pb-32">
+    <Layout>
+      <div className="min-h-full bg-slate-50 pb-28 lg:pb-8">
       <div className="bg-white border-b border-border/50">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-5 lg:py-7 space-y-4">
           <div className="flex items-center justify-between gap-4">
@@ -186,7 +188,7 @@ export default function Products() {
       {/* Conteúdo Principal */}
       <div className="max-w-6xl mx-auto p-4 sm:p-6 lg:px-8">
         {loading ? (
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
             {[1, 2, 3, 4, 5, 6].map(i => (
               <div key={i} className="h-48 bg-white rounded-[1.5rem] animate-pulse border border-border/20" />
             ))}
@@ -212,61 +214,18 @@ export default function Products() {
             }
           />
         ) : (
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
             {filteredProducts.map((product) => (
-              <div key={product.id} className="relative group bg-white rounded-[1.5rem] border border-border/40 overflow-hidden">
-                <ProductCard 
-                  product={product} 
-                  lowStockThreshold={settings?.lowStockThreshold}
-                  onClick={() => {}}
-                />
-
-                {/* Action Buttons Overlay - Mobile */}
-                <div className="flex gap-2 px-3 py-2 border-t border-border/30">
-                  <button
-                    onClick={() => handleQuickShare(product)}
-                    className="flex-1 p-2 bg-green-50 rounded-lg text-green-700 transition-colors flex items-center justify-center gap-1 text-[10px] font-bold"
-                    title="Compartilhar WhatsApp"
-                  >
-                    <Share2 className="w-4 h-4" /> Compartilhar
-                  </button>
-                  <Link href={`/edit-product/${product.id}`}>
-                    <a className="flex-1 p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center gap-1 text-[10px] font-bold">
-                      <Edit2 className="w-4 h-4" /> Editar
-                    </a>
-                  </Link>
-                  <button
-                    onClick={() => handleDelete(product.id)}
-                    className="p-2 bg-red-50 rounded-lg text-red-500"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+              <article key={product.id} className="min-w-0">
+                <ProductCard product={product} lowStockThreshold={settings?.lowStockThreshold} />
+                <div className="grid grid-cols-3 gap-1.5 mt-2">
+                  <button onClick={() => handleQuickShare(product)} className="min-w-0 py-2 px-1 bg-green-50 text-green-700 rounded-xl flex items-center justify-center gap-1 text-[9px] sm:text-[10px] font-bold" title="Compartilhar WhatsApp"><Share2 className="w-3.5 h-3.5 flex-shrink-0" /><span className="hidden sm:inline truncate">WhatsApp</span></button>
+                  <Link href={`/edit-product/${product.id}`}><a className="min-w-0 py-2 px-1 bg-primary/10 text-primary rounded-xl flex items-center justify-center gap-1 text-[9px] sm:text-[10px] font-bold"><Edit2 className="w-3.5 h-3.5 flex-shrink-0" /><span className="hidden sm:inline">Editar</span></a></Link>
+                  <button onClick={() => handleDelete(product.id)} className="min-w-0 py-2 px-1 bg-red-50 text-red-600 rounded-xl flex items-center justify-center gap-1 text-[9px] sm:text-[10px] font-bold" title="Excluir"><Trash2 className="w-3.5 h-3.5 flex-shrink-0" /><span className="hidden sm:inline">Excluir</span></button>
                 </div>
-
-                {/* Stock Adjustment - Bottom */}
-                <div className="flex items-center gap-2 px-3 pb-3">
-                  <div className="flex items-center gap-1 bg-white p-1.5 rounded-lg shadow-md border border-border/20 flex-1">
-                    <button 
-                      onClick={() => handleUpdateStock(product.id, product.stock - 1)}
-                      className="w-7 h-7 rounded-lg bg-secondary flex items-center justify-center hover:bg-secondary/80 transition-colors"
-                    >
-                      <Minus className="w-3.5 h-3.5" />
-                    </button>
-                    <div className="px-2 text-center flex-1">
-                      <p className="text-xs font-black leading-none text-foreground">{product.stock}</p>
-                    </div>
-                    <button 
-                      onClick={() => handleUpdateStock(product.id, product.stock + 1)}
-                      className="w-7 h-7 rounded-lg bg-primary text-white flex items-center justify-center hover:bg-primary/90 transition-colors"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              </div>
+              </article>
             ))}
-          </div>
-        )}
+          </div>        )}
       </div>
 
       {/* Delete Confirmation Modal */}
@@ -297,6 +256,7 @@ export default function Products() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </Layout>
   );
 }

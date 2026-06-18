@@ -1,91 +1,27 @@
-import { Product } from "@/lib/mock-data";
+﻿import { Product } from "@/lib/mock-data";
 import { ProductImageCard } from "./ProductImageCard";
 import { StockBadge } from "./StockBadge";
-import { Badge } from "@/components/ui/badge";
-import { Tag } from "lucide-react";
 
-interface ProductCardProps {
-  product: Product;
-  onClick?: () => void;
-  lowStockThreshold?: number;
-}
-
-export const ProductCard = ({ product, onClick, lowStockThreshold }: ProductCardProps) => {
-  const hasCost = product.costPrice > 0;
-  const profit = hasCost ? product.salePrice - product.costPrice : null;
-
+interface ProductCardProps { product: Product; lowStockThreshold?: number; }
+export const ProductCard = ({ product, lowStockThreshold }: ProductCardProps) => {
+  const cost = Number(product.costPrice || 0);
+  const sale = Number(product.salePrice || 0);
+  const profit = sale - cost;
   return (
-    <div
-      onClick={onClick}
-      className="bg-white overflow-hidden hover:bg-slate-50/50 transition-colors cursor-pointer flex flex-row min-h-[138px] group"
-    >
-      {/* Imagem compacta */}
-      <div className="relative w-24 sm:w-28 flex-shrink-0 bg-gradient-to-br from-muted/30 to-muted/10 overflow-hidden">
-        <ProductImageCard
-          product={product}
-          size="full"
-          objectFit="contain"
-          className="!rounded-none group-hover:scale-105 transition-transform duration-300"
-        />
-        <div className="absolute top-2 right-2">
-          <StockBadge
-            stock={product.stock}
-            lowStockThreshold={lowStockThreshold}
-            className="shadow-sm bg-white/90 backdrop-blur-sm"
-          />
-        </div>
+    <div className="bg-white rounded-2xl border border-border/60 shadow-sm overflow-hidden h-full flex flex-col">
+      <div className="relative aspect-square bg-gradient-to-br from-slate-50 to-slate-100 p-2 sm:p-3">
+        <ProductImageCard product={product} size="full" objectFit="contain" className="!rounded-xl !w-full !h-full" />
+        <div className="absolute top-2 right-2"><StockBadge stock={product.stock} lowStockThreshold={lowStockThreshold} className="shadow-sm bg-white/95 text-[8px] sm:text-[9px]" /></div>
       </div>
-
-      {/* Conteúdo */}
-      <div className="p-3 flex-1 min-w-0 flex flex-col gap-1.5">
-        {/* Marca + Categoria */}
-        <div className="flex gap-1.5 flex-wrap">
-          <Badge variant="secondary" className="text-[9px] font-black uppercase tracking-wider py-0.5 px-2 rounded-lg flex items-center gap-1">
-            <Tag className="w-2.5 h-2.5" /> {product.brand}
-          </Badge>
-          {product.category ? (
-            <Badge variant="outline" className="text-[9px] font-black uppercase tracking-wider py-0.5 px-2 rounded-lg border-primary/20 text-primary">
-              {product.category}
-            </Badge>
-          ) : null}
-        </div>
-
-        {/* Nome */}
-        <h3 className="font-bold text-sm text-foreground leading-tight line-clamp-2">
-          {product.name}
-        </h3>
-
-        {/* Valores financeiros — sempre rotulados */}
-        <div className="mt-auto pt-2 border-t border-border/40 grid grid-cols-2 gap-2">
-          <div className="min-w-0">
-            <span className="block text-[9px] text-muted-foreground uppercase">Venda</span>
-            <span className="block text-xs font-black text-primary truncate">
-              R$ {product.salePrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-            </span>
-          </div>
-
-          {hasCost && (
-            <div className="min-w-0">
-              <span className="block text-[9px] text-muted-foreground uppercase">Custo</span>
-              <span className="block text-xs font-bold text-foreground truncate">
-                R$ {product.costPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-              </span>
-            </div>
-          )}
-
-          {profit !== null && profit > 0 && (
-            <div className="min-w-0">
-              <span className="block text-[9px] text-muted-foreground uppercase">Lucro</span>
-              <span className="block text-xs font-bold text-green-600 truncate">
-                R$ {profit.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-              </span>
-            </div>
-          )}
-
-          <div className="min-w-0">
-            <span className="block text-[9px] text-muted-foreground uppercase">Estoque</span>
-            <span className="block text-xs font-bold text-foreground">{product.stock} un</span>
-          </div>
+      <div className="p-3 flex-1 flex flex-col min-w-0">
+        <p className="text-[9px] sm:text-[10px] font-black text-primary uppercase tracking-wider truncate">{product.brand || "Sem marca"}</p>
+        <h3 className="text-xs sm:text-sm font-bold leading-tight line-clamp-2 min-h-[2rem] sm:min-h-[2.5rem] mt-1">{product.name}</h3>
+        <p className="text-[9px] text-muted-foreground truncate mt-1">{product.category || "Sem categoria"}</p>
+        <div className="grid grid-cols-2 gap-x-2 gap-y-2 mt-3 pt-3 border-t border-border/40">
+          <div><span className="block text-[8px] text-muted-foreground uppercase">Venda</span><strong className="block text-[10px] sm:text-xs text-primary truncate">R$ {sale.toFixed(2)}</strong></div>
+          <div><span className="block text-[8px] text-muted-foreground uppercase">Custo</span><strong className="block text-[10px] sm:text-xs truncate">R$ {cost.toFixed(2)}</strong></div>
+          <div><span className="block text-[8px] text-muted-foreground uppercase">Lucro</span><strong className={`block text-[10px] sm:text-xs truncate ${profit >= 0 ? "text-green-600" : "text-red-600"}`}>R$ {profit.toFixed(2)}</strong></div>
+          <div><span className="block text-[8px] text-muted-foreground uppercase">Unidades</span><strong className="block text-[10px] sm:text-xs">{product.stock} un</strong></div>
         </div>
       </div>
     </div>
