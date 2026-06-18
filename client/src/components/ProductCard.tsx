@@ -17,10 +17,10 @@ export const ProductCard = ({ product, onClick, lowStockThreshold }: ProductCard
   return (
     <div
       onClick={onClick}
-      className="bg-white rounded-[1.5rem] border border-border/50 shadow-sm overflow-hidden hover:shadow-md transition-all active:scale-[0.98] cursor-pointer flex flex-col h-full group"
+      className="bg-white rounded-[1.5rem] border border-border/50 shadow-sm overflow-hidden hover:shadow-md transition-all active:scale-[0.98] cursor-pointer flex flex-row min-h-[132px] group"
     >
       {/* Imagem compacta */}
-      <div className="relative aspect-[4/3] bg-gradient-to-br from-muted/30 to-muted/10 overflow-hidden">
+      <div className="relative w-28 flex-shrink-0 bg-gradient-to-br from-muted/30 to-muted/10 overflow-hidden">
         <ProductImageCard
           product={product}
           size="full"
@@ -37,7 +37,7 @@ export const ProductCard = ({ product, onClick, lowStockThreshold }: ProductCard
       </div>
 
       {/* Conteúdo */}
-      <div className="p-3 flex-1 flex flex-col gap-2">
+      <div className="p-3 flex-1 min-w-0 flex flex-col gap-1.5">
         {/* Marca + Categoria */}
         <div className="flex gap-1.5 flex-wrap">
           <Badge variant="secondary" className="text-[9px] font-black uppercase tracking-wider py-0.5 px-2 rounded-lg flex items-center gap-1">
@@ -56,7 +56,7 @@ export const ProductCard = ({ product, onClick, lowStockThreshold }: ProductCard
         </h3>
 
         {/* Valores financeiros — sempre rotulados */}
-        <div className="mt-auto pt-2 border-t border-border/40 space-y-1">
+        <div className="mt-auto pt-1.5 border-t border-border/40 grid grid-cols-2 gap-x-3 gap-y-0.5">
           <div className="flex justify-between items-center">
             <span className="text-[10px] text-muted-foreground">Venda</span>
             <span className="text-sm font-black text-primary">

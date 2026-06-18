@@ -34,7 +34,7 @@ export function Layout({ children, title, hideBottomNav = false }: LayoutProps) 
     { href: "/", icon: Home, label: "Início" },
     { href: "/products", icon: Package, label: "Produtos" },
     { href: "/catalog", icon: BookOpen, label: "Catálogo" },
-    { href: "/marketing", icon: Megaphone, label: "Anúncio" },
+    { href: "/marketing", icon: Megaphone, label: "Anúncios" },
   ];
 
   const handleLogout = async () => {
@@ -61,7 +61,7 @@ export function Layout({ children, title, hideBottomNav = false }: LayoutProps) 
           desc: "Perfil e dados pessoais",
           icon: User,
           iconBg: "bg-primary/10 text-primary",
-          action: () => go("/settings?tab=profile"),
+          action: () => go("/settings?tab=account"),
         },
         {
           label: "Minha Assinatura",
@@ -79,14 +79,14 @@ export function Layout({ children, title, hideBottomNav = false }: LayoutProps) 
           desc: "Nome, logo e informações",
           icon: Store,
           iconBg: "bg-violet-100 text-violet-600",
-          action: () => go("/settings?tab=profile"),
+          action: () => go("/settings?tab=store"),
         },
         {
           label: "Chave Pix",
           desc: "Para recebimento dos pedidos",
           icon: KeyRound,
           iconBg: "bg-green-100 text-green-600",
-          action: () => go("/settings?tab=profile"),
+          action: () => go("/settings?tab=pix"),
         },
         {
           label: "Compartilhar Catálogo",
@@ -104,7 +104,7 @@ export function Layout({ children, title, hideBottomNav = false }: LayoutProps) 
           desc: "Notificações e ajustes",
           icon: Settings,
           iconBg: "bg-gray-100 text-gray-600",
-          action: () => go("/settings"),
+          action: () => go("/settings?tab=notifications"),
         },
         {
           label: "Suporte",

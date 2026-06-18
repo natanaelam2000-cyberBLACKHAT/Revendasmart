@@ -9,14 +9,21 @@ interface PlanData {
   referralCount?: number;
   referralCode?: string | null;
   subscriptionStatus?: string;
+  subscriptionId?: string | null;
+  paymentStatus?: string | null;
+  nextBillingAt?: string | null;
+  lastPaymentAt?: string | null;
+  canceledAt?: string | null;
 }
 
 export function usePlanData() {
   const [data, setData] = useState<PlanData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   async function loadPlanData() {
     try {
+      setError(null);
       const auth = getFirebaseAuth();
       const user = auth?.currentUser;
 
@@ -36,6 +43,7 @@ export function usePlanData() {
         }
       );
 
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
 
       console.log("[usePlanData] loaded:", json);
@@ -43,6 +51,7 @@ export function usePlanData() {
       setData(json);
     } catch (e) {
       console.error("[usePlanData] error:", e);
+      setError(e instanceof Error ? e.message : "Erro ao carregar assinatura");
     } finally {
       setLoading(false);
     }
@@ -77,5 +86,6 @@ export function usePlanData() {
     shareLink: data?.referralCode
       ? `${window.location.origin}/signup?ref=${data.referralCode}`
       : null,
+    error,
   };
 }

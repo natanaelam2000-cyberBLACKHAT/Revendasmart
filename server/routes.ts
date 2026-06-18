@@ -142,7 +142,79 @@ export async function registerRoutes(
 
   // Register App Subscription routes (Premium plan billing — isolated from revendedor payments)
   registerSubscriptionRoutes(app, requireAuth);
+  const loadPublicCatalog = async (rawSlug: string) => {
+    const db = getFirebaseAdmin().firestore();
+    const slug = normalizeCatalogSlug(rawSlug);
+    if (!slug) return null;
+    const ref = db.collection("user_settings");
+    const candidates = Array.from(new Set([rawSlug, slug]));
+    let settingsDoc: any = null;
+    for (const field of ["catalogSlug", "catalog_slug"]) {
+      for (const candidate of candidates) {
+        const snapshot = await ref.where(field, "==", candidate).limit(1).get();
+        if (!snapshot.empty) { settingsDoc = snapshot.docs[0]; break; }
+      }
+      if (settingsDoc) break;
+    }
+    if (!settingsDoc) {
+      const snapshot = await ref.get();
+      settingsDoc = snapshot.docs.find((doc: any) => {
+        const data = doc.data();
+        return [data.catalogSlug, data.catalog_slug, data.storeName]
+          .some((value) => normalizeCatalogSlug(value) === slug);
+      }) ?? null;
+    }
+    if (!settingsDoc) return null;
+    const settings = settingsDoc.data() ?? {};
+    if (settings.enablePublicCatalog === false || settings.disablePublicCatalog === true) return null;
+    const uid = settings.uid || settingsDoc.id;
+    const productDocs = await db.collection("users").doc(uid).collection("products").get();
+    const products = productDocs.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+    return { uid, slug, settings: { ...settings, uid, catalogSlug: slug, catalog_slug: slug }, products };
+  };
 
+  app.get("/api/public/catalog/:storeSlug", async (req, res) => {
+    try {
+      const catalog = await loadPublicCatalog(req.params.storeSlug);
+      if (!catalog) return res.status(404).json({ error: "CATALOG_NOT_FOUND" });
+      res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
+      return res.json(catalog);
+    } catch (error) {
+      return errorResponse(res, 503, "CATALOG_TEMPORARILY_UNAVAILABLE", error instanceof Error ? error.message : "Unknown error");
+    }
+  });
+
+  app.get("/u/:storeSlug", async (req, res, next) => {
+    try {
+      const catalog = await loadPublicCatalog(req.params.storeSlug);
+      if (!catalog) return next();
+      const indexPath = [path.resolve(__dirname || ".", "public/index.html"), path.resolve(process.cwd(), "dist/public/index.html"), path.resolve(".", "dist/public/index.html")]
+        .find((candidate) => fs.existsSync(candidate));
+      if (!indexPath) return next();
+      const storeName = catalog.settings.storeName || "Minha Loja";
+      const description = catalog.settings.catalogDescription || `Confira os produtos disponíveis no catálogo de ${storeName}.`;
+      const featured: any = catalog.products.find((p: any) => p?.imageUrl || p?.image || p?.photoUrl);
+      const image = featured?.imageUrl || featured?.image || featured?.photoUrl || "https://revendasmart.vercel.app/favicon.png";
+      const url = `https://revendasmart.vercel.app/u/${catalog.slug}`;
+      const meta = `<title>${escapeHtml(storeName)} | Catálogo</title>
+<meta name="description" content="${escapeHtml(description)}" />
+<meta property="og:title" content="${escapeHtml(storeName)}" />
+<meta property="og:description" content="${escapeHtml(description)}" />
+<meta property="og:type" content="website" /><meta property="og:url" content="${escapeHtml(url)}" />
+<meta property="og:image" content="${escapeHtml(image)}" />
+<meta name="twitter:card" content="summary_large_image" /><meta name="twitter:title" content="${escapeHtml(storeName)}" />
+<meta name="twitter:description" content="${escapeHtml(description)}" /><meta name="twitter:image" content="${escapeHtml(image)}" />`;
+      let html = fs.readFileSync(indexPath, "utf8");
+      html = html.replace(/<title>[\s\S]*?<\/title>/i, "")
+        .replace(/<meta\s+(?:property|name)="(?:og:|twitter:|description)[^"]*"[^>]*>/gi, "")
+        .replace("</head>", `${meta}\n</head>`);
+      res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
+      return res.type("html").send(html);
+    } catch (error) {
+      console.error("[catalog-meta] Failed:", error);
+      return next();
+    }
+  });
   // GET /api/user/settings/:userId - Load user settings from Firestore
   app.get("/api/user/settings/:userId", requireAuth, requireOwnership, async (req, res) => {
     try {

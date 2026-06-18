@@ -2,14 +2,6 @@ import { useState, useEffect } from "react";
 import { useParams } from "wouter";
 
 import {
-  getFirestore,
-  collection,
-  query,
-  where,
-  getDocs,
-} from "firebase/firestore";
-
-import {
   ShoppingBag,
   MessageSquare,
   Package,
@@ -20,18 +12,11 @@ import {
 } from "lucide-react";
 
 import {
-  getFirebaseApp,
-  getFirebaseAuth,
-} from "@/lib/firebase";
-
-import {
-  getUsers,
-  getStored,
-  STORAGE_KEYS,
   Product,
   AppSettings,
   defaultSettings,
 } from "@/lib/mock-data";
+import { getApiUrl } from "@/lib/api-config";
 
 export default function PublicCatalog() {
   const { storeSlug } = useParams();
@@ -41,61 +26,51 @@ export default function PublicCatalog() {
   // const catalogQuery = await db.collection('user_settings').where('catalogSlug', '==', storeSlug).limit(1).get();
  
 const [selectedGender, setSelectedGender] = useState("todos");
-const app = getFirebaseApp();
-const db = getFirestore(app);
-
 const [targetUser, setTargetUser] = useState<any>(null);
 const [products, setProducts] = useState<Product[]>([]);
 const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+const [loading, setLoading] = useState(true);
+const [loadFailed, setLoadFailed] = useState(false);
 
 useEffect(() => {
- const auth = getFirebaseAuth();
+  let cancelled = false;
   async function loadCatalog() {
-    try {
-      const usersRef = collection(db, "user_settings");
-      const q = query(usersRef, where("catalogSlug", "==", storeSlug));
-      const snapshot = await getDocs(q);
-
-      if (snapshot.empty) {
-  console.warn("[CATALOG] Nenhum usuário encontrado pro slug:", storeSlug);
-  setTargetUser(null);
-  return;
-}
-
-const userDoc = snapshot.docs[0];
-const userData = userDoc.data();
-
-if (!userData?.uid) {
-  console.error("[CATALOG] UID inválido:", userData);
-  setTargetUser(null);
-  return;
-}
-      if (!userData.enablePublicCatalog) {
-        setTargetUser(null);
+    setLoading(true);
+    setLoadFailed(false);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const response = await fetch(getApiUrl(`/api/public/catalog/${encodeURIComponent(storeSlug || "")}`));
+        if (response.status === 404) break;
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        if (cancelled) return;
+        setTargetUser({ uid: data.uid });
+        setSettings({ ...defaultSettings, ...(data.settings || {}) });
+        setProducts(Array.isArray(data.products) ? data.products : []);
+        setLoading(false);
         return;
+      } catch (err) {
+        console.warn(`[CATALOG] Tentativa ${attempt + 1} falhou:`, err);
+        if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)));
       }
-
-      setTargetUser(userData);
-      setSettings({ ...defaultSettings, ...userData });
-
-      const productsRef = collection(db, "users", userData.uid, "products");
-      const productDocs = await getDocs(productsRef);
-
-      const productsList = productDocs.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Product[];
-
-      setProducts(productsList);
-
-    } catch (err) {
-      console.error("Erro ao carregar catálogo:", err);
+    }
+    if (!cancelled) {
+      setTargetUser(null);
+      setLoadFailed(true);
+      setLoading(false);
     }
   }
-
   loadCatalog();
+  return () => { cancelled = true; };
 }, [storeSlug]);
 
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="w-10 h-10 rounded-full border-4 border-primary/20 border-t-primary animate-spin" />
+      </div>
+    );
+  }
   // Fail-soft checks
   if (!targetUser || !settings?.enablePublicCatalog || settings?.disablePublicCatalog) {
 console.log("PRODUTOS:", products);
@@ -106,7 +81,7 @@ console.log("GENDER ATUAL:", selectedGender);
           <Store className="w-10 h-10 text-muted-foreground" />
         </div>
         <h1 className="text-xl font-bold mb-2">Catálogo Indisponível</h1>
-        <p className="text-sm text-muted-foreground">Este catálogo não foi encontrado ou está temporariamente desativado pelo consultor.</p>
+        <p className="text-sm text-muted-foreground">{loadFailed ? "Não foi possível carregar agora. Tente novamente em instantes." : "Este catálogo não foi encontrado ou está desativado pelo consultor."}</p>
       </div>
     );
   }

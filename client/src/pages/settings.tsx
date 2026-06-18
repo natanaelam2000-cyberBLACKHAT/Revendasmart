@@ -31,6 +31,9 @@ const InputField = ({ label, value, onChange, placeholder = "", type = "text", d
   </div>
 );
 
+const normalizeCatalogSlug = (value: string) => value.trim().toLowerCase().normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
 export default function Settings() {
   // Get settings from Firestore via hook
   const { settings: firestoreSettings, loading: settingsLoading, error: settingsError } = useUserSettings();
@@ -62,11 +65,16 @@ export default function Settings() {
     return 'profile';
   });
   
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const [generatedUrl, setGeneratedUrl] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
   const [openHelpIndex, setOpenHelpIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.split("?")[1] || "");
+    setActiveTab(params.get("tab") || "account");
+  }, [location]);
 
   // Get Firebase Auth UID (real)
   const firebaseUid = useMemo(() => {
@@ -101,10 +109,13 @@ export default function Settings() {
         const headers: Record<string, string> = { "Content-Type": "application/json" };
         if (token) headers["Authorization"] = `Bearer ${token}`;
 
+        const catalogSlug = normalizeCatalogSlug(formSettings?.catalogSlug || formSettings?.catalog_slug || formSettings?.storeName || "minha-loja");
+        const normalizedSettings = { ...formSettings, catalogSlug, catalog_slug: catalogSlug };
+        setFormSettings(normalizedSettings);
         return await fetch(getApiUrl(`/api/user/settings/${firebaseUid}`), {
           method: "POST",
           headers,
-          body: JSON.stringify(formSettings)
+          body: JSON.stringify(normalizedSettings)
         });
       });
 
@@ -140,14 +151,8 @@ export default function Settings() {
   const handleGenerateLink = () => {
     try {
       const storeName = formSettings?.storeName || "minha-loja";
-      const slug = formSettings?.catalogSlug || storeName
-        .toLowerCase()
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/[^a-z0-9]/g, "-")
-        .replace(/-+/g, "-")
-        .replace(/^-|-$/g, "");
-      
+      const slug = normalizeCatalogSlug(formSettings?.catalogSlug || formSettings?.catalog_slug || storeName);
+      setFormSettings({ ...formSettings, catalogSlug: slug, catalog_slug: slug });
       const origin = (typeof window !== "undefined" && window.location && window.location.origin) ? window.location.origin : "";
       setGeneratedUrl(origin ? `${origin}/u/${slug}` : `/u/${slug}`);
     } catch (e) {
@@ -197,7 +202,9 @@ export default function Settings() {
 
         <div className="flex overflow-x-auto p-4 gap-2 bg-gradient-to-r from-white via-white to-white border-b border-border/50 hide-scrollbar sticky top-0 z-10">
           {[
-            { id: 'profile', icon: Store, label: 'Perfil' },
+            { id: 'account', icon: CreditCard, label: 'Conta' },
+            { id: 'store', icon: Store, label: 'Loja' },
+            { id: 'pix', icon: CreditCard, label: 'Pix' },
             { id: 'catalog_config', icon: BookOpen, label: 'Link' },
             { id: 'notifications', icon: Bell, label: 'Avisos' },
             { id: 'growth', icon: Share2, label: 'Crescimento' },
@@ -208,7 +215,7 @@ export default function Settings() {
           ].map(tab => (
             <button 
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => setLocation(`/settings?tab=${tab.id}`)}
               className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl whitespace-nowrap text-[10px] font-black uppercase transition-all shadow-sm border ${
                 activeTab === tab.id 
                   ? 'bg-primary text-white border-primary shadow-md' 
@@ -221,7 +228,7 @@ export default function Settings() {
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 pb-32 space-y-6">
-          {activeTab === 'profile' && (
+          {activeTab === 'account' && (
             <div className="space-y-4 animate-in fade-in slide-in-from-right-4">
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-muted-foreground uppercase px-1 tracking-widest">
@@ -305,6 +312,26 @@ export default function Settings() {
             </div>
           )}
 
+          {activeTab === 'store' && (
+            <div className="space-y-4 animate-in fade-in slide-in-from-right-4">
+              <div className="p-4 bg-violet-50 border border-violet-200 rounded-2xl">
+                <p className="text-xs font-black text-violet-700 uppercase">Minha Loja</p>
+                <p className="text-[10px] text-violet-600 mt-1">Identidade exibida no catálogo público.</p>
+              </div>
+              <InputField label="Nome da Loja" value={formSettings?.storeName} onChange={(v: string) => setFormSettings({...formSettings, storeName: v})} />
+              <InputField label="WhatsApp" value={formSettings?.whatsapp} onChange={(v: string) => setFormSettings({...formSettings, whatsapp: v})} />
+            </div>
+          )}
+
+          {activeTab === 'pix' && (
+            <div className="space-y-4 animate-in fade-in slide-in-from-right-4">
+              <div className="p-4 bg-green-50 border border-green-200 rounded-2xl">
+                <p className="text-xs font-black text-green-700 uppercase">Chave Pix</p>
+                <p className="text-[10px] text-green-600 mt-1">Usada para receber pedidos feitos pelo catálogo.</p>
+              </div>
+              <InputField label="Chave Pix" value={formSettings?.pixKey} onChange={(v: string) => setFormSettings({...formSettings, pixKey: v})} placeholder="CPF, e-mail, telefone ou chave aleatória" />
+            </div>
+          )}
           {activeTab === 'catalog_config' && (
             <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
               <div className="flex items-center justify-between p-4 bg-secondary/30 rounded-2xl">

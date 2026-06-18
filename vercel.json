@@ -3,6 +3,10 @@
   "outputDirectory": "dist/public",
   "rewrites": [
     {
+      "source": "/u/:storeSlug",
+      "destination": "https://revendasmart-backend-cc2743rkmq-uc.a.run.app/u/:storeSlug"
+    },
+    {
       "source": "/:path*",
       "destination": "/index.html"
     }

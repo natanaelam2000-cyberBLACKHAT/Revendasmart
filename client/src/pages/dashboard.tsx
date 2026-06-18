@@ -325,117 +325,46 @@ window.location.href = data.initPoint;
           <span className="text-[8px] font-black text-primary/40 uppercase tracking-widest">{APP_VERSION}</span>
         </div>
         
-        {/* Plan Status Badge */}
-        <div className="mb-6">
-          <PlanStatusBadge />
-          {hasPremiumAccess && <div className="mt-3 text-sm font-bold text-green-700" data-testid="text-premium-active">Premium ativo</div>}
-        </div>
-{!hasPremiumAccess && (
-  <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-xl text-center">
-    <p className="text-sm font-semibold text-green-800 mb-2">
-      Desbloqueie todos os recursos 🚀
-    </p>
-
-    <button
-      onClick={handleSubscribe}
-      className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-xl shadow-md transition-all active:scale-95"
-    >
-      Assinar Premium por R$ {import.meta.env.VITE_PREMIUM_PRICE_BRL || "19,90"}
-    </button>
-  </div>
-)}
-        <div className="flex justify-between items-start mb-1">
+        <div className="flex items-start justify-between mb-4">
           <div>
-            <h1 className="text-2xl font-bold text-foreground">{settings.storeName}</h1>
-            <p className="text-sm text-muted-foreground mb-6">Boas vendas, {settings.sellerName}!</p>
+            <h1 className="text-xl font-black text-foreground">{settings.storeName}</h1>
+            <p className="text-xs text-muted-foreground">Resumo deste mês</p>
           </div>
           {(todayBillings.length > 0 || todayPosts.length > 0) && (
-            <div className="relative">
-              <div className="w-10 h-10 bg-white rounded-2xl flex items-center justify-center shadow-sm border border-primary/20">
-                <BellIcon className="w-5 h-5 text-primary animate-pulse" />
-              </div>
-              <span className="absolute -top-1 -right-1 bg-primary text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center border-2 border-white">
+            <div className="relative w-9 h-9 bg-white rounded-xl flex items-center justify-center border border-primary/20">
+              <BellIcon className="w-4 h-4 text-primary" />
+              <span className="absolute -top-1 -right-1 bg-primary text-white text-[9px] font-bold w-5 h-5 rounded-full flex items-center justify-center border-2 border-white">
                 {todayBillings.length + todayPosts.length}
               </span>
             </div>
           )}
         </div>
-        
-        {showSalesDashboard && (
-          <div className="grid grid-cols-2 gap-4 mb-4">
-            <div 
-              onClick={() => setLocation("/monthly-sales")}
-              className="bg-white p-4 rounded-3xl shadow-sm border border-border/50 cursor-pointer hover:shadow-md hover:border-primary/30 transition-all active:scale-95"
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  setLocation("/monthly-sales");
-                }
-              }}
-              data-testid="card-monthly-sales"
-            >
-              <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center mb-3">
-                <DollarSign className="w-4 h-4 text-primary" />
-              </div>
-              <p className="text-[10px] text-muted-foreground font-black uppercase mb-1">Vendas do Mês</p>
-              <p className="text-lg font-bold">R$ {monthMetrics.revenue.toFixed(2)}</p>
-            </div>
-            <div className="bg-white p-4 rounded-3xl shadow-sm border border-border/50">
-              <div className="w-8 h-8 rounded-full bg-green-500/10 flex items-center justify-center mb-3">
-                <TrendingUp className="w-4 h-4 text-green-600" />
-              </div>
-              <p className="text-[10px] text-muted-foreground font-black uppercase mb-1">Lucro Estimado</p>
-              <p className="text-lg font-bold text-green-600">R$ {monthMetrics.profit.toFixed(2)}</p>
-            </div>
-          </div>
-        )}
 
-        <div className="grid grid-cols-2 gap-4 mb-4">
-          <div 
-            onClick={() => setLocation("/products-sold")}
-            className="bg-white p-4 rounded-3xl shadow-sm border border-border/50 cursor-pointer hover:shadow-md hover:border-primary/30 transition-all active:scale-95"
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                setLocation("/products-sold");
-              }
-            }}
-            data-testid="card-products-sold"
-          >
-            <div className="w-8 h-8 rounded-full bg-orange-500/10 flex items-center justify-center mb-3">
-              <ShoppingCart className="w-4 h-4 text-orange-600" />
-            </div>
-            <p className="text-[10px] text-muted-foreground font-black uppercase mb-1">Produtos Vendidos</p>
-            <p className="text-lg font-bold">{monthMetrics.products}</p>
+        <div className="grid grid-cols-2 gap-2">
+          <button onClick={() => setLocation("/monthly-sales")} className="bg-white p-3 rounded-2xl border border-border/50 text-left">
+            <p className="text-[9px] text-muted-foreground font-black uppercase">Vendas</p>
+            <p className="text-base font-black">R$ {monthMetrics.revenue.toFixed(2)}</p>
+          </button>
+          <div className="bg-white p-3 rounded-2xl border border-border/50">
+            <p className="text-[9px] text-muted-foreground font-black uppercase">Lucro</p>
+            <p className="text-base font-black text-green-600">R$ {monthMetrics.profit.toFixed(2)}</p>
           </div>
-          <div className="bg-white p-4 rounded-3xl shadow-sm border border-border/50">
-            <div className="w-8 h-8 rounded-full bg-blue-500/10 flex items-center justify-center mb-3">
-              <Users className="w-4 h-4 text-blue-600" />
-            </div>
-            <p className="text-[10px] text-muted-foreground font-black uppercase mb-1">Clientes Ativos</p>
-            <p className="text-lg font-bold">{monthMetrics.activeClients}</p>
+          <div className="bg-white p-3 rounded-2xl border border-border/50">
+            <p className="text-[9px] text-muted-foreground font-black uppercase">Clientes</p>
+            <p className="text-base font-black">{monthMetrics.activeClients}</p>
           </div>
-          <div className="bg-white p-4 rounded-3xl shadow-sm border border-border/50">
-            <div className="w-8 h-8 rounded-full bg-purple-500/10 flex items-center justify-center mb-3">
-              <Package className="w-4 h-4 text-purple-600" />
+          <button onClick={() => setLocation("/products")} className="bg-white p-3 rounded-2xl border border-border/50 text-left">
+            <p className="text-[9px] text-muted-foreground font-black uppercase">Estoque baixo</p>
+            <p className="text-base font-black text-orange-600">{lowStockProducts.length}</p>
+          </button>
+          <button onClick={() => setLocation("/products-sold")} className="col-span-2 bg-white p-3 rounded-2xl border border-border/50 flex items-center justify-between text-left">
+            <div>
+              <p className="text-[9px] text-muted-foreground font-black uppercase">Campeão de vendas</p>
+              <p className="text-sm font-black line-clamp-1">{topProducts[0]?.product?.name || "Sem vendas no mês"}</p>
             </div>
-            <p className="text-[10px] text-muted-foreground font-black uppercase mb-2">Estoque Total</p>
-            <p className="text-lg font-bold text-purple-600 mb-1">R$ {stockSummary.totalSaleValue.toFixed(2)}</p>
-            <div className="space-y-0.5 text-[11px] text-muted-foreground">
-              <div className="flex justify-between">
-                <span>Custo:</span>
-                <span className="font-semibold">R$ {stockSummary.totalValue.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Itens:</span>
-                <span className="font-semibold">{stockSummary.totalQuantity} un</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+            <span className="text-sm font-black text-primary">{topProducts[0]?.quantity || 0} un</span>
+          </button>
+        </div>      </div>
 
       <div className="p-6">
         {/* First Product CTA - Show if triggered and not dismissed */}

@@ -132,7 +132,8 @@ export default function Products() {
   };
 
   const handleQuickShare = (product: Product) => {
-    const catalogUrl = `https://revendasmart.vercel.app/u/${settings?.catalog_slug || "seu-catalogo"}`;
+    const catalogSlug = settings?.catalogSlug || settings?.catalog_slug || "seu-catalogo";
+    const catalogUrl = `https://revendasmart.vercel.app/u/${catalogSlug}`;
     const msg = `Olá! Tenho este produto disponível:\n\n*${product.name}*\nValor: R$ ${product.salePrice.toFixed(2)}\n\nEstoque: ${product.stock} unidade(s)\n\nVeja no catálogo:\n${catalogUrl}`;
     window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, "_blank");
     
@@ -246,7 +247,7 @@ export default function Products() {
       {/* Conteúdo Principal */}
       <div className="p-4">
         {loading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 gap-3">
             {[1, 2, 3, 4, 5, 6].map(i => (
               <div key={i} className="h-72 bg-white rounded-[1.5rem] animate-pulse border border-border/20" />
             ))}
@@ -272,9 +273,9 @@ export default function Products() {
             }
           />
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 gap-3">
             {filteredProducts.map((product) => (
-              <div key={product.id} className="relative group">
+              <div key={product.id} className="relative group bg-white rounded-[1.5rem] border border-border/40 overflow-hidden">
                 <ProductCard 
                   product={product} 
                   lowStockThreshold={settings?.lowStockThreshold}
@@ -282,29 +283,29 @@ export default function Products() {
                 />
 
                 {/* Action Buttons Overlay - Mobile */}
-                <div className="absolute top-3 left-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity sm:opacity-100">
+                <div className="flex gap-2 px-3 py-2 border-t border-border/30">
                   <button
                     onClick={() => handleQuickShare(product)}
-                    className="p-2 bg-white rounded-lg text-green-600 hover:bg-green-50 transition-colors shadow-md"
+                    className="flex-1 p-2 bg-green-50 rounded-lg text-green-700 transition-colors flex items-center justify-center gap-1 text-[10px] font-bold"
                     title="Compartilhar WhatsApp"
                   >
-                    <Share2 className="w-4 h-4" />
+                    <Share2 className="w-4 h-4" /> Compartilhar
                   </button>
                   <Link href={`/edit-product/${product.id}`}>
-                    <a className="p-2 bg-white rounded-lg text-primary hover:bg-primary/10 transition-colors shadow-md">
-                      <Edit2 className="w-4 h-4" />
+                    <a className="flex-1 p-2 bg-primary/10 rounded-lg text-primary flex items-center justify-center gap-1 text-[10px] font-bold">
+                      <Edit2 className="w-4 h-4" /> Editar
                     </a>
                   </Link>
                   <button
                     onClick={() => handleDelete(product.id)}
-                    className="p-2 bg-white rounded-lg text-red-500 hover:bg-red-50 transition-colors shadow-md"
+                    className="p-2 bg-red-50 rounded-lg text-red-500"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
 
                 {/* Stock Adjustment - Bottom */}
-                <div className="absolute bottom-4 left-4 right-4 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity sm:opacity-100">
+                <div className="flex items-center gap-2 px-3 pb-3">
                   <div className="flex items-center gap-1 bg-white p-1.5 rounded-lg shadow-md border border-border/20 flex-1">
                     <button 
                       onClick={() => handleUpdateStock(product.id, product.stock - 1)}

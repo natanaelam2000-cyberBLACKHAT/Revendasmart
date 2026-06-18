@@ -1,0 +1,177 @@
+
+> rest-express@1.0.0 check
+> tsc
+
+client/src/components/PlanStatusBadge.tsx(11,40): error TS2339: Property 'premiumOpenAccess' does not exist on type 'never'.
+client/src/components/barcode-scanner.tsx(13,7): error TS2304: Cannot find name 'videoRef'.
+client/src/components/barcode-scanner.tsx(14,8): error TS7006: Parameter 'result' implicitly has an 'any' type.
+client/src/components/barcode-scanner.tsx(16,11): error TS2304: Cannot find name 'onScan'.
+client/src/components/barcode-scanner.tsx(17,11): error TS2552: Cannot find name 'onClose'. Did you mean 'onclose'?
+client/src/components/barcode-scanner.tsx(28,5): error TS2304: Cannot find name 'onScan'.
+client/src/components/barcode-scanner.tsx(28,13): error TS2552: Cannot find name 'onClose'. Did you mean 'onclose'?
+client/src/components/barcode-scanner.tsx(41,28): error TS2304: Cannot find name 'BrowserMultiFormatReader'.
+client/src/components/barcode-scanner.tsx(43,64): error TS7006: Parameter 'result' implicitly has an 'any' type.
+client/src/components/barcode-scanner.tsx(43,72): error TS7006: Parameter 'err' implicitly has an 'any' type.
+client/src/lib/firebase-analytics.ts(148,33): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Argument of type 'K' is not assignable to parameter of type 'CustomEventName<K>'.
+      Type 'keyof FirebaseAnalyticsEvents' is not assignable to type 'CustomEventName<K>'.
+        Type '"client_created"' is not assignable to type 'CustomEventName<K>'.
+client/src/lib/firebase-performance.ts(1,26): error TS2724: '"firebase/performance"' has no exported member named 'Performance'. Did you mean 'getPerformance'?
+client/src/lib/firebase-performance.ts(136,21): error TS2551: Property 'setAttribute' does not exist on type 'PerformanceTrace'. Did you mean 'getAttribute'?
+client/src/lib/firebase.ts(72,4): error TS2578: Unused '@ts-expect-error' directive.
+client/src/lib/firebase.ts(74,4): error TS2578: Unused '@ts-expect-error' directive.
+client/src/lib/plan-helpers.ts(15,43): error TS2367: This comparison appears to be unintentional because the types '"free"' and '"admin"' have no overlap.
+client/src/lib/plan-helpers.ts(52,30): error TS2345: Argument of type '"multiNiche"' is not assignable to parameter of type 'keyof PlanLimits'.
+client/src/lib/plan-helpers.ts(68,56): error TS2345: Argument of type '{ premiumOpenAccess: boolean; premiumOpenAccessUntil: Date | null; } | null' is not assignable to parameter of type 'GlobalConfig | null'.
+  Property 'premiumOpenAccessMessage' is missing in type '{ premiumOpenAccess: boolean; premiumOpenAccessUntil: Date | null; }' but required in type 'GlobalConfig'.
+client/src/lib/remote-config-context.ts(86,5): error TS2740: Type '{}' is missing the following properties from type 'RemoteFlags': onboarding_v2_enabled, insights_enabled, sales_dashboard_enabled, referral_program_enabled, and 3 more.
+client/src/lib/remote-config.ts(135,62): error TS2345: Argument of type '() => Promise<void>' is not assignable to parameter of type 'ConfigUpdateObserver'.
+client/src/pages/add-product.tsx(1,8): error TS2300: Duplicate identifier 'React'.
+client/src/pages/add-product.tsx(2,3): error TS2300: Duplicate identifier 'useState'.
+client/src/pages/add-product.tsx(3,3): error TS2300: Duplicate identifier 'useEffect'.
+client/src/pages/add-product.tsx(4,3): error TS2300: Duplicate identifier 'useRef'.
+client/src/pages/add-product.tsx(5,3): error TS2300: Duplicate identifier 'lazy'.
+client/src/pages/add-product.tsx(8,8): error TS2300: Duplicate identifier 'React'.
+client/src/pages/add-product.tsx(8,17): error TS2300: Duplicate identifier 'useState'.
+client/src/pages/add-product.tsx(8,27): error TS2300: Duplicate identifier 'useEffect'.
+client/src/pages/add-product.tsx(8,38): error TS2300: Duplicate identifier 'useRef'.
+client/src/pages/add-product.tsx(12,10): error TS2300: Duplicate identifier 'lazy'.
+client/src/pages/add-product.tsx(15,9): error TS2322: Type 'Promise<typeof import("/home/natanaelam2000/Revendasmart/client/src/components/barcode-scanner")>' is not assignable to type 'Promise<{ default: ComponentType<any>; }>'.
+  Property 'default' is missing in type 'typeof import("/home/natanaelam2000/Revendasmart/client/src/components/barcode-scanner")' but required in type '{ default: ComponentType<any>; }'.
+client/src/pages/add-product.tsx(239,18): error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type '{}'.
+client/src/pages/add-product.tsx(256,16): error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type '{}'.
+client/src/pages/add-product.tsx(345,20): error TS2339: Property 'gender' does not exist on type '{ name: string; brand: string; category: string; costPrice: number; salePrice: number; stock: number; barcode: string; description: string; imageUrl: string; storagePath: string; extras: {}; isFeatured: boolean; isOnSale: boolean; discountPercent: number; productType: string; }'.
+client/src/pages/add-product.tsx(419,39): error TS2345: Argument of type 'string' is not assignable to parameter of type 'PlanType'.
+client/src/pages/add-product.tsx(464,3): error TS2353: Object literal may only specify known properties, and 'nicho' does not exist in type '{ productId: string; category: string; price: number; }'.
+client/src/pages/add-product.tsx(809,51): error TS2353: Object literal may only specify known properties, and 'gender' does not exist in type 'SetStateAction<{ name: string; brand: string; category: string; costPrice: number; salePrice: number; stock: number; barcode: string; description: string; imageUrl: string; storagePath: string; extras: {}; isFeatured: boolean; isOnSale: boolean; discountPercent: number; productType: string; }>'.
+client/src/pages/add-product.tsx(811,20): error TS2339: Property 'gender' does not exist on type '{ name: string; brand: string; category: string; costPrice: number; salePrice: number; stock: number; barcode: string; description: string; imageUrl: string; storagePath: string; extras: {}; isFeatured: boolean; isOnSale: boolean; discountPercent: number; productType: string; }'.
+client/src/pages/add-product.tsx(916,15): error TS2304: Cannot find name 'handleScan'.
+client/src/pages/billings.tsx(121,27): error TS2345: Argument of type '"installment_paid"' is not assignable to parameter of type 'keyof InternalTelemetryEvents'.
+client/src/pages/billings.tsx(125,55): error TS2353: Object literal may only specify known properties, and 'installmentId' does not exist in type '{ error?: Error | undefined; context?: Record<string, any> | undefined; userId?: string | undefined; severity?: "error" | "warning" | "info" | undefined; }'.
+client/src/pages/billings.tsx(156,25): error TS2345: Argument of type '"installment_partial_payment"' is not assignable to parameter of type 'keyof InternalTelemetryEvents'.
+client/src/pages/billings.tsx(167,61): error TS2353: Object literal may only specify known properties, and 'installmentId' does not exist in type '{ error?: Error | undefined; context?: Record<string, any> | undefined; userId?: string | undefined; severity?: "error" | "warning" | "info" | undefined; }'.
+client/src/pages/billings.tsx(281,25): error TS2345: Argument of type '"payment_link_deleted"' is not assignable to parameter of type 'keyof InternalTelemetryEvents'.
+client/src/pages/catalog.tsx(96,69): error TS2551: Property 'catalog_slug' does not exist on type 'AppSettings'. Did you mean 'catalogSlug'?
+client/src/pages/catalog.tsx(103,48): error TS2353: Object literal may only specify known properties, and 'method' does not exist in type '{ catalogSlug: string; clientIds?: number | undefined; }'.
+client/src/pages/catalog.tsx(104,45): error TS2322: Type '"copy"' is not assignable to type '"email" | "whatsapp" | undefined'.
+client/src/pages/catalog.tsx(112,48): error TS2353: Object literal may only specify known properties, and 'method' does not exist in type '{ catalogSlug: string; clientIds?: number | undefined; }'.
+client/src/pages/clients.tsx(92,9): error TS2353: Object literal may only specify known properties, and 'id' does not exist in type 'Omit<Client, "id">'.
+client/src/pages/clients.tsx(186,30): error TS2552: Cannot find name 'setLocation'. Did you mean 'useLocation'?
+client/src/pages/dashboard.tsx(247,18): error TS2531: Object is possibly 'null'.
+client/src/pages/marketing.tsx(112,7): error TS2353: Object literal may only specify known properties, and 'hasProduct' does not exist in type '{ productId: string; template: string; }'.
+client/src/pages/marketing.tsx(224,16): error TS1252: Function declarations are not allowed inside blocks in strict mode when targeting 'ES5'. Modules are automatically in strict mode.
+client/src/pages/marketing.tsx(229,9): error TS18047: 'ctx' is possibly 'null'.
+client/src/pages/marketing.tsx(230,9): error TS18047: 'ctx' is possibly 'null'.
+client/src/pages/marketing.tsx(231,9): error TS18047: 'ctx' is possibly 'null'.
+client/src/pages/marketing.tsx(232,9): error TS18047: 'ctx' is possibly 'null'.
+client/src/pages/marketing.tsx(233,9): error TS18047: 'ctx' is possibly 'null'.
+client/src/pages/marketing.tsx(234,9): error TS18047: 'ctx' is possibly 'null'.
+client/src/pages/marketing.tsx(235,9): error TS18047: 'ctx' is possibly 'null'.
+client/src/pages/marketing.tsx(238,9): error TS18047: 'ctx' is possibly 'null'.
+client/src/pages/marketing.tsx(239,9): error TS18047: 'ctx' is possibly 'null'.
+client/src/pages/marketing.tsx(240,9): error TS18047: 'ctx' is possibly 'null'.
+client/src/pages/marketing.tsx(243,9): error TS18047: 'ctx' is possibly 'null'.
+client/src/pages/marketing.tsx(244,9): error TS18047: 'ctx' is possibly 'null'.
+client/src/pages/marketing.tsx(245,9): error TS18047: 'ctx' is possibly 'null'.
+client/src/pages/marketing.tsx(256,9): error TS2353: Object literal may only specify known properties, and 'template' does not exist in type '{ error?: Error | undefined; context?: Record<string, any> | undefined; userId?: string | undefined; severity?: "error" | "warning" | "info" | undefined; }'.
+client/src/pages/products.tsx(135,71): error TS2551: Property 'catalog_slug' does not exist on type 'AppSettings'. Did you mean 'catalogSlug'?
+client/src/pages/products.tsx(140,23): error TS2345: Argument of type '"product_quick_shared"' is not assignable to parameter of type 'keyof InternalTelemetryEvents'.
+client/src/pages/public-catalog.tsx(45,25): error TS2769: No overload matches this call.
+  Overload 1 of 4, '(app: FirebaseApp): Firestore', gave the following error.
+    Argument of type 'FirebaseApp | null' is not assignable to parameter of type 'FirebaseApp'.
+      Type 'null' is not assignable to type 'FirebaseApp'.
+  Overload 2 of 4, '(databaseId: string): Firestore', gave the following error.
+    Argument of type 'FirebaseApp | null' is not assignable to parameter of type 'string'.
+      Type 'null' is not assignable to type 'string'.
+client/src/pages/public-catalog.tsx(124,22): error TS2339: Property 'gender' does not exist on type 'Product'.
+client/src/pages/sell.tsx(151,31): error TS2345: Argument of type '"product_last_unit_sold"' is not assignable to parameter of type 'keyof InternalTelemetryEvents'.
+client/src/pages/sell.tsx(190,13): error TS2353: Object literal may only specify known properties, and 'saleId' does not exist in type '{ error?: Error | undefined; context?: Record<string, any> | undefined; userId?: string | undefined; severity?: "error" | "warning" | "info" | undefined; }'.
+client/src/pages/sell.tsx(212,11): error TS2552: Cannot find name 'clientId'. Did you mean 'clients'?
+client/src/pages/sell.tsx(217,17): error TS2304: Cannot find name 'user'.
+client/src/pages/settings.tsx(436,62): error TS2339: Property 'referral_conversions' does not exist on type 'AppSettings'.
+client/src/pages/settings.tsx(437,67): error TS2339: Property 'last_referral_conversion_at' does not exist on type 'AppSettings'.
+client/src/pages/settings.tsx(496,70): error TS2339: Property 'reward_eligible_conversions' does not exist on type 'AppSettings'.
+client/src/pages/settings.tsx(497,63): error TS2339: Property 'reward_granted_count' does not exist on type 'AppSettings'.
+client/src/pages/settings.tsx(498,64): error TS2339: Property 'reward_last_granted_at' does not exist on type 'AppSettings'.
+client/src/pages/settings.tsx(590,40): error TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead?
+client/src/pages/settings.tsx(642,34): error TS2304: Cannot find name 'getCurrentUserId'.
+client/src/pages/settings.tsx(693,38): error TS2304: Cannot find name 'getCurrentUserId'.
+client/src/pages/settings.tsx(726,34): error TS2304: Cannot find name 'getStored'.
+client/src/pages/settings.tsx(726,44): error TS2304: Cannot find name 'STORAGE_KEYS'.
+client/src/pages/settings.tsx(743,34): error TS2304: Cannot find name 'getStored'.
+client/src/pages/settings.tsx(743,44): error TS2304: Cannot find name 'STORAGE_KEYS'.
+client/src/pages/settings.tsx(760,34): error TS2304: Cannot find name 'getStored'.
+client/src/pages/settings.tsx(760,44): error TS2304: Cannot find name 'STORAGE_KEYS'.
+client/src/pages/signup.tsx(115,58): error TS2353: Object literal may only specify known properties, and 'referralUid' does not exist in type '{ error?: Error | undefined; context?: Record<string, any> | undefined; userId?: string | undefined; severity?: "error" | "warning" | "info" | undefined; }'.
+client/src/pages/signup.tsx(146,11): error TS2322: Type 'string' is not assignable to type 'Error'.
+client/src/pages/subscribe.tsx(77,95): error TS2339: Property 'error' does not exist on type '{ planData: PlanData | null; plan: PlanData | null; activePlan: string; hasPremiumAccess: boolean; isPremium: boolean; premiumActive: boolean; loading: boolean; refresh: () => Promise<...>; globalConfig: null; referralCode: string | null; referralCount: number; shareLink: string | null; }'.
+client/src/pages/subscribe.tsx(78,33): error TS2554: Expected 2 arguments, but got 1.
+client/src/pages/subscribe.tsx(81,38): error TS2339: Property 'paymentStatus' does not exist on type 'PlanData'.
+client/src/pages/subscribe.tsx(85,55): error TS2339: Property 'subscriptionId' does not exist on type 'PlanData'.
+client/src/pages/subscribe.tsx(261,12): error TS2304: Cannot find name 'Loader2'.
+client/src/pages/subscribe.tsx(308,14): error TS2304: Cannot find name 'XCircle'.
+client/src/pages/subscribe.tsx(340,12): error TS2304: Cannot find name 'Loader2'.
+client/src/pages/subscribe.tsx(363,12): error TS2304: Cannot find name 'ChevronLeft'.
+client/src/pages/subscribe.tsx(398,12): error TS2304: Cannot find name 'Loader2'.
+client/src/pages/subscribe.tsx(415,20): error TS2339: Property 'subscriptionId' does not exist on type 'PlanData'.
+client/src/pages/subscribe.tsx(427,39): error TS2304: Cannot find name 'CheckCircle'.
+client/src/pages/subscribe.tsx(428,37): error TS2304: Cannot find name 'Loader2'.
+client/src/pages/subscribe.tsx(429,42): error TS2304: Cannot find name 'XCircle'.
+client/src/pages/subscribe.tsx(440,23): error TS2339: Property 'nextBillingAt' does not exist on type 'PlanData'.
+client/src/pages/subscribe.tsx(443,59): error TS2339: Property 'nextBillingAt' does not exist on type 'PlanData'.
+client/src/pages/subscribe.tsx(446,23): error TS2339: Property 'lastPaymentAt' does not exist on type 'PlanData'.
+client/src/pages/subscribe.tsx(448,18): error TS2304: Cannot find name 'CheckCircle'.
+client/src/pages/subscribe.tsx(449,59): error TS2339: Property 'lastPaymentAt' does not exist on type 'PlanData'.
+client/src/pages/subscribe.tsx(452,48): error TS2339: Property 'canceledAt' does not exist on type 'PlanData'.
+client/src/pages/subscribe.tsx(454,18): error TS2304: Cannot find name 'XCircle'.
+client/src/pages/subscribe.tsx(455,55): error TS2339: Property 'canceledAt' does not exist on type 'PlanData'.
+client/src/pages/subscribe.tsx(482,32): error TS2339: Property 'premiumOpenAccessMessage' does not exist on type 'never'.
+client/src/pages/subscribe.tsx(484,30): error TS2339: Property 'premiumOpenAccessUntil' does not exist on type 'never'.
+client/src/pages/subscribe.tsx(486,55): error TS2339: Property 'premiumOpenAccessUntil' does not exist on type 'never'.
+client/src/pages/subscribe.tsx(530,18): error TS2304: Cannot find name 'Loader2'.
+client/src/pages/subscribe.tsx(545,14): error TS2304: Cannot find name 'CheckCircle'.
+client/src/pages/subscribe.tsx(589,24): error TS2304: Cannot find name 'Loader2'.
+client/src/providers/plan-provider.tsx(53,7): error TS2345: Argument of type 'Auth | null' is not assignable to parameter of type 'Auth'.
+  Type 'null' is not assignable to type 'Auth'.
+server/firebase-storage-migration.ts(38,7): error TS2741: Property 'samplePath' is missing in type '{ ready: false; errors: string[]; }' but required in type 'MigrationPrepResult'.
+server/payments.ts(687,40): error TS2304: Cannot find name 'uid'.
+server/payments.ts(688,7): error TS18004: No value exists in scope for the shorthand property 'chargeId'. Either declare one or provide an initializer.
+server/payments.ts(737,35): error TS2304: Cannot find name 'uid'.
+server/payments.ts(738,7): error TS18004: No value exists in scope for the shorthand property 'chargeId'. Either declare one or provide an initializer.
+server/payments.ts(789,38): error TS2304: Cannot find name 'uid'.
+server/payments.ts(790,7): error TS18004: No value exists in scope for the shorthand property 'chargeId'. Either declare one or provide an initializer.
+server/routes.ts(158,68): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes.ts(172,11): error TS18004: No value exists in scope for the shorthand property 'userId'. Either declare one or provide an initializer.
+server/routes.ts(205,77): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes.ts(276,48): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes.ts(346,67): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes.ts(362,11): error TS18004: No value exists in scope for the shorthand property 'userId'. Either declare one or provide an initializer.
+server/routes.ts(362,41): error TS2304: Cannot find name 'body'.
+server/routes.ts(377,9): error TS2339: Property 'validateFirebaseStorageSetup' does not exist on type 'typeof import("/home/natanaelam2000/Revendasmart/server/migration-helpers")'.
+server/routes.ts(380,9): error TS2339: Property 'readProductsFromStorage' does not exist on type 'typeof import("/home/natanaelam2000/Revendasmart/server/migration-helpers")'.
+server/routes.ts(381,9): error TS2339: Property 'readClientsFromStorage' does not exist on type 'typeof import("/home/natanaelam2000/Revendasmart/server/migration-helpers")'.
+server/routes.ts(382,9): error TS2339: Property 'readSalesFromStorage' does not exist on type 'typeof import("/home/natanaelam2000/Revendasmart/server/migration-helpers")'.
+server/routes.ts(383,9): error TS2339: Property 'readInstallmentsFromStorage' does not exist on type 'typeof import("/home/natanaelam2000/Revendasmart/server/migration-helpers")'.
+server/routes.ts(384,9): error TS2339: Property 'readPostsFromStorage' does not exist on type 'typeof import("/home/natanaelam2000/Revendasmart/server/migration-helpers")'.
+server/routes.ts(385,9): error TS2339: Property 'listImagesFromIndexedDB' does not exist on type 'typeof import("/home/natanaelam2000/Revendasmart/server/migration-helpers")'.
+server/routes.ts(393,65): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes.ts(419,11): error TS18004: No value exists in scope for the shorthand property 'userId'. Either declare one or provide an initializer.
+server/routes.ts(460,11): error TS18004: No value exists in scope for the shorthand property 'userId'. Either declare one or provide an initializer.
+server/routes.ts(494,60): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes.ts(582,11): error TS18004: No value exists in scope for the shorthand property 'userId'. Either declare one or provide an initializer.
+server/routes.ts(659,53): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes.ts(678,70): error TS18004: No value exists in scope for the shorthand property 'userId'. Either declare one or provide an initializer.
+server/routes.ts(691,52): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'BinaryLike'.
+  Type 'string[]' is not assignable to type 'BinaryLike'.
+    Type 'string[]' is missing the following properties from type 'Float64Array': BYTES_PER_ELEMENT, buffer, byteLength, byteOffset, and 3 more.
+server/routes.ts(694,53): error TS2345: Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+  Type 'string[]' is not assignable to type 'string'.
+server/routes.ts(717,70): error TS18004: No value exists in scope for the shorthand property 'userId'. Either declare one or provide an initializer.

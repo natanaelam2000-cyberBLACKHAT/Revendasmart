@@ -12,6 +12,10 @@ import {
   Calendar,
   Gift, 
   Sparkles,
+  Loader2,
+  XCircle,
+  CheckCircle,
+  ChevronLeft,
 } from "lucide-react";
 import { getFirebaseIdToken, getCurrentFirebaseUser } from "@/lib/firebase";
 import { getApiUrl } from "@/lib/api-config";

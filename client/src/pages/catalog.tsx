@@ -93,7 +93,8 @@ export default function Catalog() {
 
   const cartTotal = useMemo(() => cart.reduce((sum, item) => sum + (item.product.salePrice * item.quantity), 0), [cart]);
   const cartCount = useMemo(() => cart.reduce((sum, item) => sum + item.quantity, 0), [cart]);
-  const catalogUrl = `https://revendasmart.vercel.app/u/${settings?.catalog_slug || "seu-catalogo"}`;
+  const catalogSlug = settings?.catalogSlug || settings?.catalog_slug || "seu-catalogo";
+  const catalogUrl = `https://revendasmart.vercel.app/u/${catalogSlug}`;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(catalogUrl);
