@@ -72,8 +72,11 @@ export default function Settings() {
   const [openHelpIndex, setOpenHelpIndex] = useState<number | null>(null);
 
   useEffect(() => {
-    const params = new URLSearchParams(location.split("?")[1] || "");
+    const params = new URLSearchParams(window.location.search);
     setActiveTab(params.get("tab") || "menu");
+    const syncTab = () => setActiveTab(new URLSearchParams(window.location.search).get("tab") || "menu");
+    window.addEventListener("popstate", syncTab);
+    return () => window.removeEventListener("popstate", syncTab);
   }, [location]);
 
   // Get Firebase Auth UID (real)
@@ -187,9 +190,9 @@ export default function Settings() {
     { title: "Minha Assinatura", subtitle: "Plano e faturamento", icon: CreditCard, color: "bg-sky-100 text-sky-700", path: "/subscribe" },
     { title: "Minha Loja", subtitle: "Nome, logo e informações", icon: Store, color: "bg-violet-100 text-violet-700", path: "/settings?tab=store" },
     { title: "Chave Pix", subtitle: "Recebimento dos pedidos", icon: KeyRound, color: "bg-green-100 text-green-700", path: "/settings?tab=pix" },
-    { title: "Compartilhar Catálogo", subtitle: "Link e QR Code do catálogo", icon: Share2, color: "bg-blue-100 text-blue-700", path: "/settings?tab=catalog_config" },
-    { title: "Preferências", subtitle: "Notificações e ajustes", icon: Bell, color: "bg-slate-100 text-slate-700", path: "/settings?tab=notifications" },
-    { title: "Suporte", subtitle: "Ajuda, FAQ e contato", icon: HelpCircle, color: "bg-amber-100 text-amber-700", path: "/settings?tab=help" },
+    { title: "Compartilhar Catálogo", subtitle: "Link e QR Code do catálogo", icon: Share2, color: "bg-blue-100 text-blue-700", path: "/settings?tab=catalog" },
+    { title: "Preferências", subtitle: "Notificações e ajustes", icon: Bell, color: "bg-slate-100 text-slate-700", path: "/settings?tab=preferences" },
+    { title: "Suporte", subtitle: "Ajuda, FAQ e contato", icon: HelpCircle, color: "bg-amber-100 text-amber-700", path: "/settings?tab=support" },
   ];
 
   if (activeTab === "menu") {
@@ -203,7 +206,7 @@ export default function Settings() {
             </div>
           </section>
           <div className="bg-white rounded-[2rem] border border-border/60 shadow-sm overflow-hidden divide-y divide-border/50">
-            {accountMenu.map(item => <button key={item.title} onClick={() => setLocation(item.path)} className="w-full flex items-center gap-4 p-4 sm:p-5 text-left hover:bg-slate-50 active:bg-slate-100 transition-colors">
+            {accountMenu.map(item => <button key={item.title} onClick={() => { const tab = new URL(item.path, window.location.origin).searchParams.get("tab"); if (tab) setActiveTab(tab); setLocation(item.path); }} className="w-full flex items-center gap-4 p-4 sm:p-5 text-left hover:bg-slate-50 active:bg-slate-100 transition-colors">
               <div className={`w-11 h-11 rounded-2xl flex items-center justify-center flex-shrink-0 ${item.color}`}><item.icon className="w-5 h-5" /></div>
               <div className="flex-1 min-w-0"><p className="text-sm sm:text-base font-bold">{item.title}</p><p className="text-xs text-muted-foreground mt-0.5">{item.subtitle}</p></div><ChevronRight className="w-5 h-5 text-muted-foreground/50" />
             </button>)}
@@ -240,91 +243,19 @@ export default function Settings() {
 
         <div className="flex-1 w-full max-w-4xl mx-auto p-4 sm:p-6 lg:p-8 pb-32 space-y-6">
           {activeTab === 'account' && (
-            <div className="space-y-4 animate-in fade-in slide-in-from-right-4">
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-muted-foreground uppercase px-1 tracking-widest">
-                  Tipos de Negócio
-                  {(() => {
-                    const types = toBusinessTypesArray(formSettings?.businessType, formSettings?.businessTypes);
-                    return types.length > 1 ? <span className="ml-2 text-primary font-black">({types.length})</span> : null;
-                  })()}
-                </label>
-                <p className="text-[10px] text-muted-foreground px-1">Selecione um ou mais nichos</p>
-                <div className="space-y-2">
-                  {NICHO_IDS.map(nichoId => {
-                    const cfg = getNichoConfig(nichoId);
-                    const currentTypes = toBusinessTypesArray(formSettings?.businessType, formSettings?.businessTypes);
-                    const isSelected = currentTypes.includes(nichoId);
-                    return (
-                      <button
-                        key={nichoId}
-                        type="button"
-                        data-testid={`settings-nicho-${nichoId}`}
-                        onClick={() => {
-                          const current = toBusinessTypesArray(formSettings?.businessType, formSettings?.businessTypes);
-                          const next = current.includes(nichoId)
-                            ? current.filter(t => t !== nichoId)
-                            : [...current, nichoId];
-                          const primary = next[0] || 'Geral';
-                          setFormSettings({
-                            ...formSettings,
-                            businessType: primary,
-                            businessTypes: next.length > 0 ? next : ['Geral']
-                          } as any);
-                        }}
-                        className={`w-full flex items-center gap-3 p-3 rounded-2xl border-2 transition-all text-left ${
-                          isSelected
-                            ? 'border-primary bg-primary/5'
-                            : 'border-border bg-secondary/20 hover:border-primary/30'
-                        }`}
-                      >
-                        <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center flex-shrink-0 transition-all ${
-                          isSelected ? 'border-primary bg-primary text-white' : 'border-border'
-                        }`}>
-                          {isSelected && <Check className="w-3.5 h-3.5" />}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-black uppercase tracking-wide">{cfg.label}</p>
-                          <p className="text-[9px] text-muted-foreground">{cfg.desc}</p>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              <InputField label="Nome da Loja" value={formSettings?.storeName} onChange={(v: string) => setFormSettings({...formSettings, storeName: v})} />
-              <InputField label="WhatsApp" value={formSettings?.whatsapp} onChange={(v: string) => setFormSettings({...formSettings, whatsapp: v})} />
-              
-              {/* Account Section (integrated into Profile) */}
-              <div className="pt-4 border-t border-border/30 space-y-4">
-                <h3 className="text-[11px] font-black text-muted-foreground uppercase tracking-widest">Conta</h3>
+            <div className="space-y-5 animate-in fade-in slide-in-from-right-4">
+              <div><p className="text-xs font-black text-primary uppercase tracking-wider">Minha Conta</p><h2 className="text-2xl font-black mt-1">Perfil e dados pessoais</h2><p className="text-sm text-muted-foreground mt-1">Atualize seus dados de contato e identificação.</p></div>
+              <div className="bg-white border border-border/60 rounded-3xl p-5 space-y-4 shadow-sm">
+                <InputField label="Nome" value={formSettings?.sellerName} onChange={(v: string) => setFormSettings({...formSettings, sellerName: v})} />
                 <InputField label="E-mail" value={currentUserEmail || ""} disabled={true} />
-
-                {/* Mercado Pago connection */}
-                <button
-                  data-testid="button-go-to-mp-settings"
-                  onClick={() => setLocation("/settings/mercadopago")}
-                  className="w-full flex items-center justify-between bg-white border border-border/60 py-4 px-5 rounded-2xl shadow-sm"
-                >
-                  <div className="flex items-center gap-3">
-                    <CreditCard className="w-4 h-4 text-[#009EE3]" />
-                    <div className="text-left">
-                      <p className="text-xs font-black uppercase tracking-wide">Mercado Pago</p>
-                      <p className="text-[10px] text-muted-foreground">Conecte sua conta para receber pagamentos</p>
-                    </div>
-                  </div>
-                  <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                </button>
-
-                <button onClick={handleLogout} className="w-full bg-destructive/10 text-destructive font-black py-4 rounded-2xl uppercase text-xs">
-                  Sair da Conta
-                </button>
+                <InputField label="WhatsApp" value={formSettings?.whatsapp} onChange={(v: string) => setFormSettings({...formSettings, whatsapp: v})} />
               </div>
+              <button data-testid="button-go-to-mp-settings" onClick={() => setLocation("/settings/mercadopago")} className="w-full flex items-center justify-between bg-white border border-border/60 py-4 px-5 rounded-2xl shadow-sm"><div className="flex items-center gap-3"><CreditCard className="w-5 h-5 text-[#009EE3]" /><div className="text-left"><p className="text-sm font-bold">Mercado Pago</p><p className="text-xs text-muted-foreground">Gerenciar conta de recebimento</p></div></div><ChevronRight className="w-5 h-5 text-muted-foreground" /></button>
             </div>
           )}
-
           {activeTab === 'store' && (
-            <div className="space-y-4 animate-in fade-in slide-in-from-right-4">
+            <div className="space-y-5 animate-in fade-in slide-in-from-right-4">
+              <div><p className="text-xs font-black text-violet-700 uppercase tracking-wider">Minha Loja</p><h2 className="text-2xl font-black mt-1">Nome e informações</h2><p className="text-sm text-muted-foreground mt-1">Dados exibidos para seus clientes no catálogo.</p></div>
               <div className="p-4 bg-violet-50 border border-violet-200 rounded-2xl">
                 <p className="text-xs font-black text-violet-700 uppercase">Minha Loja</p>
                 <p className="text-[10px] text-violet-600 mt-1">Identidade exibida no catálogo público.</p>
@@ -335,7 +266,8 @@ export default function Settings() {
           )}
 
           {activeTab === 'pix' && (
-            <div className="space-y-4 animate-in fade-in slide-in-from-right-4">
+            <div className="space-y-5 animate-in fade-in slide-in-from-right-4">
+              <div><p className="text-xs font-black text-green-700 uppercase tracking-wider">Chave Pix</p><h2 className="text-2xl font-black mt-1">Recebimento dos pedidos</h2><p className="text-sm text-muted-foreground mt-1">Configure a chave apresentada aos seus clientes.</p></div>
               <div className="p-4 bg-green-50 border border-green-200 rounded-2xl">
                 <p className="text-xs font-black text-green-700 uppercase">Chave Pix</p>
                 <p className="text-[10px] text-green-600 mt-1">Usada para receber pedidos feitos pelo catálogo.</p>
@@ -343,8 +275,9 @@ export default function Settings() {
               <InputField label="Chave Pix" value={formSettings?.pixKey} onChange={(v: string) => setFormSettings({...formSettings, pixKey: v})} placeholder="CPF, e-mail, telefone ou chave aleatória" />
             </div>
           )}
-          {activeTab === 'catalog_config' && (
+          {activeTab === 'catalog' && (
             <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
+              <div><p className="text-xs font-black text-blue-700 uppercase tracking-wider">Compartilhar Catálogo</p><h2 className="text-2xl font-black mt-1">Link e QR Code</h2><p className="text-sm text-muted-foreground mt-1">Compartilhe sua vitrine pública com seus clientes.</p></div>
               <div className="flex items-center justify-between p-4 bg-secondary/30 rounded-2xl">
                 <div className="flex items-center gap-2">
                   <Store className="w-4 h-4 text-primary" />
@@ -397,8 +330,9 @@ export default function Settings() {
             </div>
           )}
 
-          {activeTab === 'notifications' && (
+          {activeTab === 'preferences' && (
             <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
+              <div><p className="text-xs font-black text-slate-700 uppercase tracking-wider">Preferências</p><h2 className="text-2xl font-black mt-1">Notificações e ajustes</h2><p className="text-sm text-muted-foreground mt-1">Personalize lembretes e o comportamento do aplicativo.</p></div>
               <div className="flex items-center justify-between p-4 bg-secondary/30 rounded-2xl">
                 <div className="flex items-center gap-2">
                   <Bell className="w-4 h-4 text-primary" />
@@ -813,8 +747,9 @@ export default function Settings() {
             </div>
           )}
 
-          {activeTab === 'help' && (
+          {activeTab === 'support' && (
             <div className="space-y-4 animate-in fade-in slide-in-from-right-4 pb-20">
+              <div><p className="text-xs font-black text-amber-700 uppercase tracking-wider">Suporte</p><h2 className="text-2xl font-black mt-1">Ajuda, FAQ e contato</h2><p className="text-sm text-muted-foreground mt-1">Encontre respostas ou fale com o suporte.</p></div>
               {/* Header Info */}
               <div className="bg-gradient-to-br from-primary/10 to-primary/5 p-6 rounded-3xl border border-primary/20 space-y-3">
                 <h2 className="text-lg font-black text-primary">Central de Ajuda</h2>

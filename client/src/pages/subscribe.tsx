@@ -31,8 +31,10 @@ type PageStatus = "idle" | "loading" | "redirecting" | "success" | "error" | "ca
 // Helper: format date for PT-BR
 // ---------------------------------------------------------------------------
 function fmtDate(d: Date | string | null | undefined): string {
-  if (!d) return "—";
-  return new Date(d).toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" });
+  if (!d) return "Data não disponível";
+  const date = d instanceof Date ? d : new Date(d);
+  if (Number.isNaN(date.getTime())) return "Data não disponível";
+  return date.toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" });
 }
 
 // ---------------------------------------------------------------------------
