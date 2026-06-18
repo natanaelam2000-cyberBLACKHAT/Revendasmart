@@ -17,10 +17,10 @@ export const ProductCard = ({ product, onClick, lowStockThreshold }: ProductCard
   return (
     <div
       onClick={onClick}
-      className="bg-white rounded-[1.5rem] border border-border/50 shadow-sm overflow-hidden hover:shadow-md transition-all active:scale-[0.98] cursor-pointer flex flex-row min-h-[132px] group"
+      className="bg-white overflow-hidden hover:bg-slate-50/50 transition-colors cursor-pointer flex flex-row min-h-[138px] group"
     >
       {/* Imagem compacta */}
-      <div className="relative w-28 flex-shrink-0 bg-gradient-to-br from-muted/30 to-muted/10 overflow-hidden">
+      <div className="relative w-24 sm:w-28 flex-shrink-0 bg-gradient-to-br from-muted/30 to-muted/10 overflow-hidden">
         <ProductImageCard
           product={product}
           size="full"
@@ -56,35 +56,35 @@ export const ProductCard = ({ product, onClick, lowStockThreshold }: ProductCard
         </h3>
 
         {/* Valores financeiros — sempre rotulados */}
-        <div className="mt-auto pt-1.5 border-t border-border/40 grid grid-cols-2 gap-x-3 gap-y-0.5">
-          <div className="flex justify-between items-center">
-            <span className="text-[10px] text-muted-foreground">Venda</span>
-            <span className="text-sm font-black text-primary">
+        <div className="mt-auto pt-2 border-t border-border/40 grid grid-cols-2 gap-2">
+          <div className="min-w-0">
+            <span className="block text-[9px] text-muted-foreground uppercase">Venda</span>
+            <span className="block text-xs font-black text-primary truncate">
               R$ {product.salePrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
             </span>
           </div>
 
           {hasCost && (
-            <div className="flex justify-between items-center">
-              <span className="text-[10px] text-muted-foreground">Custo</span>
-              <span className="text-[11px] font-semibold text-muted-foreground">
+            <div className="min-w-0">
+              <span className="block text-[9px] text-muted-foreground uppercase">Custo</span>
+              <span className="block text-xs font-bold text-foreground truncate">
                 R$ {product.costPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
               </span>
             </div>
           )}
 
           {profit !== null && profit > 0 && (
-            <div className="flex justify-between items-center">
-              <span className="text-[10px] text-muted-foreground">Lucro</span>
-              <span className="text-[11px] font-bold text-green-600">
+            <div className="min-w-0">
+              <span className="block text-[9px] text-muted-foreground uppercase">Lucro</span>
+              <span className="block text-xs font-bold text-green-600 truncate">
                 R$ {profit.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
               </span>
             </div>
           )}
 
-          <div className="flex justify-between items-center pt-0.5">
-            <span className="text-[10px] text-muted-foreground">Estoque</span>
-            <span className="text-[11px] font-bold text-foreground">{product.stock} un</span>
+          <div className="min-w-0">
+            <span className="block text-[9px] text-muted-foreground uppercase">Estoque</span>
+            <span className="block text-xs font-bold text-foreground">{product.stock} un</span>
           </div>
         </div>
       </div>

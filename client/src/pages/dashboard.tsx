@@ -357,12 +357,10 @@ window.location.href = data.initPoint;
             <p className="text-[9px] text-muted-foreground font-black uppercase">Estoque baixo</p>
             <p className="text-base font-black text-orange-600">{lowStockProducts.length}</p>
           </button>
-          <button onClick={() => setLocation("/products-sold")} className="col-span-2 bg-white p-3 rounded-2xl border border-border/50 flex items-center justify-between text-left">
-            <div>
-              <p className="text-[9px] text-muted-foreground font-black uppercase">Campeão de vendas</p>
-              <p className="text-sm font-black line-clamp-1">{topProducts[0]?.product?.name || "Sem vendas no mês"}</p>
-            </div>
-            <span className="text-sm font-black text-primary">{topProducts[0]?.quantity || 0} un</span>
+          <button onClick={() => setLocation("/products-sold")} className="col-span-2 bg-white p-3 rounded-2xl border border-amber-200 flex items-center gap-3 text-left">
+            <div className="w-9 h-9 rounded-xl bg-amber-100 flex items-center justify-center text-lg">🏆</div>
+            <div className="flex-1 min-w-0"><p className="text-[9px] text-amber-700 font-black uppercase">Campeão de vendas</p><p className="text-sm font-black truncate">{topProducts[0]?.product?.name || "Sem vendas no mês"}</p></div>
+            <div className="text-right flex-shrink-0"><p className="text-xs font-black text-primary">{topProducts[0]?.quantity || 0} un</p><p className="text-[10px] text-muted-foreground">R$ {topProducts[0]?.product ? (topProducts[0].product!.salePrice * topProducts[0].quantity).toFixed(2) : "0,00"}</p></div>
           </button>
         </div>      </div>
 
@@ -455,10 +453,10 @@ window.location.href = data.initPoint;
                 return product ? (
                   <div 
                     key={product.id} 
-                    className="min-w-[130px] bg-white rounded-[1.5rem] border border-border/50 shadow-sm overflow-hidden hover:shadow-md transition-all active:scale-95 flex flex-col group"
+                    className="min-w-[250px] bg-white rounded-2xl border border-border/50 shadow-sm overflow-hidden hover:shadow-md transition-all active:scale-95 flex items-center group"
                   >
                     {/* Image Container - Compacto */}
-                    <div className="relative w-full aspect-square bg-gradient-to-br from-primary/5 to-primary/10 flex items-center justify-center overflow-hidden group-hover:from-primary/10 group-hover:to-primary/15 transition-colors">
+                    <div className="relative w-20 h-20 m-3 rounded-xl flex-shrink-0 bg-gradient-to-br from-primary/5 to-primary/10 flex items-center justify-center overflow-hidden group-hover:from-primary/10 group-hover:to-primary/15 transition-colors">
                       <ProductImageCard product={product} size="full" objectFit="contain" className="!rounded-none group-hover:scale-110 transition-transform duration-300" />
                       
                       {/* Sales Rank Badge - Floating */}
@@ -470,7 +468,7 @@ window.location.href = data.initPoint;
                     </div>
 
                     {/* Info Container - Compacto */}
-                    <div className="p-2.5 flex-1 flex flex-col justify-between">
+                    <div className="p-3 pl-0 flex-1 min-w-0 flex flex-col justify-between">
                       <div className="min-h-[3rem] flex flex-col justify-center">
                         <p className="text-[8px] font-black text-primary uppercase mb-0.5 truncate">{product.brand}</p>
                         <p className="text-[10px] font-bold text-foreground truncate line-clamp-2">{product.name}</p>

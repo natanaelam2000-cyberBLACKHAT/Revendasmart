@@ -166,90 +166,29 @@ export default function Products() {
   };
 
   return (
-    <div className="min-h-full bg-gradient-to-b from-primary/5 to-background pb-32">
-      {/* Header */}
-      <div className="sticky top-0 z-40 bg-white border-b border-border/40 shadow-sm">
-        <div className="p-6 space-y-4">
-          {/* Título e Botão */}
-          <div className="flex items-center justify-between">
-            <h1 className="text-2xl font-black text-foreground">Gestão de Estoque</h1>
-            <Link href="/add">
-              <a className="bg-primary text-white px-5 py-2.5 rounded-2xl flex items-center gap-2 shadow-lg shadow-primary/20 text-xs font-black uppercase tracking-widest hover:shadow-xl transition-all active:scale-95">
-                <Plus className="w-4 h-4" /> Novo
-              </a>
-            </Link>
+    <div className="min-h-full bg-slate-50 pb-32">
+      <div className="bg-white border-b border-border/50">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-5 lg:py-7 space-y-4">
+          <div className="flex items-center justify-between gap-4">
+            <div><p className="text-xs font-bold text-primary uppercase tracking-wider">Produtos</p><h1 className="text-2xl lg:text-3xl font-black">Gestão de estoque</h1><p className="text-sm text-muted-foreground mt-1">{products.length} produtos · lucro potencial de R$ {stats.totalProfit.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p></div>
+            <Link href="/add"><a className="bg-primary text-white px-4 py-3 rounded-xl flex items-center gap-2 shadow-md text-xs font-black whitespace-nowrap"><Plus className="w-4 h-4" /> Novo produto</a></Link>
           </div>
-
-          {/* Lucro Potencial - Card Executivo */}
-          <div className="bg-gradient-to-br from-primary/10 to-primary/5 p-5 rounded-[2rem] border border-primary/20">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
-                <TrendingUp className="w-4 h-4 text-primary" />
-              </div>
-              <span className="text-[9px] font-black text-primary uppercase tracking-widest">Lucro Potencial</span>
+          <div className="flex flex-col lg:flex-row gap-3 lg:items-center">
+            <div className="relative flex-1"><Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground/50" /><input type="text" placeholder="Buscar por nome ou marca..." className="w-full bg-slate-50 border border-border/60 rounded-xl py-3 pl-11 pr-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
+            <div className="flex gap-2 flex-wrap">
+              <button onClick={() => setShowLowStock(!showLowStock)} className={`px-3 py-2 rounded-full text-[10px] font-bold border flex items-center gap-1.5 ${showLowStock?'bg-amber-50 text-amber-700 border-amber-200':'bg-white text-muted-foreground border-border'}`}>{showLowStock?<Eye className="w-3.5 h-3.5"/>:<EyeOff className="w-3.5 h-3.5"/>} Estoque baixo {stats.lowStockCount}</button>
+              <button onClick={() => setShowOutOfStock(!showOutOfStock)} className={`px-3 py-2 rounded-full text-[10px] font-bold border flex items-center gap-1.5 ${showOutOfStock?'bg-red-50 text-red-700 border-red-200':'bg-white text-muted-foreground border-border'}`}>{showOutOfStock?<Eye className="w-3.5 h-3.5"/>:<EyeOff className="w-3.5 h-3.5"/>} Sem estoque {stats.outOfStockCount}</button>
             </div>
-            <p className="text-3xl font-black text-primary leading-none mb-1">
-              R$ {stats.totalProfit.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-            </p>
-            <p className="text-[10px] text-muted-foreground">Estimativa baseada no estoque atual</p>
           </div>
-
-          {/* Busca */}
-          <div className="relative">
-            <Search className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground/40" />
-            <input
-              type="text"
-              placeholder="Buscar por nome ou marca..."
-              className="w-full bg-secondary/30 border border-border/40 rounded-2xl py-3 pl-12 pr-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-transparent transition-all"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
-
-          {/* Filtros por Categoria */}
-          <div className="space-y-2">
-            <p className="text-[9px] font-black text-muted-foreground uppercase tracking-widest">Categorias</p>
-            <FilterChips 
-              options={categories} 
-              selected={selectedCategory} 
-              onSelect={setSelectedCategory}
-            />
-          </div>
-
-          {/* Filtros de Estoque */}
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={() => setShowOutOfStock(!showOutOfStock)}
-              className={`px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all border flex items-center justify-center gap-2 ${
-                showOutOfStock 
-                  ? 'bg-red-100 text-red-700 border-red-200 shadow-sm' 
-                  : 'bg-white text-muted-foreground border-border/40'
-              }`}
-            >
-              {showOutOfStock ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-              Sem Estoque ({stats.outOfStockCount})
-            </button>
-            <button
-              onClick={() => setShowLowStock(!showLowStock)}
-              className={`px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all border flex items-center justify-center gap-2 ${
-                showLowStock 
-                  ? 'bg-yellow-100 text-yellow-700 border-yellow-200 shadow-sm' 
-                  : 'bg-white text-muted-foreground border-border/40'
-              }`}
-            >
-              {showLowStock ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-              Estoque Baixo ({stats.lowStockCount})
-            </button>
-          </div>
+          <FilterChips options={categories} selected={selectedCategory} onSelect={setSelectedCategory} className="!mx-0 !px-0 !pb-0" />
         </div>
       </div>
-
       {/* Conteúdo Principal */}
-      <div className="p-4">
+      <div className="max-w-6xl mx-auto p-4 sm:p-6 lg:px-8">
         {loading ? (
-          <div className="grid grid-cols-1 gap-3">
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
             {[1, 2, 3, 4, 5, 6].map(i => (
-              <div key={i} className="h-72 bg-white rounded-[1.5rem] animate-pulse border border-border/20" />
+              <div key={i} className="h-48 bg-white rounded-[1.5rem] animate-pulse border border-border/20" />
             ))}
           </div>
         ) : error ? (
@@ -273,7 +212,7 @@ export default function Products() {
             }
           />
         ) : (
-          <div className="grid grid-cols-1 gap-3">
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
             {filteredProducts.map((product) => (
               <div key={product.id} className="relative group bg-white rounded-[1.5rem] border border-border/40 overflow-hidden">
                 <ProductCard 

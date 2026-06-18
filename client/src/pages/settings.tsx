@@ -11,7 +11,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { 
   Store, Palette, CreditCard, MessageSquare, Package, BookOpen, 
-  Download, Save, ChevronRight, Bell, Upload, Trash2, ShieldAlert, RefreshCw, Activity, CheckCircle, XCircle, Users, Share2, ExternalLink, FileSpreadsheet, QrCode, Copy, Info, Mail, Globe, Check, Scale, HelpCircle, ChevronDown
+  Download, Save, ChevronRight, Bell, Upload, Trash2, ShieldAlert, RefreshCw, Activity, CheckCircle, XCircle, Users, Share2, ExternalLink, FileSpreadsheet, QrCode, Copy, Info, Mail, Globe, Check, Scale, HelpCircle, ChevronDown, User, KeyRound, LogOut, ArrowLeft
 } from "lucide-react";
 import { NICHO_IDS, getNichoConfig, toBusinessTypesArray } from "@/lib/nicho-config";
 
@@ -60,9 +60,9 @@ export default function Settings() {
   const [activeTab, setActiveTab] = useState(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
-      return params.get('tab') || 'profile';
+      return params.get('tab') || 'menu';
     }
-    return 'profile';
+    return 'menu';
   });
   
   const [location, setLocation] = useLocation();
@@ -73,7 +73,7 @@ export default function Settings() {
 
   useEffect(() => {
     const params = new URLSearchParams(location.split("?")[1] || "");
-    setActiveTab(params.get("tab") || "account");
+    setActiveTab(params.get("tab") || "menu");
   }, [location]);
 
   // Get Firebase Auth UID (real)
@@ -181,8 +181,42 @@ export default function Settings() {
   };
 
 
+  const displayName = formSettings?.sellerName || currentUserEmail?.split("@")[0] || "Usuário";
+  const accountMenu = [
+    { title: "Minha Conta", subtitle: "Perfil e dados pessoais", icon: User, color: "bg-primary/10 text-primary", path: "/settings?tab=account" },
+    { title: "Minha Assinatura", subtitle: "Plano e faturamento", icon: CreditCard, color: "bg-sky-100 text-sky-700", path: "/subscribe" },
+    { title: "Minha Loja", subtitle: "Nome, logo e informações", icon: Store, color: "bg-violet-100 text-violet-700", path: "/settings?tab=store" },
+    { title: "Chave Pix", subtitle: "Recebimento dos pedidos", icon: KeyRound, color: "bg-green-100 text-green-700", path: "/settings?tab=pix" },
+    { title: "Compartilhar Catálogo", subtitle: "Link e QR Code do catálogo", icon: Share2, color: "bg-blue-100 text-blue-700", path: "/settings?tab=catalog_config" },
+    { title: "Preferências", subtitle: "Notificações e ajustes", icon: Bell, color: "bg-slate-100 text-slate-700", path: "/settings?tab=notifications" },
+    { title: "Suporte", subtitle: "Ajuda, FAQ e contato", icon: HelpCircle, color: "bg-amber-100 text-amber-700", path: "/settings?tab=help" },
+  ];
+
+  if (activeTab === "menu") {
+    return (
+      <Layout>
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-10">
+          <section className="bg-gradient-to-br from-primary to-primary/80 text-white rounded-[2rem] p-6 lg:p-8 shadow-xl shadow-primary/15 mb-6">
+            <div className="flex items-center gap-4">
+              <div className="w-14 h-14 rounded-2xl bg-white/15 border border-white/20 flex items-center justify-center font-black text-2xl">R</div>
+              <div><p className="text-sm font-bold text-white/75">RevendaSmart</p><h1 className="text-2xl lg:text-3xl font-black mt-1">Olá, {displayName}!</h1><p className="text-sm text-white/75 mt-1">Gerencie sua conta e sua loja.</p></div>
+            </div>
+          </section>
+          <div className="bg-white rounded-[2rem] border border-border/60 shadow-sm overflow-hidden divide-y divide-border/50">
+            {accountMenu.map(item => <button key={item.title} onClick={() => setLocation(item.path)} className="w-full flex items-center gap-4 p-4 sm:p-5 text-left hover:bg-slate-50 active:bg-slate-100 transition-colors">
+              <div className={`w-11 h-11 rounded-2xl flex items-center justify-center flex-shrink-0 ${item.color}`}><item.icon className="w-5 h-5" /></div>
+              <div className="flex-1 min-w-0"><p className="text-sm sm:text-base font-bold">{item.title}</p><p className="text-xs text-muted-foreground mt-0.5">{item.subtitle}</p></div><ChevronRight className="w-5 h-5 text-muted-foreground/50" />
+            </button>)}
+            <button onClick={handleLogout} className="w-full flex items-center gap-4 p-4 sm:p-5 text-left hover:bg-red-50 transition-colors">
+              <div className="w-11 h-11 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center"><LogOut className="w-5 h-5" /></div><div className="flex-1"><p className="text-sm sm:text-base font-bold text-red-600">Sair</p><p className="text-xs text-red-500/70 mt-0.5">Encerrar sessão</p></div><ChevronRight className="w-5 h-5 text-red-300" />
+            </button>
+          </div>
+        </div>
+      </Layout>
+    );
+  }
   return (
-    <Layout title="Ajustes">
+    <Layout>
       <div className="flex flex-col h-full bg-background">
         <div className="p-3 px-6 bg-primary/5 border-b border-primary/10 flex justify-between items-center min-h-[2.5rem]">
           <p className="text-[8px] font-black text-primary uppercase tracking-[0.2em]">
@@ -200,34 +234,11 @@ export default function Settings() {
           )}
         </div>
 
-        <div className="flex overflow-x-auto p-4 gap-2 bg-gradient-to-r from-white via-white to-white border-b border-border/50 hide-scrollbar sticky top-0 z-10">
-          {[
-            { id: 'account', icon: CreditCard, label: 'Conta' },
-            { id: 'store', icon: Store, label: 'Loja' },
-            { id: 'pix', icon: CreditCard, label: 'Pix' },
-            { id: 'catalog_config', icon: BookOpen, label: 'Link' },
-            { id: 'notifications', icon: Bell, label: 'Avisos' },
-            { id: 'growth', icon: Share2, label: 'Crescimento' },
-            { id: 'backup', icon: Download, label: 'Backup' },
-            { id: 'export_csv', icon: FileSpreadsheet, label: 'Planilhas' },
-            { id: 'help', icon: HelpCircle, label: 'Ajuda' },
-            { id: 'about_and_legal', icon: Info, label: 'Sobre e Legal' },
-          ].map(tab => (
-            <button 
-              key={tab.id}
-              onClick={() => setLocation(`/settings?tab=${tab.id}`)}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl whitespace-nowrap text-[10px] font-black uppercase transition-all shadow-sm border ${
-                activeTab === tab.id 
-                  ? 'bg-primary text-white border-primary shadow-md' 
-                  : 'bg-white text-muted-foreground border-border/40 hover:border-primary/30'
-              }`}
-            >
-              <tab.icon className="w-3.5 h-3.5" /> {tab.label}
-            </button>
-          ))}
+        <div className="px-4 sm:px-6 lg:px-8 pt-4 max-w-4xl mx-auto w-full">
+          <button onClick={() => setLocation("/settings")} className="inline-flex items-center gap-2 text-sm font-bold text-muted-foreground hover:text-primary"><ArrowLeft className="w-4 h-4" /> Voltar para Conta</button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 pb-32 space-y-6">
+        <div className="flex-1 w-full max-w-4xl mx-auto p-4 sm:p-6 lg:p-8 pb-32 space-y-6">
           {activeTab === 'account' && (
             <div className="space-y-4 animate-in fade-in slide-in-from-right-4">
               <div className="space-y-2">
