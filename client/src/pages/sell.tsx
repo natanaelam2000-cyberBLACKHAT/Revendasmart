@@ -18,6 +18,10 @@ export default function Sell() {
   const [selectedClient, setSelectedClient] = useState<string>("");
   const [cart, setCart] = useState<{product: Product, quantity: number}[]>([]);
   const [paymentType, setPaymentType] = useState<'cash' | 'installments'>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<'pix' | 'dinheiro' | 'credito' | 'debito'>('pix');
+  const [downPaymentMethod, setDownPaymentMethod] = useState<'pix' | 'dinheiro' | 'credito' | 'debito'>('pix');
+  const [discountType, setDiscountType] = useState<'fixed' | 'percent'>('fixed');
+  const [discountValue, setDiscountValue] = useState(0);
   const [installments, setInstallments] = useState(1);
   const [downPayment, setDownPayment] = useState(0);
   const [success, setSuccess] = useState(false);
@@ -49,8 +53,10 @@ export default function Sell() {
     });
   };
 
-  const total = cart.reduce((acc, item) => acc + (item.product.salePrice * item.quantity), 0);
-  const remainingBalance = total - downPayment;
+  const subtotal = cart.reduce((acc, item) => acc + (item.product.salePrice * item.quantity), 0);
+  const discountAmount = Math.min(subtotal, discountType === 'percent' ? subtotal * Math.min(100, discountValue) / 100 : discountValue);
+  const total = Math.max(0, subtotal - discountAmount);
+  const remainingBalance = Math.max(0, total - downPayment);
 
   const handleCheckout = async () => {
     if (cart.length === 0) {
@@ -103,9 +109,17 @@ export default function Sell() {
         id: saleId,
         clientId: selectedClient,
         products: cart.map(c => ({ productId: c.product.id, quantity: c.quantity, price: c.product.salePrice })),
+        subtotal,
+        discountType,
+        discountValue,
+        discountAmount,
+        total: total,
         totalPrice: total,
-        paymentType,
+        paymentType: paymentType === 'cash' ? 'avista' : 'prazo',
+        legacyPaymentType: paymentType,
+        paymentMethod: paymentType === 'cash' ? paymentMethod : null,
         downPayment: paymentType === 'installments' ? downPayment : 0,
+        downPaymentMethod: paymentType === 'installments' && downPayment > 0 ? downPaymentMethod : null,
         installments: paymentType === 'installments' ? installments : 0,
         date: new Date().toISOString()
       };
@@ -177,6 +191,11 @@ export default function Sell() {
             metadata: {
               installmentCount: installments,
               downPayment,
+              downPaymentMethod: downPayment > 0 ? downPaymentMethod : null,
+              subtotal,
+              discountType,
+              discountValue,
+              discountAmount,
               saleId,
             },
           }),
@@ -209,12 +228,12 @@ export default function Sell() {
       logError("sale_checkout_error", errorMsg, {
         error: err instanceof Error ? err : undefined,
         context: { 
-          clientId, 
+          clientId: selectedClient,
           cartItems: cart.length, 
           paymentType,
           totalAmount: total 
         },
-        userId: user?.uid,
+        userId: uid,
         severity: "error",
       });
     } finally {
@@ -307,13 +326,20 @@ export default function Sell() {
 
         {cart.length > 0 && (
           <div className="fixed bottom-24 left-0 right-0 p-4 max-w-md mx-auto z-40">
-            <div className="bg-white rounded-2xl p-5 shadow-xl border border-border/20 animate-in slide-in-from-bottom-5">
-              {/* Header */}
-              <div className="mb-4">
-                <p className="text-[9px] text-muted-foreground font-black uppercase tracking-widest mb-2">Total da Venda</p>
-                <p className="text-3xl font-black text-foreground">R$ {total.toFixed(2)}</p>
+            <div className="bg-white rounded-2xl p-5 shadow-xl border border-border/20 animate-in slide-in-from-bottom-5 max-h-[calc(100dvh-8rem)] overflow-y-auto">
+              <div className="mb-3"><p className="text-[9px] text-muted-foreground font-black uppercase tracking-widest">Resumo da Venda</p></div>
+              <div className="mb-4 rounded-xl bg-secondary/20 p-3 space-y-3">
+                <div className="flex items-center justify-between"><span className="text-[10px] font-bold text-muted-foreground">Subtotal</span><span className="text-sm font-bold">R$ {subtotal.toFixed(2)}</span></div>
+                <div className="grid grid-cols-[auto_1fr] gap-2">
+                  <div className="flex bg-white rounded-lg p-1 border border-border/40">
+                    <button type="button" onClick={() => setDiscountType('fixed')} className={`px-3 py-2 rounded-md text-[9px] font-black ${discountType === 'fixed' ? 'bg-primary text-white' : 'text-muted-foreground'}`}>R$</button>
+                    <button type="button" onClick={() => setDiscountType('percent')} className={`px-3 py-2 rounded-md text-[9px] font-black ${discountType === 'percent' ? 'bg-primary text-white' : 'text-muted-foreground'}`}>%</button>
+                  </div>
+                  <input type="number" min="0" max={discountType === 'percent' ? 100 : subtotal} step="0.01" value={discountValue} onChange={e => setDiscountValue(Math.max(0, Number(e.target.value)))} placeholder="Desconto" className="min-w-0 bg-white border border-border/40 rounded-lg px-3 text-sm font-bold outline-none focus:ring-1 focus:ring-primary" />
+                </div>
+                {discountAmount > 0 && <div className="flex items-center justify-between text-green-700"><span className="text-[10px] font-bold">Desconto aplicado</span><span className="text-sm font-black">- R$ {discountAmount.toFixed(2)}</span></div>}
+                <div className="flex items-center justify-between border-t border-border/30 pt-2"><span className="text-[10px] font-black uppercase">Total</span><span className="text-2xl font-black">R$ {total.toFixed(2)}</span></div>
               </div>
-
               {/* Payment Type Toggle */}
               <div className="flex gap-3 mb-4">
                 <button 
@@ -342,8 +368,11 @@ export default function Sell() {
 
               {/* Payment Details - Compact */}
               {paymentType === 'cash' ? (
-                <div className="mb-4 pb-4 border-b border-border/20">
-                  <p className="text-[9px] text-muted-foreground font-medium">Pagamento à vista completo</p>
+                <div className="mb-4 pb-4 border-b border-border/20 space-y-2">
+                  <p className="text-[9px] text-muted-foreground font-black uppercase">Forma de pagamento</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[['pix','Pix'],['dinheiro','Dinheiro'],['credito','Cartão de crédito'],['debito','Cartão de débito']].map(([value,label]) => <button type="button" key={value} onClick={() => setPaymentMethod(value as typeof paymentMethod)} className={`py-2.5 px-2 rounded-xl text-[9px] font-bold border ${paymentMethod === value ? 'bg-primary text-white border-primary' : 'bg-white text-muted-foreground border-border/50'}`}>{label}</button>)}
+                  </div>
                 </div>
               ) : (
                 <div className="mb-4 pb-4 border-b border-border/20 space-y-2">
@@ -362,6 +391,12 @@ export default function Sell() {
                     />
                   </div>
 
+                  {downPayment > 0 && <div>
+                    <label className="text-[8px] font-black text-muted-foreground uppercase block mb-1">Forma da entrada</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {[['pix','Pix'],['dinheiro','Dinheiro'],['credito','Cartão de crédito'],['debito','Cartão de débito']].map(([value,label]) => <button type="button" key={value} onClick={() => setDownPaymentMethod(value as typeof downPaymentMethod)} className={`py-2 px-2 rounded-lg text-[9px] font-bold border ${downPaymentMethod === value ? 'bg-primary text-white border-primary' : 'bg-white text-muted-foreground border-border/50'}`}>{label}</button>)}
+                    </div>
+                  </div>}
                   {/* Parcelas + Valor grid */}
                   <div className="grid grid-cols-2 gap-2">
                     <div>

@@ -114,7 +114,17 @@ export interface Sale {
   clientId: string;
   products: { productId: string; quantity: number; price: number }[];
   totalPrice: number;
-  paymentType: 'cash' | 'installments';
+  paymentType: 'cash' | 'installments' | 'avista' | 'prazo';
+  legacyPaymentType?: 'cash' | 'installments';
+  paymentMethod?: 'pix' | 'dinheiro' | 'credito' | 'debito' | null;
+  downPayment?: number;
+  downPaymentMethod?: 'pix' | 'dinheiro' | 'credito' | 'debito' | null;
+  installments?: number;
+  subtotal?: number;
+  discountType?: 'fixed' | 'percent';
+  discountValue?: number;
+  discountAmount?: number;
+  total?: number;
   date: string;
 }
 

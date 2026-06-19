@@ -1,4 +1,4 @@
-﻿import { Product } from "@/lib/mock-data";
+import { Product } from "@/lib/mock-data";
 import { ProductImageCard } from "./ProductImageCard";
 import { StockBadge } from "./StockBadge";
 
@@ -8,7 +8,7 @@ export const ProductCard = ({ product, lowStockThreshold }: ProductCardProps) =>
   const sale = Number(product.salePrice || 0);
   const profit = sale - cost;
   return (
-    <div className="bg-white rounded-2xl border border-border/60 shadow-sm overflow-hidden h-full flex flex-col">
+    <div className="bg-white h-full flex flex-col">
       <div className="relative aspect-square bg-gradient-to-br from-slate-50 to-slate-100 p-2 sm:p-3">
         <ProductImageCard product={product} size="full" objectFit="contain" className="!rounded-xl !w-full !h-full" />
         <div className="absolute top-2 right-2"><StockBadge stock={product.stock} lowStockThreshold={lowStockThreshold} className="shadow-sm bg-white/95 text-[8px] sm:text-[9px]" /></div>
@@ -17,6 +17,11 @@ export const ProductCard = ({ product, lowStockThreshold }: ProductCardProps) =>
         <p className="text-[9px] sm:text-[10px] font-black text-primary uppercase tracking-wider truncate">{product.brand || "Sem marca"}</p>
         <h3 className="text-xs sm:text-sm font-bold leading-tight line-clamp-2 min-h-[2rem] sm:min-h-[2.5rem] mt-1">{product.name}</h3>
         <p className="text-[9px] text-muted-foreground truncate mt-1">{product.category || "Sem categoria"}</p>
+        {sale <= 1 && (
+          <p className="mt-2 rounded-lg bg-amber-50 px-2 py-1 text-[9px] font-semibold leading-tight text-amber-700">
+            Preço possivelmente incompleto
+          </p>
+        )}
         <div className="grid grid-cols-2 gap-x-2 gap-y-2 mt-3 pt-3 border-t border-border/40">
           <div><span className="block text-[8px] text-muted-foreground uppercase">Venda</span><strong className="block text-[10px] sm:text-xs text-primary truncate">R$ {sale.toFixed(2)}</strong></div>
           <div><span className="block text-[8px] text-muted-foreground uppercase">Custo</span><strong className="block text-[10px] sm:text-xs truncate">R$ {cost.toFixed(2)}</strong></div>

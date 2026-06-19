@@ -1,23 +1,18 @@
 import { useState, useMemo, useRef } from "react";
 import { Layout } from "@/components/layout";
-import { 
-  Product, saveStored, STORAGE_KEYS, 
-  ScheduledPost, AppSettings, defaultSettings, getProductImage 
-} from "@/lib/mock-data";
+import { Product, AppSettings, defaultSettings, getProductImage } from "@/lib/mock-data";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, logError } from "@/lib/firebase";
 import { useFeatureEnabled } from "@/lib/remote-config-context";
 import { 
-  Megaphone, Calendar, Share2, MessageSquare, Plus, Trash2, Tag, 
+  Megaphone, Share2, MessageSquare, Plus, Tag,
   Gift, Sparkles, Heart, Copy, ChevronRight, AlertCircle, ShoppingBag, 
   Smartphone, Wallet, Info, Image as ImageIcon, Download
 } from "lucide-react";
-import { format, parseISO } from "date-fns";
 
 export default function Marketing() {
   const { products, loading, error } = useDashboardData();
-  const [posts, setPosts] = useState<ScheduledPost[]>([]);
   const { settings: firestoreSettings } = useUserSettings();
   const settings = firestoreSettings || defaultSettings;
   const v2TemplatesEnabled = useFeatureEnabled("marketing_templates_v2_enabled");
@@ -259,11 +254,6 @@ export default function Marketing() {
     }
   };
 
-  const handleRemovePost = (id: string) => {
-    const updated = posts.filter(p => p.id !== id);
-    setPosts(updated);
-    saveStored(STORAGE_KEYS.POSTS, updated);
-  };
 
   return (
     <Layout title="Marketing">

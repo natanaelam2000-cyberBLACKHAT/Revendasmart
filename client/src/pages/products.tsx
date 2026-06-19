@@ -216,9 +216,9 @@ export default function Products() {
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
             {filteredProducts.map((product) => (
-              <article key={product.id} className="min-w-0">
+              <article key={product.id} className="min-w-0 overflow-hidden rounded-2xl border border-border/60 bg-white shadow-sm flex flex-col">
                 <ProductCard product={product} lowStockThreshold={settings?.lowStockThreshold} />
-                <div className="grid grid-cols-3 gap-1.5 mt-2">
+                <div className="grid grid-cols-3 gap-1.5 border-t border-border/40 p-2 mt-auto">
                   <button onClick={() => handleQuickShare(product)} className="min-w-0 py-2 px-1 bg-green-50 text-green-700 rounded-xl flex items-center justify-center gap-1 text-[8px] sm:text-[10px] font-bold" title="Compartilhar WhatsApp"><Share2 className="w-3.5 h-3.5 flex-shrink-0" /><span className="truncate">Compartilhar</span></button>
                   <Link href={`/edit-product/${product.id}`}><a className="min-w-0 py-2 px-1 bg-primary/10 text-primary rounded-xl flex items-center justify-center gap-1 text-[8px] sm:text-[10px] font-bold"><Edit2 className="w-3.5 h-3.5 flex-shrink-0" /><span>Editar</span></a></Link>
                   <button onClick={() => handleDelete(product.id)} className="min-w-0 py-2 px-1 bg-red-50 text-red-600 rounded-xl flex items-center justify-center gap-1 text-[8px] sm:text-[10px] font-bold" title="Excluir"><Trash2 className="w-3.5 h-3.5 flex-shrink-0" /><span>Excluir</span></button>

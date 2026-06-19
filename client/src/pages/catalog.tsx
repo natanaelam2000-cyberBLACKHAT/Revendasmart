@@ -340,9 +340,10 @@ export default function Catalog() {
                     <ProductImageCard product={item.product} size="md" objectFit="contain" />
                   </div>
                   <div className="flex-1">
-                    <h4 className="text-xs font-bold leading-tight mb-1">{item.product.name}</h4>
-                    <p className="text-xs font-black text-primary">R$ {(item.product.salePrice * item.quantity).toFixed(2)}</p>
-                    <div className="flex items-center gap-2 mt-2">
+                    <h4 className="text-xs font-bold leading-tight mb-1 line-clamp-2">{item.product.name}</h4>
+                    <p className="text-[10px] text-muted-foreground">Preço unitário: R$ {item.product.salePrice.toFixed(2)}</p>
+                    <p className="text-xs font-black text-primary mt-1">Subtotal: R$ {(item.product.salePrice * item.quantity).toFixed(2)}</p>
+                    <div className="flex items-center gap-2 mt-2"><span className="text-[9px] font-bold text-muted-foreground mr-1">Quantidade:</span>
                       <button onClick={() => updateQuantity(item.product.id, item.quantity - 1)} className="w-6 h-6 rounded-full bg-white shadow-sm flex items-center justify-center"><Minus className="w-3 h-3"/></button>
                       <span className="text-xs font-black">{item.quantity}</span>
                       <button onClick={() => updateQuantity(item.product.id, item.quantity + 1)} disabled={item.quantity >= item.product.stock} className="w-6 h-6 rounded-full bg-white shadow-sm flex items-center justify-center"><Plus className="w-3 h-3"/></button>
@@ -355,9 +356,9 @@ export default function Catalog() {
 
           {cart.length > 0 && (
             <div className="p-8 border-t border-border/40 space-y-4">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] font-black text-muted-foreground uppercase tracking-widest">Total</span>
-                <span className="text-3xl font-black text-foreground">R$ {cartTotal.toFixed(2)}</span>
+              <div className="bg-secondary/20 rounded-2xl p-4 space-y-2">
+                <div className="flex items-center justify-between"><span className="text-[10px] font-bold text-muted-foreground">Itens</span><span className="text-sm font-black">{cartCount}</span></div>
+                <div className="flex items-center justify-between border-t border-border/30 pt-2"><span className="text-[10px] font-black uppercase tracking-widest">Total</span><span className="text-2xl font-black text-foreground">R$ {cartTotal.toFixed(2)}</span></div>
               </div>
               <button 
                 onClick={handleSendOrderWhatsApp} 
@@ -371,7 +372,7 @@ export default function Catalog() {
                 className="w-full bg-primary text-white font-black py-5 rounded-[2rem] flex items-center justify-center gap-3 shadow-xl shadow-primary/20"
               >
                 {checkoutLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ShoppingCart className="w-5 h-5" />}
-                Pagar com Cartão/Pix
+                Pagar com Pix / Cartão de Crédito
               </button>
               {checkoutError && <p className="text-[10px] text-red-500 font-bold text-center">{checkoutError}</p>}
             </div>
@@ -387,6 +388,7 @@ export default function Catalog() {
               <h3 className="font-black text-2xl">Compartilhar Catálogo</h3>
               <button onClick={() => setShowShareModal(false)} className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center"><X className="w-5 h-5" /></button>
             </div>
+            <div className="bg-secondary/30 rounded-2xl p-3 border border-border/40"><p className="text-[9px] font-black text-muted-foreground uppercase mb-1">Link do catálogo</p><p className="text-xs font-mono break-all text-foreground">{catalogUrl}</p></div>
             <div className="grid grid-cols-2 gap-4">
               <button 
                 onClick={handleShareWhatsApp} 
