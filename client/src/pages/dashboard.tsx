@@ -228,10 +228,15 @@ export default function Dashboard() {
     });
 
     return Array.from(productMetrics.entries())
-      .map(([productId, qty]) => ({ product: products.find(p => p.id === productId), quantity: qty }))
+      .map(([productId, qty]) => {
+        const product = products.find(p => p.id === productId);
+        const revenue = product ? product.salePrice * qty : 0;
+        const profit = product ? (product.salePrice - (product.costPrice || 0)) * qty : 0;
+        return { product, quantity: qty, revenue, profit };
+      })
       .filter(item => item.product)
       .sort((a, b) => b.quantity - a.quantity)
-      .slice(0, 3);
+      .slice(0, 5);
   }, [currentMonthSales, products]);
 
   // Low stock alert products
@@ -360,7 +365,7 @@ window.location.href = data.initPoint;
           <button onClick={() => setLocation("/products-sold")} className="col-span-2 bg-white p-3 rounded-2xl border border-amber-200 flex items-center gap-3 text-left">
             <div className="w-9 h-9 rounded-xl bg-amber-100 flex items-center justify-center text-lg">🏆</div>
             <div className="flex-1 min-w-0"><p className="text-[9px] text-amber-700 font-black uppercase">Campeão de vendas</p><p className="text-sm font-black truncate">{topProducts[0]?.product?.name || "Sem vendas no mês"}</p></div>
-            <div className="text-right flex-shrink-0"><p className="text-xs font-black text-primary">{topProducts[0]?.quantity || 0} un</p><p className="text-[10px] text-muted-foreground">R$ {topProducts[0]?.product ? (topProducts[0].product!.salePrice * topProducts[0].quantity).toFixed(2) : "0,00"}</p></div>
+            <div className="text-right flex-shrink-0"><p className="text-xs font-black text-primary">{topProducts[0]?.quantity || 0} un</p><p className="text-[10px] text-muted-foreground">R$ {topProducts[0]?.revenue.toFixed(2) || "0,00"}</p></div>
           </button>
         </div>      </div>
 
@@ -448,7 +453,7 @@ window.location.href = data.initPoint;
               <TrendingUp className="w-3.5 h-3.5" /> Campeões de Venda
             </h2>
             <div className="flex gap-3 overflow-x-auto pb-2 hide-scrollbar -mx-6 px-6">
-              {topProducts.map(({ product, quantity }, index) => {
+              {topProducts.map(({ product, quantity, revenue, profit }, index) => {
                 const badge = getSalesRankBadge(index);
                 return product ? (
                   <div 
@@ -482,8 +487,9 @@ window.location.href = data.initPoint;
                         </div>
                         <div className="flex justify-between items-center text-[9px]">
                           <span className="text-muted-foreground">Faturamento</span>
-                          <span className="font-bold text-green-600">R$ {(product.salePrice * quantity).toFixed(0)}</span>
+                          <span className="font-bold text-green-600">R$ {revenue.toFixed(2)}</span>
                         </div>
+                        <div className="flex justify-between items-center text-[9px]"><span className="text-muted-foreground">Lucro</span><span className="font-bold text-emerald-600">R$ {profit.toFixed(2)}</span></div>
                       </div>
                     </div>
                   </div>

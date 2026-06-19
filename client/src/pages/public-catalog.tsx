@@ -17,6 +17,7 @@ import {
   defaultSettings,
 } from "@/lib/mock-data";
 import { getApiUrl } from "@/lib/api-config";
+import { ProductImageCard } from "@/components/ProductImageCard";
 
 export default function PublicCatalog() {
   const { storeSlug } = useParams();
@@ -44,7 +45,7 @@ useEffect(() => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         if (cancelled) return;
-        setTargetUser({ uid: data.uid });
+        setTargetUser({ uid: data.uid || data.settings?.uid || "public" });
         setSettings({ ...defaultSettings, ...(data.settings || {}) });
         setProducts(Array.isArray(data.products) ? data.products : []);
         setLoading(false);
@@ -72,9 +73,8 @@ useEffect(() => {
     );
   }
   // Fail-soft checks
-  if (!targetUser || !settings?.enablePublicCatalog || settings?.disablePublicCatalog) {
-console.log("PRODUTOS:", products);
-console.log("GENDER ATUAL:", selectedGender);
+  const catalogEnabled = (settings as any)?.enablePublicCatalog ?? (settings as any)?.catalogEnabled ?? true;
+  if (!targetUser || catalogEnabled === false || settings?.disablePublicCatalog) {
     return (
       <div className="min-h-screen bg-background flex flex-col items-center justify-center p-6 text-center">
         <div className="w-20 h-20 bg-secondary rounded-full flex items-center justify-center mb-6">
@@ -98,82 +98,33 @@ const filteredProducts = (Array.isArray(products) ? products : []).filter(p => {
 
   return normalize(p.gender) === normalize(selectedGender);
 });
-console.log("FILTRADOS:", filteredProducts);
 
   return (
-    <div className="min-h-screen bg-background pb-24 max-w-md mx-auto relative shadow-2xl flex flex-col">
-      <header className="px-6 pt-12 pb-8 bg-white border-b border-border/50 sticky top-0 z-40">
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 bg-primary/10 rounded-2xl flex items-center justify-center text-primary font-black text-xl">
-            {storeDisplayName.charAt(0).toUpperCase()}
-          </div>
-          <div>
-            <h1 className="text-xl font-black tracking-tight">{storeDisplayName}</h1>
-            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Catálogo Digital</p>
-          </div>
+    <div className="min-h-screen bg-slate-50 text-slate-900">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 flex items-center gap-4">
+          <div className="w-12 h-12 rounded-2xl bg-primary text-white flex items-center justify-center font-black text-xl overflow-hidden">{settings?.storeLogo ? <img src={settings.storeLogo} alt={storeDisplayName} className="w-full h-full object-cover" /> : storeDisplayName.charAt(0).toUpperCase()}</div>
+          <div className="min-w-0"><h1 className="text-xl sm:text-2xl font-black truncate">{storeDisplayName}</h1><p className="text-xs text-muted-foreground">Catálogo digital · {filteredProducts.length} produtos</p></div>
         </div>
       </header>
-
-      <main className="flex-1 p-6 space-y-6">
-
-  {/* 🔥 FILTRO DE GÊNERO */}
-  <div className="flex gap-2 overflow-x-auto pb-2">
-    {["todos", "masculino", "feminino", "unisex"].map(g => (
-      <button
-        key={g}
-        onClick={() => setSelectedGender(g)}
-        className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap ${
-          selectedGender === g
-            ? "bg-primary text-white"
-            : "bg-white border"
-        }`}
-      >
-        {g}
-      </button>
-    ))}
-  </div>
-
-  <div className="grid grid-cols-1 gap-6">
-  {filteredProducts.length > 0 ? (
-  (Array.isArray(filteredProducts) ? filteredProducts : []).map((product) => {
-    if (!product) return null;
-
-    const image = product?.imageUrl || "/placeholder.png";
-    const name = product?.name || "Sem nome";
-    const price = Number(product?.salePrice || 0);
-
-    return (
-      <div key={product.id || Math.random()} className="bg-white rounded-2xl border p-4">
-        <img src={image} className="w-full h-40 object-cover rounded-xl mb-3" />
-
-        <div className="space-y-2">
-          <p className="text-xs text-muted-foreground">
-            {product.category || "Geral"}
-          </p>
-
-          <h3 className="font-bold">{name}</h3>
-
-          <p className="font-black">
-            R$ {price.toFixed(2)}
-          </p>
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+        <div className="flex gap-2 overflow-x-auto pb-4 hide-scrollbar">
+          {["todos","masculino","feminino","unisex"].map(g=><button key={g} onClick={()=>setSelectedGender(g)} className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap border ${selectedGender===g?"bg-primary text-white border-primary":"bg-white text-muted-foreground border-slate-200"}`}>{g==="todos"?"Todos":g.charAt(0).toUpperCase()+g.slice(1)}</button>)}
         </div>
-      </div>
-    );
-  })
-) : (
-  <div className="text-center py-20">
-    <Package className="w-12 h-12 text-muted-foreground/20 mx-auto mb-4" />
-    <p className="text-sm font-bold text-muted-foreground uppercase">
-      Nenhum produto disponível
-    </p>
-  </div>
-)}
-        </div>
+        {filteredProducts.length>0?<div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-5">
+          {filteredProducts.map(product=>{const price=Number(product.salePrice||0); return <article key={product.id} className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+            <div className="aspect-[4/5] bg-slate-50"><ProductImageCard product={product} size="full" objectFit="contain" className="!rounded-none !border-0" /></div>
+            <div className="p-3 sm:p-4 flex-1 flex flex-col">
+              <p className="text-[9px] sm:text-[10px] font-black text-primary uppercase tracking-wider truncate">{product.brand||"Sem marca"}</p>
+              <h2 className="text-xs sm:text-sm font-bold leading-tight line-clamp-2 min-h-[2rem] sm:min-h-[2.5rem] mt-1">{product.name||"Produto"}</h2>
+              <p className="text-[10px] text-muted-foreground truncate mt-1">{product.category||"Geral"}</p>
+              {settings.showStock!==false&&<p className={`text-[10px] font-bold mt-2 ${product.stock>0?"text-green-600":"text-red-500"}`}>{product.stock>0?`Disponível: ${product.stock} ${product.stock===1?"unidade":"unidades"}`:"Produto esgotado"}</p>}
+              {settings.showPrice!==false&&<p className="text-base sm:text-xl font-black text-primary mt-auto pt-3">R$ {price.toLocaleString("pt-BR",{minimumFractionDigits:2})}</p>}
+            </div>
+          </article>})}
+        </div>:<div className="bg-white rounded-3xl border border-dashed border-slate-300 py-20 text-center"><Package className="w-12 h-12 text-slate-300 mx-auto mb-3"/><p className="font-bold text-muted-foreground">Nenhum produto disponível</p></div>}
       </main>
-
-      <footer className="p-8 text-center bg-secondary/20">
-        <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.2em]">Criado com RevendaSmart</p>
-      </footer>
+      <footer className="py-8 text-center text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground">Criado com RevendaSmart</footer>
     </div>
   );
 }

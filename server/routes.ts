@@ -9,6 +9,15 @@ import { registerConnectionRoutes } from "./mercadopago-connections";
 import { registerSubscriptionRoutes } from "./subscriptions";
 import { getGlobalConfig, setGlobalConfig } from "./subscriptions";
  import crypto from "crypto";
+
+function normalizeCatalogSlug(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase().normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+function escapeHtml(value: unknown): string {
+  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
 // Helper: Structured error response with audit context
 function errorResponse(
   res: Response,
@@ -149,7 +158,7 @@ export async function registerRoutes(
     const ref = db.collection("user_settings");
     const candidates = Array.from(new Set([rawSlug, slug]));
     let settingsDoc: any = null;
-    for (const field of ["catalogSlug", "catalog_slug"]) {
+    for (const field of ["catalogSlug", "catalog_slug", "userSlug", "slug"]) {
       for (const candidate of candidates) {
         const snapshot = await ref.where(field, "==", candidate).limit(1).get();
         if (!snapshot.empty) { settingsDoc = snapshot.docs[0]; break; }
@@ -160,17 +169,18 @@ export async function registerRoutes(
       const snapshot = await ref.get();
       settingsDoc = snapshot.docs.find((doc: any) => {
         const data = doc.data();
-        return [data.catalogSlug, data.catalog_slug, data.storeName]
+        return [data.catalogSlug, data.catalog_slug, data.userSlug, data.slug, data.storeName]
           .some((value) => normalizeCatalogSlug(value) === slug);
       }) ?? null;
     }
     if (!settingsDoc) return null;
     const settings = settingsDoc.data() ?? {};
-    if (settings.enablePublicCatalog === false || settings.disablePublicCatalog === true) return null;
+    const catalogEnabled = settings.enablePublicCatalog ?? settings.catalogEnabled ?? settings.catalog_enabled ?? true;
+    if (catalogEnabled === false || settings.disablePublicCatalog === true) return null;
     const uid = settings.uid || settingsDoc.id;
     const productDocs = await db.collection("users").doc(uid).collection("products").get();
     const products = productDocs.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
-    return { uid, slug, settings: { ...settings, uid, catalogSlug: slug, catalog_slug: slug }, products };
+    return { uid, slug, settings: { ...settings, uid, catalogSlug: slug, catalog_slug: slug, userSlug: slug, enablePublicCatalog: catalogEnabled }, products };
   };
 
   app.get("/api/public/catalog/:storeSlug", async (req, res) => {

@@ -12,7 +12,7 @@ import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { 
   Store, Palette, CreditCard, MessageSquare, Package, BookOpen, 
-  Download, Save, ChevronRight, Bell, Upload, Trash2, ShieldAlert, RefreshCw, Activity, CheckCircle, XCircle, Users, Share2, ExternalLink, FileSpreadsheet, QrCode, Copy, Info, Mail, Globe, Check, Scale, HelpCircle, ChevronDown, User, KeyRound, LogOut, ArrowLeft
+  Download, Save, ChevronRight, Bell, Upload, Trash2, ShieldAlert, RefreshCw, Activity, CheckCircle, XCircle, Users, Share2, ExternalLink, FileSpreadsheet, QrCode, Copy, Info, Mail, Globe, Check, Scale, HelpCircle, ChevronDown, User, KeyRound, LogOut, ArrowLeft, Receipt
 } from "lucide-react";
 import { NICHO_IDS, getNichoConfig, toBusinessTypesArray } from "@/lib/nicho-config";
 
@@ -247,10 +247,12 @@ export default function Settings() {
   const displayName = formSettings?.sellerName || currentUserEmail?.split("@")[0] || "Usuário";
   const accountMenu = [
     { title: "Minha Conta", subtitle: "Perfil e dados pessoais", icon: User, color: "bg-primary/10 text-primary", path: "/settings?tab=account" },
-    { title: "Minha Assinatura", subtitle: "Plano e faturamento", icon: CreditCard, color: "bg-sky-100 text-sky-700", path: "/subscribe" },
     { title: "Minha Loja", subtitle: "Nome, logo e informações", icon: Store, color: "bg-violet-100 text-violet-700", path: "/settings?tab=store" },
     { title: "Chave Pix", subtitle: "Recebimento dos pedidos", icon: KeyRound, color: "bg-green-100 text-green-700", path: "/settings?tab=pix" },
     { title: "Compartilhar Catálogo", subtitle: "Link e QR Code do catálogo", icon: Share2, color: "bg-blue-100 text-blue-700", path: "/settings?tab=catalog" },
+    { title: "Clientes", subtitle: "Cadastro, busca e histórico de compras", icon: Users, color: "bg-cyan-100 text-cyan-700", path: "/clients" },
+    { title: "Cobranças", subtitle: "Pendentes, vencidas e recebidas", icon: Receipt, color: "bg-emerald-100 text-emerald-700", path: "/billings" },
+    { title: "Minha Assinatura", subtitle: "Plano e faturamento", icon: CreditCard, color: "bg-sky-100 text-sky-700", path: "/subscribe" },
     { title: "Preferências", subtitle: "Notificações e ajustes", icon: Bell, color: "bg-slate-100 text-slate-700", path: "/settings?tab=preferences" },
     { title: "Suporte", subtitle: "Ajuda, FAQ e contato", icon: HelpCircle, color: "bg-amber-100 text-amber-700", path: "/settings?tab=support" },
   ];
@@ -367,6 +369,7 @@ export default function Settings() {
                             <div className="bg-secondary/50 rounded-2xl p-4 text-xs font-mono break-all border border-primary/20">
                               {generatedUrl.split('://')[1] || generatedUrl}
                             </div>
+                            <div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => navigator.clipboard.writeText(generatedUrl)} className="py-3 rounded-xl bg-secondary text-xs font-bold flex items-center justify-center gap-2"><Copy className="w-4 h-4" /> Copiar</button><button type="button" onClick={() => window.open(generatedUrl, "_blank", "noopener,noreferrer")} className="py-3 rounded-xl bg-primary text-white text-xs font-bold flex items-center justify-center gap-2"><ExternalLink className="w-4 h-4" /> Abrir catálogo</button></div>
                           </div>
 
                           <div className="bg-white p-6 rounded-3xl border border-border/50 flex flex-col items-center gap-4">

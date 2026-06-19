@@ -1,6 +1,8 @@
 import { useState, useMemo } from "react";
 import { useParams, useLocation } from "wouter";
-import { getStored, STORAGE_KEYS, Client, Sale, Installment, initialClients, initialProducts, Product } from "@/lib/mock-data";
+import { Installment } from "@/lib/mock-data";
+import { useClientsData } from "@/hooks/useClientsData";
+import { useDashboardData } from "@/hooks/useDashboardData";
 import { Layout } from "@/components/layout";
 import { Phone, MessageSquare, ShoppingBag, Receipt, ChevronLeft, Calendar } from "lucide-react";
 import { format, parseISO } from "date-fns";
@@ -8,10 +10,9 @@ import { format, parseISO } from "date-fns";
 export default function ClientDetail() {
   const { id } = useParams();
   const [, setLocation] = useLocation();
-  const [clients] = useState<Client[]>(() => getStored(STORAGE_KEYS.CLIENTS, initialClients));
-  const [sales] = useState<Sale[]>(() => getStored(STORAGE_KEYS.SALES, []));
-  const [billings] = useState<Installment[]>(() => getStored(STORAGE_KEYS.INSTALLMENTS, []));
-  const [products] = useState<Product[]>(() => getStored(STORAGE_KEYS.PRODUCTS, initialProducts));
+  const { clients, loading: clientsLoading } = useClientsData();
+  const { sales, products, loading: dashboardLoading } = useDashboardData();
+  const [billings] = useState<Installment[]>([]);
 
   const client = clients.find(c => c.id === id);
   
@@ -19,7 +20,8 @@ export default function ClientDetail() {
   const clientBillings = useMemo(() => billings.filter(b => b.clientId === id), [billings, id]);
   const totalDebt = useMemo(() => clientBillings.filter(b => b.status !== 'paid').reduce((a, b) => a + (b.amount - b.paidAmount), 0), [clientBillings]);
 
-  if (!client) return <Layout>Cliente não encontrado</Layout>;
+  if (clientsLoading || dashboardLoading) return <Layout><div className="p-8 text-center">Carregando cliente...</div></Layout>;
+  if (!client) return <Layout><div className="p-8 text-center">Cliente não encontrado</div></Layout>;
 
   const sendWhatsApp = (msg: string) => {
     window.open(`https://wa.me/${client.phone}?text=${encodeURIComponent(msg)}`, '_blank');

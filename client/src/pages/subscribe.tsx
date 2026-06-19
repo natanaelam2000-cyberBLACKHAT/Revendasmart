@@ -417,6 +417,12 @@ export default function Subscribe() {
 
   </div>
 )}
+        <div className="bg-white border border-border/60 rounded-3xl p-5 mb-6 shadow-sm">
+          <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Plano atual</p>
+          <div className="flex items-center justify-between mt-2"><div><p className="text-lg font-black">{hasPremiumAccess ? "Premium" : "Grátis"}</p><p className={`text-xs font-bold ${hasPremiumAccess ? "text-green-600" : "text-muted-foreground"}`}>{hasPremiumAccess ? "Premium ativo" : "Plano gratuito"}</p></div><CreditCard className="w-6 h-6 text-primary" /></div>
+          {planError && <p className="text-xs text-amber-700 bg-amber-50 rounded-xl p-3 mt-3">Dados de cobrança temporariamente indisponíveis. Seu acesso continua funcionando.</p>}
+        </div>
+
         {/* Current Status Card (if has subscription) */}
         {planData?.subscriptionId && (
           <div className={`rounded-3xl p-4 mb-6 border ${

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getFirebaseAuth } from "@/lib/firebase";
-import { getFirestore, collection, onSnapshot, setDoc, doc } from "firebase/firestore";
+import { getFirestore, collection, onSnapshot, setDoc, doc, updateDoc, deleteDoc } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { Client } from "@/lib/mock-data";
 
@@ -9,6 +9,8 @@ interface ClientsData {
   loading: boolean;
   error?: string;
   addClient: (client: Omit<Client, 'id'>) => Promise<string | null>;
+  updateClient: (id: string, client: Partial<Omit<Client, 'id'>>) => Promise<boolean>;
+  deleteClient: (id: string) => Promise<boolean>;
 }
 
 /**
@@ -20,7 +22,9 @@ export function useClientsData(): ClientsData {
   const [data, setData] = useState<ClientsData>({
     clients: [],
     loading: true,
-    addClient: async () => null
+    addClient: async () => null,
+    updateClient: async () => false,
+    deleteClient: async () => false
   });
 
   useEffect(() => {
@@ -92,7 +96,16 @@ export function useClientsData(): ClientsData {
         }
       };
 
-      setData(prev => ({ ...prev, addClient }));
+      const updateClient = async (id: string, clientData: Partial<Omit<Client, 'id'>>) => {
+        try { await updateDoc(doc(firestore, "users", uid, "clients", id), clientData); return true; }
+        catch (err) { console.error("[useClientsData] Error updating client:", err); return false; }
+      };
+      const deleteClient = async (id: string) => {
+        try { await deleteDoc(doc(firestore, "users", uid, "clients", id)); return true; }
+        catch (err) { console.error("[useClientsData] Error deleting client:", err); return false; }
+      };
+
+      setData(prev => ({ ...prev, addClient, updateClient, deleteClient }));
 
       return () => {
         unsubscribeClients();
