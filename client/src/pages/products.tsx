@@ -7,10 +7,8 @@ import {
   Search,
   Share2,
   AlertTriangle,
-  Minus,
   Eye,
-  EyeOff,
-  TrendingUp
+  EyeOff
 } from "lucide-react";
 import { Link } from "wouter";
 import { Product, deleteImage } from "@/lib/mock-data";
@@ -19,7 +17,7 @@ import { FilterChips } from "@/components/FilterChips";
 import { EmptyState } from "@/components/EmptyState";
 import { getFirebaseAuth, logTelemetryEvent } from "@/lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
-import { getFirestore, collection, onSnapshot, doc, updateDoc, deleteDoc } from "firebase/firestore";
+import { getFirestore, collection, onSnapshot, doc, deleteDoc } from "firebase/firestore";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { Layout } from "@/components/layout";
 
@@ -118,21 +116,6 @@ export default function Products() {
     });
   }, [products, selectedCategory, search, showOutOfStock, showLowStock]);
 
-  const handleUpdateStock = async (id: string, newStock: number) => {
-    if (newStock < 0) return;
-    const auth = getFirebaseAuth();
-    if (!auth?.currentUser) return;
-    
-    try {
-      const firestore = getFirestore();
-      await updateDoc(doc(firestore, "users", auth.currentUser.uid, "products", id), {
-        stock: newStock
-      });
-    } catch (err) {
-      console.error("Erro ao atualizar estoque:", err);
-    }
-  };
-
   const handleQuickShare = (product: Product) => {
     const catalogSlug = settings?.catalogSlug || settings?.catalog_slug || "seu-catalogo";
     const catalogUrl = `https://revendasmart.vercel.app/u/${catalogSlug}`;
@@ -144,6 +127,7 @@ export default function Products() {
   };
 
   const [deleteConfirm, setDeleteConfirm] = useState<{ show: boolean; productId?: string }>({ show: false });
+  const productToDelete = useMemo(() => products.find(product => product.id === deleteConfirm.productId), [products, deleteConfirm.productId]);
 
   const handleDelete = (id: string) => {
     setDeleteConfirm({ show: true, productId: id });
@@ -230,12 +214,14 @@ export default function Products() {
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end justify-center z-50 p-4">
           <div className="w-full max-w-md bg-white rounded-t-[2rem] sm:rounded-[3rem] px-6 pt-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] space-y-6 animate-in slide-in-from-bottom-full max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain">
             <div className="text-center">
-              <div className="w-16 h-16 bg-red-50 rounded-3xl flex items-center justify-center mx-auto mb-4">
-                <Trash2 className="w-8 h-8 text-red-500" />
-              </div>
-              <h2 className="text-xl font-black text-foreground">Excluir Produto?</h2>
-              <p className="text-sm text-muted-foreground mt-2">Esta ação é permanente e não pode ser desfeita.</p>
+              <h2 className="text-xl font-black text-foreground">Excluir produto?</h2>
+              <p className="text-sm text-muted-foreground mt-1">Confira os dados antes de confirmar.</p>
             </div>
+            {productToDelete && <div className="flex gap-4 rounded-2xl border border-border/50 bg-slate-50 p-4">
+              <div className="h-24 w-24 shrink-0 overflow-hidden rounded-2xl bg-white"><ProductImageCard product={productToDelete} size="full" objectFit="contain" /></div>
+              <div className="min-w-0 flex-1"><p className="line-clamp-2 text-sm font-black">{productToDelete.name}</p><dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-[10px]"><div><dt className="text-muted-foreground">Marca</dt><dd className="truncate font-bold">{productToDelete.brand || "Sem marca"}</dd></div><div><dt className="text-muted-foreground">Preço</dt><dd className="font-bold text-primary">R$ {Number(productToDelete.salePrice).toFixed(2)}</dd></div><div className="col-span-2"><dt className="text-muted-foreground">Categoria</dt><dd className="font-bold">{productToDelete.category || "Sem categoria"}</dd></div></dl></div>
+            </div>}
+            <p className="rounded-xl bg-red-50 p-3 text-center text-xs font-bold text-red-700">Ação irreversível.</p>
             <div className="flex gap-3">
               <button
                 onClick={() => setDeleteConfirm({ show: false })}

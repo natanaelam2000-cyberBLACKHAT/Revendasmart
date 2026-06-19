@@ -1,15 +1,16 @@
-import { useState, useMemo, useRef } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { Layout } from "@/components/layout";
-import { Product, AppSettings, defaultSettings, getProductImage } from "@/lib/mock-data";
+import { defaultSettings, getProductImage } from "@/lib/mock-data";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, logError } from "@/lib/firebase";
 import { useFeatureEnabled } from "@/lib/remote-config-context";
-import { 
-  Megaphone, Share2, MessageSquare, Plus, Tag,
-  Gift, Sparkles, Heart, Copy, ChevronRight, AlertCircle, ShoppingBag, 
-  Smartphone, Wallet, Info, Image as ImageIcon, Download
-} from "lucide-react";
+import { MessageSquare, Sparkles, Copy, Smartphone, Wallet, Info, Image as ImageIcon, History, WandSparkles } from "lucide-react";
+import { useMarketingHistory, type MarketingHistoryEntry, type MarketingAction } from "@/hooks/useMarketingHistory";
+import { MarketingHistoryPanel } from "@/components/MarketingHistoryPanel";
+import { MarketingStats } from "@/components/MarketingStats";
+import { PageSkeleton } from "@/components/PageSkeleton";
+import { createMarketingCard, downloadMarketingCard } from "@/lib/marketing-card";
 
 export default function Marketing() {
   const { products, loading, error } = useDashboardData();
@@ -27,6 +28,10 @@ export default function Marketing() {
   const [note, setNote] = useState('');
   const [ctaText, setCtaText] = useState('Me chama no WhatsApp!');
   const [includePayment, setIncludePayment] = useState(false);
+  const [activeTab, setActiveTab] = useState<"generator" | "history">("generator");
+  const [feedback, setFeedback] = useState("");
+  const generatedKeys = useRef(new Set<string>());
+  const { entries: historyEntries, loading: historyLoading, recordAction } = useMarketingHistory();
 
   // Get products and filter Kit products from Firestore (unified source)
   const kitProducts = useMemo(() => 
@@ -94,172 +99,124 @@ export default function Marketing() {
   }, [selectedProduct, selectedKit, template, priceOverride, note, ctaText, includePayment, settings]);
 
   const [copied, setCopied] = useState(false);
+  const selectedItem = selectedProduct || selectedKit;
+  const currentPrice = priceOverride || selectedItem?.salePrice?.toFixed(2) || "0,00";
+  const currentTemplate = templates[template as keyof typeof templates];
+  const currentImageUrl = selectedItem ? getProductImage(selectedItem) || undefined : undefined;
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(generatedText);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-    
+  const entryPayload = (action: MarketingAction) => selectedItem ? {
+    action, productId: selectedItem.id, productName: selectedItem.name,
+    productBrand: selectedItem.brand || "", imageUrl: currentImageUrl,
+    generatedText, template, price: currentPrice, headline: currentTemplate.headline,
+    storeName: settings.storeName || "RevendaSmart", primaryColor: settings.primaryColor || "#ec4899",
+  } : null;
+
+  const registerAction = async (action: MarketingAction) => {
+    const payload = entryPayload(action);
+    if (payload) await recordAction(payload).catch(error => console.error("[marketing] action not recorded", error));
+  };
+
+  useEffect(() => {
+    if (!selectedItem || !generatedText) return;
+    const key = `${selectedItem.id}:${template}`;
+    if (generatedKeys.current.has(key)) return;
+    generatedKeys.current.add(key);
+    void registerAction("generated");
+  }, [selectedItem?.id, template]);
+
+  const showFeedback = (message: string) => {
+    setFeedback(message);
+    window.setTimeout(() => setFeedback(""), 2500);
+  };
+
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(generatedText);
+    setCopied(true); window.setTimeout(() => setCopied(false), 2000);
+    await registerAction("copied");
+    showFeedback("Anúncio copiado");
+    const productId = selectedProductId || selectedKitId;
     const user = getFirebaseAuth()?.currentUser;
-    logTelemetryEvent("ad_text_copied", {
-      template,
-      hasProduct: !!selectedProductId,
-      hasKit: !!selectedKitId,
-    }, user?.uid);
-    
-    // Track ad text copied event (both telemetry and analytics)
+    logTelemetryEvent("ad_text_copied", { productId, template }, user?.uid);
+    trackAnalyticsEvent("ad_text_copied", { item_id: productId });
+  };
+
+  const handleShare = async () => {
+    await registerAction("shared");
+    showFeedback("Compartilhamento aberto no WhatsApp");
+    window.open(`https://wa.me/?text=${encodeURIComponent(generatedText)}`, "_blank");
     const productId = selectedProductId || selectedKitId;
-    if (productId) {
-      const user = getFirebaseAuth()?.currentUser;
-      logTelemetryEvent("ad_text_copied", { productId, template }, user?.uid);
-      trackAnalyticsEvent("ad_text_copied", { item_id: productId });
+    const user = getFirebaseAuth()?.currentUser;
+    logTelemetryEvent("ad_shared", { productId, channel: "whatsapp" }, user?.uid);
+    trackAnalyticsEvent("share", { method: "whatsapp", content_type: "product", item_id: productId });
+  };
+
+  const downloadEntryCard = async (entry: MarketingHistoryEntry) => {
+    const blob = await createMarketingCard(entry);
+    downloadMarketingCard(blob, entry.productName);
+  };
+
+  const handleDownloadImage = async () => {
+    const payload = entryPayload("downloaded");
+    if (!payload) return;
+    try {
+      const blob = await createMarketingCard(payload);
+      downloadMarketingCard(blob, payload.productName);
+      await recordAction(payload);
+      showFeedback("Download concluído");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Não foi possível baixar o card";
+      setImageError(message);
+      logError("ad_image_generation_failed", message, { template, hasProduct: !!selectedProductId, hasKit: !!selectedKitId });
     }
   };
 
-  const handleShare = () => {
-    window.open(`https://wa.me/?text=${encodeURIComponent(generatedText)}`, '_blank');
-    
-    // Track ad shared event (both telemetry and analytics)
-    const productId = selectedProductId || selectedKitId;
-    if (productId) {
-      const user = getFirebaseAuth()?.currentUser;
-      logTelemetryEvent("ad_shared", { productId, channel: "whatsapp" }, user?.uid);
-      trackAnalyticsEvent("share", { method: "whatsapp", content_type: "product", item_id: productId });
-    }
+  const repeatPayload = (entry: MarketingHistoryEntry, action: MarketingAction) => ({
+    action, productId: entry.productId, productName: entry.productName, productBrand: entry.productBrand || "",
+    imageUrl: entry.imageUrl, generatedText: entry.generatedText, template: entry.template, price: entry.price,
+    headline: entry.headline, storeName: entry.storeName, primaryColor: entry.primaryColor,
+  });
+  const repeatCopy = async (entry: MarketingHistoryEntry) => {
+    await navigator.clipboard.writeText(entry.generatedText);
+    await recordAction(repeatPayload(entry, "copied"));
+    showFeedback("Anúncio copiado");
+  };
+  const repeatShare = async (entry: MarketingHistoryEntry) => {
+    await recordAction(repeatPayload(entry, "shared"));
+    window.open(`https://wa.me/?text=${encodeURIComponent(entry.generatedText)}`, "_blank");
+  };
+  const repeatDownload = async (entry: MarketingHistoryEntry) => {
+    await downloadEntryCard(entry);
+    await recordAction(repeatPayload(entry, "downloaded"));
+    showFeedback("Download concluído");
   };
 
-  const adRef = useRef<HTMLDivElement>(null);
-
-  if (loading) {
-    return (
-      <Layout title="Anúncios">
-        <div className="flex flex-col items-center justify-center py-12">
-          <div className="w-12 h-12 rounded-full border-4 border-primary/20 border-t-primary animate-spin"></div>
-          <p className="text-muted-foreground mt-4">Carregando produtos...</p>
-        </div>
-      </Layout>
-    );
-  }
+  if (loading) return <Layout title="Anúncios"><PageSkeleton variant="dashboard" /></Layout>;
 
   if (error) {
     return (
       <Layout title="Anúncios">
         <div className="p-6 text-center">
-          <p className="text-destructive font-bold mb-2">Erro ao carregar produtos</p>
-          <p className="text-muted-foreground text-sm">{error}</p>
+          <p className="text-destructive font-bold mb-2">Ocorreu um erro temporário.</p>
+          <p className="text-muted-foreground text-sm mb-4">Não foi possível carregar os produtos para o Marketing.</p>
+          <button onClick={() => window.location.reload()} className="rounded-xl bg-primary px-5 py-3 text-xs font-black text-white">Tentar novamente</button>
         </div>
       </Layout>
     );
   }
 
-  const renderProductImage = (ctx: CanvasRenderingContext2D, url: string, callback: () => void) => {
-    if (!url) {
-      callback();
-      return;
-    }
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.src = url;
-    img.onload = () => {
-      // Calculate aspect ratio to fit in 500x500
-      const ratio = Math.min(500 / img.width, 500 / img.height);
-      const w = img.width * ratio;
-      const h = img.height * ratio;
-      const x = 540 - w / 2;
-      const y = 500 - h / 2;
-      ctx.drawImage(img, x, y, w, h);
-      callback();
-    };
-    img.onerror = () => callback();
-  };
-
-  const handleDownloadImage = () => {
-    if (!adRef.current) return;
-    
-    try {
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      canvas.width = 1080;
-      canvas.height = 1080;
-
-      // Background
-      const gradient = ctx.createLinearGradient(0, 0, 1080, 1080);
-      gradient.addColorStop(0, settings.primaryColor || '#ec4899');
-      gradient.addColorStop(1, '#ffffff');
-      ctx.fillStyle = gradient;
-      ctx.fillRect(0, 0, 1080, 1080);
-
-      // White Card
-      ctx.fillStyle = '#ffffff';
-      ctx.shadowColor = 'rgba(0,0,0,0.1)';
-      ctx.shadowBlur = 50;
-      ctx.beginPath();
-      ctx.roundRect(100, 100, 880, 880, 80);
-      ctx.fill();
-
-      // Store Name
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = settings.primaryColor || '#ec4899';
-      ctx.font = '900 40px Outfit, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(settings.storeName.toUpperCase(), 540, 200);
-
-      // Product Image (if available)
-      const itemToRender = selectedProduct || selectedKit;
-      const imgUrl = itemToRender ? getProductImage(itemToRender) : null;
-      if (imgUrl) {
-        renderProductImage(ctx, imgUrl, renderText);
-      } else {
-        renderText();
-      }
-
-      function renderText() {
-        const t = templates[template as keyof typeof templates];
-        const price = priceOverride || selectedProduct?.salePrice.toFixed(2);
-
-        // Badge
-        ctx.fillStyle = settings.primaryColor || '#ec4899';
-        ctx.beginPath();
-        ctx.roundRect(340, 780, 400, 80, 40);
-        ctx.fill();
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '900 32px Outfit, sans-serif';
-        ctx.fillText(t.headline, 540, 832);
-
-        // Product/Kit Name
-        ctx.fillStyle = '#1f2937';
-        ctx.font = '900 60px Outfit, sans-serif';
-        ctx.fillText(selectedProduct?.name || selectedKit?.name || "", 540, 920);
-
-        // Price
-        ctx.fillStyle = settings.primaryColor || '#ec4899';
-        ctx.font = '900 80px Outfit, sans-serif';
-        ctx.fillText(`R$ ${price}`, 540, 1010);
-
-        const link = document.createElement('a');
-        link.download = `anuncio-${selectedProduct?.name || selectedKit?.name}.png`;
-        link.href = canvas.toDataURL('image/png');
-        link.click();
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Erro desconhecido ao gerar imagem";
-      setImageError(`Erro: ${msg}`);
-      logError("ad_image_generation_failed", msg, {
-        template,
-        hasProduct: !!selectedProductId,
-        hasKit: !!selectedKitId,
-      });
-    }
-  };
 
 
   return (
     <Layout title="Marketing">
       <div className="flex flex-col h-full bg-background">
-        <div className="flex-1 overflow-y-auto p-6 pb-32">
-          {(
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 pb-32 space-y-5">
+          <MarketingStats entries={historyEntries} />
+          <div className="grid grid-cols-2 gap-2 rounded-2xl bg-secondary/50 p-1.5">
+            <button onClick={() => setActiveTab("generator")} className={`flex items-center justify-center gap-2 rounded-xl py-3 text-xs font-black transition-all ${activeTab === "generator" ? "bg-white text-primary shadow-sm" : "text-muted-foreground"}`}><WandSparkles className="h-4 w-4"/>Gerador</button>
+            <button onClick={() => setActiveTab("history")} className={`flex items-center justify-center gap-2 rounded-xl py-3 text-xs font-black transition-all ${activeTab === "history" ? "bg-white text-primary shadow-sm" : "text-muted-foreground"}`}><History className="h-4 w-4"/>Histórico</button>
+          </div>
+          {feedback && <div className="fixed left-1/2 top-20 z-[80] -translate-x-1/2 rounded-full bg-foreground px-4 py-2 text-xs font-bold text-background shadow-xl animate-in fade-in">{feedback}</div>}
+          {activeTab === "generator" ? (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
               {/* New Templates Notice - Controlled by marketing_templates_v2_enabled flag */}
               {v2TemplatesEnabled && (
@@ -395,7 +352,7 @@ export default function Marketing() {
                           const itemToUse = selectedProduct || (selectedKit && products.find(p => p.id === selectedKit.id));
                           const imgSrc = itemToUse ? getProductImage(itemToUse) : null;
                           return imgSrc ? (
-                            <img src={imgSrc} className="w-full h-full object-contain" alt="preview" />
+                            <img src={imgSrc} className="w-full h-full object-contain" alt={itemToUse?.name || "Produto"} loading="lazy" decoding="async" />
                           ) : (
                             <div className="text-[8px] text-muted-foreground text-center">Sem imagem</div>
                           );
@@ -432,6 +389,7 @@ export default function Marketing() {
                       <MessageSquare className="w-4 h-4" /> Compartilhar no WhatsApp
                     </button>
 
+                    {imageError && <p className="mb-3 rounded-xl bg-red-50 p-3 text-center text-[10px] font-bold text-red-700">{imageError}</p>}
                     <button 
                       onClick={handleDownloadImage}
                       className="w-full bg-white text-primary font-black py-3 rounded-2xl text-[10px] uppercase tracking-wider flex items-center justify-center gap-2 shadow-sm hover:bg-primary/5 active:scale-95 transition-all border border-primary/20"
@@ -453,6 +411,8 @@ export default function Marketing() {
                 </div>
               )}
             </div>
+          ) : (
+            <MarketingHistoryPanel entries={historyEntries} loading={historyLoading} onCopy={repeatCopy} onShare={repeatShare} onDownload={repeatDownload} />
           )}
         </div>
       </div>

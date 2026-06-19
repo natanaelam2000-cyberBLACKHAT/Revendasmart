@@ -5,7 +5,6 @@ import { Share2, Search, X, Copy, Check, ShoppingCart, Plus, Minus, Trash2, Send
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import type { Product } from "@/lib/mock-data";
-import { getProductImage } from "@/lib/mock-data";
 import { ProductImageCard } from "@/components/ProductImageCard";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";
 import { getApiUrl } from "@/lib/api-config";
@@ -20,7 +19,7 @@ export default function Catalog() {
   const { settings } = useUserSettings();
 
   const [search, setSearch] = useState("");
-  const [genderFilter, setGenderFilter] = useState("todos");
+  const [genderFilter] = useState("todos");
   const [categoryFilter, setCategoryFilter] = useState("todos");
   const [showShareModal, setShowShareModal] = useState(false);
   const [showCart, setShowCart] = useState(false);
@@ -315,8 +314,8 @@ export default function Catalog() {
 
       {/* Cart Modal */}
       {showCart && (
-        <div className="fixed inset-0 bg-white z-50 flex flex-col animate-in slide-in-from-bottom-full duration-300">
-          <div className="p-6 flex items-center justify-between border-b border-border/40">
+        <div className="fixed inset-0 bg-white z-[70] flex flex-col animate-in slide-in-from-bottom-full duration-300">
+          <div className="px-5 pt-[max(1.25rem,env(safe-area-inset-top))] pb-4 flex items-center justify-between border-b border-border/40">
             <button onClick={() => setShowCart(false)} className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center"><X className="w-5 h-5" /></button>
             <h3 className="font-black text-lg">Meu Pedido</h3>
             <div className="w-10" />
@@ -326,7 +325,8 @@ export default function Catalog() {
             {cart.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center">
                 <ShoppingCart className="w-12 h-12 text-muted-foreground/20 mb-3" />
-                <p className="font-bold text-muted-foreground">Carrinho Vazio</p>
+                <p className="font-bold text-muted-foreground">Carrinho vazio</p>
+                <button onClick={() => setShowCart(false)} className="mt-5 rounded-xl bg-primary px-5 py-3 text-xs font-black text-white">Continuar comprando</button>
               </div>
             ) : (
               cart.map(item => (
@@ -336,12 +336,14 @@ export default function Catalog() {
                   </div>
                   <div className="flex-1">
                     <h4 className="text-xs font-bold leading-tight mb-1 line-clamp-2">{item.product.name}</h4>
-                    <p className="text-[10px] text-muted-foreground">Preço unitário: R$ {item.product.salePrice.toFixed(2)}</p>
+                    <p className="text-[9px] font-black uppercase tracking-wider text-primary">{item.product.brand || "Sem marca"}</p>
+                    <p className="text-[10px] text-muted-foreground mt-1">Preço unitário: R$ {item.product.salePrice.toFixed(2)}</p>
                     <p className="text-xs font-black text-primary mt-1">Subtotal: R$ {(item.product.salePrice * item.quantity).toFixed(2)}</p>
-                    <div className="flex items-center gap-2 mt-2"><span className="text-[9px] font-bold text-muted-foreground mr-1">Quantidade:</span>
-                      <button onClick={() => updateQuantity(item.product.id, item.quantity - 1)} className="w-6 h-6 rounded-full bg-white shadow-sm flex items-center justify-center"><Minus className="w-3 h-3"/></button>
+                    <div className="flex items-center justify-between gap-2 mt-3"><div className="flex items-center gap-2"><span className="text-[9px] font-bold text-muted-foreground mr-1">Quantidade:</span>
+                      <button onClick={() => updateQuantity(item.product.id, item.quantity - 1)} className="w-7 h-7 rounded-full bg-white shadow-sm flex items-center justify-center"><Minus className="w-3 h-3"/></button>
                       <span className="text-xs font-black">{item.quantity}</span>
-                      <button onClick={() => updateQuantity(item.product.id, item.quantity + 1)} disabled={item.quantity >= item.product.stock} className="w-6 h-6 rounded-full bg-white shadow-sm flex items-center justify-center"><Plus className="w-3 h-3"/></button>
+                      <button onClick={() => updateQuantity(item.product.id, item.quantity + 1)} disabled={item.quantity >= item.product.stock} className="w-7 h-7 rounded-full bg-white shadow-sm flex items-center justify-center"><Plus className="w-3 h-3"/></button></div>
+                      <button onClick={() => removeFromCart(item.product.id)} className="flex items-center gap-1 text-[9px] font-bold text-red-600"><Trash2 className="w-3.5 h-3.5"/>Remover</button>
                     </div>
                   </div>
                 </div>
@@ -350,11 +352,12 @@ export default function Catalog() {
           </div>
 
           {cart.length > 0 && (
-            <div className="p-8 border-t border-border/40 space-y-4">
+            <div className="px-5 pt-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] border-t border-border/40 space-y-3 bg-white">
               <div className="bg-secondary/20 rounded-2xl p-4 space-y-2">
                 <div className="flex items-center justify-between"><span className="text-[10px] font-bold text-muted-foreground">Itens</span><span className="text-sm font-black">{cartCount}</span></div>
                 <div className="flex items-center justify-between border-t border-border/30 pt-2"><span className="text-[10px] font-black uppercase tracking-widest">Total</span><span className="text-2xl font-black text-foreground">R$ {cartTotal.toFixed(2)}</span></div>
               </div>
+              <button onClick={() => setShowCart(false)} className="w-full py-3 text-xs font-black text-primary">Continuar comprando</button>
               <button 
                 onClick={handleSendOrderWhatsApp} 
                 className="w-full bg-[#25D366] text-white font-black py-5 rounded-[2rem] flex items-center justify-center gap-3 shadow-xl shadow-green-200"
