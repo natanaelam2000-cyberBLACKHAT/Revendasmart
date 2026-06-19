@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { PageSkeleton } from "@/components/PageSkeleton";
 import { Layout } from "@/components/layout";
 import { Share2, Search, X, Copy, Check, ShoppingCart, Plus, Minus, Trash2, Send, Loader2 } from "lucide-react";
 import { useDashboardData } from "@/hooks/useDashboardData";
@@ -196,13 +197,7 @@ export default function Catalog() {
   };
 
   if (loading) {
-    return (
-      <Layout title="Catálogo">
-        <div className="flex items-center justify-center py-12">
-          <div className="w-12 h-12 rounded-full border-4 border-primary/20 border-t-primary animate-spin" />
-        </div>
-      </Layout>
-    );
+    return <Layout title="Catálogo"><PageSkeleton variant="cards" /></Layout>;
   }
 
   return (

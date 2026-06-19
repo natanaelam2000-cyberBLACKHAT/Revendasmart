@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { PageSkeleton } from "@/components/PageSkeleton";
 import { Product, Installment, getProductImage } from "@/lib/mock-data";
 import { Layout } from "@/components/layout";
 import { Search, ShoppingBag, Plus, Minus, CheckCircle2, AlertCircle } from "lucide-react";
@@ -242,16 +243,7 @@ export default function Sell() {
   };
 
   if (productsLoading || clientsLoading) {
-    return (
-      <Layout title="Registrar Venda">
-        <div className="flex items-center justify-center h-full">
-          <div className="text-center space-y-4">
-            <div className="w-12 h-12 rounded-full border-4 border-primary/20 border-t-primary animate-spin mx-auto"></div>
-            <p className="text-muted-foreground">Carregando...</p>
-          </div>
-        </div>
-      </Layout>
-    );
+    return <Layout title="Registrar Venda"><PageSkeleton variant="cards" count={4} /></Layout>;
   }
 
   if (success) {

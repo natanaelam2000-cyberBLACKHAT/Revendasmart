@@ -1,4 +1,3 @@
-import { RemoteConfigProvider } from "@/components/RemoteConfigProvider";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -33,6 +32,7 @@ import Login from "@/pages/login";
 import Signup from "@/pages/signup";
 import NotFound from "@/pages/not-found";
 import { MaintenanceBanner } from "@/components/MaintenanceBanner";
+import { PageSkeleton } from "@/components/PageSkeleton";
 
 
 function Router() {
@@ -165,7 +165,7 @@ function Router() {
     <>
         <TooltipProvider>
           {/* <Toaster /> -- Disabled: causes insertBefore DOM error on initial render */}
-         <Suspense fallback={<div>Carregando...</div>}>
+         <Suspense fallback={<PageSkeleton variant="dashboard" />}>
   <Router />
 </Suspense>
         </TooltipProvider>

@@ -130,8 +130,8 @@ export function PaymentLinkModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-end max-w-md mx-auto">
-      <div className="bg-white w-full rounded-t-3xl max-h-[90vh] overflow-y-auto flex flex-col animate-in slide-in-from-bottom-4">
+    <div className="fixed inset-0 bg-black/50 z-[70] flex items-end justify-center">
+      <div className="bg-white w-full max-w-md rounded-t-3xl max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain flex flex-col animate-in slide-in-from-bottom-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
         {/* Header - Sticky */}
         <div className="sticky top-0 bg-white border-b border-border/30 p-6 flex items-center justify-between flex-shrink-0">
           <div>

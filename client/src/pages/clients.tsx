@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { PageSkeleton } from "@/components/PageSkeleton";
 import { Layout } from "@/components/layout";
 import { Installment, defaultSettings } from "@/lib/mock-data";
 import { Search, UserPlus, Phone, ChevronRight, MessageSquare, ShoppingBag, Receipt, Download, CheckSquare, Square, Send, AlertCircle, Pencil, Trash2 } from "lucide-react";
@@ -126,22 +127,16 @@ export default function Clients() {
   };
 
   if (loading) {
-    return (
-      <Layout title="Clientes">
-        <div className="p-6 text-center">
-          <div className="w-12 h-12 rounded-full border-4 border-primary/20 border-t-primary animate-spin mx-auto mb-4"></div>
-          <p className="text-muted-foreground">Carregando clientes...</p>
-        </div>
-      </Layout>
-    );
+    return <Layout title="Clientes"><PageSkeleton variant="list" /></Layout>;
   }
 
   if (error) {
     return (
       <Layout title="Clientes">
         <div className="p-6 text-center">
-          <p className="text-destructive font-bold mb-2">Erro ao carregar</p>
-          <p className="text-muted-foreground text-sm">{error}</p>
+          <p className="text-destructive font-bold mb-2">Ocorreu um erro temporário.</p>
+          <p className="text-muted-foreground text-sm mb-4">Não foi possível carregar seus clientes.</p>
+          <button onClick={() => window.location.reload()} className="bg-primary text-white px-5 py-3 rounded-xl text-sm font-bold">Tentar novamente</button>
         </div>
       </Layout>
     );
@@ -293,7 +288,7 @@ export default function Clients() {
 
       {showAdd && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-end animate-in fade-in duration-300">
-          <div className="bg-white w-full max-w-md mx-auto rounded-t-[2.5rem] p-8 animate-in slide-in-from-bottom-10 duration-300">
+          <div className="bg-white w-full max-w-md mx-auto rounded-t-[2.5rem] px-6 pt-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] animate-in slide-in-from-bottom-10 duration-300 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-bold">{editingId ? "Editar Cliente" : "Novo Cliente"}</h2>
               <button onClick={() => setShowAdd(false)} className="text-sm font-medium text-muted-foreground">Fechar</button>

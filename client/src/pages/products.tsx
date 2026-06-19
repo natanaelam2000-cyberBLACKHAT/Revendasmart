@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
+import { PageSkeleton } from "@/components/PageSkeleton";
 import {
   Plus,
   Edit2,
@@ -188,16 +189,12 @@ export default function Products() {
       {/* Conteúdo Principal */}
       <div className="max-w-6xl mx-auto p-4 sm:p-6 lg:px-8">
         {loading ? (
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
-            {[1, 2, 3, 4, 5, 6].map(i => (
-              <div key={i} className="h-48 bg-white rounded-[1.5rem] animate-pulse border border-border/20" />
-            ))}
-          </div>
+          <PageSkeleton variant="cards" />
         ) : error ? (
           <EmptyState
             icon={<AlertTriangle className="w-12 h-12 text-red-400" />}
-            title="Erro ao carregar"
-            description={error}
+            title="Ocorreu um erro temporário."
+            description="Não foi possível carregar seus produtos. Tente novamente."
           />
         ) : filteredProducts.length === 0 ? (
           <EmptyState
@@ -231,7 +228,7 @@ export default function Products() {
       {/* Delete Confirmation Modal */}
       {deleteConfirm.show && deleteConfirm.productId && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end justify-center z-50 p-4">
-          <div className="w-full max-w-md bg-white rounded-[3rem] p-8 space-y-6 animate-in slide-in-from-bottom-full">
+          <div className="w-full max-w-md bg-white rounded-t-[2rem] sm:rounded-[3rem] px-6 pt-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] space-y-6 animate-in slide-in-from-bottom-full max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain">
             <div className="text-center">
               <div className="w-16 h-16 bg-red-50 rounded-3xl flex items-center justify-center mx-auto mb-4">
                 <Trash2 className="w-8 h-8 text-red-500" />

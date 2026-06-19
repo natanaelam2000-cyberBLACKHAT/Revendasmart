@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
+import { PageSkeleton } from "@/components/PageSkeleton";
 import { Layout } from "@/components/layout";
 import {
   Receipt, Calendar, CheckCircle, Clock, AlertCircle, MessageSquare,
@@ -295,14 +296,7 @@ if (type === "reminder") {
   const isLoading = loading || chargesLoading;
 
   if (isLoading) {
-    return (
-      <Layout title="Cobranças">
-        <div className="flex flex-col items-center justify-center py-12">
-          <div className="w-12 h-12 rounded-full border-4 border-primary/20 border-t-primary animate-spin" />
-          <p className="text-muted-foreground mt-4">Carregando cobranças...</p>
-        </div>
-      </Layout>
-    );
+    return <Layout title="Cobranças"><PageSkeleton variant="list" /></Layout>;
   }
 
   return (

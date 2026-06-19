@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
+import { PageSkeleton } from "@/components/PageSkeleton";
 import { useLocation } from "wouter";
 import { 
-  Product, APP_VERSION
+  Product
 } from "@/lib/mock-data";
 import { Layout } from "@/components/layout";
 import { ProductImageCard } from "@/components/ProductImageCard";
@@ -296,14 +297,7 @@ window.location.href = data.initPoint;
 
   // Show loading while checking onboarding status
   if (settingsLoading || dataLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-center space-y-4">
-          <div className="w-12 h-12 rounded-full border-4 border-primary/20 border-t-primary animate-spin mx-auto"></div>
-          <p className="text-muted-foreground">Carregando...</p>
-        </div>
-      </div>
-    );
+    return <Layout><PageSkeleton variant="dashboard" /></Layout>;
   }
 
   // If not completed onboarding, don't render anything (will redirect above)
@@ -316,8 +310,9 @@ window.location.href = data.initPoint;
     return (
       <Layout>
         <div className="p-6 text-center">
-          <p className="text-destructive font-bold mb-2">Erro ao carregar dados</p>
-          <p className="text-muted-foreground text-sm">{dataError}</p>
+          <p className="text-destructive font-bold mb-2">Ocorreu um erro temporário.</p>
+          <p className="text-muted-foreground text-sm mb-4">Não foi possível carregar seu resumo.</p>
+          <button onClick={() => window.location.reload()} className="bg-primary text-white px-5 py-3 rounded-xl text-sm font-bold">Tentar novamente</button>
         </div>
       </Layout>
     );
@@ -326,10 +321,6 @@ window.location.href = data.initPoint;
   return (
     <Layout>
       <div className="px-6 pt-12 pb-6 bg-primary/5 rounded-b-[2.5rem] relative">
-        <div className="absolute top-4 right-6">
-          <span className="text-[8px] font-black text-primary/40 uppercase tracking-widest">{APP_VERSION}</span>
-        </div>
-        
         <div className="flex items-start justify-between mb-4">
           <div>
             <h1 className="text-xl font-black text-foreground">{settings.storeName}</h1>

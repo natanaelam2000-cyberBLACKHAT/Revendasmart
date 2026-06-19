@@ -8,34 +8,10 @@ import App from "./App";
 // Sentry temporariamente desativado para diagnóstico
 
 
-class ErrorBoundary extends React.Component<any, any> {
-  constructor(props: any) {
-    super(props);
-    this.state = { hasError: false };
-  }
-
-  static getDerivedStateFromError() {
-    return { hasError: true };
-  }
-
-  componentDidCatch(error: any, info: any) {
-    console.error("Erro capturado:", error, info);
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return <div style={{ padding: 20 }}>Erro no app ⚠️</div>;
-    }
-
-    return this.props.children;
-  }
-}
 import "./index.css";
 import { APP_VERSION } from "./lib/mock-data";
 
 
-// Announce patch version at startup
-console.log(`[SETTINGS PATCH ACTIVE ${APP_VERSION}] useUserSettings.ts with onAuthStateChanged and direct user.getIdToken()`);
 
 // Service Worker disabled temporarily in production
 // TODO: Re-enable after fixing cache assets and ensuring offline support stability
@@ -55,18 +31,7 @@ class GlobalErrorBoundary extends React.Component<{children: React.ReactNode}, {
   static getDerivedStateFromError() { return { hasError: true }; }
   componentDidCatch(error: any, errorInfo: any) { console.error("Global Error:", error, errorInfo); }
   
-  handleReset = () => {
-    // Reset without browser confirm() for better mobile/PWA experience
-    const confirmed = window.confirm === undefined ? true : window.confirm('Deseja limpar seus dados para tentar corrigir o erro?');
-    if (confirmed !== false) {
-      try {
-        localStorage.clear();
-      } catch (e) {
-        console.warn("Failed to clear localStorage:", e);
-      }
-      window.location.href = window.location.origin;
-    }
-  };
+  handleRetry = () => window.location.reload();
 
   render() {
     if (this.state.hasError) {
@@ -75,21 +40,11 @@ class GlobalErrorBoundary extends React.Component<{children: React.ReactNode}, {
           <div className="w-20 h-20 bg-destructive/10 rounded-full flex items-center justify-center mb-6">
             <span className="text-4xl">⚠️</span>
           </div>
-          <h1 className="text-xl font-bold mb-2">Ops! Algo deu errado.</h1>
-          <p className="text-sm mb-8 text-muted-foreground">O aplicativo encontrou um erro e não pôde continuar.</p>
+          <h1 className="text-xl font-bold mb-2">Ocorreu um erro temporário.</h1>
+          <p className="text-sm mb-8 text-muted-foreground">Não foi possível concluir esta ação. Tente novamente em instantes.</p>
           <div className="flex flex-col gap-3 w-full max-w-xs">
-            <button 
-              onClick={() => window.location.search = '?safe=1'} 
-              className="w-full bg-primary text-white px-6 py-4 rounded-2xl font-bold shadow-lg active:scale-95 transition-all"
-            >
-              Abrir Modo de Segurança
-            </button>
-            <button 
-              onClick={this.handleReset} 
-              className="w-full bg-destructive/10 text-destructive px-6 py-4 rounded-2xl font-bold border border-destructive/20 active:scale-95 transition-all"
-            >
-              Resetar Meus Dados
-            </button>
+            <button onClick={this.handleRetry} className="w-full bg-primary text-white px-6 py-4 rounded-2xl font-bold shadow-lg active:scale-95 transition-all">Tentar novamente</button>
+            <button onClick={() => window.location.href = '/'} className="w-full bg-secondary text-foreground px-6 py-4 rounded-2xl font-bold active:scale-95 transition-all">Voltar ao início</button>
           </div>
         </div>
       );
@@ -159,9 +114,9 @@ if (isSafeMode) {
     console.error("Critical error on boot", e);
     createRoot(document.getElementById("root")!).render(
       <div className="min-h-screen bg-background flex flex-col items-center justify-center p-6 text-center font-sans">
-        <h1 className="text-xl font-bold mb-4">Erro Crítico</h1>
+        <h1 className="text-xl font-bold mb-4">Ocorreu um erro temporário.</h1>
         <p className="text-sm mb-8 text-muted-foreground">Não foi possível carregar o RevendaSmart.</p>
-        <button onClick={() => window.location.search = '?safe=1'} className="bg-primary text-white px-6 py-3 rounded-full font-bold">Abrir Modo de Segurança</button>
+        <div className="flex flex-col gap-3 w-full max-w-xs"><button onClick={() => window.location.reload()} className="bg-primary text-white px-6 py-3 rounded-2xl font-bold">Tentar novamente</button><button onClick={() => window.location.href = '/'} className="bg-secondary px-6 py-3 rounded-2xl font-bold">Voltar ao início</button></div>
       </div>
     );
   }
