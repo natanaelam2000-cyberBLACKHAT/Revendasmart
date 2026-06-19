@@ -219,9 +219,9 @@ export default function Products() {
               <article key={product.id} className="min-w-0">
                 <ProductCard product={product} lowStockThreshold={settings?.lowStockThreshold} />
                 <div className="grid grid-cols-3 gap-1.5 mt-2">
-                  <button onClick={() => handleQuickShare(product)} className="min-w-0 py-2 px-1 bg-green-50 text-green-700 rounded-xl flex items-center justify-center gap-1 text-[9px] sm:text-[10px] font-bold" title="Compartilhar WhatsApp"><Share2 className="w-3.5 h-3.5 flex-shrink-0" /><span className="hidden sm:inline truncate">WhatsApp</span></button>
-                  <Link href={`/edit-product/${product.id}`}><a className="min-w-0 py-2 px-1 bg-primary/10 text-primary rounded-xl flex items-center justify-center gap-1 text-[9px] sm:text-[10px] font-bold"><Edit2 className="w-3.5 h-3.5 flex-shrink-0" /><span className="hidden sm:inline">Editar</span></a></Link>
-                  <button onClick={() => handleDelete(product.id)} className="min-w-0 py-2 px-1 bg-red-50 text-red-600 rounded-xl flex items-center justify-center gap-1 text-[9px] sm:text-[10px] font-bold" title="Excluir"><Trash2 className="w-3.5 h-3.5 flex-shrink-0" /><span className="hidden sm:inline">Excluir</span></button>
+                  <button onClick={() => handleQuickShare(product)} className="min-w-0 py-2 px-1 bg-green-50 text-green-700 rounded-xl flex items-center justify-center gap-1 text-[8px] sm:text-[10px] font-bold" title="Compartilhar WhatsApp"><Share2 className="w-3.5 h-3.5 flex-shrink-0" /><span className="truncate">Compartilhar</span></button>
+                  <Link href={`/edit-product/${product.id}`}><a className="min-w-0 py-2 px-1 bg-primary/10 text-primary rounded-xl flex items-center justify-center gap-1 text-[8px] sm:text-[10px] font-bold"><Edit2 className="w-3.5 h-3.5 flex-shrink-0" /><span>Editar</span></a></Link>
+                  <button onClick={() => handleDelete(product.id)} className="min-w-0 py-2 px-1 bg-red-50 text-red-600 rounded-xl flex items-center justify-center gap-1 text-[8px] sm:text-[10px] font-bold" title="Excluir"><Trash2 className="w-3.5 h-3.5 flex-shrink-0" /><span>Excluir</span></button>
                 </div>
               </article>
             ))}

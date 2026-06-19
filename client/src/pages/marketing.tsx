@@ -22,7 +22,6 @@ export default function Marketing() {
   const settings = firestoreSettings || defaultSettings;
   const v2TemplatesEnabled = useFeatureEnabled("marketing_templates_v2_enabled");
   
-  const [activeTab, setActiveTab] = useState<'generator' | 'scheduled'>('generator');
   const [imageError, setImageError] = useState("");
   
   // Ad Generator State
@@ -269,24 +268,8 @@ export default function Marketing() {
   return (
     <Layout title="Marketing">
       <div className="flex flex-col h-full bg-background">
-        {/* Tab Switcher */}
-        <div className="flex p-4 gap-2 bg-white border-b border-border/50">
-          <button 
-            onClick={() => setActiveTab('generator')}
-            className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl text-[10px] font-black uppercase transition-all ${activeTab === 'generator' ? 'bg-primary text-white shadow-md' : 'bg-secondary text-muted-foreground'}`}
-          >
-            <Megaphone className="w-4 h-4" /> Gerador
-          </button>
-          <button 
-            onClick={() => setActiveTab('scheduled')}
-            className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl text-[10px] font-black uppercase transition-all ${activeTab === 'scheduled' ? 'bg-primary text-white shadow-md' : 'bg-secondary text-muted-foreground'}`}
-          >
-            <Calendar className="w-4 h-4" /> Agendados
-          </button>
-        </div>
-
         <div className="flex-1 overflow-y-auto p-6 pb-32">
-          {activeTab === 'generator' ? (
+          {(
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
               {/* New Templates Notice - Controlled by marketing_templates_v2_enabled flag */}
               {v2TemplatesEnabled && (
@@ -477,49 +460,6 @@ export default function Marketing() {
                     <p className="text-xs font-bold text-muted-foreground uppercase">Nenhum produto selecionado</p>
                     <p className="text-[10px] text-muted-foreground/60 px-4">Escolha um produto acima para gerar seu anúncio automático!</p>
                   </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="space-y-4 animate-in fade-in slide-in-from-right-4">
-              {posts.length > 0 ? (
-                posts.filter(p => p.status === 'pending').map(post => {
-                  const product = products.find(p => p.id === post.productId);
-                  return (
-                    <div key={post.id} className="bg-white p-4 rounded-3xl border border-border/50 shadow-sm group">
-                      <div className="flex gap-4 mb-4">
-                        <div className="w-16 h-16 bg-secondary rounded-2xl overflow-hidden flex-shrink-0 flex items-center justify-center">
-                          {product && getProductImage(product) ? (
-                            <img src={getProductImage(product)!} className="w-full h-full object-cover mix-blend-multiply" />
-                          ) : (
-                            <div className="text-[8px] text-muted-foreground/40">-</div>
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex justify-between items-start mb-1">
-                            <p className="text-[9px] font-black text-primary uppercase">{format(parseISO(post.scheduledDate), 'dd/MM HH:mm')}</p>
-                            <button onClick={() => handleRemovePost(post.id)} className="text-muted-foreground/40 hover:text-destructive transition-colors">
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                          <p className="text-xs font-medium line-clamp-2 leading-relaxed">{post.content}</p>
-                        </div>
-                      </div>
-                      <button 
-                        onClick={() => window.open(`https://wa.me/?text=${encodeURIComponent(post.content)}`, '_blank')}
-                        className="w-full bg-secondary text-primary font-black py-3 rounded-2xl text-[10px] uppercase tracking-wider flex items-center justify-center gap-2 active:scale-95 transition-all"
-                      >
-                         <Share2 className="w-4 h-4" /> Postar Agora
-                      </button>
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="bg-white p-12 rounded-[3rem] border border-border/50 flex flex-col items-center justify-center text-center gap-4">
-                  <div className="w-16 h-16 bg-primary/5 rounded-full flex items-center justify-center">
-                    <Calendar className="w-8 h-8 text-primary/30" />
-                  </div>
-                  <p className="text-[10px] font-black text-muted-foreground uppercase tracking-widest">Nenhum post agendado</p>
                 </div>
               )}
             </div>

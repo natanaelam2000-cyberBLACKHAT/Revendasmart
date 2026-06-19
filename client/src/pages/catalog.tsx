@@ -381,8 +381,8 @@ export default function Catalog() {
 
       {/* Share Modal */}
       {showShareModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end">
-          <div className="bg-white w-full rounded-t-[3rem] p-8 space-y-6 animate-in slide-in-from-bottom-full">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-end justify-center p-0 sm:p-4">
+          <div className="bg-white w-full max-w-md rounded-t-[2rem] sm:rounded-[2rem] px-5 pt-5 pb-[calc(7rem+env(safe-area-inset-bottom))] sm:p-7 space-y-5 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain animate-in slide-in-from-bottom-full">
             <div className="flex items-center justify-between">
               <h3 className="font-black text-2xl">Compartilhar Catálogo</h3>
               <button onClick={() => setShowShareModal(false)} className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center"><X className="w-5 h-5" /></button>
@@ -390,14 +390,14 @@ export default function Catalog() {
             <div className="grid grid-cols-2 gap-4">
               <button 
                 onClick={handleShareWhatsApp} 
-                className="flex flex-col items-center gap-3 p-6 bg-green-50 rounded-[2rem] border border-green-100"
+                className="flex flex-col items-center gap-3 p-5 bg-green-50 rounded-[2rem] border border-green-100"
               >
                 <div className="w-12 h-12 bg-green-500 rounded-2xl flex items-center justify-center shadow-lg shadow-green-200"><Share2 className="w-6 h-6 text-white" /></div>
                 <span className="text-[10px] font-black uppercase tracking-widest text-green-700">WhatsApp</span>
               </button>
               <button 
                 onClick={handleCopyLink} 
-                className="flex flex-col items-center gap-3 p-6 bg-primary/5 rounded-[2rem] border border-primary/10"
+                className="flex flex-col items-center gap-3 p-5 bg-primary/5 rounded-[2rem] border border-primary/10"
               >
                 <div className="w-12 h-12 bg-primary rounded-2xl flex items-center justify-center shadow-lg shadow-primary/20">
                   {copied ? <Check className="w-6 h-6 text-white" /> : <Copy className="w-6 h-6 text-white" />}
