@@ -38,7 +38,9 @@ export function useClientsData(): ClientsData {
       return;
     }
 
+    let unsubscribeClients: (() => void) | undefined;
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      unsubscribeClients?.();
       if (!user) {
         setData(prev => ({
           ...prev,
@@ -53,7 +55,7 @@ export function useClientsData(): ClientsData {
       const uid = user.uid;
 
       // Subscribe to clients collection
-      const unsubscribeClients = onSnapshot(
+      unsubscribeClients = onSnapshot(
         collection(firestore, "users", uid, "clients"),
         (snapshot) => {
           const clientsData = snapshot.docs.map(d => ({
@@ -107,12 +109,9 @@ export function useClientsData(): ClientsData {
 
       setData(prev => ({ ...prev, addClient, updateClient, deleteClient }));
 
-      return () => {
-        unsubscribeClients();
-      };
     });
 
-    return () => unsubscribeAuth();
+    return () => { unsubscribeClients?.(); unsubscribeAuth(); };
   }, []);
 
   return data;

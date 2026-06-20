@@ -178,7 +178,13 @@ export default function Catalog() {
       const data = await resp.json();
 
       if (!resp.ok) {
-        throw new Error(data?.message || data?.error || `Erro ${resp.status}`);
+        const technicalMessage = String(data?.message || data?.error || "");
+        const friendlyMessage = data?.userMessage || data?.details ||
+          (/Unsupported state|unable to authenticate|decrypt/i.test(technicalMessage)
+            ? "A conexão com o Mercado Pago precisa ser renovada em Ajustes."
+            : "Não foi possível iniciar o pagamento agora. Tente novamente.");
+        console.error("[catalog/checkout] Preference creation failed", { status: resp.status, stage: data?.stage || "unknown", error: technicalMessage });
+        throw new Error(friendlyMessage);
       }
 
       if (!data.paymentUrl) {
@@ -188,7 +194,7 @@ export default function Catalog() {
       window.location.href = data.paymentUrl;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Erro ao processar pagamento";
-      setCheckoutError(`❌ ${msg}`);
+      setCheckoutError(msg);
       console.error("[catalog] Checkout error:", err);
     } finally {
       setCheckoutLoading(false);

@@ -27,7 +27,9 @@ export function useCharges(): UseChargesResult {
       return;
     }
 
+    let unsubscribeSnapshot: (() => void) | undefined;
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      unsubscribeSnapshot?.();
       if (!user) {
         setLoading(false);
         setCharges([]);
@@ -38,7 +40,7 @@ export function useCharges(): UseChargesResult {
       const chargesRef = collection(db, "users", user.uid, "charges");
       const q = query(chargesRef, orderBy("createdAt", "desc"));
 
-      const unsubscribeSnapshot = onSnapshot(
+      unsubscribeSnapshot = onSnapshot(
         q,
         (snapshot) => {
           const data = snapshot.docs.map((doc) => ({
@@ -56,10 +58,9 @@ export function useCharges(): UseChargesResult {
         }
       );
 
-      return () => unsubscribeSnapshot();
     });
 
-    return () => unsubscribeAuth();
+    return () => { unsubscribeSnapshot?.(); unsubscribeAuth(); };
   }, []);
 
   return { charges, loading, error };

@@ -294,7 +294,7 @@ export default function Subscribe() {
             ))}
           </div>
           <button
-            onClick={() => setLocation("/dashboard")}
+            onClick={() => setLocation("/")}
             className="w-full bg-primary text-white font-bold py-4 rounded-2xl text-base active:scale-95 transition-all shadow-md"
             data-testid="button-go-dashboard"
           >
@@ -320,7 +320,7 @@ export default function Subscribe() {
             </p>
           </div>
           <button
-            onClick={() => setLocation("/dashboard")}
+            onClick={() => setLocation("/")}
             className="w-full bg-secondary text-foreground font-bold py-4 rounded-2xl text-base"
             data-testid="button-back-dashboard-cancelled"
           >
@@ -362,7 +362,7 @@ export default function Subscribe() {
 
         {/* Back */}
         <button
-          onClick={() => setLocation("/dashboard")}
+          onClick={() => setLocation("/")}
           className="flex items-center gap-2 text-muted-foreground mb-6 font-medium"
           data-testid="button-back-subscribe"
         >

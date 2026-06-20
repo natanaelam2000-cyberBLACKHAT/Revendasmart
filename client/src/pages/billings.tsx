@@ -43,14 +43,18 @@ export default function Billings() {
     const auth = getFirebaseAuth();
     if (!auth) { setLoading(false); return; }
 
+    let unsubInstallments: (() => void) | undefined;
+    let unsubClients: (() => void) | undefined;
     const unsubAuth = onAuthStateChanged(auth, (user) => {
+      unsubInstallments?.();
+      unsubClients?.();
       if (!user) { setLoading(false); return; }
 
       const db = getFirestore();
       const uid = user.uid;
 
       // Subscribe to installments
-      const unsubInstallments = onSnapshot(
+      unsubInstallments = onSnapshot(
         query(collection(db, "users", uid, "installments")),
         (snap) => {
           const data = snap.docs.map((d) => ({ ...d.data(), id: d.id })) as Installment[];
@@ -64,7 +68,7 @@ export default function Billings() {
       );
 
       // Subscribe to clients
-      const unsubClients = onSnapshot(
+      unsubClients = onSnapshot(
         query(collection(db, "users", uid, "clients")),
         (snap) => {
           setClients(snap.docs.map((d) => ({ ...d.data(), id: d.id })));
@@ -74,14 +78,13 @@ export default function Billings() {
         }
       );
 
-      // Return cleanup function
-      return () => {
-        unsubInstallments();
-        unsubClients();
-      };
     });
 
-    return () => unsubAuth();
+    return () => {
+      unsubInstallments?.();
+      unsubClients?.();
+      unsubAuth();
+    };
   }, []);
 
   const getClient = (id: string) => clients.find((c) => c.id === id);

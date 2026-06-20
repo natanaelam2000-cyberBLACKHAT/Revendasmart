@@ -264,7 +264,7 @@ export default function Settings() {
           <section className="bg-gradient-to-br from-primary to-primary/80 text-white rounded-[2rem] p-6 lg:p-8 shadow-xl shadow-primary/15 mb-6">
             <div className="flex items-center gap-4">
               <button type="button" onClick={() => logoInputRef.current?.click()} disabled={isUploadingLogo} className="relative w-14 h-14 rounded-2xl bg-white/15 border border-white/20 flex items-center justify-center font-black text-2xl overflow-hidden disabled:opacity-60" aria-label="Alterar logo da loja">
-                {formSettings?.storeLogo ? <img src={formSettings.storeLogo} alt="Logo da loja" className="w-full h-full object-cover" /> : "R"}
+                {formSettings?.storeLogo ? <img src={formSettings.storeLogo} alt="Logo da loja" className="w-full h-full object-cover" loading="lazy" decoding="async" /> : "R"}
                 <span className="absolute inset-x-0 bottom-0 bg-black/45 text-[8px] font-bold py-0.5">{isUploadingLogo ? "Enviando" : "Alterar"}</span>
               </button>
               <input ref={logoInputRef} type="file" accept="image/*" className="hidden" onChange={handleLogoChange} />

@@ -28,7 +28,9 @@ export function useMPConnections(): UseMPConnectionsResult {
     const auth = getFirebaseAuth();
     if (!auth) { setLoading(false); return; }
 
+    let unsubSnap: (() => void) | undefined;
     const unsubAuth = onAuthStateChanged(auth, (user) => {
+      unsubSnap?.();
       if (!user) { setLoading(false); setConnections([]); return; }
 
       const db = getFirestore();
@@ -37,7 +39,7 @@ export function useMPConnections(): UseMPConnectionsResult {
         orderBy("connectedAt", "desc")
       );
 
-      const unsubSnap = onSnapshot(
+      unsubSnap = onSnapshot(
         q,
         (snap) => {
           const data = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as MPConnectionSafeView[];
@@ -52,10 +54,9 @@ export function useMPConnections(): UseMPConnectionsResult {
         }
       );
 
-      return () => unsubSnap();
     });
 
-    return () => unsubAuth();
+    return () => { unsubSnap?.(); unsubAuth(); };
   }, []);
 
   const activeConnections = connections.filter((c) => c.status === "active");

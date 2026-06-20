@@ -1,15 +1,7 @@
-import React, {
-  useState,
-  useEffect,
-  useRef,
-  lazy,
-  Suspense
-} from "react";
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, lazy, Suspense } from "react";
 import { Layout } from "@/components/layout";
 import { Camera, CheckCircle2, ChevronDown, ScanLine, Wand2, Sparkles, ChevronLeft, ImagePlus, AlertCircle } from "lucide-react";
 import { useLocation, useParams } from "wouter";
-import { lazy } from "react";
 
 const BarcodeScanner = lazy(
   () => import("@/components/barcode-scanner")
@@ -353,11 +345,11 @@ const productId = id || productRef.id;
         setFormError("Nome do produto é obrigatório.");
         return;
       }
-     if (productData.costPrice < 0) {
+     if (!Number.isFinite(productData.costPrice) || productData.costPrice < 0) {
   setFormError("Preço de custo inválido.");
   return;
 }
- if (productData.salePrice <= 0) {
+ if (!Number.isFinite(productData.salePrice) || productData.salePrice <= 0) {
   setFormError("Preço de venda deve ser maior que 0.");
   return;
 }
@@ -640,7 +632,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
             <div className="relative group cursor-pointer">
               <div className="w-40 h-40 bg-secondary rounded-[2.5rem] border-2 border-dashed border-border/60 flex flex-col items-center justify-center text-muted-foreground transition-all overflow-hidden relative">
                 {formData.imageUrl && !isEnhancing && !isCompressingImage ? (
-                   <img src={formData.imageUrl} className="w-full h-full object-cover" />
+                   <img src={formData.imageUrl} alt="Prévia do produto" className="w-full h-full object-cover" loading="lazy" decoding="async" />
                 ) : isCompressingImage ? (
                   <div className="absolute inset-0 bg-primary/20 flex flex-col items-center justify-center text-primary">
                     <Sparkles className="w-8 h-8 animate-spin" />
@@ -913,7 +905,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
    <Suspense fallback={<div>Carregando scanner...</div>}>
   {scanning && (
     <BarcodeScanner
-      onScan={handleScan}
+      onScan={handleBarcodeScan}
       onClose={() => setScanning(false)}
     />
   )}

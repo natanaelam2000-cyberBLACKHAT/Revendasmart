@@ -11,6 +11,7 @@ import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, measureOperati
 export default function Clients() {
   const { clients, loading, error, addClient, updateClient, deleteClient } = useClientsData();
   const { activePlan } = usePlanData();
+  const [, setLocation] = useLocation();
   const [billings] = useState<Installment[]>([]);
   const [settings] = useState(() => defaultSettings);
   const [search, setSearch] = useState("");
@@ -90,7 +91,7 @@ export default function Clients() {
 
     const clientId = editingId
       ? (await updateClient(editingId, newClient) ? editingId : null)
-      : await measureOperation("client_creation", async () => addClient({ ...newClient, id: "" }));
+      : await measureOperation("client_creation", async () => addClient(newClient));
 
     if (clientId) {
       // Track client created event (both telemetry and analytics)

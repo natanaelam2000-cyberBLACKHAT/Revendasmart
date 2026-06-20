@@ -87,7 +87,7 @@ export const deleteImage = async (id: string): Promise<void> => {
 // Helper para normalizar imagem do produto
 export const getProductImage = (product: Product | any): string | null => {
   if (!product) return null;
-  const img = product.imageUrl || product.image || product.photo || '';
+  const img = product.imageUrl || product.photoUrl || product.image || product.photo || '';
   return img && typeof img === 'string' && img.trim() !== '' ? img : null;
 };
 

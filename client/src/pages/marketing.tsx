@@ -31,7 +31,7 @@ export default function Marketing() {
   const [activeTab, setActiveTab] = useState<"generator" | "history">("generator");
   const [feedback, setFeedback] = useState("");
   const generatedKeys = useRef(new Set<string>());
-  const { entries: historyEntries, loading: historyLoading, recordAction } = useMarketingHistory();
+  const { entries: historyEntries, loading: historyLoading, recordAction, removeEntry, clearHistory } = useMarketingHistory();
 
   // Get products and filter Kit products from Firestore (unified source)
   const kitProducts = useMemo(() => 
@@ -106,7 +106,8 @@ export default function Marketing() {
 
   const entryPayload = (action: MarketingAction) => selectedItem ? {
     action, productId: selectedItem.id, productName: selectedItem.name,
-    productBrand: selectedItem.brand || "", imageUrl: currentImageUrl,
+    productBrand: String(selectedItem.brand || ""), imageUrl: selectedItem.imageUrl || currentImageUrl,
+    photoUrl: (selectedItem as any).photoUrl, image: (selectedItem as any).image, imageId: selectedItem.imageId,
     generatedText, template, price: currentPrice, headline: currentTemplate.headline,
     storeName: settings.storeName || "RevendaSmart", primaryColor: settings.primaryColor || "#ec4899",
   } : null;
@@ -172,7 +173,7 @@ export default function Marketing() {
 
   const repeatPayload = (entry: MarketingHistoryEntry, action: MarketingAction) => ({
     action, productId: entry.productId, productName: entry.productName, productBrand: entry.productBrand || "",
-    imageUrl: entry.imageUrl, generatedText: entry.generatedText, template: entry.template, price: entry.price,
+    imageUrl: entry.imageUrl, photoUrl: entry.photoUrl, image: entry.image, imageId: entry.imageId, generatedText: entry.generatedText, template: entry.template, price: entry.price,
     headline: entry.headline, storeName: entry.storeName, primaryColor: entry.primaryColor,
   });
   const repeatCopy = async (entry: MarketingHistoryEntry) => {
@@ -412,7 +413,7 @@ export default function Marketing() {
               )}
             </div>
           ) : (
-            <MarketingHistoryPanel entries={historyEntries} loading={historyLoading} onCopy={repeatCopy} onShare={repeatShare} onDownload={repeatDownload} />
+            <MarketingHistoryPanel entries={historyEntries} loading={historyLoading} onCopy={repeatCopy} onShare={repeatShare} onDownload={repeatDownload} onRemove={removeEntry} onClear={clearHistory} />
           )}
         </div>
       </div>

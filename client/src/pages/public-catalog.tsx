@@ -103,7 +103,7 @@ const filteredProducts = (Array.isArray(products) ? products : []).filter(p => {
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl bg-primary text-white flex items-center justify-center font-black text-xl overflow-hidden">{settings?.storeLogo ? <img src={settings.storeLogo} alt={storeDisplayName} className="w-full h-full object-cover" /> : storeDisplayName.charAt(0).toUpperCase()}</div>
+          <div className="w-12 h-12 rounded-2xl bg-primary text-white flex items-center justify-center font-black text-xl overflow-hidden">{settings?.storeLogo ? <img src={settings.storeLogo} alt={storeDisplayName} className="w-full h-full object-cover" loading="lazy" decoding="async" /> : storeDisplayName.charAt(0).toUpperCase()}</div>
           <div className="min-w-0"><h1 className="text-xl sm:text-2xl font-black truncate">{storeDisplayName}</h1><p className="text-xs text-muted-foreground">Catálogo digital · {filteredProducts.length} produtos</p></div>
         </div>
       </header>

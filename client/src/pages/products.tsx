@@ -13,11 +13,12 @@ import {
 import { Link } from "wouter";
 import { Product, deleteImage } from "@/lib/mock-data";
 import { ProductCard } from "@/components/ProductCard";
+import { ProductImageCard } from "@/components/ProductImageCard";
 import { FilterChips } from "@/components/FilterChips";
 import { EmptyState } from "@/components/EmptyState";
 import { getFirebaseAuth, logTelemetryEvent } from "@/lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
-import { getFirestore, collection, onSnapshot, doc, deleteDoc } from "firebase/firestore";
+import { getFirestore, collection, onSnapshot, doc, deleteDoc, getDoc } from "firebase/firestore";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { Layout } from "@/components/layout";
 
@@ -29,6 +30,9 @@ export default function Products() {
   const [selectedCategory, setSelectedCategory] = useState("Todas");
   const [showOutOfStock, setShowOutOfStock] = useState(true);
   const [showLowStock, setShowLowStock] = useState(true);
+  const [deleteError, setDeleteError] = useState("");
+  const [deletingProductId, setDeletingProductId] = useState<string | null>(null);
+  const [deleteSuccess, setDeleteSuccess] = useState("");
   const { settings } = useUserSettings();
 
   useEffect(() => {
@@ -130,30 +134,52 @@ export default function Products() {
   const productToDelete = useMemo(() => products.find(product => product.id === deleteConfirm.productId), [products, deleteConfirm.productId]);
 
   const handleDelete = (id: string) => {
+    if (!id || !products.some(product => product.id === id)) {
+      console.error("[products/delete] Invalid product id", { hasId: Boolean(id) });
+      setDeleteError("Não foi possível identificar este produto.");
+      return;
+    }
+    setDeleteError("");
     setDeleteConfirm({ show: true, productId: id });
   };
 
   const handleDeleteConfirm = async (id: string) => {
-    if (!id) return;
-    setDeleteConfirm({ show: false });
-    
-    const product = products.find(p => p.id === id);
-    const firestore = getFirestore();
     const auth = getFirebaseAuth();
-    
-    if (!auth?.currentUser) return;
-
+    const uid = auth?.currentUser?.uid;
+    const product = products.find(item => item.id === id);
+    if (!id || !uid || !product) {
+      console.error("[products/delete] Missing deletion context", { hasProductId: Boolean(id), hasUid: Boolean(uid), productFound: Boolean(product) });
+      setDeleteError("Não foi possível excluir este produto agora.");
+      return;
+    }
+    setDeletingProductId(id);
+    setDeleteError("");
     try {
-      if (product?.imageId) deleteImage(product.imageId);
-      await deleteDoc(doc(firestore, "users", auth.currentUser.uid, "products", id));
-    } catch (err) {
-      console.error("Erro ao deletar:", err);
+      const productRef = doc(getFirestore(), "users", uid, "products", id);
+      await deleteDoc(productRef);
+      const deletedSnapshot = await getDoc(productRef);
+      if (deletedSnapshot.exists()) throw new Error("Produto ainda existe após deleteDoc");
+      if (product.imageId) await deleteImage(product.imageId);
+      setDeleteConfirm({ show: false });
+      setDeleteSuccess(`${String(product.name || "Produto")} foi excluído.`);
+      window.setTimeout(() => setDeleteSuccess(""), 3000);
+    } catch (error: any) {
+      console.error("[products/delete] Firestore deletion failed", {
+        productId: id,
+        path: `users/${uid}/products/${id}`,
+        code: error?.code || "unknown",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      setDeleteError("Não foi possível excluir o produto. Verifique sua conexão e tente novamente.");
+    } finally {
+      setDeletingProductId(null);
     }
   };
 
   return (
     <Layout>
       <div className="min-h-full bg-slate-50 pb-28 lg:pb-8">
+      {deleteSuccess && <div className="fixed left-1/2 top-20 z-[80] -translate-x-1/2 rounded-full bg-green-600 px-4 py-2 text-xs font-bold text-white shadow-xl">{deleteSuccess}</div>}
       <div className="bg-white border-b border-border/50">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-5 lg:py-7 space-y-4">
           <div className="flex items-center justify-between gap-4">
@@ -219,9 +245,10 @@ export default function Products() {
             </div>
             {productToDelete && <div className="flex gap-4 rounded-2xl border border-border/50 bg-slate-50 p-4">
               <div className="h-24 w-24 shrink-0 overflow-hidden rounded-2xl bg-white"><ProductImageCard product={productToDelete} size="full" objectFit="contain" /></div>
-              <div className="min-w-0 flex-1"><p className="line-clamp-2 text-sm font-black">{productToDelete.name}</p><dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-[10px]"><div><dt className="text-muted-foreground">Marca</dt><dd className="truncate font-bold">{productToDelete.brand || "Sem marca"}</dd></div><div><dt className="text-muted-foreground">Preço</dt><dd className="font-bold text-primary">R$ {Number(productToDelete.salePrice).toFixed(2)}</dd></div><div className="col-span-2"><dt className="text-muted-foreground">Categoria</dt><dd className="font-bold">{productToDelete.category || "Sem categoria"}</dd></div></dl></div>
+              <div className="min-w-0 flex-1"><p className="line-clamp-2 text-sm font-black">{productToDelete.name}</p><dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-[10px]"><div><dt className="text-muted-foreground">Marca</dt><dd className="truncate font-bold">{typeof productToDelete.brand === "string" && productToDelete.brand ? productToDelete.brand : "Sem marca"}</dd></div><div><dt className="text-muted-foreground">Preço</dt><dd className="font-bold text-primary">R$ {Number(productToDelete.salePrice).toFixed(2)}</dd></div><div className="col-span-2"><dt className="text-muted-foreground">Categoria</dt><dd className="font-bold">{typeof productToDelete.category === "string" && productToDelete.category ? productToDelete.category : "Sem categoria"}</dd></div></dl></div>
             </div>}
             <p className="rounded-xl bg-red-50 p-3 text-center text-xs font-bold text-red-700">Ação irreversível.</p>
+            {deleteError && <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-center text-xs font-bold text-red-700">{deleteError}</p>}
             <div className="flex gap-3">
               <button
                 onClick={() => setDeleteConfirm({ show: false })}
@@ -231,9 +258,10 @@ export default function Products() {
               </button>
               <button
                 onClick={() => handleDeleteConfirm(deleteConfirm.productId!)}
-                className="flex-1 bg-red-500 text-white font-black py-3 rounded-2xl text-xs uppercase hover:bg-red-600 transition-colors"
+                disabled={deletingProductId === deleteConfirm.productId}
+                className="flex-1 bg-red-500 disabled:opacity-60 text-white font-black py-3 rounded-2xl text-xs uppercase hover:bg-red-600 transition-colors"
               >
-                Excluir
+                {deletingProductId === deleteConfirm.productId ? "Excluindo..." : "Excluir"}
               </button>
             </div>
           </div>

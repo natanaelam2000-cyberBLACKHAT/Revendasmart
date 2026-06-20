@@ -93,9 +93,11 @@ export function PaymentLinkModal({
 
       const data = await resp.json();
       if (!resp.ok) {
-        const errMsg = data?.message || 
-                       data?.error?.message || 
-                       `Erro ${resp.status}: ${resp.statusText}`;
+        const technicalMessage = typeof data?.message === "string" ? data.message : typeof data?.error === "string" ? data.error : "";
+        const errMsg = data?.userMessage || data?.details ||
+          (/Unsupported state|unable to authenticate|decrypt/i.test(technicalMessage)
+            ? "A conexão com o Mercado Pago precisa ser renovada em Ajustes."
+            : "Não foi possível gerar o link agora. Tente novamente.");
         throw new Error(errMsg);
       }
 

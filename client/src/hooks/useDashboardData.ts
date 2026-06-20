@@ -36,7 +36,13 @@ export function useDashboardData(): DashboardData {
       return;
     }
 
+    let unsubscribeProducts: (() => void) | undefined;
+    let unsubscribeSales: (() => void) | undefined;
+    let unsubscribeClients: (() => void) | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      unsubscribeProducts?.(); unsubscribeSales?.(); unsubscribeClients?.();
+      if (timer) clearTimeout(timer);
       if (!user) {
         setData(prev => ({
           ...prev,
@@ -53,7 +59,7 @@ export function useDashboardData(): DashboardData {
       const uid = user.uid;
 
       // Subscribe to products
-      const unsubscribeProducts = onSnapshot(
+      unsubscribeProducts = onSnapshot(
         collection(firestore, "users", uid, "products"),
         (snapshot) => {
           const prods = snapshot.docs.map(doc => ({
@@ -69,7 +75,7 @@ export function useDashboardData(): DashboardData {
       );
 
       // Subscribe to sales
-      const unsubscribeSales = onSnapshot(
+      unsubscribeSales = onSnapshot(
         collection(firestore, "users", uid, "sales"),
         (snapshot) => {
           const salesData = snapshot.docs.map(d => d.data());
@@ -81,7 +87,7 @@ export function useDashboardData(): DashboardData {
       );
 
       // Subscribe to clients
-      const unsubscribeClients = onSnapshot(
+      unsubscribeClients = onSnapshot(
         collection(firestore, "users", uid, "clients"),
         (snapshot) => {
           const clientsData = snapshot.docs.map(d => d.data());
@@ -93,22 +99,19 @@ export function useDashboardData(): DashboardData {
       );
 
       // Set loading to false once first batch loaded
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         setData(prev => ({ ...prev, loading: false }));
       }, 500);
 
       // Debug logging
       console.log("[useDashboardData] UID:", uid);
 
-      return () => {
-        clearTimeout(timer);
-        unsubscribeProducts();
-        unsubscribeSales();
-        unsubscribeClients();
-      };
     });
 
-    return () => unsubscribeAuth();
+    return () => {
+      if (timer) clearTimeout(timer);
+      unsubscribeProducts?.(); unsubscribeSales?.(); unsubscribeClients?.(); unsubscribeAuth();
+    };
   }, []);
 
   return data;
