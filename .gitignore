@@ -8,3 +8,7 @@ vite.config.ts.*
 .env*.local
 .env
 *.swp
+# Staging secrets
+.env.staging
+.env.staging.*
+!.env.staging.example
