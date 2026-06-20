@@ -151,6 +151,193 @@ export async function registerRoutes(
 
   // Register App Subscription routes (Premium plan billing — isolated from revendedor payments)
   registerSubscriptionRoutes(app, requireAuth);
+  // Finalize a manual sale atomically: sale + stock + installment schedule.
+  app.post("/api/sales/finalize", requireAuth, async (req, res) => {
+    const uid = (req as any).firebaseUid as string;
+    const body = req.body ?? {};
+
+    try {
+      const saleId = typeof body.saleId === "string" && /^[a-zA-Z0-9_-]{6,80}$/.test(body.saleId)
+        ? body.saleId
+        : crypto.randomUUID();
+      const clientId = typeof body.clientId === "string" ? body.clientId.trim() : "";
+      const rawProducts = Array.isArray(body.products) ? body.products : [];
+      const paymentType = body.paymentType === "prazo" ? "prazo" : body.paymentType === "avista" ? "avista" : null;
+      const discountType = body.discountType === "percent" ? "percent" : "fixed";
+      const discountValue = Number(body.discountValue ?? 0);
+      const downPayment = Number(body.downPayment ?? 0);
+      const installmentCount = Number(body.installments ?? 0);
+
+      if (!clientId || !paymentType || rawProducts.length === 0 || rawProducts.length > 100) {
+        return res.status(400).json({ code: "INVALID_SALE", message: "Dados da venda inválidos." });
+      }
+      if (!Number.isFinite(discountValue) || discountValue < 0 ||
+          (discountType === "percent" && discountValue > 100) ||
+          !Number.isFinite(downPayment) || downPayment < 0) {
+        return res.status(400).json({ code: "INVALID_TOTALS", message: "Valores da venda inválidos." });
+      }
+      if (paymentType === "prazo" && (!Number.isInteger(installmentCount) || installmentCount < 1 || installmentCount > 12)) {
+        return res.status(400).json({ code: "INVALID_INSTALLMENTS", message: "Quantidade de parcelas inválida." });
+      }
+
+      const requestedProducts = new Map<string, number>();
+      for (const item of rawProducts) {
+        const productId = typeof item?.productId === "string" ? item.productId.trim() : "";
+        const quantity = Number(item?.quantity);
+        if (!productId || !Number.isInteger(quantity) || quantity <= 0 || quantity > 9999) {
+          return res.status(400).json({ code: "INVALID_PRODUCT", message: "Produto ou quantidade inválida." });
+        }
+        requestedProducts.set(productId, (requestedProducts.get(productId) ?? 0) + quantity);
+      }
+
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+      const userRef = db.collection("users").doc(uid);
+      const saleRef = userRef.collection("sales").doc(saleId);
+      const clientRef = userRef.collection("clients").doc(clientId);
+      const productEntries = Array.from(requestedProducts.entries()).map(([productId, quantity]) => ({
+        productId,
+        quantity,
+        ref: userRef.collection("products").doc(productId),
+      }));
+
+      const result = await db.runTransaction(async (transaction) => {
+        const snapshots = await transaction.getAll(saleRef, clientRef, ...productEntries.map((item) => item.ref));
+        const saleSnapshot = snapshots[0];
+        const clientSnapshot = snapshots[1];
+        const productSnapshots = snapshots.slice(2);
+
+        if (saleSnapshot.exists) throw new Error("SALE_ALREADY_EXISTS");
+        if (!clientSnapshot.exists) throw new Error("CLIENT_NOT_FOUND");
+
+        let subtotalCents = 0;
+        const saleProducts = productEntries.map((item, index) => {
+          const snapshot = productSnapshots[index];
+          if (!snapshot.exists) throw new Error(`PRODUCT_NOT_FOUND:${item.productId}`);
+          const product = snapshot.data() ?? {};
+          const stock = Number(product.stock);
+          const price = Number(product.salePrice);
+          if (!Number.isFinite(stock) || stock < item.quantity) {
+            throw new Error(`INSUFFICIENT_STOCK:${String(product.name ?? item.productId)}`);
+          }
+          if (!Number.isFinite(price) || price < 0) throw new Error(`INVALID_PRODUCT_PRICE:${item.productId}`);
+          const priceCents = Math.round(price * 100);
+          subtotalCents += priceCents * item.quantity;
+          return { productId: item.productId, quantity: item.quantity, price: priceCents / 100, stock };
+        });
+
+        const requestedDiscountCents = discountType === "percent"
+          ? Math.round(subtotalCents * discountValue / 100)
+          : Math.round(discountValue * 100);
+        const discountCents = Math.min(subtotalCents, requestedDiscountCents);
+        const totalCents = subtotalCents - discountCents;
+        const downPaymentCents = Math.round(downPayment * 100);
+        if (downPaymentCents > totalCents) throw new Error("DOWN_PAYMENT_EXCEEDS_TOTAL");
+        const remainingCents = paymentType === "prazo" ? totalCents - downPaymentCents : 0;
+        const now = new Date();
+        const date = now.toISOString();
+
+        const sale = {
+          id: saleId,
+          clientId,
+          products: saleProducts.map((product) => ({
+            productId: product.productId,
+            quantity: product.quantity,
+            price: product.price,
+          })),
+          subtotal: subtotalCents / 100,
+          discountType,
+          discountValue,
+          discountAmount: discountCents / 100,
+          total: totalCents / 100,
+          totalPrice: totalCents / 100,
+          paymentType,
+          legacyPaymentType: paymentType === "avista" ? "cash" : "installments",
+          paymentMethod: paymentType === "avista" ? body.paymentMethod ?? null : null,
+          downPayment: paymentType === "prazo" ? downPaymentCents / 100 : 0,
+          downPaymentMethod: paymentType === "prazo" && downPaymentCents > 0 ? body.downPaymentMethod ?? null : null,
+          installments: paymentType === "prazo" ? installmentCount : 0,
+          date,
+        };
+        transaction.create(saleRef, sale);
+
+        for (let index = 0; index < productEntries.length; index += 1) {
+          const item = productEntries[index];
+          const saleProduct = saleProducts[index];
+          transaction.update(item.ref, {
+            stock: saleProduct.stock - item.quantity,
+            lastSoldDate: date,
+          });
+        }
+
+        const installmentIds = [];
+        if (remainingCents > 0) {
+          const baseAmountCents = Math.floor(remainingCents / installmentCount);
+          let allocatedCents = 0;
+          for (let index = 0; index < installmentCount; index += 1) {
+            const amountCents = index === installmentCount - 1
+              ? remainingCents - allocatedCents
+              : baseAmountCents;
+            allocatedCents += amountCents;
+            const installmentId = `${saleId}-${String(index + 1).padStart(2, "0")}`;
+            const dueDate = new Date(now);
+            const dueDay = dueDate.getUTCDate();
+            dueDate.setUTCDate(1);
+            dueDate.setUTCMonth(dueDate.getUTCMonth() + index + 1);
+            const lastDayOfMonth = new Date(Date.UTC(
+              dueDate.getUTCFullYear(), dueDate.getUTCMonth() + 1, 0,
+            )).getUTCDate();
+            dueDate.setUTCDate(Math.min(dueDay, lastDayOfMonth));
+            transaction.create(userRef.collection("installments").doc(installmentId), {
+              id: installmentId,
+              saleId,
+              clientId,
+              amount: amountCents / 100,
+              dueDate: dueDate.toISOString(),
+              status: "pending",
+              paidAmount: 0,
+              installmentNumber: index + 1,
+              totalInstallments: installmentCount,
+              createdAt: date,
+            });
+            installmentIds.push(installmentId);
+          }
+        }
+
+        return {
+          saleId,
+          subtotal: subtotalCents / 100,
+          total: totalCents / 100,
+          remainingBalance: remainingCents / 100,
+          installmentIds,
+          depletedProductIds: saleProducts
+            .filter((product, index) => product.stock - productEntries[index].quantity === 0)
+            .map((product) => product.productId),
+        };
+      });
+
+      return res.status(201).json(result);
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "SALE_TRANSACTION_FAILED";
+      if (code === "SALE_ALREADY_EXISTS") {
+        return res.status(409).json({ code, message: "Esta venda já foi finalizada." });
+      }
+      if (code === "CLIENT_NOT_FOUND") {
+        return res.status(400).json({ code, message: "Cliente não encontrado." });
+      }
+      if (code === "DOWN_PAYMENT_EXCEEDS_TOTAL") {
+        return res.status(400).json({ code, message: "A entrada não pode ser maior que o total." });
+      }
+      if (code.startsWith("INSUFFICIENT_STOCK:")) {
+        return res.status(409).json({ code: "INSUFFICIENT_STOCK", message: `Estoque insuficiente para ${code.slice(19)}.` });
+      }
+      if (code.startsWith("PRODUCT_NOT_FOUND:") || code.startsWith("INVALID_PRODUCT_PRICE:")) {
+        return res.status(400).json({ code: code.split(":")[0], message: "Um produto da venda não está mais disponível." });
+      }
+      return errorResponse(res, 500, "SALE_TRANSACTION_FAILED", "Não foi possível finalizar a venda.", { uid });
+    }
+  });
+
   const loadPublicCatalog = async (rawSlug: string) => {
     const db = getFirebaseAdmin().firestore();
     const slug = normalizeCatalogSlug(rawSlug);
@@ -227,8 +414,8 @@ export async function registerRoutes(
   });
   // GET /api/user/settings/:userId - Load user settings from Firestore
   app.get("/api/user/settings/:userId", requireAuth, requireOwnership, async (req, res) => {
+    const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
     try {
-      const { userId } = req.params;
       if (!userId) {
         return res.status(400).json({ error: "userId required" });
       }
@@ -258,9 +445,9 @@ export async function registerRoutes(
 
   // POST /api/user/settings/:userId - Save user settings to Firestore
   app.post("/api/user/settings/:userId", requireAuth, requireOwnership, async (req, res) => {
+    const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+    const body = req.body;
     try {
-      const { userId } = req.params;
-      const body = req.body;
 
       console.log("[/api/user/settings POST] userId:", userId);
       console.log("[/api/user/settings POST] body keys:", Object.keys(body));
@@ -953,7 +1140,7 @@ if (!existingPlan.exists) {
   // ---------------------------------------------------------------------------
   // GET /api/admin/global-config — Get current global premium access config
   // ---------------------------------------------------------------------------
-  app.get("/api/admin/global-config", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/admin/global-config", requireAuth, requireAdmin, async (req: Request, res: Response) => {
     try {
       const config = await getGlobalConfig();
       return res.json({
@@ -971,7 +1158,7 @@ if (!existingPlan.exists) {
   // POST /api/admin/global-config — Update global premium access config
   // Body: { premiumOpenAccess: boolean, premiumOpenAccessUntil?: ISO-string, premiumOpenAccessMessage?: string }
   // ---------------------------------------------------------------------------
-  app.post("/api/admin/global-config", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/admin/global-config", requireAuth, requireAdmin, async (req: Request, res: Response) => {
     try {
       const { premiumOpenAccess, premiumOpenAccessUntil, premiumOpenAccessMessage } = req.body;
       

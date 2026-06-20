@@ -258,8 +258,17 @@ async function fetchMPAccountInfo(accessToken: string): Promise<{
 export async function getValidMPAccessToken(
   uid: string,
   mpConnectionId?: string | null
-): Promise<{ accessToken: string; tokenSource: "central" | "revendedor" }> {
+): Promise<{
+  accessToken: string;
+  tokenSource: "central" | "revendedor";
+  connectionId: string | null;
+}> {
   const centralToken = process.env.MERCADOPAGO_ACCESS_TOKEN ?? "";
+  const centralFallback = (reason: string): { accessToken: string; tokenSource: "central"; connectionId: null } => {
+    if (!centralToken) throw new Error(`Mercado Pago indisponível: credencial central ausente (${reason})`);
+    console.warn("[mp-connections] Using central token fallback", { reason, uidPresent: Boolean(uid) });
+    return { accessToken: centralToken, tokenSource: "central", connectionId: null };
+  };
 
   // No connection specified → try to find default
   let connectionId = mpConnectionId ?? null;
@@ -270,7 +279,7 @@ export async function getValidMPAccessToken(
 
   // No active connection → fall back to central token
   if (!connectionId) {
-    return { accessToken: centralToken, tokenSource: "central" };  }
+    return centralFallback("no_active_connection");  }
 
   const connection = await fetchConnection(uid, connectionId);
 
@@ -279,12 +288,12 @@ export async function getValidMPAccessToken(
     console.warn(
       `[mp-connections] Connection ${connectionId} not found/revoked — falling back to central token`
     );
-    return { accessToken: centralToken, tokenSource: "central" };
+    return centralFallback("connection_missing_or_revoked");
   }
 
   // No access token stored → fall back
   if (!connection.accessToken) {
-    return { accessToken: centralToken, tokenSource: "central" };
+    return centralFallback("connection_without_access_token");
   }
 
   // Check if token needs refresh (expires within margin)
@@ -292,9 +301,17 @@ export async function getValidMPAccessToken(
   const needsRefresh = expiresAt - Date.now() < ACCESS_TOKEN_REFRESH_MARGIN_MS;
 
   if (!needsRefresh) {
-    // Token is still valid
-    const plainToken = decryptToken(connection.accessToken);
-    return { accessToken: plainToken, tokenSource: "revendedor" };
+    try {
+      const plainToken = decryptToken(connection.accessToken);
+      return { accessToken: plainToken, tokenSource: "revendedor", connectionId };
+    } catch (error) {
+      console.error("[mp-connections] Stored access token could not be decrypted", {
+        connectionId,
+        errorName: error instanceof Error ? error.name : "UnknownError",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return centralFallback("stored_token_authentication_failed");
+    }
   }
 
   // Token expired or near expiry → refresh
@@ -307,7 +324,7 @@ export async function getValidMPAccessToken(
       status: "expired",
       updatedAt: now(),
     });
-    return { accessToken: centralToken, tokenSource: "central" };
+    return centralFallback("refresh_token_missing");
   }
 
   try {
@@ -332,7 +349,7 @@ export async function getValidMPAccessToken(
     await (await getConnectionRef(uid, connectionId)).update(updates);
     console.log(`[mp-connections] Token refreshed for connection ${connectionId}`);
 
-    return { accessToken: newTokens.access_token, tokenSource: "revendedor" };
+    return { accessToken: newTokens.access_token, tokenSource: "revendedor", connectionId };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logMPConnectionError("token_refresh", uid, msg, {
@@ -344,8 +361,71 @@ export async function getValidMPAccessToken(
       status: "expired",
       updatedAt: now(),
     });
-    return { accessToken: centralToken, tokenSource: "central" };
+    return centralFallback("token_refresh_failed");
   }
+}
+
+/**
+ * Resolve the exact credential recorded on a charge.
+ * Revendedor charges never fall back to the central account.
+ */
+export async function getMPAccessTokenForCharge(
+  uid: string,
+  tokenSource: "central" | "revendedor",
+  mpConnectionId?: string | null,
+): Promise<{ accessToken: string; connectionId: string | null }> {
+  if (tokenSource === "central") {
+    const centralToken = process.env.MERCADOPAGO_ACCESS_TOKEN ?? "";
+    if (!centralToken) throw new Error("CENTRAL_MP_TOKEN_NOT_CONFIGURED");
+    return { accessToken: centralToken, connectionId: null };
+  }
+
+  if (!mpConnectionId) throw new Error("MP_CONNECTION_ID_MISSING");
+  const connection = await fetchConnection(uid, mpConnectionId);
+  if (!connection || connection.status !== "active") {
+    throw new Error("MP_CONNECTION_NOT_ACTIVE");
+  }
+  if (!connection.accessToken) throw new Error("MP_CONNECTION_TOKEN_MISSING");
+
+  const expiresAt = new Date(connection.accessTokenExpiresAt).getTime();
+  const needsRefresh = !Number.isFinite(expiresAt) ||
+    expiresAt - Date.now() < ACCESS_TOKEN_REFRESH_MARGIN_MS;
+  if (!needsRefresh) {
+    return { accessToken: decryptToken(connection.accessToken), connectionId: mpConnectionId };
+  }
+  if (!connection.refreshToken) throw new Error("MP_CONNECTION_REFRESH_TOKEN_MISSING");
+
+  const plainRefreshToken = decryptToken(connection.refreshToken);
+  const newTokens = await refreshAccessTokens(plainRefreshToken);
+  const updates: Partial<MPConnection> = {
+    accessToken: encryptToken(newTokens.access_token),
+    accessTokenExpiresAt: new Date(Date.now() + newTokens.expires_in * 1000).toISOString(),
+    updatedAt: now(),
+  };
+  if (newTokens.refresh_token) {
+    updates.refreshToken = encryptToken(newTokens.refresh_token);
+  }
+  await (await getConnectionRef(uid, mpConnectionId)).update(updates);
+  return { accessToken: newTokens.access_token, connectionId: mpConnectionId };
+}
+
+/**
+ * Compatibility lookup for old webhook URLs that did not include charge identity.
+ */
+export async function findMPConnectionByMerchantId(
+  merchantId: string,
+): Promise<{ uid: string; connectionId: string } | null> {
+  if (!merchantId) return null;
+  const admin = getFirebaseAdmin();
+  const snapshot = await admin.firestore()
+    .collectionGroup("mercadopago_connections")
+    .where("merchantId", "==", merchantId)
+    .limit(10)
+    .get();
+  const document = snapshot.docs.find((item) => item.data()?.status === "active");
+  if (!document) return null;
+  const uid = document.ref.parent.parent?.id ?? "";
+  return uid ? { uid, connectionId: document.id } : null;
 }
 
 // ---------------------------------------------------------------------------

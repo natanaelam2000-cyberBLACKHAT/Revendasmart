@@ -38,6 +38,9 @@ import { DEFAULT_GLOBAL_CONFIG } from "../shared/monetization";
 // ---------------------------------------------------------------------------
 const CENTRAL_ACCESS_TOKEN = process.env.MERCADOPAGO_ACCESS_TOKEN?.trim() ?? "";
 const WEBHOOK_SECRET = process.env.MERCADOPAGO_WEBHOOK_SECRET?.trim() ?? "";
+const ALLOW_UNSIGNED_WEBHOOK =
+  process.env.ALLOW_UNSIGNED_SUBSCRIPTION_WEBHOOK?.trim().toLowerCase() === "true";
+const WEBHOOK_MAX_AGE_MS = 5 * 60 * 1000;
 const APP_BASE_URL = process.env.APP_BASE_URL ?? "https://revendasmart-backend-164193806378.us-central1.run.app";
 const FRONTEND_URL = process.env.FRONTEND_URL ?? "https://revendasmart.vercel.app";
 
@@ -68,6 +71,78 @@ console.error(`[subscriptions] ERROR-${eid} op=${op} uid=${uid} msg=${msg}`, ctx
 
 function normalizeStatus(status?: string | null): string {
 return (status ?? "").toLowerCase().trim();
+}
+
+type WebhookSignatureResult =
+  | { valid: true; mode: "signed" | "explicit-dev-bypass" }
+  | { valid: false; status: 401 | 503; code: string };
+
+function getSingleHeader(req: Request, name: "x-signature" | "x-request-id"): string {
+  const value = req.headers[name];
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function safeHexEqual(received: string, expected: string): boolean {
+  if (!/^[a-f0-9]{64}$/i.test(received) || !/^[a-f0-9]{64}$/i.test(expected)) {
+    return false;
+  }
+  const receivedBuffer = Buffer.from(received, "hex");
+  const expectedBuffer = Buffer.from(expected, "hex");
+  return receivedBuffer.length === expectedBuffer.length &&
+    crypto.timingSafeEqual(receivedBuffer, expectedBuffer);
+}
+
+function validateSubscriptionWebhookSignature(
+  req: Request,
+  subscriptionId: string,
+): WebhookSignatureResult {
+  if (!WEBHOOK_SECRET) {
+    if (process.env.NODE_ENV !== "production" && ALLOW_UNSIGNED_WEBHOOK) {
+      console.warn("[subscriptions/webhook] Explicit unsigned development mode enabled");
+      return { valid: true, mode: "explicit-dev-bypass" };
+    }
+    console.error("[subscriptions/webhook] MERCADOPAGO_WEBHOOK_SECRET is not configured");
+    return { valid: false, status: 503, code: "WEBHOOK_SECRET_NOT_CONFIGURED" };
+  }
+
+  const signatureHeader = getSingleHeader(req, "x-signature");
+  const requestId = getSingleHeader(req, "x-request-id").trim();
+  if (!signatureHeader || !requestId) {
+    return { valid: false, status: 401, code: "MISSING_WEBHOOK_SIGNATURE" };
+  }
+
+  const signatureParts = new Map(
+    signatureHeader.split(",").map((part) => {
+      const separator = part.indexOf("=");
+      return separator < 0
+        ? [part.trim(), ""]
+        : [part.slice(0, separator).trim(), part.slice(separator + 1).trim()];
+    }),
+  );
+  const timestamp = signatureParts.get("ts") ?? "";
+  const receivedSignature = signatureParts.get("v1") ?? "";
+  if (!/^\d{10,13}$/.test(timestamp) || !receivedSignature) {
+    return { valid: false, status: 401, code: "INVALID_WEBHOOK_SIGNATURE_FORMAT" };
+  }
+
+  const numericTimestamp = Number(timestamp);
+  const timestampMs = timestamp.length === 10 ? numericTimestamp * 1000 : numericTimestamp;
+  if (!Number.isFinite(timestampMs) || Math.abs(Date.now() - timestampMs) > WEBHOOK_MAX_AGE_MS) {
+    return { valid: false, status: 401, code: "EXPIRED_WEBHOOK_SIGNATURE" };
+  }
+
+  const normalizedId = subscriptionId.toLowerCase();
+  const manifest = `id:${normalizedId};request-id:${requestId};ts:${timestamp};`;
+  const expectedSignature = crypto
+    .createHmac("sha256", WEBHOOK_SECRET)
+    .update(manifest)
+    .digest("hex");
+
+  if (!safeHexEqual(receivedSignature, expectedSignature)) {
+    return { valid: false, status: 401, code: "INVALID_WEBHOOK_SIGNATURE" };
+  }
+
+  return { valid: true, mode: "signed" };
 }
 
 function isSubscriptionValid(status?: string | null, paymentStatus?: string | null): boolean {
@@ -534,31 +609,28 @@ currentPlan: premiumActive ? "premium" : "free",
   });
 app.post("/api/app-subscription/webhook", async (req: Request, res: Response) => {
   try {
-
-    console.log("[WEBHOOK] Signature validation bypassed temporarily");
-
-    // if (WEBHOOK_SECRET) {
-    //   const signature = req.headers["x-signature"];
-    //
-    //   if (!signature || signature !== WEBHOOK_SECRET) {
-    //     return res.status(401).json({ error: "INVALID_SIGNATURE" });
-    //   }
-    // }
-
-
     const body = req.body || {};
-    const subscriptionId = body?.data?.id || body?.id || null;
+    const rawSubscriptionId = body?.data?.id || body?.id || null;
+    const subscriptionId =
+      typeof rawSubscriptionId === "string" || typeof rawSubscriptionId === "number"
+        ? String(rawSubscriptionId).trim()
+        : "";
 
     if (!subscriptionId) {
       return res.status(400).json({ error: "MISSING_ID" });
     }
 
+    const signatureResult = validateSubscriptionWebhookSignature(req, subscriptionId);
+    if (!signatureResult.valid) {
+      console.warn("[subscriptions/webhook] Rejected notification", {
+        code: signatureResult.code,
+        requestId: getSingleHeader(req, "x-request-id") || null,
+      });
+      return res.status(signatureResult.status).json({ error: signatureResult.code });
+    }
+
     const preApproval = new PreApproval(mpClient);
     const mpSub = await preApproval.get({ id: subscriptionId });
-    console.log(
-  "[MP_SUB]",
-  JSON.stringify(mpSub, null, 2)
-);
 
     const uid = (mpSub as any).external_reference ?? null;
 
@@ -587,7 +659,8 @@ app.post("/api/app-subscription/webhook", async (req: Request, res: Response) =>
 
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Unknown error";
-    return res.status(500).json({ error: msg });
+    logSubError("webhook_processing", null, msg);
+    return res.status(500).json({ error: "WEBHOOK_PROCESSING_FAILED" });
   }
 });
 }

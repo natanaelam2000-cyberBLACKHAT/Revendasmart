@@ -15,12 +15,15 @@ import type { Express, Request, Response } from "express";
 import * as crypto from "crypto";
 import { MercadoPagoConfig, Preference, Payment as MPPayment } from "mercadopago";
 import { getFirebaseAdmin } from "./firebase-admin-init";
-import { getValidMPAccessToken } from "./mercadopago-connections";
+import {
+  findMPConnectionByMerchantId,
+  getMPAccessTokenForCharge,
+  getValidMPAccessToken,
+} from "./mercadopago-connections";
 import {
   type Charge,
   type CreatePaymentLinkInput,
   type MPWebhookPayload,
-  type ChargeStatus,
   buildExternalReference,
   parseExternalReference,
   resolveChargeStatus,
@@ -57,15 +60,12 @@ if (!CENTRAL_ACCESS_TOKEN) {
   console.warn("[payments] MERCADOPAGO_ACCESS_TOKEN is not set — central account fallback will fail");
 }
 
-// Central client used only for webhook syncs (which may be from any connection)
-const centralMPClient = new MercadoPagoConfig({
-  accessToken: CENTRAL_ACCESS_TOKEN,
-  options: { timeout: 10000 },
-});
-
-const paymentClient = new MPPayment(centralMPClient);
-
-const ENVIRONMENT = detectEnvironment(CENTRAL_ACCESS_TOKEN);
+function createPaymentClient(accessToken: string): MPPayment {
+  return new MPPayment(new MercadoPagoConfig({
+    accessToken,
+    options: { timeout: 10000 },
+  }));
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -79,11 +79,6 @@ async function getChargeRef(uid: string, chargeId: string) {
   const admin = getFirebaseAdmin();
   const db = admin.firestore();
   return db.collection("users").doc(uid).collection("charges").doc(chargeId);
-}
-
-async function saveCharge(uid: string, charge: Charge): Promise<void> {
-  const ref = await getChargeRef(uid, charge.id);
-  await ref.set(charge);
 }
 
 async function updateCharge(
@@ -179,18 +174,35 @@ async function syncPaymentFromMP(
   uid: string,
   chargeId: string,
   mpPaymentId: string,
-  webhookEventId?: string
+  webhookEventId?: string,
+  prefetchedPayment?: any,
 ): Promise<Charge | null> {
   try {
-    const mpData = await paymentClient.get({ id: mpPaymentId });
-    const rawStatus = (mpData as any).status ?? "pending";
-    const newStatus = resolveChargeStatus(rawStatus);
-
     const charge = await fetchCharge(uid, chargeId);
     if (!charge) {
       console.warn(`[payments/sync] Charge ${chargeId} not found for uid ${uid}`);
       return null;
     }
+
+    let mpData = prefetchedPayment;
+    if (!mpData) {
+      const tokenSource = charge.tokenSource ?? "central";
+      const { accessToken } = await getMPAccessTokenForCharge(
+        uid,
+        tokenSource,
+        charge.mpConnectionId ?? null,
+      );
+      mpData = await createPaymentClient(accessToken).get({ id: mpPaymentId });
+    }
+    const paymentReference = parseExternalReference(
+      String((mpData as any).external_reference ?? ""),
+    );
+    if (!paymentReference || paymentReference.uid !== uid || paymentReference.chargeId !== chargeId) {
+      throw new Error("PAYMENT_REFERENCE_MISMATCH");
+    }
+
+    const rawStatus = (mpData as any).status ?? "pending";
+    const newStatus = resolveChargeStatus(rawStatus);
 
     // Idempotency: skip if this exact event was already processed
     if (webhookEventId && charge.webhookLastEventId === webhookEventId) {
@@ -315,15 +327,22 @@ async function handleCreateLink(req: Request, res: Response) {
     console.error("[payments/create-link] stage=", stage);
     console.error("[payments/create-link] DEBUG: Step 1 — Getting MP Access Token");
     
-    const { accessToken, tokenSource } = await getValidMPAccessToken(
+    const {
+      accessToken,
+      tokenSource,
+      connectionId: resolvedConnectionId,
+    } = await getValidMPAccessToken(
       body.uid,
       body.mpConnectionId ?? null
     );
     console.error("[payments/create-link] DEBUG: Step 1 SUCCESS — Token resolved", {
       tokenSource,
-      tokenLength: accessToken?.length || 0,
-      tokenPreview: accessToken?.substring(0, 30) || "null",
+      tokenConfigured: Boolean(accessToken),
+      tokenEnvironment: detectEnvironment(accessToken),
     });
+    if (!accessToken || accessToken.trim().length < 20) {
+      throw new Error("Mercado Pago indisponível: access token não configurado");
+    }
 
     // Build per-request Mercado Pago client with the resolved token
     stage = "create_mp_client";
@@ -370,19 +389,21 @@ async function handleCreateLink(req: Request, res: Response) {
         },
       ],
       external_reference: externalReference ?? "",
-      // REMOVED temporarily to identify culprit:
-      // payer: {},
-      // back_urls: { ... },
-      // auto_return: "approved",
-      // notification_url: ...,
-      // statement_descriptor: "RevendaSmart",
+      back_urls: {
+        success: `${FRONTEND_URL}/catalog?payment=success`,
+        pending: `${FRONTEND_URL}/catalog?payment=pending`,
+        failure: `${FRONTEND_URL}/catalog?payment=failure`,
+      },
+      auto_return: "approved",
+      notification_url: `${APP_BASE_URL}/api/payments/webhook?uid=${encodeURIComponent(body.uid)}&chargeId=${encodeURIComponent(chargeId)}`,
       metadata: {
+        ...(safeMetadata ?? {}),
         uid: body.uid,
         chargeId,
         clientId: body.clientId,
         saleId: body.saleId ?? null,
         tokenSource,
-        ...(safeMetadata ?? {}),
+        mpConnectionId: resolvedConnectionId,
       },
     };
     
@@ -524,11 +545,7 @@ async function handleCreateLink(req: Request, res: Response) {
     if (body && body.saleId && String(body.saleId).trim() !== "") {
       charge.saleId = body.saleId;
     }
-    if (body && body.mpConnectionId && String(body.mpConnectionId).trim() !== "") {
-      charge.mpConnectionId = body.mpConnectionId;
-    } else {
-      charge.mpConnectionId = null;
-    }
+    charge.mpConnectionId = resolvedConnectionId;
     
     // metadata: only add if body has it AND it's a valid object with content
     if (body && body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata)) {
@@ -599,18 +616,13 @@ async function handleCreateLink(req: Request, res: Response) {
       console.error("[payments/create-link] Cannot log error stack:", String(stackErr));
     }
     
-    return res.status(500).json({
+    const tokenAuthenticationFailure = /Unsupported state|unable to authenticate|decrypt|auth tag/i.test(errorMsg);
+    return res.status(tokenAuthenticationFailure ? 503 : 500).json({
       error: "Erro ao gerar link de pagamento",
       stage: stage ?? "unknown",
-      message: errorMsg,
-      name: errorName,
-      stackTrace: fullStack ? fullStack.split('\n').slice(0, 8) : null,
-      details: {
-        uid: body?.uid ?? null,
-        clientId: body?.clientId ?? null,
-        title: body?.title ?? null,
-        amount: body?.amount ?? null,
-      },
+      userMessage: tokenAuthenticationFailure
+        ? "A conexão com o Mercado Pago precisa ser renovada. Reconecte sua conta em Ajustes."
+        : "Não foi possível iniciar o pagamento agora. Tente novamente em instantes.",
     });
   }
 }
@@ -648,49 +660,58 @@ async function handleWebhook(req: Request, res: Response) {
   }
 
   const mpPaymentId = String(payload.data?.id ?? "");
+  let webhookUid: string | null = null;
+  let webhookChargeId: string | null = null;
   if (!mpPaymentId) {
     return res.status(200).json({ received: true, skipped: "missing data.id" });
   }
 
   try {
-    // Fetch payment from MP to get externalReference
-    const mpData = await paymentClient.get({ id: mpPaymentId });
-    const externalReference = (mpData as any).external_reference ?? "";
+    const queryUid = typeof req.query.uid === "string" ? req.query.uid : "";
+    const queryChargeId = typeof req.query.chargeId === "string" ? req.query.chargeId : "";
+    let uid = queryUid;
+    let chargeId = queryChargeId;
+    let prefetchedPayment: any = null;
 
-    if (!externalReference) {
-      console.warn(`[payments/webhook] No external_reference for payment ${mpPaymentId}`);
-      return res.status(200).json({ received: true, skipped: "no external_reference" });
+    if (uid && chargeId) {
+      const identifiedCharge = await fetchCharge(uid, chargeId);
+      if (!identifiedCharge) throw new Error("WEBHOOK_CHARGE_NOT_FOUND");
+    } else {
+      // Compatibility for preferences created before identified notification URLs.
+      let legacyToken = CENTRAL_ACCESS_TOKEN;
+      if (payload.user_id) {
+        const legacyConnection = await findMPConnectionByMerchantId(String(payload.user_id));
+        if (legacyConnection) {
+          uid = legacyConnection.uid;
+          const resolved = await getMPAccessTokenForCharge(
+            legacyConnection.uid,
+            "revendedor",
+            legacyConnection.connectionId,
+          );
+          legacyToken = resolved.accessToken;
+        }
+      }
+      if (!legacyToken) throw new Error("LEGACY_WEBHOOK_TOKEN_NOT_RESOLVED");
+      prefetchedPayment = await createPaymentClient(legacyToken).get({ id: mpPaymentId });
+      const parsed = parseExternalReference((prefetchedPayment as any).external_reference ?? "");
+      if (!parsed) throw new Error("INVALID_EXTERNAL_REFERENCE");
+      uid = parsed.uid;
+      chargeId = parsed.chargeId;
     }
 
-    // Parse uid + chargeId from externalReference
-    const parsed = parseExternalReference(externalReference);
-    if (!parsed) {
-      console.warn(`[payments/webhook] Could not parse externalReference: ${externalReference}`);
-      return res.status(200).json({ received: true, skipped: "invalid external_reference" });
-    }
-
-    const { uid, chargeId } = parsed;
-
-    // Verify charge exists in Firestore
-    const charge = await fetchCharge(uid, chargeId);
-    if (!charge) {
-      console.warn(`[payments/webhook] Charge ${chargeId} not found for uid ${uid}`);
-      return res.status(200).json({ received: true, skipped: "charge not found" });
-    }
-
-    // Sync status (idempotency handled inside)
-    await syncPaymentFromMP(uid, chargeId, mpPaymentId, eventId);
-
+    webhookUid = uid;
+    webhookChargeId = chargeId;
+    await syncPaymentFromMP(uid, chargeId, mpPaymentId, eventId, prefetchedPayment);
     return res.status(200).json({ received: true, chargeId, uid });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logPaymentError("webhook_process", uid, msg, {
-      chargeId,
+    logPaymentError("webhook_process", webhookUid, msg, {
+      chargeId: webhookChargeId,
       mpPaymentId,
       errorName: err instanceof Error ? err.name : "UnknownError",
     });
-    // Still return 200 to prevent MP retries for our own errors
-    return res.status(200).json({ received: true, error: "Processing error — logged" });
+    // Retryable response: Mercado Pago will deliver the event again.
+    return res.status(500).json({ received: false, error: "PAYMENT_SYNC_FAILED" });
   }
 }
 
@@ -698,11 +719,9 @@ async function handleWebhook(req: Request, res: Response) {
 // Route: GET /api/payments/status/:chargeId
 // ---------------------------------------------------------------------------
 async function handleGetStatus(req: Request, res: Response) {
+  const chargeId = Array.isArray(req.params.chargeId) ? req.params.chargeId[0] : (req.params.chargeId as string);
+  const uid = (req as any).firebaseUid as string;
   try {
-    const chargeId = Array.isArray(req.params.chargeId)
-      ? req.params.chargeId[0]
-      : (req.params.chargeId as string);
-    const uid = (req as any).firebaseUid as string;
 
     if (!chargeId) {
       return res.status(400).json({ error: "chargeId required" });
@@ -748,11 +767,9 @@ async function handleGetStatus(req: Request, res: Response) {
 // Useful if webhook was missed or arrived inconsistent.
 // ---------------------------------------------------------------------------
 async function handleResync(req: Request, res: Response) {
+  const chargeId = Array.isArray(req.params.chargeId) ? req.params.chargeId[0] : (req.params.chargeId as string);
+  const uid = (req as any).firebaseUid as string;
   try {
-    const chargeId = Array.isArray(req.params.chargeId)
-      ? req.params.chargeId[0]
-      : (req.params.chargeId as string);
-    const uid = (req as any).firebaseUid as string;
 
     if (!chargeId) {
       return res.status(400).json({ error: "chargeId required" });

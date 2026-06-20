@@ -58,12 +58,50 @@ service cloud.firestore {
         allow create, update, delete: if false;
       }
       
+      // SUBCOLLECTION: installments
+      // Installments are created by trusted backend flows. The owner may only
+      // read them and register payment progress without changing their terms.
+      match /installments/{installmentId} {
+        allow read: if userOwnsResource(uid);
+        allow create, delete: if false;
+        allow update: if userOwnsResource(uid)
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['status', 'paidAmount'])
+          && request.resource.data.status is string
+          && request.resource.data.status in ['pending', 'partial', 'paid', 'overdue']
+          && request.resource.data.paidAmount is number
+          && resource.data.amount is number
+          && request.resource.data.paidAmount >= 0
+          && request.resource.data.paidAmount <= resource.data.amount;
+      }
+
       // SUBCOLLECTION: sales
-      // User can only read their own sales
-      // Writes are backend-only
+      // Users may create sales only inside their own account. Existing sales
+      // remain immutable from the client; stock-safe mutations belong to the
+      // transactional backend flow handled separately.
       match /sales/{saleId} {
         allow read: if userOwnsResource(uid);
-        allow create, update, delete: if false;
+        allow create: if userOwnsResource(uid)
+          && request.resource.data.keys().hasAll([
+            'id', 'clientId', 'products', 'subtotal', 'total',
+            'paymentType', 'date'
+          ])
+          && request.resource.data.id == saleId
+          && request.resource.data.clientId is string
+          && request.resource.data.clientId.size() > 0
+          && request.resource.data.products is list
+          && request.resource.data.products.size() > 0
+          && request.resource.data.products.size() <= 100
+          && request.resource.data.subtotal is number
+          && request.resource.data.subtotal >= 0
+          && request.resource.data.total is number
+          && request.resource.data.total >= 0
+          && request.resource.data.total <= request.resource.data.subtotal
+          && request.resource.data.paymentType is string
+          && request.resource.data.paymentType in ['avista', 'prazo']
+          && request.resource.data.date is string
+          && request.resource.data.date.size() > 0;
+        allow update, delete: if false;
       }
       
       // SUBCOLLECTION: mercadopago_connections

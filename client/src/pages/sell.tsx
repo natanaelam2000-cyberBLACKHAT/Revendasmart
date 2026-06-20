@@ -1,13 +1,13 @@
 import { useState, useEffect } from "react";
 import { PageSkeleton } from "@/components/PageSkeleton";
-import { Product, Installment, getProductImage } from "@/lib/mock-data";
+import { Product, getProductImage } from "@/lib/mock-data";
 import { Layout } from "@/components/layout";
+import { ProductImageCard } from "@/components/ProductImageCard";
 import { Search, ShoppingBag, Plus, Minus, CheckCircle2, AlertCircle } from "lucide-react";
 import { useLocation } from "wouter";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { useClientsData } from "@/hooks/useClientsData";
 import { getFirebaseAuth, logError, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";
-import { getFirestore, setDoc, doc, updateDoc } from "firebase/firestore";
 import { getApiUrl } from "@/lib/api-config";
 
 export default function Sell() {
@@ -76,7 +76,7 @@ export default function Sell() {
         setSaveError("Entrada não pode ser negativa");
         return;
       }
-      if (remainingBalance < 0) {
+      if (downPayment > total) {
         setSaveError("Entrada não pode ser maior que o total");
         return;
       }
@@ -102,46 +102,46 @@ export default function Sell() {
     setSaveError("");
 
     try {
-      const firestore = getFirestore();
-      const saleId = Math.random().toString(36).substr(2, 9);
-      
-      // Create sale in Firestore
-      const newSale = {
-        id: saleId,
-        clientId: selectedClient,
-        products: cart.map(c => ({ productId: c.product.id, quantity: c.quantity, price: c.product.salePrice })),
-        subtotal,
-        discountType,
-        discountValue,
-        discountAmount,
-        total: total,
-        totalPrice: total,
-        paymentType: paymentType === 'cash' ? 'avista' : 'prazo',
-        legacyPaymentType: paymentType,
-        paymentMethod: paymentType === 'cash' ? paymentMethod : null,
-        downPayment: paymentType === 'installments' ? downPayment : 0,
-        downPaymentMethod: paymentType === 'installments' && downPayment > 0 ? downPaymentMethod : null,
-        installments: paymentType === 'installments' ? installments : 0,
-        date: new Date().toISOString()
-      };
-      
-      await measureOperation("sale_registration", async () => {
-        return setDoc(doc(firestore, "users", uid, "sales", saleId), newSale);
-      });
-      console.log("[sell] Sale created:", saleId);
-      
-      // Track sale registered event (both telemetry and analytics)
+      const saleId = Math.random().toString(36).substring(2, 11);
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error("Não foi possível autenticar a venda");
+
+      const saleResponse = await measureOperation("sale_registration", () => fetch(getApiUrl("/api/sales/finalize"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          saleId,
+          clientId: selectedClient,
+          products: cart.map((item) => ({ productId: item.product.id, quantity: item.quantity })),
+          discountType,
+          discountValue,
+          paymentType: paymentType === "cash" ? "avista" : "prazo",
+          paymentMethod: paymentType === "cash" ? paymentMethod : null,
+          downPayment: paymentType === "installments" ? downPayment : 0,
+          downPaymentMethod: paymentType === "installments" && downPayment > 0 ? downPaymentMethod : null,
+          installments: paymentType === "installments" ? installments : 0,
+        }),
+      }));
+
+      const saleResult = await saleResponse.json().catch(() => ({}));
+      if (!saleResponse.ok) {
+        throw new Error(saleResult.message || "Não foi possível finalizar a venda");
+      }
+
       logTelemetryEvent("sale_registered", {
-        saleId,
+        saleId: saleResult.saleId,
         clientId: selectedClient,
-        amount: total,
+        amount: saleResult.total,
         itemCount: cart.length,
         paymentType,
       }, uid);
-      
+
       trackAnalyticsEvent("purchase", {
-        transaction_id: saleId,
-        value: total,
+        transaction_id: saleResult.saleId,
+        value: saleResult.total,
         currency: "BRL",
         items: cart.map(item => ({
           item_id: item.product.id,
@@ -150,32 +150,18 @@ export default function Sell() {
         })),
       });
 
-      // Update product stock and lastSoldDate in Firestore
-      for (const cartItem of cart) {
-        const product = products.find(p => p.id === cartItem.product.id);
+      for (const productId of saleResult.depletedProductIds ?? []) {
+        const product = products.find((item) => item.id === productId);
         if (product) {
-          const newStock = Math.max(0, product.stock - cartItem.quantity);
-          
-          await updateDoc(doc(firestore, "users", uid, "products", cartItem.product.id), {
-            stock: newStock,
-            lastSoldDate: new Date().toISOString()
-          });
-          
-          // Log low stock as event, don't interrupt user with alert
-          if (newStock === 0 && product.stock > 0) {
-            logTelemetryEvent("product_last_unit_sold", {
-              productId: cartItem.product.id,
-              productName: product.name,
-            }, uid);
-          }
+          logTelemetryEvent("product_last_unit_sold", {
+            productId,
+            productName: product.name,
+          }, uid);
         }
       }
-      
-      console.log("[sell] Products updated");
 
       // Generate charges if installments
-      if (paymentType === 'installments' && remainingBalance > 0) {
-        const token = await auth.currentUser?.getIdToken();
+      if (paymentType === 'installments' && saleResult.remainingBalance > 0) {
         const chargeResponse = await fetch(getApiUrl("/api/payments/create-link"), {
           method: "POST",
           headers: {
@@ -185,10 +171,10 @@ export default function Sell() {
           body: JSON.stringify({
             uid,
             clientId: selectedClient,
-            saleId,
-            title: `Parcelamento - Venda ${saleId}`,
-            description: `${installments}x de R$ ${(remainingBalance / installments).toFixed(2)}`,
-            amount: remainingBalance,
+            saleId: saleResult.saleId,
+            title: `Parcelamento - Venda ${saleResult.saleId}`,
+            description: `${installments}x de R$ ${(saleResult.remainingBalance / installments).toFixed(2)}`,
+            amount: saleResult.remainingBalance,
             metadata: {
               installmentCount: installments,
               downPayment,
@@ -197,7 +183,7 @@ export default function Sell() {
               discountType,
               discountValue,
               discountAmount,
-              saleId,
+              saleId: saleResult.saleId,
             },
           }),
         });
@@ -207,9 +193,9 @@ export default function Sell() {
           const errorMsg = errorData.message || errorData.error || `HTTP ${chargeResponse.status}`;
           setSaveError(`⚠️ Venda salva, mas cobrança falhou: ${errorMsg}. Crie o link manualmente em Cobranças.`);
           logError("sale_charge_creation_failed", errorMsg, {
-            saleId,
+            saleId: saleResult.saleId,
             clientId: selectedClient,
-            amount: remainingBalance,
+            amount: saleResult.remainingBalance,
             status: chargeResponse.status,
           });
         } else {
@@ -296,14 +282,14 @@ export default function Sell() {
               return (
                 <div key={product.id} className={`bg-white rounded-3xl p-3 border transition-all ${qty > 0 ? 'border-primary ring-4 ring-primary/5' : 'border-border/40'}`}>
                   <div className="aspect-square bg-secondary/30 rounded-2xl mb-2 flex items-center justify-center overflow-hidden relative">
-                    {getProductImage(product) && <img src={getProductImage(product)!} className="w-full h-full object-contain mix-blend-multiply" />}
+                    <ProductImageCard product={product} size="full" objectFit="contain" className="!rounded-none !border-0" />
                     <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-md text-white text-[8px] font-black px-2 py-1 rounded-lg uppercase">
                       {product.stock} un
                     </div>
                   </div>
                   <h3 className="text-[11px] font-bold truncate">{product.name}</h3>
                   <div className="flex items-center justify-between mt-2">
-                    <span className="text-xs font-black">R$ {product.salePrice.toFixed(2)}</span>
+                    <span className="text-xs font-black">R$ {Number(product.salePrice || 0).toFixed(2)}</span>
                     <div className="flex items-center gap-1">
                       {qty > 0 && <button onClick={() => removeFromCart(product.id)} className="w-7 h-7 rounded-full bg-secondary flex items-center justify-center active:scale-90"><Minus className="w-3.5 h-3.5"/></button>}
                       {qty > 0 && <span className="text-xs font-black w-4 text-center">{qty}</span>}

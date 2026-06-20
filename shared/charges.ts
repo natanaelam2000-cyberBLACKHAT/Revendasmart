@@ -156,8 +156,8 @@ export interface MPWebhookPayload {
   data?: {
     id?: string | number;
   };
-  live_mode?: boolean;
   user_id?: string | number;
+  live_mode?: boolean;
   api_version?: string;
   date_created?: string;
 }
