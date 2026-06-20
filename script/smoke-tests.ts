@@ -13,6 +13,8 @@ const sell = read("client/src/pages/sell.tsx");
 const subscriptions = read("server/subscriptions.ts");
 const payments = read("server/payments.ts");
 const mpConnections = read("server/mercadopago-connections.ts");
+const app = read("client/src/App.tsx");
+const partialPaymentModal = read("client/src/components/PartialPaymentModal.tsx");
 const vercel = JSON.parse(read("vercel.json"));
 
 assert.match(routes, /catalogSlug.*catalog_slug.*userSlug.*slug/);
@@ -46,6 +48,10 @@ assert.match(payments, /PAYMENT_SYNC_FAILED/);
 assert.match(payments, /PAYMENT_REFERENCE_MISMATCH/);
 assert.match(payments, /chargeId=\$\{encodeURIComponent\(chargeId\)\}/);
 assert.match(mpConnections, /Revendedor charges never fall back to the central account/);
+assert.match(app, /if \(authState\.loading\) return/);
+assert.match(settings, /normalizeSettingsTab/);
+assert.match(publicCatalog, /onError=\{\(\) => setLogoFailed\(true\)\}/);
+assert.match(partialPaymentModal, /safe-area-inset-bottom/);
 assert.ok(vercel.rewrites.some((rule: any) => rule.source === "/u/:storeSlug" && rule.destination === "/index.html"));
 
 const response = await fetch("https://revendasmart-backend-cc2743rkmq-uc.a.run.app/api/public/catalog/adriana-perfumes");

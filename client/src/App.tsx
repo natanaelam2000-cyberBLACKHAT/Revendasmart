@@ -103,25 +103,24 @@ function Router() {
   }, []);
 
   useEffect(() => {
-    if (authState.loading || settingsLoading) return;
+    if (authState.loading) return;
 
     const isPublicRoute =
       location === "/login" ||
       location === "/signup" ||
       location.startsWith("/u/");
 
-    // Redirect unauthenticated users to login
-    if (!authState.uid && !isPublicRoute) {
-      setLocation("/login");
+    // Authentication does not depend on settings. Redirect immediately so
+    // private screens never flash defaults or remain behind a skeleton.
+    if (!authState.uid) {
+      if (!isPublicRoute) setLocation("/login");
       return;
     }
 
-    // Guard: authenticated users who haven't completed onboarding
-    // must go through /onboarding before accessing any other route
-    if (authState.uid && !isPublicRoute && location !== "/onboarding") {
-      if (settings?.onboarding_completed !== true) {
-        setLocation("/onboarding");
-      }
+    // Settings are only needed for the onboarding guard after authentication.
+    if (settingsLoading || isPublicRoute || location === "/onboarding") return;
+    if (settings?.onboarding_completed !== true) {
+      setLocation("/onboarding");
     }
   }, [authState, settings, location, setLocation, settingsLoading]);
 

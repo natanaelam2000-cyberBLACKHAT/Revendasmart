@@ -32,9 +32,11 @@ const [products, setProducts] = useState<Product[]>([]);
 const [settings, setSettings] = useState<AppSettings>(defaultSettings);
 const [loading, setLoading] = useState(true);
 const [loadFailed, setLoadFailed] = useState(false);
+const [logoFailed, setLogoFailed] = useState(false);
 
 useEffect(() => {
   let cancelled = false;
+  setLogoFailed(false);
   async function loadCatalog() {
     setLoading(true);
     setLoadFailed(false);
@@ -103,13 +105,13 @@ const filteredProducts = (Array.isArray(products) ? products : []).filter(p => {
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl bg-primary text-white flex items-center justify-center font-black text-xl overflow-hidden">{settings?.storeLogo ? <img src={settings.storeLogo} alt={storeDisplayName} className="w-full h-full object-cover" loading="lazy" decoding="async" /> : storeDisplayName.charAt(0).toUpperCase()}</div>
+          <div className="w-12 h-12 rounded-2xl bg-primary text-white flex items-center justify-center font-black text-xl overflow-hidden">{settings?.storeLogo && !logoFailed ? <img src={settings.storeLogo} alt={storeDisplayName} className="w-full h-full object-cover" loading="lazy" decoding="async" onError={() => setLogoFailed(true)} /> : storeDisplayName.charAt(0).toUpperCase()}</div>
           <div className="min-w-0"><h1 className="text-xl sm:text-2xl font-black truncate">{storeDisplayName}</h1><p className="text-xs text-muted-foreground">Catálogo digital · {filteredProducts.length} produtos</p></div>
         </div>
       </header>
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         <div className="flex gap-2 overflow-x-auto pb-4 hide-scrollbar">
-          {["todos","masculino","feminino","unisex"].map(g=><button key={g} onClick={()=>setSelectedGender(g)} className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap border ${selectedGender===g?"bg-primary text-white border-primary":"bg-white text-muted-foreground border-slate-200"}`}>{g==="todos"?"Todos":g.charAt(0).toUpperCase()+g.slice(1)}</button>)}
+          {["todos","masculino","feminino","unisex"].map(g=><button key={g} onClick={()=>setSelectedGender(g)} className={`min-h-11 px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap border ${selectedGender===g?"bg-primary text-white border-primary":"bg-white text-muted-foreground border-slate-200"}`}>{g==="todos"?"Todos":g.charAt(0).toUpperCase()+g.slice(1)}</button>)}
         </div>
         {filteredProducts.length>0?<div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-5">
           {filteredProducts.map(product=>{const price=Number(product.salePrice||0); return <article key={product.id} className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">

@@ -35,6 +35,13 @@ const InputField = ({ label, value, onChange, placeholder = "", type = "text", d
 const normalizeCatalogSlug = (value: string) => value.trim().toLowerCase().normalize("NFD")
   .replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
+const VALID_SETTINGS_TABS = new Set([
+  "menu", "account", "store", "pix", "catalog", "preferences",
+  "growth", "backup", "export_csv", "support", "about_and_legal",
+]);
+const normalizeSettingsTab = (value: string | null) =>
+  value && VALID_SETTINGS_TABS.has(value) ? value : "menu";
+
 async function compressLogo(file: File, maxSize = 512, quality = 0.82): Promise<Blob | null> {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -83,7 +90,7 @@ export default function Settings() {
   const [activeTab, setActiveTab] = useState(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
-      return params.get('tab') || 'menu';
+      return normalizeSettingsTab(params.get('tab'));
     }
     return 'menu';
   });
@@ -97,9 +104,16 @@ export default function Settings() {
   const logoInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    setActiveTab(params.get("tab") || "menu");
-    const syncTab = () => setActiveTab(new URLSearchParams(window.location.search).get("tab") || "menu");
+    const syncTab = () => {
+      const params = new URLSearchParams(window.location.search);
+      const requestedTab = params.get("tab");
+      const normalizedTab = normalizeSettingsTab(requestedTab);
+      setActiveTab(normalizedTab);
+      if (requestedTab && normalizedTab === "menu") {
+        window.history.replaceState({}, "", "/settings");
+      }
+    };
+    syncTab();
     window.addEventListener("popstate", syncTab);
     return () => window.removeEventListener("popstate", syncTab);
   }, [location]);
