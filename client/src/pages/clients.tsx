@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Layout } from "@/components/layout";
 import { Installment, defaultSettings } from "@/lib/mock-data";
-import { Search, UserPlus, Phone, ChevronRight, MessageSquare, ShoppingBag, Receipt, Download, CheckSquare, Square, Send, AlertCircle, Pencil, Trash2 } from "lucide-react";
+import { Search, UserPlus, ChevronRight, Download, CheckSquare, Square, Send, AlertCircle, Pencil, Trash2 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useClientsData } from "@/hooks/useClientsData";
 import { usePlanData } from "@/hooks/usePlanData";

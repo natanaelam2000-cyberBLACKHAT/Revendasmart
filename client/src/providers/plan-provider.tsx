@@ -46,6 +46,11 @@ export function PlanProvider({
 
   useEffect(() => {
     const auth = getFirebaseAuth();
+    if (!auth) {
+      setPlanData(null);
+      setLoading(false);
+      return;
+    }
 
     let unsubFirestore: (() => void) | null = null;
 

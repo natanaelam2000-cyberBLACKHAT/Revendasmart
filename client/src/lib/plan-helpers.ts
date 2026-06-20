@@ -1,4 +1,4 @@
-import { PLAN_CONFIG, PlanType, canAddProduct, canAddClient, canUseFeature, isPremiumOpenAccessActive } from '@shared/monetization';
+import { PLAN_CONFIG, PlanType, canAddProduct, canAddClient, canUseFeature, isPremiumOpenAccessActive, type GlobalConfig } from '@shared/monetization';
 
 /**
  * Client-side plan validation helpers
@@ -6,7 +6,7 @@ import { PLAN_CONFIG, PlanType, canAddProduct, canAddClient, canUseFeature, isPr
 
   // fallback segurança
 export function checkProductLimit(
-  plan: PlanType,
+  plan: PlanType | "admin" | null | undefined,
   currentCount: number,
   openAccess = false
 ): { allowed: boolean; limit: number } {
@@ -49,7 +49,7 @@ export function checkCategoriesFeature(plan: PlanType, openAccess = false): bool
 
 export function checkMultiNicheFeature(plan: PlanType, openAccess = false): boolean {
   if (openAccess) return true;
-  return canUseFeature(plan, 'multiNiche');
+  return PLAN_CONFIG[plan].limits.niches !== 1;
 }
 
 export function getPlanName(plan: PlanType): string {
@@ -64,7 +64,7 @@ export function getPlanColor(plan: PlanType): string {
   return PLAN_CONFIG[plan].color;
 }
 
-export function shouldBypassLimits(globalConfig: { premiumOpenAccess: boolean; premiumOpenAccessUntil: Date | null } | null, hasPremiumAccess: boolean): boolean {
+export function shouldBypassLimits(globalConfig: GlobalConfig | null, hasPremiumAccess: boolean): boolean {
   return hasPremiumAccess || isPremiumOpenAccessActive(globalConfig);
 }
 

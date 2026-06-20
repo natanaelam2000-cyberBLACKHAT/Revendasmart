@@ -1,26 +1,19 @@
 import { useState, useEffect, useMemo } from "react";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { useLocation } from "wouter";
-import { 
-  Product
-} from "@/lib/mock-data";
 import { Layout } from "@/components/layout";
 import { ProductImageCard } from "@/components/ProductImageCard";
-import { PlanStatusBadge } from "@/components/PlanStatusBadge";
-import { 
-  Search, TrendingUp, Package, AlertCircle, Filter, Zap, Share2, 
-  Sparkles, ArrowRight, TrendingDown, Users, ShoppingCart, DollarSign, Bell as BellIcon
+import {
+  TrendingUp, Package, AlertCircle, Zap, Share2,
+  Sparkles, ArrowRight, TrendingDown, Users, Bell as BellIcon
 } from "lucide-react";
-import { Link } from "wouter";
 import { differenceInDays, isToday, parseISO } from "date-fns";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { useDashboardData } from "@/hooks/useDashboardData";
-import { usePlanData } from "@/hooks/usePlanData";
-import { getFirebaseAuth } from "@/lib/firebase";
 import { useFeatureEnabled } from "@/lib/remote-config-context";
 
 // Helper: Get stock badge for low stock products
-const getStockBadge = (stock: number, lowStockThreshold: number) => {
+const getStockBadge = (stock: number) => {
   if (stock === 0) {
     return { icon: "🔴", label: "Esgotado", color: "bg-red-100 text-red-700" };
   } else if (stock <= 3) {
@@ -45,20 +38,16 @@ const getSalesRankBadge = (index: number) => {
 
 export default function Dashboard() {
   // Call all hooks before any conditional returns
-  const [location, setLocation] = useLocation();
+  const [, setLocation] = useLocation();
   const { onboarding_completed, loading: settingsLoading, settings } = useUserSettings();
   const { products, sales, clients, loading: dataLoading, error: dataError } = useDashboardData();
-  const { hasPremiumAccess } = usePlanData();
-  const showSalesDashboard = useFeatureEnabled("sales_dashboard_enabled");
   const showInsights = useFeatureEnabled("insights_enabled");
   const enableReferralProgram = useFeatureEnabled("referral_program_enabled");
 
   // Declare all state hooks here (billings, posts still from Firestore will be added later if needed)
   const [billings] = useState<any[]>([]);
   const [posts] = useState<any[]>([]);
-  
-  const [search, setSearch] = useState("");
-  const [filterBrand, setFilterBrand] = useState<string>("All");
+
   const [showFirstProductCTA, setShowFirstProductCTA] = useState<boolean>(false);
 
   // Declare all effect hooks here
@@ -73,11 +62,11 @@ export default function Dashboard() {
     if (typeof window !== 'undefined' && !showFirstProductCTA) {
       const params = new URLSearchParams(window.location.search);
       const action = params.get('action');
-      
+
       if (action === 'first_product') {
         // Mark CTA as shown
         setShowFirstProductCTA(true);
-        
+
         // Remove the action param from URL to prevent re-triggering on refresh
         const newUrl = window.location.pathname + window.location.hash;
         window.history.replaceState({ path: newUrl }, '', newUrl);
@@ -118,9 +107,7 @@ export default function Dashboard() {
     };
   }, [currentMonthSales, products]);
 
-  const totalStockValue = products.reduce((acc, p) => acc + (p.costPrice * p.stock), 0);
-  const totalExpectedProfit = products.reduce((acc, p) => acc + ((p.salePrice - p.costPrice) * p.stock), 0);
-  
+
   // Smart Suggestions Logic - Prioritized & Actionable
   const insights = useMemo(() => {
     const list: { title: string, desc: string, icon: any, color: string, action: string, link: string, priority: number }[] = [];
@@ -169,7 +156,7 @@ export default function Dashboard() {
   // Inactive Clients (Priority 4 - medium attention)
   clients.forEach(c => {
     const clientSales = sales.filter(s => s.clientId === c.id);
-    const lastSale = clientSales.length > 0 
+    const lastSale = clientSales.length > 0
       ? clientSales.reduce((latest, s) => {
           const d = parseISO(s.date);
           return d > latest ? d : latest;
@@ -209,14 +196,6 @@ export default function Dashboard() {
   // Compute derived values after all hooks
   const todayBillings = billings.filter(b => isToday(parseISO(b.dueDate)) && b.status !== 'paid');
   const todayPosts = posts.filter(p => isToday(parseISO(p.scheduledDate)) && p.status !== 'posted');
-  
-  const filteredProducts = products.filter(p => {
-    const matchesSearch = p.name.toLowerCase().includes(search.toLowerCase());
-    const matchesBrand = filterBrand === "All" || p.brand === filterBrand;
-    return matchesSearch && matchesBrand;
-  });
-
-  const brands = ["All", ...Array.from(new Set(products.map(p => p.brand)))];
 
   // Top selling products in current month
   const topProducts = useMemo(() => {
@@ -247,53 +226,6 @@ export default function Dashboard() {
       .sort((a, b) => a.stock - b.stock)
       .slice(0, 3);
   }, [products, settings.lowStockThreshold]);
-
-const handleSubscribe = async () => {
-  try {
-    const user = getFirebaseAuth().currentUser;
-
-    if (!user) {
-      alert("Usuário não autenticado");
-      return;
-    }
-
-    const token = await user.getIdToken();
-
-    const res = await fetch(
-      "https://revendasmart-backend-164193806378.us-central1.run.app/api/app-subscription/create",
-      {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${token}`,
-        },
-      }
-    );
-
-    const data = await res.json();
-
- if (data.initPoint) {
-window.location.href = data.initPoint;
-} else {
-  console.error(data);
-  alert("Erro ao iniciar pagamento");
-}
-  } catch (err) {
-    console.error(err);
-    alert("Erro ao conectar com servidor");
-  }
-};
-  // Total stock value and quantity
-  const stockSummary = useMemo(() => {
-    let totalValue = 0;
-    let totalSaleValue = 0;
-    let totalQuantity = 0;
-    products.forEach(p => {
-      totalValue += p.costPrice * p.stock;
-      totalSaleValue += p.salePrice * p.stock;
-      totalQuantity += p.stock;
-    });
-    return { totalValue, totalSaleValue, totalQuantity };
-  }, [products]);
 
   // Show loading while checking onboarding status
   if (settingsLoading || dataLoading) {
@@ -414,8 +346,8 @@ window.location.href = data.initPoint;
                 >
                   <div className="flex items-center gap-3">
                     <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${
-                      insight.color === 'destructive' ? 'bg-destructive/10 text-destructive' : 
-                      insight.color === 'orange' ? 'bg-orange-100 text-orange-600' : 
+                      insight.color === 'destructive' ? 'bg-destructive/10 text-destructive' :
+                      insight.color === 'orange' ? 'bg-orange-100 text-orange-600' :
                       insight.color === 'primary' ? 'bg-primary/10 text-primary' : 'bg-green-100 text-green-600'
                     }`}>
                       <insight.icon className="w-5 h-5" />
@@ -447,14 +379,14 @@ window.location.href = data.initPoint;
               {topProducts.map(({ product, quantity, revenue, profit }, index) => {
                 const badge = getSalesRankBadge(index);
                 return product ? (
-                  <div 
-                    key={product.id} 
+                  <div
+                    key={product.id}
                     className="min-w-[250px] bg-white rounded-2xl border border-border/50 shadow-sm overflow-hidden hover:shadow-md transition-all active:scale-95 flex items-center group"
                   >
                     {/* Image Container - Compacto */}
                     <div className="relative w-20 h-20 m-3 rounded-xl flex-shrink-0 bg-gradient-to-br from-primary/5 to-primary/10 flex items-center justify-center overflow-hidden group-hover:from-primary/10 group-hover:to-primary/15 transition-colors">
                       <ProductImageCard product={product} size="full" objectFit="contain" className="!rounded-none group-hover:scale-110 transition-transform duration-300" />
-                      
+
                       {/* Sales Rank Badge - Floating */}
                       {badge && (
                         <div className={`absolute top-2 right-2 ${badge.color} px-2 py-1 rounded-full text-[10px] font-bold flex items-center gap-1 shadow-md backdrop-blur-sm`}>
@@ -469,7 +401,7 @@ window.location.href = data.initPoint;
                         <p className="text-[8px] font-black text-primary uppercase mb-0.5 truncate">{product.brand}</p>
                         <p className="text-[10px] font-bold text-foreground truncate line-clamp-2">{product.name}</p>
                       </div>
-                      
+
                       {/* Stats Compactos */}
                       <div className="space-y-1 border-t border-border/30 pt-2">
                         <div className="flex justify-between items-center text-[9px]">
@@ -498,16 +430,16 @@ window.location.href = data.initPoint;
             </h2>
             <div className="flex gap-3 overflow-x-auto pb-2 hide-scrollbar -mx-6 px-6">
               {lowStockProducts.map(product => {
-                const badge = getStockBadge(product.stock, settings.lowStockThreshold);
+                const badge = getStockBadge(product.stock);
                 return (
-                  <div 
-                    key={product.id} 
+                  <div
+                    key={product.id}
                     className="min-w-[160px] bg-white rounded-[1.5rem] border border-destructive/20 shadow-sm overflow-hidden hover:shadow-md transition-all active:scale-95 flex flex-col"
                   >
                     {/* Image Container - Larger & Prominent */}
                     <div className="relative w-full aspect-square bg-gradient-to-br from-destructive/5 to-destructive/10 flex items-center justify-center overflow-hidden">
                       <ProductImageCard product={product} size="full" objectFit="contain" className="!rounded-none" />
-                      
+
                       {/* Stock Badge - Floating */}
                       {badge && (
                         <div className={`absolute top-2 right-2 ${badge.color} px-2 py-1 rounded-full text-[10px] font-bold flex items-center gap-1 shadow-sm`}>
@@ -523,7 +455,7 @@ window.location.href = data.initPoint;
                         <p className="text-[9px] font-black text-primary uppercase mb-1 truncate">{product.brand}</p>
                         <p className="text-xs font-bold text-foreground truncate mb-2">{product.name}</p>
                       </div>
-                      
+
                       {/* Stats */}
                       <div className="space-y-1.5 border-t border-destructive/20 pt-2">
                         <div className="flex justify-between items-center">

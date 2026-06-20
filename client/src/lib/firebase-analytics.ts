@@ -106,7 +106,7 @@ export interface FirebaseAnalyticsEvents {
     num_items: number;
   };
   catalog_shared: {
-    method: "whatsapp" | "email";
+    method: "whatsapp" | "email" | "copy";
     num_recipients?: number;
   };
   ad_text_copied: {
@@ -145,7 +145,12 @@ export function trackAnalyticsEvent<K extends keyof FirebaseAnalyticsEvents>(
   }
 
   try {
-    firebaseLogEvent(analytics, eventName, eventData as any);
+    const logTypedEvent = firebaseLogEvent as (
+      analyticsInstance: Analytics,
+      name: string,
+      params?: Record<string, unknown>
+    ) => void;
+    logTypedEvent(analytics, eventName, eventData);
     console.log(`[FirebaseAnalytics] Tracked: ${eventName}`);
   } catch (err) {
     console.error("[FirebaseAnalytics] Failed to track event:", err);

@@ -193,10 +193,12 @@ export default function Sell() {
           const errorMsg = errorData.message || errorData.error || `HTTP ${chargeResponse.status}`;
           setSaveError(`⚠️ Venda salva, mas cobrança falhou: ${errorMsg}. Crie o link manualmente em Cobranças.`);
           logError("sale_charge_creation_failed", errorMsg, {
-            saleId: saleResult.saleId,
-            clientId: selectedClient,
-            amount: saleResult.remainingBalance,
-            status: chargeResponse.status,
+            context: {
+              saleId: saleResult.saleId,
+              clientId: selectedClient,
+              amount: saleResult.remainingBalance,
+              status: chargeResponse.status,
+            },
           });
         } else {
           const chargeData = await chargeResponse.json();

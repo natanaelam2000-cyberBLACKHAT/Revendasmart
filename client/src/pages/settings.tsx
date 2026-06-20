@@ -1,8 +1,8 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { Layout } from "@/components/layout";
-import { 
-  AppSettings, 
-  logout, APP_VERSION
+import {
+  AppSettings,
+  logout, APP_VERSION, getCurrentUserId, getStored, STORAGE_KEYS
 } from "@/lib/mock-data";
 import { getCurrentFirebaseUser, getFirebaseIdToken, getFirebaseAuth, measureOperation, logTelemetryEvent } from "@/lib/firebase";
 import { useLocation } from "wouter";
@@ -10,18 +10,17 @@ import { getApiUrl } from "@/lib/api-config";
 import { QRCodeSVG } from "qrcode.react";
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { useUserSettings } from "@/hooks/useUserSettings";
-import { 
-  Store, Palette, CreditCard, MessageSquare, Package, BookOpen, 
-  Download, Save, ChevronRight, Bell, Upload, Trash2, ShieldAlert, RefreshCw, Activity, CheckCircle, XCircle, Users, Share2, ExternalLink, FileSpreadsheet, QrCode, Copy, Info, Mail, Globe, Check, Scale, HelpCircle, ChevronDown, User, KeyRound, LogOut, ArrowLeft, Receipt
+import {
+  Store, CreditCard,
+  Download, Save, ChevronRight, Bell, Upload, RefreshCw, Users, Share2, ExternalLink, FileSpreadsheet, QrCode, Copy, Mail, Scale, HelpCircle, ChevronDown, User, KeyRound, LogOut, ArrowLeft, Receipt
 } from "lucide-react";
-import { NICHO_IDS, getNichoConfig, toBusinessTypesArray } from "@/lib/nicho-config";
 
 // MOVED OUTSIDE: InputField must be defined OUTSIDE Settings component
 // to prevent recreation on every render (which was causing focus loss)
 const InputField = ({ label, value, onChange, placeholder = "", type = "text", disabled = false }: any) => (
   <div className="space-y-1.5">
     <label className="text-[10px] font-black text-muted-foreground uppercase px-1 tracking-widest">{label}</label>
-    <input 
+    <input
       type={type}
       disabled={disabled}
       className={`w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none transition-all ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
@@ -66,16 +65,16 @@ async function compressLogo(file: File, maxSize = 512, quality = 0.82): Promise<
 }
 export default function Settings() {
   // Get settings from Firestore via hook
-  const { settings: firestoreSettings, loading: settingsLoading, error: settingsError } = useUserSettings();
-  
+  const { settings: firestoreSettings, loading: settingsLoading } = useUserSettings();
+
   // Local state for form edits (synced with Firestore on save)
   // Initialize with default empty object to avoid undefined
   const [formSettings, setFormSettings] = useState<AppSettings>(() => firestoreSettings || {});
-  
+
   // Track if we've already initialized formSettings from Firestore
   // This ensures we only sync ONCE on mount, not on every Firestore update
   const hasInitialized = useRef(false);
-  
+
   // Sync Firestore settings to form ONLY on initial load
   // This prevents re-renders from interrupting user input
   useEffect(() => {
@@ -85,8 +84,8 @@ export default function Settings() {
       hasInitialized.current = true;
     }
   }, [settingsLoading]); // Only depend on loading state, not firestoreSettings
-  
-  
+
+
   const [activeTab, setActiveTab] = useState(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
@@ -94,10 +93,10 @@ export default function Settings() {
     }
     return 'menu';
   });
-  
+
   const [location, setLocation] = useLocation();
   const [generatedUrl, setGeneratedUrl] = useState("");
-  const [isSaving, setIsSaving] = useState(false);
+  const [, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
   const [openHelpIndex, setOpenHelpIndex] = useState<number | null>(null);
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
@@ -130,11 +129,8 @@ export default function Settings() {
       const firebaseUser = getCurrentFirebaseUser();
       if (firebaseUser?.email) return firebaseUser.email;
       return null;
-    } catch (e) { return null; }
+    } catch { return null; }
   }, []);
-
-  // Resolve userId (use firebaseUid)
-  const userId = firebaseUid;
 
   const handleSave = async () => {
     if (!firebaseUid) {
@@ -197,7 +193,7 @@ export default function Settings() {
       setFormSettings({ ...formSettings, catalogSlug: slug, catalog_slug: slug });
       const origin = (typeof window !== "undefined" && window.location && window.location.origin) ? window.location.origin : "";
       setGeneratedUrl(origin ? `${origin}/u/${slug}` : `/u/${slug}`);
-    } catch (e) {
+    } catch {
       setSaveMessage("Erro ao gerar link.");
     }
   };
@@ -307,8 +303,8 @@ export default function Settings() {
           </p>
           {saveMessage && (
             <div className={`text-[9px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg ${
-              saveMessage.includes("Erro") 
-                ? "bg-red-100 text-red-700 border border-red-200" 
+              saveMessage.includes("Erro")
+                ? "bg-red-100 text-red-700 border border-red-200"
                 : "bg-green-100 text-green-700 border border-green-200"
             }`}>
               {saveMessage.includes("Erro") ? "⚠️ " : "✓ "}
@@ -363,11 +359,11 @@ export default function Settings() {
                   <Store className="w-4 h-4 text-primary" />
                   <span className="text-[10px] font-black text-muted-foreground uppercase">Catálogo Ativo</span>
                 </div>
-                <input 
-                  type="checkbox" 
-                  checked={!!formSettings?.enablePublicCatalog} 
-                  onChange={e => setFormSettings({...formSettings, enablePublicCatalog: e.target.checked})} 
-                  className="w-5 h-5 accent-primary" 
+                <input
+                  type="checkbox"
+                  checked={!!formSettings?.enablePublicCatalog}
+                  onChange={e => setFormSettings({...formSettings, enablePublicCatalog: e.target.checked})}
+                  className="w-5 h-5 accent-primary"
                 />
               </div>
 
@@ -389,15 +385,15 @@ export default function Settings() {
                           <div className="bg-white p-6 rounded-3xl border border-border/50 flex flex-col items-center gap-4">
                             <p className="text-[10px] font-black text-muted-foreground uppercase tracking-widest">QR Code do Catálogo</p>
                             <div className="p-4 bg-white border-4 border-secondary rounded-2xl">
-                              <QRCodeSVG 
+                              <QRCodeSVG
                                 id="qr-code-svg"
-                                value={generatedUrl} 
+                                value={generatedUrl}
                                 size={160}
                                 level="H"
                                 includeMargin={false}
                               />
                             </div>
-                            <button 
+                            <button
                               onClick={handleDownloadQR}
                               className="flex items-center gap-2 text-[10px] font-black text-primary uppercase hover:opacity-70 transition-opacity"
                             >
@@ -419,28 +415,28 @@ export default function Settings() {
                   <Bell className="w-4 h-4 text-primary" />
                   <span className="text-[10px] font-black text-muted-foreground uppercase">Lembretes de Cobrança</span>
                 </div>
-                <input 
-                  type="checkbox" 
-                  checked={!!formSettings?.notification_settings?.enable_billing_reminders} 
+                <input
+                  type="checkbox"
+                  checked={!!formSettings?.notification_settings?.enable_billing_reminders}
                   onChange={e => setFormSettings({
-                    ...formSettings, 
+                    ...formSettings,
                     notification_settings: {
                       ...(formSettings?.notification_settings || {}),
                       enable_billing_reminders: e.target.checked
                     }
-                  })} 
-                  className="w-5 h-5 accent-primary" 
+                  })}
+                  className="w-5 h-5 accent-primary"
                 />
               </div>
 
               <div className="space-y-1.5">
                 <label className="text-[10px] font-black text-muted-foreground uppercase px-1 tracking-widest">Avisar quantos dias antes?</label>
-                <input 
+                <input
                   type="number"
                   className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none"
                   value={formSettings?.notification_settings?.reminder_days_before_due || 1}
                   onChange={e => setFormSettings({
-                    ...formSettings, 
+                    ...formSettings,
                     notification_settings: {
                       ...(formSettings?.notification_settings || {}),
                       reminder_days_before_due: parseInt(e.target.value) || 0
@@ -452,13 +448,9 @@ export default function Settings() {
           )}
 
           {activeTab === 'growth' && (
-            <div className="space-y-6 animate-in fade-in slide-in-from-right-4" 
+            <div className="space-y-6 animate-in fade-in slide-in-from-right-4"
               onLoad={() => {
-                try {
-                  logTelemetryEvent("growth_tab_viewed", { origin: "settings_nav" }).catch(() => {});
-                } catch (e) {
-  console.error(e);
-}
+                logTelemetryEvent("growth_tab_viewed", { origin: "settings_nav" }).catch(() => {});
               }}
             >
               <div className="p-6 bg-primary/5 rounded-[2rem] border border-primary/10 space-y-4">
@@ -484,17 +476,17 @@ export default function Settings() {
                 <div className="p-6 bg-white rounded-2xl border border-border space-y-5">
                   <div>
                     <h3 className="text-xs font-black uppercase tracking-widest text-foreground mb-4">Suas Indicações Convertidas</h3>
-                    
+
                     {(() => {
                       const conversions = firestoreSettings?.referral_conversions || 0;
                       const lastConversionAt = firestoreSettings?.last_referral_conversion_at;
-                      
+
                       const lastConversionDate = lastConversionAt ? (() => {
                         try {
                           const date = new Date(lastConversionAt);
-                          return date.toLocaleDateString('pt-BR', { 
-                            year: 'numeric', 
-                            month: 'long', 
+                          return date.toLocaleDateString('pt-BR', {
+                            year: 'numeric',
+                            month: 'long',
                             day: 'numeric',
                             hour: '2-digit',
                             minute: '2-digit'
@@ -503,7 +495,7 @@ export default function Settings() {
                           return lastConversionAt;
                         }
                       })() : null;
-                      
+
                       return conversions === 0 ? (
                         <div className="text-center py-6 text-muted-foreground" data-testid="text-empty-conversions">
                           <Users className="w-12 h-12 mx-auto mb-3 opacity-20" />
@@ -544,18 +536,18 @@ export default function Settings() {
                 <div className="p-6 bg-gradient-to-r from-amber-50 to-yellow-50 rounded-2xl border border-amber-100 space-y-5">
                   <div>
                     <h3 className="text-xs font-black uppercase tracking-widest text-amber-900 mb-4">Seu Saldo de Recompensas</h3>
-                    
+
                     {(() => {
                       const eligibleConversions = firestoreSettings?.reward_eligible_conversions || 0;
                       const grantedCount = firestoreSettings?.reward_granted_count || 0;
                       const lastGrantedAt = firestoreSettings?.reward_last_granted_at;
-                      
+
                       const lastGrantedDate = lastGrantedAt ? (() => {
                         try {
                           const date = new Date(lastGrantedAt);
-                          return date.toLocaleDateString('pt-BR', { 
-                            year: 'numeric', 
-                            month: 'long', 
+                          return date.toLocaleDateString('pt-BR', {
+                            year: 'numeric',
+                            month: 'long',
                             day: 'numeric',
                             hour: '2-digit',
                             minute: '2-digit'
@@ -564,7 +556,7 @@ export default function Settings() {
                           return lastGrantedAt;
                         }
                       })() : null;
-                      
+
                       return (eligibleConversions === 0 && grantedCount === 0) ? (
                         <div className="text-center py-6 text-amber-900/60">
                           <p className="text-[11px] font-medium">Nenhuma recompensa disponível ainda</p>
@@ -582,7 +574,7 @@ export default function Settings() {
                               <p className="text-[9px] text-amber-900/60">Baseado em suas indicações convertidas</p>
                             </div>
                           )}
-                          
+
                           {/* Concedidas Section */}
                           {grantedCount > 0 && (
                             <div className="p-4 bg-green-50/80 rounded-xl border border-green-200/70 space-y-2">
@@ -606,7 +598,7 @@ export default function Settings() {
                 <div>
                   <label className="text-[10px] font-black text-muted-foreground uppercase px-1 tracking-widest mb-2 block">Seu Link de Referência</label>
                   <div className="flex gap-2">
-                    <input 
+                    <input
                       readOnly
                       value={`https://revendasmart.vercel.app?referral=${firebaseUid || 'seu-id'}`}
                       className="flex-1 bg-secondary/50 border-none rounded-2xl p-4 text-xs focus:ring-2 focus:ring-primary/20 outline-none"
@@ -640,10 +632,11 @@ export default function Settings() {
                       onClick={() => {
                         const link = `https://revendasmart.vercel.app?referral=${firebaseUid || 'seu-id'}`;
                         const text = `Confira o RevendaSmart! Gerenciador completo para revendedoras. ${link}`;
-                        const method = navigator.share ? "native_share" : "direct_share";
+                        const canShare = typeof navigator.share === "function";
+                        const method = canShare ? "native_share" : "direct_share";
                         logTelemetryEvent("referral_share_initiated", { method, origin: "settings_growth" }).catch(() => {});
-                        
-                        if (navigator.share) {
+
+                        if (canShare) {
                           navigator.share({ title: "RevendaSmart", text })
                             .then(() => {
                               logTelemetryEvent("referral_share_success", { method: "native_share" }).catch(() => {});
@@ -689,7 +682,7 @@ export default function Settings() {
                 <p className="text-[10px] text-muted-foreground leading-relaxed">
                   Baixe todos os seus dados deste dispositivo.
                 </p>
-                <button 
+                <button
                   onClick={() => {
                     try {
                       const id = getCurrentUserId();
@@ -711,7 +704,7 @@ export default function Settings() {
                       a.click();
                       setSaveMessage("Backup exportado com sucesso! ✨");
                       setTimeout(() => setSaveMessage(""), 3000);
-                    } catch (e) { setSaveMessage("Erro ao exportar."); }
+                    } catch { setSaveMessage("Erro ao exportar."); }
                   }}
                   className="w-full bg-primary text-white font-black py-3 rounded-xl text-[10px] uppercase tracking-widest flex items-center justify-center gap-2"
                 >
@@ -727,9 +720,9 @@ export default function Settings() {
                 <label className="w-full bg-white border border-dashed border-border rounded-xl p-4 flex flex-col items-center justify-center gap-2 cursor-pointer active:bg-secondary/50 transition-colors">
                   <Upload className="w-4 h-4 text-muted-foreground" />
                   <span className="text-[10px] font-bold uppercase text-muted-foreground">Selecionar Arquivo .json</span>
-                  <input 
-                    type="file" 
-                    className="hidden" 
+                  <input
+                    type="file"
+                    className="hidden"
                     accept=".json"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
@@ -757,7 +750,7 @@ export default function Settings() {
                           });
                           setSaveMessage('Backup restaurado com sucesso! ✨');
                           setTimeout(() => window.location.reload(), 1500);
-                        } catch (err) { 
+                        } catch {
                           setSaveMessage('Erro ao importar: arquivo inválido.');
                         }
                       };
@@ -773,8 +766,8 @@ export default function Settings() {
             <div className="space-y-4 animate-in fade-in slide-in-from-right-4">
               <div className="p-4 bg-secondary/30 rounded-2xl border border-border space-y-4">
                 <h3 className="text-xs font-black uppercase tracking-widest text-muted-foreground">Exportar Planilhas (CSV)</h3>
-                
-                <button 
+
+                <button
                   onClick={() => {
                     const data = getStored(STORAGE_KEYS.CLIENTS, []);
                     const headers = ["ID", "Nome", "Telefone", "Email", "Notas"];
@@ -791,7 +784,7 @@ export default function Settings() {
                   <FileSpreadsheet className="w-4 h-4 text-green-600" /> Exportar Clientes (CSV)
                 </button>
 
-                <button 
+                <button
                   onClick={() => {
                     const data = getStored(STORAGE_KEYS.SALES, []);
                     const headers = ["ID", "Cliente ID", "Total", "Pagamento", "Data"];
@@ -808,7 +801,7 @@ export default function Settings() {
                   <FileSpreadsheet className="w-4 h-4 text-green-600" /> Exportar Vendas (CSV)
                 </button>
 
-                <button 
+                <button
                   onClick={() => {
                     const data = getStored(STORAGE_KEYS.INSTALLMENTS, []);
                     const headers = ["ID", "Venda ID", "Cliente ID", "Valor", "Vencimento", "Status"];
@@ -960,7 +953,7 @@ Dica: Descreva seu problema e se possível anexe uma screenshot do erro.`
                     </div>
                     <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${openHelpIndex === index ? 'rotate-180' : ''}`} />
                   </div>
-                  
+
                   {/* Expanded Content */}
                   {openHelpIndex === index && (
                     <div className="mt-2 bg-primary/5 border border-primary/20 p-4 rounded-2xl animate-in fade-in slide-in-from-top-2">
@@ -974,7 +967,7 @@ Dica: Descreva seu problema e se possível anexe uma screenshot do erro.`
               <div className="mt-6 bg-gradient-to-br from-primary/15 to-primary/5 p-6 rounded-3xl border border-primary/20 space-y-3">
                 <p className="text-xs font-bold text-primary uppercase">Continua com dúvidas?</p>
                 <p className="text-xs text-muted-foreground leading-relaxed">Nossa equipe está aqui para ajudar! Entre em contato:</p>
-                <a 
+                <a
                   href="mailto:revendasmart.suporte@gmail.com"
                   className="inline-flex items-center gap-2 bg-primary text-white font-black text-xs px-4 py-3 rounded-xl hover:bg-primary/90 transition-colors uppercase"
                   data-testid="button-support-email"
@@ -1018,7 +1011,7 @@ Dica: Descreva seu problema e se possível anexe uma screenshot do erro.`
               {/* Legal Documents & Privacy */}
               <div className="space-y-3">
                 <h3 className="text-[10px] font-black text-muted-foreground uppercase tracking-widest px-1">Documentos Legais</h3>
-                
+
                 {/* Privacy Policy */}
                 <a
                   href={getApiUrl("/api/legal/privacy-policy")}
@@ -1073,7 +1066,7 @@ Dica: Descreva seu problema e se possível anexe uma screenshot do erro.`
               {/* Support & Contact */}
               <div className="space-y-3">
                 <h3 className="text-[10px] font-black text-muted-foreground uppercase tracking-widest px-1">Suporte</h3>
-                
+
                 <a
                   href="mailto:revendasmart.suporte@gmail.com"
                   className="w-full flex items-center justify-between bg-white border border-border/60 p-4 rounded-2xl shadow-sm hover:bg-primary/5 transition-colors"

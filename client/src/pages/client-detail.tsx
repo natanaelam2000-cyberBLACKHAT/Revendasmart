@@ -1,10 +1,10 @@
 import { useState, useMemo } from "react";
 import { useParams, useLocation } from "wouter";
-import { Installment } from "@/lib/mock-data";
+import { Installment, type Sale } from "@/lib/mock-data";
 import { useClientsData } from "@/hooks/useClientsData";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { Layout } from "@/components/layout";
-import { Phone, MessageSquare, ShoppingBag, Receipt, ChevronLeft, Calendar } from "lucide-react";
+import { Phone, MessageSquare, ShoppingBag, ChevronLeft, Calendar } from "lucide-react";
 import { format, parseISO } from "date-fns";
 
 export default function ClientDetail() {
@@ -90,7 +90,7 @@ export default function ClientDetail() {
                     <span className="text-sm font-bold">R$ {sale.totalPrice.toFixed(2)}</span>
                   </div>
                   <div className="flex flex-wrap gap-1">
-                    {sale.products.map((p, i) => (
+                    {sale.products.map((p: Sale["products"][number], i: number) => (
                       <span key={i} className="text-[10px] bg-secondary px-2 py-0.5 rounded-full">
                         {products.find(prod => prod.id === p.productId)?.name || 'Produto'} ({p.quantity}x)
                       </span>

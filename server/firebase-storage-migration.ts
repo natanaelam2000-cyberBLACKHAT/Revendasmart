@@ -35,7 +35,7 @@ export async function checkStorageReadiness(): Promise<MigrationPrepResult> {
     if (!admin) {
       errors.push("Firebase Admin SDK not initialized");
       ready = false;
-      return { ready, errors };
+      return { ready, errors, samplePath: "" };
     }
 
     // Get storage bucket from Firebase project

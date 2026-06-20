@@ -2,10 +2,11 @@ import { Sparkles, Share2, Copy } from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { usePlanData } from "@/hooks/usePlanData";
-import { PLANS } from "@shared/monetization";
+import { PLANS, type GlobalConfig } from "@shared/monetization";
 
 export function PlanStatusBadge() {
-  const { activePlan, hasPremiumAccess, referralCode, shareLink, referralCount, loading, globalConfig } = usePlanData();
+  const { activePlan, hasPremiumAccess, referralCode, shareLink, referralCount, loading, globalConfig: rawGlobalConfig } = usePlanData();
+  const globalConfig = rawGlobalConfig as GlobalConfig | null;
   const [copied, setCopied] = useState(false);
   const [, setLocation] = useLocation();
   const isOpenAccess = !!globalConfig?.premiumOpenAccess;

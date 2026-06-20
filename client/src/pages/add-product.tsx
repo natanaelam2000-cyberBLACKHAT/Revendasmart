@@ -7,6 +7,7 @@ const BarcodeScanner = lazy(
   () => import("@/components/barcode-scanner")
 );
 import { Product, defaultSettings } from "@/lib/mock-data";
+import type { PlanType } from "@shared/monetization";
 import { getFirebaseAuth, getFirebaseIdToken, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";
 import { 
   getFirestore, 
@@ -77,6 +78,25 @@ async function compressImage(
   });
 }
 
+interface ProductFormData {
+  name: string;
+  brand: string;
+  category: string;
+  costPrice: number;
+  salePrice: number;
+  stock: number;
+  barcode: string;
+  description: string;
+  imageUrl: string;
+  storagePath: string;
+  extras: Record<string, string>;
+  isFeatured: boolean;
+  isOnSale: boolean;
+  discountPercent: number;
+  productType: string;
+  gender: string;
+}
+
 export default function AddProduct() {
 
 
@@ -120,7 +140,7 @@ const [, setLocation] = useLocation();
   const [brandMode, setBrandMode] = useState<'predefined' | 'custom'>('predefined');
   const hasPredefinedBrands = !!nichoConfig.predefinedBrands;
 
- const [formData, setFormData] = useState({
+ const [formData, setFormData] = useState<ProductFormData>({
   name: "",
   brand: hasPredefinedBrands ? (nichoConfig.predefinedBrands![0] || "") : "",
   category: categorySuggestions[0] || "",
@@ -135,7 +155,8 @@ const [, setLocation] = useLocation();
   isFeatured: false,
   isOnSale: false,
   discountPercent: 0,
-  productType: activeNicho as string
+  productType: activeNicho as string,
+  gender: "unisex"
 });
  useEffect(() => {
   return () => {
@@ -205,6 +226,7 @@ const [, setLocation] = useLocation();
                 isOnSale: product.isOnSale || false,
                 discountPercent: product.discountPercent || 0,
                 productType: product.productType || inferredNicho,
+                gender: product.gender || "unisex",
               });
             }
           })
@@ -405,7 +427,7 @@ const productDocs = await getDocs(
 
 const productCount = productDocs.size;
 
-const safePlan = activePlan || "free";
+const safePlan: PlanType = activePlan === "premium" ? "premium" : "free";
 console.log("[DEBUG] safePlan =", safePlan);
 console.log("[DEBUG] productCount =", productCount);
 const { allowed } = checkProductLimit(safePlan, productCount, true);

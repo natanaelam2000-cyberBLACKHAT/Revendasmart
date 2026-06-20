@@ -101,7 +101,7 @@ export default function Catalog() {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
     const user = getFirebaseAuth()?.currentUser;
-    logTelemetryEvent("catalog_link_shared", { method: "copy" }, user?.uid);
+    logTelemetryEvent("catalog_link_shared", { catalogSlug }, user?.uid);
     trackAnalyticsEvent("catalog_shared", { method: "copy" });
   };
 
@@ -110,7 +110,7 @@ export default function Catalog() {
     window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, "_blank");
     setShowShareModal(false);
     const user = getFirebaseAuth()?.currentUser;
-    logTelemetryEvent("catalog_link_shared", { method: "whatsapp" }, user?.uid);
+    logTelemetryEvent("catalog_link_shared", { catalogSlug }, user?.uid);
     trackAnalyticsEvent("catalog_shared", { method: "whatsapp" });
   };
 

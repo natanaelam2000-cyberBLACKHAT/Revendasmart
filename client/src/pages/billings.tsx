@@ -126,7 +126,7 @@ export default function Billings() {
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Erro ao atualizar pagamento";
         setPaymentError(msg);
-        logError("installment_payment_failed", msg, { installmentId: id });
+        logError("installment_payment_failed", msg, { context: { installmentId: id } });
       }
     } else {
       // Partial payment — show modal
@@ -168,7 +168,7 @@ export default function Billings() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Erro ao registrar pagamento";
       setPaymentError(msg);
-      logError("installment_partial_payment_failed", msg, { installmentId: partialPaymentId });
+      logError("installment_partial_payment_failed", msg, { context: { installmentId: partialPaymentId } });
     }
   };
 

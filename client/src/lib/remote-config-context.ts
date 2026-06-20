@@ -6,7 +6,7 @@
  */
 
 import { createContext, useContext, useCallback } from "react";
-import { RemoteFlags } from "./remote-config";
+import { getAllFlags, type RemoteFlags } from "./remote-config";
 
 // ============================================================================
 // CONTEXT TYPE
@@ -83,7 +83,7 @@ export function useAllRemoteFlags(): RemoteFlags {
   const context = useContext(RemoteConfigContext);
   
   if (!context) {
-    return {};
+    return getAllFlags();
   }
 
   return { ...context.flags };

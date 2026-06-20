@@ -16,6 +16,7 @@ export interface Product {
   storagePath?: string;
   imageId?: string;
   description?: string;
+  gender?: string;
   lastSoldDate?: string;
   extras?: Record<string, any>;
   isFeatured?: boolean;
@@ -174,9 +175,16 @@ export interface AppSettings {
   /** Futuro-proof: nomes de loja específicos por nicho (ex: { "Roupas": "Boutique Bella", "Cosméticos & Perfumes": "Beleza da Adri" }) */
   storeNamesByNicho?: Record<string, string>;
   catalogSlug: string;
+  /** Campo legado mantido para leitura de documentos antigos. */
+  catalog_slug?: string;
   onboarding_completed?: boolean;
   disablePublicCatalog?: boolean;
   referralMessage?: string;
+  referral_conversions?: number;
+  last_referral_conversion_at?: string;
+  reward_eligible_conversions?: number;
+  reward_granted_count?: number;
+  reward_last_granted_at?: string;
   notification_settings?: any;
   marketing_settings?: any;
 }

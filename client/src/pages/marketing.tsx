@@ -167,7 +167,7 @@ export default function Marketing() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Não foi possível baixar o card";
       setImageError(message);
-      logError("ad_image_generation_failed", message, { template, hasProduct: !!selectedProductId, hasKit: !!selectedKitId });
+      logError("ad_image_generation_failed", message, { context: { template, hasProduct: !!selectedProductId, hasKit: !!selectedKitId } });
     }
   };
 

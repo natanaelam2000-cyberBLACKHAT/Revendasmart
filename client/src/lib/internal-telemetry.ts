@@ -38,12 +38,22 @@ user_logged_out: Record<string, never>;
     productId: string;
     category: string;
     price: number;
+    nicho?: string;
+    hasImage?: boolean;
+    extrasCount?: number;
   };
   product_updated: {
     productId: string;
   };
   product_deleted: {
     productId: string;
+  };
+  product_quick_shared: {
+    productId: string;
+  };
+  product_last_unit_sold: {
+    productId: string;
+    productName: string;
   };
 
   // Clients
@@ -83,6 +93,18 @@ user_logged_out: Record<string, never>;
   payment_received: {
     chargeId: string;
     amount: number;
+  };
+  payment_link_deleted: {
+    chargeId: string;
+  };
+  installment_paid: {
+    installmentId: string;
+    amount: number;
+  };
+  installment_partial_payment: {
+    installmentId: string;
+    amount: number;
+    totalPaid: number;
   };
 
   // Catalog

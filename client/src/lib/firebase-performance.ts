@@ -1,4 +1,4 @@
-import { getPerformance, Performance, trace } from "firebase/performance";
+import { getPerformance, trace, type FirebasePerformance } from "firebase/performance";
 import { FirebaseApp } from "firebase/app";
 
 /**
@@ -19,7 +19,7 @@ import { FirebaseApp } from "firebase/app";
  * Custom traces should be sparse and targeted at critical paths only.
  */
 
-let performance: Performance | null = null;
+let performance: FirebasePerformance | null = null;
 let isInitialized = false;
 
 /**
@@ -133,7 +133,7 @@ export function createTrace(operationName: string) {
     },
     setAttribute: (name: string, value: string) => {
       try {
-        customTrace.setAttribute(name, value);
+        customTrace.putAttribute(name, value);
       } catch (err) {
         console.error("[FirebasePerformance] Failed to set attribute:", err);
       }

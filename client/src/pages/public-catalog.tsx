@@ -2,13 +2,8 @@ import { useState, useEffect } from "react";
 import { useParams } from "wouter";
 
 import {
-  ShoppingBag,
-  MessageSquare,
   Package,
-  Info,
-  ChevronRight,
   Store,
-  ExternalLink,
 } from "lucide-react";
 
 import {

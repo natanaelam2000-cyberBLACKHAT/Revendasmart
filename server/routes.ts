@@ -1,13 +1,13 @@
 import fs from "fs";
 import path from "path";
 import type { Express, Request, Response, NextFunction } from "express";
-import { createServer, type Server } from "http";
-import { storage } from "./storage";
+import type { Server } from "http";
 import { initializeFirebaseAdmin, getFirebaseAdmin } from "./firebase-admin-init";
 import { registerPaymentRoutes } from "./payments";
 import { registerConnectionRoutes } from "./mercadopago-connections";
 import { registerSubscriptionRoutes } from "./subscriptions";
 import { getGlobalConfig, setGlobalConfig } from "./subscriptions";
+import { validateFirebaseStorageSetup } from "./firebase-storage-migration";
  import crypto from "crypto";
 
 function normalizeCatalogSlug(value: unknown): string {
@@ -18,6 +18,11 @@ function escapeHtml(value: unknown): string {
   return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;")
     .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
+function getRouteParam(req: Request, name: string): string {
+  const value = req.params[name];
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
 // Helper: Structured error response with audit context
 function errorResponse(
   res: Response,
@@ -637,22 +642,8 @@ export async function registerRoutes(
   
   // GET /api/user/migration-status/:userId - Get migration readiness status
   app.get("/api/user/migration-status/:userId", requireAuth, requireOwnership, async (req, res) => {
+    const userId = getRouteParam(req, "userId");
     try {
-      const { userId } = req.params;
-      
-      // Import migration helpers
-      const { 
-        generateMigrationStatus,
-        validateFirebaseStorageSetup 
-      } = await import("./migration-helpers");
-      const { 
-        readProductsFromStorage,
-        readClientsFromStorage,
-        readSalesFromStorage,
-        readInstallmentsFromStorage,
-        readPostsFromStorage,
-        listImagesFromIndexedDB
-      } = await import("./migration-helpers");
 
       // This is a dry-run endpoint - we cannot read from client localStorage directly
       // Instead, return what we know from Firestore
@@ -692,8 +683,8 @@ export async function registerRoutes(
 
   // POST /api/user/data/validate/:userId - DRY RUN: Validate data integrity (no changes)
   app.post("/api/user/data/validate/:userId", requireAuth, requireOwnership, async (req, res) => {
+    const userId = getRouteParam(req, "userId");
     try {
-      const { userId } = req.params;
       const { data } = req.body;
       
       if (!data) {
@@ -734,8 +725,8 @@ export async function registerRoutes(
   // ============ REWARD GRANTING (Admin Action) ============
   // POST /api/rewards/grant/:targetUserId - Grant rewards to a user (admin only, no payout yet)
   app.post("/api/rewards/grant/:targetUserId", requireAuth, requireAdmin, async (req, res) => {
+    const targetUserId = getRouteParam(req, "targetUserId");
     try {
-      const { targetUserId } = req.params;
       const { count, reason } = req.body;
       const adminUid = (req as any).firebaseUid;
       
@@ -820,15 +811,15 @@ export async function registerRoutes(
         error instanceof Error && error.message.includes("Cannot grant") ? 400 : 500,
         "REWARD_GRANT_FAILED",
         msg,
-        { targetUserId: req.params.targetUserId }
+        { targetUserId }
       );
     }
   });
 
   // POST /api/user/images/migrate/:userId - Placeholder for future image migration
   app.post("/api/user/images/migrate/:userId", requireAuth, requireOwnership, async (req, res) => {
+    const userId = getRouteParam(req, "userId");
     try {
-      const { userId } = req.params;
       
       // For now, this is a preparation endpoint - no actual migration
       return res.status(202).json({
@@ -901,7 +892,7 @@ export async function registerRoutes(
       const content = fs.readFileSync(filePath, "utf8");
       res.setHeader("Content-Type", "text/markdown; charset=utf-8");
       res.send(content);
-    } catch (error) {
+    } catch {
       res.status(404).json({ error: "Privacy Policy not found" });
     }
   });
@@ -913,15 +904,15 @@ export async function registerRoutes(
       const content = fs.readFileSync(filePath, "utf8");
       res.setHeader("Content-Type", "text/markdown; charset=utf-8");
       res.send(content);
-    } catch (error) {
+    } catch {
       res.status(404).json({ error: "Terms of Service not found" });
     }
   });
 
   // GET /api/plan/data/:userId - Get user plan data
   app.get("/api/plan/data/:userId", requireAuth, requireOwnership, async (req, res) => {
+    const userId = getRouteParam(req, "userId");
     try {
-      const { userId } = req.params;
       const admin = getFirebaseAdmin();
       const db = admin.firestore();
 
@@ -950,8 +941,8 @@ export async function registerRoutes(
 
   // POST /api/plan/initialize/:userId - Initialize user plan (called on first login)
   app.post("/api/plan/initialize/:userId", requireAuth, requireOwnership, async (req, res) => {
+    const userId = getRouteParam(req, "userId");
     try {
-      const { userId } = req.params;
       const admin = getFirebaseAdmin();
       const db = admin.firestore();
      

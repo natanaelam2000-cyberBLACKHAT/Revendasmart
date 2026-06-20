@@ -132,7 +132,8 @@ export function setupConfigUpdateListener(): void {
 
   try {
     // unsubscribeConfigListener: Firebase provides a function to unsubscribe
-    unsubscribeConfigListener = onConfigUpdate(remoteConfig, async () => {
+    unsubscribeConfigListener = onConfigUpdate(remoteConfig, {
+      next: async () => {
       console.log("[RemoteConfig] Real-time update received from Firebase, activating...");
       
       try {
@@ -155,6 +156,13 @@ export function setupConfigUpdateListener(): void {
       } catch (error) {
         console.warn("[RemoteConfig] Failed to activate updated config:", error);
       }
+      },
+      error: (error) => {
+        console.warn("[RemoteConfig] Real-time listener error:", error);
+      },
+      complete: () => {
+        console.log("[RemoteConfig] Real-time listener completed");
+      },
     });
     
     console.log("[RemoteConfig] Real-time listener setup complete");

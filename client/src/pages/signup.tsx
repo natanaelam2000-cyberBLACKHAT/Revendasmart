@@ -112,7 +112,7 @@ export default function Signup() {
         } catch (e) {
           console.warn("[signup] Referral application error:", e);
           const errorMsg = e instanceof Error ? e.message : "Unknown error";
-          logError("signup_referral_failed", errorMsg, { referralUid, userId: user.uid });
+          logError("signup_referral_failed", errorMsg, { context: { referralUid }, userId: user.uid });
           logTelemetryEvent("referral_rejected", { 
             referralUid, 
             reason: "api_error"
@@ -143,7 +143,7 @@ export default function Signup() {
         }
       } catch (bootstrapErr) {
         logError("signup_bootstrap_failed", "Erro ao inicializar conta", {
-          error: bootstrapErr instanceof Error ? bootstrapErr.message : String(bootstrapErr),
+          error: bootstrapErr instanceof Error ? bootstrapErr : new Error(String(bootstrapErr)),
         });
         // Don't throw — account is created, just warn but proceed to onboarding
         console.warn("Failed to bootstrap user data, but account was created:", bootstrapErr);
@@ -151,16 +151,15 @@ export default function Signup() {
 
       // Redirect to onboarding
       setLocation("/onboarding");
-    } catch (err: any) {
-      console.log("[SIGNUP DEBUG] Firebase Error Code:", err.code);
-      console.log("[SIGNUP DEBUG] Firebase Error Message:", err.message);
+    } catch (err: unknown) {
+      const code = err && typeof err === "object" && "code" in err ? String(err.code) : "";
       console.error("[signup] Firebase error:", err);
       
-      if (err.code === "auth/email-already-in-use") {
+      if (code === "auth/email-already-in-use") {
         setError("Este email já está cadastrado");
-      } else if (err.code === "auth/weak-password") {
+      } else if (code === "auth/weak-password") {
         setError("Senha muito fraca. Use pelo menos 6 caracteres.");
-      } else if (err.code === "auth/invalid-email") {
+      } else if (code === "auth/invalid-email") {
         setError("Email inválido");
       } else {
         setError("Erro ao criar conta. Tente novamente.");

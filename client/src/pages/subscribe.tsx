@@ -17,10 +17,10 @@ import {
   CheckCircle,
   ChevronLeft,
 } from "lucide-react";
-import { getFirebaseIdToken, getCurrentFirebaseUser } from "@/lib/firebase";
+import { getFirebaseIdToken } from "@/lib/firebase";
 import { getApiUrl } from "@/lib/api-config";
 import { usePlanData } from "@/hooks/usePlanData";
-import { isPremiumFromGlobalAccess } from "@shared/monetization";
+import { isPremiumFromGlobalAccess, type GlobalConfig, type PlanData as MonetizationPlanData } from "@shared/monetization";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -80,8 +80,9 @@ export default function Subscribe() {
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
-  const { planData, globalConfig, isPremium, hasPremiumAccess, loading: planLoading, refresh, error: planError } = usePlanData();
-  const isGlobalPremiumActive = isPremiumFromGlobalAccess(globalConfig);
+  const { planData, globalConfig: rawGlobalConfig, isPremium, hasPremiumAccess, loading: planLoading, refresh, error: planError } = usePlanData();
+  const globalConfig = rawGlobalConfig as GlobalConfig | null;
+  const isGlobalPremiumActive = isPremiumFromGlobalAccess(planData as MonetizationPlanData | null, globalConfig);
   const subscriptionUiState = useMemo(() => {
     const subscriptionStatus = (planData?.subscriptionStatus ?? "").toLowerCase();
     const paymentStatus = (planData?.paymentStatus ?? "").toLowerCase();
@@ -94,7 +95,6 @@ export default function Subscribe() {
   }, [planData, isPremium, isGlobalPremiumActive, hasPremiumAccess]);
   const isActiveSubscriber = subscriptionUiState.hasValidSubscription;
   const isPendingPayment = subscriptionUiState.isPending;
-  const isRecentPending = subscriptionUiState.hasRecentPending;
   const isCancelledSubscriber = planData?.subscriptionStatus === "cancelled";
   const showBuyButton = subscriptionUiState.showBuyButton && !hasPremiumAccess;
 
