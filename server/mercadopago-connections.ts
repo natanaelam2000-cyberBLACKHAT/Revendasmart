@@ -35,7 +35,7 @@ import {
 // Helper: Structured error logging for MP connections
 function logMPConnectionError(
   operationName: string,
-  uid: string | null,
+  _uid: string | null,
   errorMsg: string,
   context?: Record<string, any>
 ) {
@@ -44,9 +44,8 @@ function logMPConnectionError(
   
   console.error(`[${timestamp}] MP-CONNECTION-ERROR-ID: ${errorId}`, {
     operation: operationName,
-    uid,
-    error: errorMsg,
-    context,
+    errorType: errorMsg ? "operation_failed" : "unknown_error",
+    contextKeys: context ? Object.keys(context) : [],
   });
 }
 
@@ -124,7 +123,7 @@ async function createOAuthState(uid: string, ipAddress: string): Promise<string>
   };
 
   await db.collection("mercadopago_oauth_states").doc(nonce).set(state);
-  console.log(`[mp-connections] OAuth state created for uid=${uid}, expires=${expiresAt}`);
+  console.info("[mp-connections] OAuth state created");
   return nonce;
 }
 
@@ -137,7 +136,7 @@ async function consumeOAuthState(
   const doc = await ref.get();
 
   if (!doc.exists) {
-    console.warn(`[mp-connections] OAuth state not found: ${nonce}`);
+    console.warn("[mp-connections] OAuth state not found");
     return null;
   }
 
@@ -145,28 +144,26 @@ async function consumeOAuthState(
 
   // Validate: not expired
   if (new Date(state.expiresAt) < new Date()) {
-    console.warn(`[mp-connections] OAuth state expired: ${nonce}`);
+    console.warn("[mp-connections] OAuth state expired");
     await ref.delete(); // Clean up expired states
     return null;
   }
 
   // Validate: not already used
   if (state.used) {
-    console.warn(`[mp-connections] OAuth state already used: ${nonce}`);
+    console.warn("[mp-connections] OAuth state already used");
     return null;
   }
 
   // Validate: bound to the expected uid
   if (state.uid !== expectedUid) {
-    console.warn(
-      `[mp-connections] OAuth state uid mismatch: expected=${expectedUid}, got=${state.uid}`
-    );
+    console.warn("[mp-connections] OAuth state owner mismatch");
     return null;
   }
 
   // Invalidate: mark as used (one-time use)
   await ref.update({ used: true, usedAt: now() });
-  console.log(`[mp-connections] OAuth state consumed for uid=${expectedUid}`);
+  console.info("[mp-connections] OAuth state consumed");
 
   return state;
 }
@@ -266,7 +263,7 @@ export async function getValidMPAccessToken(
   const centralToken = process.env.MERCADOPAGO_ACCESS_TOKEN ?? "";
   const centralFallback = (reason: string): { accessToken: string; tokenSource: "central"; connectionId: null } => {
     if (!centralToken) throw new Error(`Mercado Pago indisponível: credencial central ausente (${reason})`);
-    console.warn("[mp-connections] Using central token fallback", { reason, uidPresent: Boolean(uid) });
+    console.warn("[mp-connections] Using central payment credential fallback", { reason });
     return { accessToken: centralToken, tokenSource: "central", connectionId: null };
   };
 
@@ -304,21 +301,17 @@ export async function getValidMPAccessToken(
     try {
       const plainToken = decryptToken(connection.accessToken);
       return { accessToken: plainToken, tokenSource: "revendedor", connectionId };
-    } catch (error) {
-      console.error("[mp-connections] Stored access token could not be decrypted", {
-        connectionId,
-        errorName: error instanceof Error ? error.name : "UnknownError",
-        message: error instanceof Error ? error.message : String(error),
-      });
+    } catch {
+      console.error("[mp-connections] Stored payment credential could not be decrypted");
       return centralFallback("stored_token_authentication_failed");
     }
   }
 
   // Token expired or near expiry → refresh
-  console.log(`[mp-connections] Access token near expiry for connection ${connectionId} — refreshing`);
+  console.info("[mp-connections] Payment credential near expiry — refreshing");
 
   if (!connection.refreshToken) {
-    console.warn(`[mp-connections] No refresh token for ${connectionId} — falling back to central`);
+    console.warn("[mp-connections] Refresh credential unavailable — using central fallback");
     // Mark as expired for user awareness
     await (await getConnectionRef(uid, connectionId)).update({
       status: "expired",
@@ -347,7 +340,7 @@ export async function getValidMPAccessToken(
     }
 
     await (await getConnectionRef(uid, connectionId)).update(updates);
-    console.log(`[mp-connections] Token refreshed for connection ${connectionId}`);
+    console.info("[mp-connections] Payment credential refreshed");
 
     return { accessToken: newTokens.access_token, tokenSource: "revendedor", connectionId };
   } catch (err) {
@@ -451,7 +444,7 @@ async function handleStartAuth(req: Request, res: Response) {
     authUrl.searchParams.set("redirect_uri", REDIRECT_URI);
     authUrl.searchParams.set("state", nonce);
 
-    console.log(`[mp-connections] OAuth flow started for uid=${uid}`);
+    console.info("[mp-connections] OAuth flow started");
 
     return res.json({ authUrl: authUrl.toString(), nonce });
   } catch (err) {
@@ -650,7 +643,7 @@ async function handleRevoke(req: Request, res: Response) {
       // Preserve: id, uid, merchantId, accountEmail, accountName, connectedAt, lastUsedAt
     });
 
-    console.log(`[mp-connections/revoke] Connection ${connectionId} soft-revoked for uid=${uid}`);
+    console.info("[mp-connections/revoke] Connection revoked");
 
     return res.json({ connectionId, status: "revoked" });
   } catch (err) {
@@ -736,7 +729,7 @@ async function handleSetDefault(req: Request, res: Response) {
 
     await batch.commit();
 
-    console.log(`[mp-connections/set-default] Connection ${connectionId} set as default for uid=${uid}`);
+    console.info("[mp-connections/set-default] Default connection updated");
 
     return res.json({ connectionId, isDefault: true });
   } catch (err) {

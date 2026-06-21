@@ -33,7 +33,7 @@ import {
 // Helper: Structured error logging for payment operations
 function logPaymentError(
   operationName: string,
-  uid: string | null,
+  _uid: string | null,
   errorMsg: string,
   context?: Record<string, any>
 ) {
@@ -42,9 +42,8 @@ function logPaymentError(
   
   console.error(`[${timestamp}] PAYMENT-ERROR-ID: ${errorId}`, {
     operation: operationName,
-    uid,
-    error: errorMsg,
-    context,
+    errorType: errorMsg ? "operation_failed" : "unknown_error",
+    contextKeys: context ? Object.keys(context) : [],
   });
 }
 
@@ -57,7 +56,7 @@ const APP_BASE_URL = process.env.APP_BASE_URL ?? "https://revendasmart-backend-1
 const FRONTEND_URL = process.env.FRONTEND_URL ?? "https://revendasmart.vercel.app";
 
 if (!CENTRAL_ACCESS_TOKEN) {
-  console.warn("[payments] MERCADOPAGO_ACCESS_TOKEN is not set — central account fallback will fail");
+  console.warn("[payments] Central payment credential is not configured");
 }
 
 function createPaymentClient(accessToken: string): MPPayment {
@@ -107,8 +106,8 @@ async function fetchCharge(uid: string, chargeId: string): Promise<Charge | null
  */
 function verifyWebhookSignature(req: Request, rawBody: Buffer): boolean {
   if (!WEBHOOK_SECRET) {
-    console.warn("[payments/webhook] MERCADOPAGO_WEBHOOK_SECRET not set — skipping signature check");
-    return true; // Permissive when no secret configured (dev mode)
+    console.error("[payments/webhook] Webhook secret is not configured");
+    return false;
   }
 
   try {
@@ -180,7 +179,7 @@ async function syncPaymentFromMP(
   try {
     const charge = await fetchCharge(uid, chargeId);
     if (!charge) {
-      console.warn(`[payments/sync] Charge ${chargeId} not found for uid ${uid}`);
+      console.warn("[payments/sync] Charge not found");
       return null;
     }
 
@@ -206,7 +205,7 @@ async function syncPaymentFromMP(
 
     // Idempotency: skip if this exact event was already processed
     if (webhookEventId && charge.webhookLastEventId === webhookEventId) {
-      console.log(`[payments/sync] Event ${webhookEventId} already processed — skipping`);
+      console.info("[payments/sync] Event already processed — skipping");
       return charge;
     }
 
@@ -232,7 +231,7 @@ async function syncPaymentFromMP(
     }
 
     await updateCharge(uid, chargeId, updates);
-    console.log(`[payments/sync] Charge ${chargeId} updated: ${charge.status} → ${newStatus}`);
+    console.info(`[payments/sync] Charge status updated: ${charge.status} → ${newStatus}`);
 
     return { ...charge, ...updates } as Charge;
   } catch (err) {
@@ -254,15 +253,8 @@ async function handleCreateLink(req: Request, res: Response) {
   let stage = "start";
   
   try {
-    console.error("[payments/create-link] ============ ENDPOINT CALLED ============");
-    console.error("[payments/create-link] stage=", stage);
-    
-    try {
-      console.error("[payments/create-link] Raw body:", JSON.stringify(req.body ?? {}));
-    } catch (e) {
-      console.error("[payments/create-link] Cannot JSON.stringify(req.body):", String(e));
-    }
-    console.error("[payments/create-link] Request headers:", Object.keys(req.headers ?? {}));
+    console.info("[payments/create-link] Request received");
+    console.info("[payments/create-link] stage=", stage);
     
     stage = "validate_body";
     console.error("[payments/create-link] stage=", stage);
@@ -270,21 +262,7 @@ async function handleCreateLink(req: Request, res: Response) {
     body = req.body as CreatePaymentLinkInput;
     const authenticatedUid = (req as any).firebaseUid as string;
 
-    // Log payload received — safe object operations
-    const safeBody = body ?? {};
-    console.error("[payments/create-link] PAYLOAD RECEIVED:", {
-      uid: safeBody?.uid ?? null,
-      clientId: safeBody?.clientId ?? null,
-      title: safeBody?.title ?? null,
-      amount: safeBody?.amount ?? null,
-      description: safeBody?.description ?? null,
-      saleId: safeBody?.saleId ?? null,
-      mpConnectionId: safeBody?.mpConnectionId ?? null,
-      authenticatedUid,
-      bodyKeys: safeBody ? Object.keys(safeBody ?? {}) : [],
-    });
-
-    // Validate required fields with detailed logs
+    // Validate required fields without logging customer or payment payloads
     const missingFields: string[] = [];
     if (!body?.uid) missingFields.push("uid");
     if (!body?.clientId) missingFields.push("clientId");
@@ -295,7 +273,6 @@ async function handleCreateLink(req: Request, res: Response) {
       console.error("[payments/create-link] Missing fields:", missingFields);
       return res.status(400).json({
         error: `Missing required fields: ${missingFields.join(", ")}`,
-        received: body,
       });
     }
 
@@ -325,7 +302,7 @@ async function handleCreateLink(req: Request, res: Response) {
     // ── Caminho B: Resolve which MP account to use ──────────────────────────
     stage = "resolve_token";
     console.error("[payments/create-link] stage=", stage);
-    console.error("[payments/create-link] DEBUG: Step 1 — Getting MP Access Token");
+    console.error("[payments/create-link] Resolving payment credential");
     
     const {
       accessToken,
@@ -335,11 +312,7 @@ async function handleCreateLink(req: Request, res: Response) {
       body.uid,
       body.mpConnectionId ?? null
     );
-    console.error("[payments/create-link] DEBUG: Step 1 SUCCESS — Token resolved", {
-      tokenSource,
-      tokenConfigured: Boolean(accessToken),
-      tokenEnvironment: detectEnvironment(accessToken),
-    });
+    console.info("[payments/create-link] Payment credential resolved");
     if (!accessToken || accessToken.trim().length < 20) {
       throw new Error("Mercado Pago indisponível: access token não configurado");
     }
@@ -359,14 +332,14 @@ async function handleCreateLink(req: Request, res: Response) {
     // Build Mercado Pago preference
     stage = "build_preference_payload";
     console.error("[payments/create-link] stage=", stage);
-    console.error("[payments/create-link] DEBUG: Step 3 — Building preferencePayload");
+    console.error("[payments/create-link] Preparing payment preference");
     
     // Validate critical fields before building payload
     const FRONTEND_URL_VALID = FRONTEND_URL && FRONTEND_URL.startsWith("http");
     const APP_BASE_URL_VALID = APP_BASE_URL && APP_BASE_URL.startsWith("http");
     
     if (!FRONTEND_URL_VALID || !APP_BASE_URL_VALID) {
-      console.error("[payments/create-link] Invalid URLs:", { FRONTEND_URL, APP_BASE_URL });
+      console.error("[payments/create-link] Invalid payment redirect configuration");
       return res.status(500).json({
         error: "Configuration error: invalid URLs",
         details: "FRONTEND_URL ou APP_BASE_URL não configurados corretamente",
@@ -407,20 +380,8 @@ async function handleCreateLink(req: Request, res: Response) {
       },
     };
     
-    console.error("[payments/create-link] DEBUG: Step 3 SUCCESS — Payload fields:", {
-      itemsCount: preferencePayload.items?.length ?? 0,
-      itemTitle: preferencePayload.items?.[0]?.title ?? null,
-      itemUnitPrice: preferencePayload.items?.[0]?.unit_price ?? null,
-      externalReference: preferencePayload.external_reference ?? null,
-      metadataKeys: safeMetadata ? Object.keys(safeMetadata ?? {}) : [],
-    });
+    console.info("[payments/create-link] Payment preference prepared");
     
-    try {
-      console.error("[payments/create-link] DEBUG: Step 3 FULL PAYLOAD:", JSON.stringify(preferencePayload ?? {}, null, 2));
-    } catch (jsonError) {
-      console.error("[payments/create-link] Cannot stringify preferencePayload:", String(jsonError));
-    }
-
     stage = "create_preference";
     console.error("[payments/create-link] stage=", stage);
     console.error("[payments/create-link] DEBUG: Step 4 — Calling preferenceClient.create()");
@@ -429,42 +390,18 @@ async function handleCreateLink(req: Request, res: Response) {
     try {
       preference = await preferenceClient.create({ body: preferencePayload });
       
-      const safePreference = preference ?? {};
-      console.error("[payments/create-link] DEBUG: Step 4 SUCCESS — Preference created:", {
-        id: safePreference?.id ?? null,
-        init_point: safePreference?.init_point ?? null,
-        sandbox_init_point: safePreference?.sandbox_init_point ?? null,
-      });
-      
-      try {
-        console.error("[payments/create-link] Preference full response:", JSON.stringify(safePreference ?? {}, null, 2));
-      } catch (jsonErr) {
-        console.error("[payments/create-link] Cannot stringify preference:", String(jsonErr));
-      }
+      console.info("[payments/create-link] Preference created");
     } catch (mpError: any) {
       // Extract error details — ALWAYS provide fallbacks
       const mpErrorMessage = mpError?.message ?? "Unknown error";
       const mpErrorStatus = mpError?.status ?? null;
       const mpErrorCode = mpError?.code ?? null;
-      const mpErrorResponse = mpError?.response ?? null;
       
-      try {
-        console.error("[payments/create-link] ❌ STEP 4 FAILED — MP SDK Error:", {
-          errorName: mpError?.name ?? "Unknown",
-          message: mpErrorMessage,
-          status: mpErrorStatus,
-          code: mpErrorCode,
-          stack: mpError?.stack ?? null,
-          cause: mpError?.cause ?? null,
-        });
-        try {
-          console.error("[payments/create-link] MP Error response:", JSON.stringify(mpErrorResponse ?? {}, null, 2));
-        } catch (e) {
-          console.error("[payments/create-link] Cannot stringify mpErrorResponse:", String(e));
-        }
-      } catch (logErr) {
-        console.error("[payments/create-link] Error logging MP error:", String(logErr));
-      }
+      console.error("[payments/create-link] Mercado Pago request failed", {
+        errorName: mpError?.name ?? "Unknown",
+        status: mpErrorStatus,
+        code: mpErrorCode,
+      });
 
       // Determine specific error message based on error type
       let userMessage = "Erro ao comunicar com Mercado Pago";
@@ -572,9 +509,7 @@ async function handleCreateLink(req: Request, res: Response) {
     stage = "send_response";
     console.error("[payments/create-link] stage=", stage);
 
-    console.error(
-      `[payments/create-link] ✅ SUCCESS: Charge ${chargeId} created | uid=${body.uid} | amount=R$${body.amount} | tokenSource=${tokenSource}`
-    );
+    console.info("[payments/create-link] Charge created successfully");
 
     return res.status(201).json({
       chargeId,
@@ -587,18 +522,12 @@ async function handleCreateLink(req: Request, res: Response) {
     });
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err ?? "Unknown error");
-    const fullStack = err instanceof Error ? err.stack : String(err ?? "");
     const errorName = err instanceof Error ? err.name : "UnknownError";
     
     console.error("[payments/create-link] ❌ CAUGHT OUTER ERROR at stage:", stage);
-    console.error("[payments/create-link] Error details:", {
+    console.error("[payments/create-link] Request failed", {
       stage,
-      error: errorMsg,
       errorName,
-      uid: body?.uid ?? null,
-      clientId: body?.clientId ?? null,
-      title: body?.title ?? null,
-      amount: body?.amount ?? null,
     });
     
     // Log to structured error tracking
@@ -609,12 +538,6 @@ async function handleCreateLink(req: Request, res: Response) {
       amount: body?.amount ?? null,
       isMPError: errorMsg.includes("Mercado Pago"),
     });
-    
-    try {
-      console.error("[payments/create-link] Error stack:", fullStack);
-    } catch (stackErr) {
-      console.error("[payments/create-link] Cannot log error stack:", String(stackErr));
-    }
     
     const tokenAuthenticationFailure = /Unsupported state|unable to authenticate|decrypt|auth tag/i.test(errorMsg);
     return res.status(tokenAuthenticationFailure ? 503 : 500).json({
@@ -634,25 +557,23 @@ async function handleWebhook(req: Request, res: Response) {
   // Always acknowledge quickly — MP retries if we don't respond fast
   const rawBody = (req as any).rawBody as Buffer | undefined;
 
-  // Validate signature (if secret is configured)
-  if (rawBody && WEBHOOK_SECRET) {
-    const valid = verifyWebhookSignature(req, rawBody);
-    if (!valid) {
-      console.warn("[payments/webhook] Rejected: invalid signature");
-      return res.status(401).json({ error: "Invalid webhook signature" });
-    }
+  if (!WEBHOOK_SECRET) {
+    console.error("[payments/webhook] Rejected: webhook secret is not configured");
+    return res.status(401).json({ error: "Invalid webhook signature" });
+  }
+  if (!rawBody || !verifyWebhookSignature(req, rawBody)) {
+    console.warn("[payments/webhook] Rejected: invalid signature");
+    return res.status(401).json({ error: "Invalid webhook signature" });
   }
 
   const payload = req.body as MPWebhookPayload;
   const eventId = (req.headers["x-request-id"] as string) ?? "";
 
-  console.log("[payments/webhook] Received:", JSON.stringify({
+  console.info("[payments/webhook] Signed event received", {
     action: payload.action,
     type: payload.type,
-    dataId: payload.data?.id,
-    eventId,
-    live_mode: payload.live_mode,
-  }));
+    liveMode: payload.live_mode === true,
+  });
 
   // Only handle payment events
   if (payload.type !== "payment" && payload.action?.split(".")?.[0] !== "payment") {
@@ -842,7 +763,7 @@ async function handleDeleteCharge(req: Request, res: Response) {
     const db = admin.firestore();
     await db.collection("users").doc(uid).collection("charges").doc(chargeId).delete();
 
-    console.log(`[payments] Charge deleted: ${chargeId} by ${uid}`);
+    console.info("[payments] Charge deleted");
     return res.json({ success: true, chargeId, message: "Charge deleted successfully" });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

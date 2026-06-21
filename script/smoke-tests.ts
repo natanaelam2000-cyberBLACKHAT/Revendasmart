@@ -49,6 +49,17 @@ assert.match(payments, /PAYMENT_SYNC_FAILED/);
 assert.match(payments, /PAYMENT_REFERENCE_MISMATCH/);
 assert.match(payments, /chargeId=\$\{encodeURIComponent\(chargeId\)\}/);
 assert.match(mpConnections, /Revendedor charges never fall back to the central account/);
+// Mercado Pago webhooks are fail-closed and logs do not expose credentials or identifiers.
+assert.doesNotMatch(payments, /skipping signature check|Permissive when no secret/);
+assert.match(payments, /if \(!WEBHOOK_SECRET\)[\s\S]*?status\(401\)/);
+assert.match(payments, /if \(!rawBody \|\| !verifyWebhookSignature\(req, rawBody\)\)/);
+assert.doesNotMatch(subscriptions, /ALLOW_UNSIGNED_SUBSCRIPTION_WEBHOOK|explicit-dev-bypass/);
+assert.match(subscriptions, /if \(!WEBHOOK_SECRET\)[\s\S]*?status: 401/);
+const subscriptionWebhook = subscriptions.slice(subscriptions.indexOf('app.post("/api/app-subscription/webhook"'));
+assert.ok(subscriptionWebhook.indexOf("if (!WEBHOOK_SECRET)") < subscriptionWebhook.indexOf("const body = req.body"));
+assert.doesNotMatch(payments, /Raw body:|FULL PAYLOAD:|Preference full response:|Payload fields:/);
+assert.doesNotMatch(subscriptions, /Token length:|console\.log\("UID:"/);
+assert.doesNotMatch(mpConnections, /OAuth state (created|consumed) for uid=|OAuth state not found: \$\{nonce\}/);
 assert.match(app, /if \(authState\.loading\) return/);
 assert.match(settings, /normalizeSettingsTab/);
 assert.match(publicCatalog, /onError=\{\(\) => setLogoFailed\(true\)\}/);
