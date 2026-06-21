@@ -141,6 +141,32 @@ function checkGrantRateLimit(adminUid: string): boolean {
   return true;
 }
 
+
+const REFERRAL_REWARD_LIMIT = 3;
+const REFERRAL_RATE_LIMIT_WINDOW_MS = 60_000;
+const REFERRAL_RATE_LIMIT_MAX = 10;
+const referralRateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+function checkReferralRateLimit(uid: string, action: "track" | "validate"): boolean {
+  const key = `${uid}:${action}`;
+  const now = Date.now();
+  const current = referralRateLimitMap.get(key);
+  if (!current || now > current.resetAt) {
+    referralRateLimitMap.set(key, { count: 1, resetAt: now + REFERRAL_RATE_LIMIT_WINDOW_MS });
+    return true;
+  }
+  if (current.count >= REFERRAL_RATE_LIMIT_MAX) return false;
+  current.count += 1;
+  return true;
+}
+
+function isValidReferralUid(value: unknown): value is string {
+  return typeof value === "string" && /^[a-zA-Z0-9_-]{10,128}$/.test(value);
+}
+
+function referralEventId(referrerUid: string, referredUid: string): string {
+  return crypto.createHash("sha256").update(`${referrerUid}:${referredUid}`).digest("hex");
+}
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -978,153 +1004,186 @@ if (!existingPlan.exists) {
     }
   });
 
-  // POST /api/referral/track-event - Track referral event (account creation, onboarding, etc)
-  app.post("/api/referral/track-event", async (req, res) => {
+  // Referral events are security-sensitive because they can grant Premium.
+  // The referred UID always comes from the verified Firebase token.
+  app.post("/api/referral/track-event", requireAuth, async (req, res) => {
+    const referredUid = (req as any).firebaseUid as string;
+    const body = req.body ?? {};
+    const suppliedReferredUid = body.referredUID;
+    const referrerUid = body.referrerUID;
+
+    if (suppliedReferredUid != null && suppliedReferredUid !== referredUid) {
+      return res.status(403).json({ error: "REFERRAL_OWNERSHIP_MISMATCH" });
+    }
+    if (!isValidReferralUid(referrerUid) || body.event !== "onboarding_completed") {
+      return res.status(400).json({ error: "INVALID_REFERRAL_PAYLOAD" });
+    }
+    if (referrerUid === referredUid) {
+      return res.status(400).json({ error: "SELF_REFERRAL_NOT_ALLOWED" });
+    }
+    if (!checkReferralRateLimit(referredUid, "track")) {
+      return res.status(429).json({ error: "REFERRAL_RATE_LIMITED" });
+    }
+
     try {
-      const { referredUID, referredEmail, referrerUID, referrerEmail, event } = req.body;
-
-      if (!referredUID || !referrerUID || !event) {
-        return res.status(400).json({ error: "Missing required fields" });
-      }
-
-      // Validate referral code if provided
-      const { refCode } = req.body;
-      if (refCode && typeof refCode === "string") {
-        if (!refCode.startsWith("USER-")) {
-          return res.status(400).json({ error: "Invalid referral code format" });
-        }
-      }
-
       const admin = getFirebaseAdmin();
       const db = admin.firestore();
+      await Promise.all([
+        admin.auth().getUser(referredUid),
+        admin.auth().getUser(referrerUid),
+      ]);
 
-      // Create referral event
-      const eventId = db.collection("referralEvents").doc().id;
+      const eventId = referralEventId(referrerUid, referredUid);
       const eventRef = db.collection("referralEvents").doc(eventId);
+      const referredSettingsRef = db.collection("user_settings").doc(referredUid);
 
-      await eventRef.set({
-        referredUID,
-        referredEmail,
-        referrerUID,
-        referrerEmail,
-        events: [
-          {
+      await db.runTransaction(async (transaction) => {
+        const referredSettings = await transaction.get(referredSettingsRef);
+        const existingEvent = await transaction.get(eventRef);
+        if (!referredSettings.exists || referredSettings.data()?.onboarding_completed !== true) {
+          throw new Error("ONBOARDING_NOT_COMPLETED");
+        }
+        if (existingEvent.exists) throw new Error("DUPLICATE_REFERRAL");
+
+        transaction.create(eventRef, {
+          referredUID: referredUid,
+          referrerUID: referrerUid,
+          events: [{
             timestamp: admin.firestore.Timestamp.now(),
-            event,
+            event: "onboarding_completed",
             status: "success",
-          },
-        ],
-        status: "pending",
-        validatedAt: null,
-        deviceId: req.body.deviceId || null,
-        ipAddress: req.ip || null,
-        accountAge: 0,
-        createdAt: admin.firestore.Timestamp.now(),
-        updatedAt: admin.firestore.Timestamp.now(),
-      });
-
-      console.log("[referral/track-event] Event tracked:", {
-        eventId,
-        referredUID,
-        referrerUID,
-        event,
+          }],
+          status: "pending",
+          ownershipVerified: true,
+          securityVersion: 2,
+          validatedAt: null,
+          createdAt: admin.firestore.Timestamp.now(),
+          updatedAt: admin.firestore.Timestamp.now(),
+        });
       });
 
       return res.status(200).json({ eventId, status: "pending" });
     } catch (error) {
-      const msg = error instanceof Error ? error.message : "Unknown error";
-      return errorResponse(res, 500, "REFERRAL_TRACK_ERROR", msg);
+      const code = error instanceof Error ? error.message : "REFERRAL_TRACK_ERROR";
+      if (code === "ONBOARDING_NOT_COMPLETED") {
+        return res.status(400).json({ error: code });
+      }
+      if (code === "DUPLICATE_REFERRAL") {
+        return res.status(409).json({ error: code });
+      }
+      if ((error as { code?: string })?.code === "auth/user-not-found") {
+        return res.status(400).json({ error: "REFERRAL_USER_NOT_FOUND" });
+      }
+      return errorResponse(res, 500, "REFERRAL_TRACK_ERROR", "Não foi possível registrar a indicação.");
     }
   });
 
-  // POST /api/referral/validate-referral - Validate referral after onboarding
-  app.post("/api/referral/validate-referral", async (req, res) => {
+  app.post("/api/referral/validate-referral", requireAuth, async (req, res) => {
+    const referredUid = (req as any).firebaseUid as string;
+    const body = req.body ?? {};
+    const suppliedReferredUid = body.referredUID;
+    const referrerUid = body.referrerUID;
+
+    if (suppliedReferredUid != null && suppliedReferredUid !== referredUid) {
+      return res.status(403).json({ error: "REFERRAL_OWNERSHIP_MISMATCH" });
+    }
+    if (!isValidReferralUid(referrerUid)) {
+      return res.status(400).json({ error: "INVALID_REFERRAL_PAYLOAD" });
+    }
+    if (referrerUid === referredUid) {
+      return res.status(400).json({ error: "SELF_REFERRAL_NOT_ALLOWED" });
+    }
+    if (!checkReferralRateLimit(referredUid, "validate")) {
+      return res.status(429).json({ error: "REFERRAL_RATE_LIMITED" });
+    }
+
     try {
-      const { referredUID, referrerUID } = req.body;
-
-      if (!referredUID || !referrerUID) {
-        return res.status(400).json({ error: "Missing required fields" });
-      }
-
       const admin = getFirebaseAdmin();
       const db = admin.firestore();
+      await Promise.all([
+        admin.auth().getUser(referredUid),
+        admin.auth().getUser(referrerUid),
+      ]);
 
-      // Find referral event for this pair
-      const eventsQuery = await db
-        .collection("referralEvents")
-        .where("referredUID", "==", referredUID)
-        .where("referrerUID", "==", referrerUID)
-        .get();
+      const eventId = referralEventId(referrerUid, referredUid);
+      const eventRef = db.collection("referralEvents").doc(eventId);
+      const referredSettingsRef = db.collection("user_settings").doc(referredUid);
+      const planRef = db.collection("users").doc(referrerUid).collection("planData").doc("main");
+      const validationRef = planRef.collection("validatedReferrals").doc(referredUid);
 
-      if (eventsQuery.empty) {
-        return res.status(404).json({ error: "Referral event not found" });
-      }
+      const result = await db.runTransaction(async (transaction) => {
+        const eventDoc = await transaction.get(eventRef);
+        const referredSettings = await transaction.get(referredSettingsRef);
+        const validationDoc = await transaction.get(validationRef);
+        const validatedReferrals = await transaction.get(planRef.collection("validatedReferrals"));
 
-      const eventDoc = eventsQuery.docs[0];
-      const eventData = eventDoc.data();
-
-      // Verify referral is still pending
-      if (eventData.status !== "pending") {
-        return res.status(400).json({ error: "Referral already processed" });
-      }
-
-      // Mark as valid
-      await eventDoc.ref.update({
-        status: "valid",
-        validatedAt: admin.firestore.Timestamp.now(),
-        updatedAt: admin.firestore.Timestamp.now(),
-      });
-
-      // Update referrer's referral count
-      const planDocRef = db.collection("users").doc(referrerUID).collection("planData").doc("main");
-      const planSnap = await planDocRef.get();
-
-      if (planSnap.exists) {
-        const currentCount = planSnap.data()?.referralCount || 0;
-        const newCount = currentCount + 1;
-
-        await planDocRef.update({
-          referralCount: newCount,
-          updatedAt: admin.firestore.Timestamp.now(),
-        });
-
-        // If reached 3 valid referrals, grant premium
-        if (newCount === 3) {
-          const thirtyDaysFromNow = new Date();
-          thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
-
-          await planDocRef.update({
-            currentPlan: "premium",
-            premiumActive: true,
-            premiumExpiresAt: admin.firestore.Timestamp.fromDate(thirtyDaysFromNow),
-            premiumStartedAt: admin.firestore.Timestamp.now(),
-            premiumSource: "referral_reward",
-          });
-
-          console.log("[referral/validate] Premium granted via referral for user:", referrerUID);
-          return res.status(200).json({
-            status: "valid",
-            premiumGranted: true,
-            message: "Você ganhou 30 dias de Premium!",
-          });
+        if (!eventDoc.exists ||
+            eventDoc.data()?.referredUID !== referredUid ||
+            eventDoc.data()?.referrerUID !== referrerUid ||
+            eventDoc.data()?.ownershipVerified !== true) {
+          throw new Error("INVALID_REFERRAL_EVENT");
+        }
+        if (!referredSettings.exists || referredSettings.data()?.onboarding_completed !== true) {
+          throw new Error("ONBOARDING_NOT_COMPLETED");
+        }
+        if (eventDoc.data()?.status !== "pending" || validationDoc.exists) {
+          throw new Error("DUPLICATE_REFERRAL");
         }
 
-        console.log("[referral/validate] Referral count updated:", {
-          referrerUID,
-          newCount,
-        });
-        return res.status(200).json({
-          status: "valid",
-          premiumGranted: false,
-          referralCount: newCount,
-          remaining: 3 - newCount,
-        });
-      }
+        const newCount = validatedReferrals.size + 1;
+        const premiumGranted = newCount === REFERRAL_REWARD_LIMIT;
+        const now = admin.firestore.Timestamp.now();
 
-      return res.status(200).json({ status: "valid", premiumGranted: false });
+        transaction.update(eventRef, {
+          status: "valid",
+          validatedAt: now,
+          updatedAt: now,
+        });
+        transaction.create(validationRef, {
+          referredUID: referredUid,
+          referrerUID: referrerUid,
+          eventId,
+          validatedAt: now,
+        });
+
+        const planUpdate: Record<string, unknown> = {
+          referralCount: newCount,
+          updatedAt: now,
+        };
+        if (premiumGranted) {
+          const premiumExpiresAt = new Date();
+          premiumExpiresAt.setDate(premiumExpiresAt.getDate() + 30);
+          Object.assign(planUpdate, {
+            currentPlan: "premium",
+            premiumActive: true,
+            premiumExpiresAt: admin.firestore.Timestamp.fromDate(premiumExpiresAt),
+            premiumStartedAt: now,
+            premiumSource: "referral_reward",
+          });
+        }
+        transaction.set(planRef, planUpdate, { merge: true });
+
+        return { newCount, premiumGranted };
+      });
+
+      return res.status(200).json({
+        status: "valid",
+        premiumGranted: result.premiumGranted,
+        referralCount: result.newCount,
+        remaining: Math.max(0, REFERRAL_REWARD_LIMIT - result.newCount),
+      });
     } catch (error) {
-      const msg = error instanceof Error ? error.message : "Unknown error";
-      return errorResponse(res, 500, "REFERRAL_VALIDATE_ERROR", msg);
+      const code = error instanceof Error ? error.message : "REFERRAL_VALIDATE_ERROR";
+      if (code === "DUPLICATE_REFERRAL") {
+        return res.status(409).json({ error: code });
+      }
+      if (code === "INVALID_REFERRAL_EVENT" || code === "ONBOARDING_NOT_COMPLETED") {
+        return res.status(400).json({ error: code });
+      }
+      if ((error as { code?: string })?.code === "auth/user-not-found") {
+        return res.status(400).json({ error: "REFERRAL_USER_NOT_FOUND" });
+      }
+      return errorResponse(res, 500, "REFERRAL_VALIDATE_ERROR", "Não foi possível validar a indicação.");
     }
   });
 

@@ -147,22 +147,51 @@ export default function Onboarding() {
         // Track onboarding completion for referral validation
         const urlParams = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
         const refCode = urlParams.get('ref');
-        const refUID = sessionStorage.getItem('referrer_uid');
-        
-        if (refUID && uid) {
-          console.log("[onboarding] Tracking onboarding completion for referral:", { refUID, refCode });
-          fetch(getApiUrl('/api/referral/track-event'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              referredUID: uid,
-              referredEmail: auth?.currentUser?.email || '',
-              referrerUID: refUID,
-              referrerEmail: '',
-              event: 'onboarding_completed',
-              refCode: refCode || null,
-            }),
-          }).catch(err => console.error('[onboarding] Referral tracking error:', err));
+        const refUID = sessionStorage.getItem('referrer_uid')
+          || (typeof responseData.settings?.referral_source === 'string'
+            ? responseData.settings.referral_source
+            : null);
+        const currentUser = auth.currentUser;
+
+        if (refUID && uid && currentUser) {
+          void (async () => {
+            try {
+              const referralToken = await currentUser.getIdToken();
+              const referralHeaders = {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${referralToken}`,
+              };
+
+              const trackResponse = await fetch(getApiUrl('/api/referral/track-event'), {
+                method: 'POST',
+                headers: referralHeaders,
+                body: JSON.stringify({
+                  referrerUID: refUID,
+                  event: 'onboarding_completed',
+                  refCode: refCode || null,
+                }),
+              });
+
+              if (trackResponse.status === 401 || trackResponse.status === 403) return;
+              if (!trackResponse.ok && trackResponse.status !== 409) {
+                console.warn('[onboarding] Não foi possível registrar a indicação.');
+                return;
+              }
+
+              const validateResponse = await fetch(getApiUrl('/api/referral/validate-referral'), {
+                method: 'POST',
+                headers: referralHeaders,
+                body: JSON.stringify({ referrerUID: refUID }),
+              });
+
+              if (validateResponse.status === 401 || validateResponse.status === 403) return;
+              if (!validateResponse.ok && validateResponse.status !== 409) {
+                console.warn('[onboarding] Não foi possível validar a indicação.');
+              }
+            } catch {
+              console.warn('[onboarding] A indicação não pôde ser sincronizada agora.');
+            }
+          })();
         }
 
         console.log("[onboarding] Settings patched optimistically — navigating to dashboard");

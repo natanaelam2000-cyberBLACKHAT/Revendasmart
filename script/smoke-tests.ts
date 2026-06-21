@@ -15,6 +15,7 @@ const payments = read("server/payments.ts");
 const mpConnections = read("server/mercadopago-connections.ts");
 const app = read("client/src/App.tsx");
 const partialPaymentModal = read("client/src/components/PartialPaymentModal.tsx");
+const onboarding = read("client/src/pages/onboarding.tsx");
 const vercel = JSON.parse(read("vercel.json"));
 
 assert.match(routes, /catalogSlug.*catalog_slug.*userSlug.*slug/);
@@ -54,6 +55,60 @@ assert.match(publicCatalog, /onError=\{\(\) => setLogoFailed\(true\)\}/);
 assert.match(partialPaymentModal, /safe-area-inset-bottom/);
 assert.ok(vercel.rewrites.some((rule: any) => rule.source === "/u/:storeSlug" && rule.destination === "/index.html"));
 
+// Referral/Premium security regression checks.
+const trackReferralStart = routes.indexOf('app.post("/api/referral/track-event"');
+const validateReferralStart = routes.indexOf('app.post("/api/referral/validate-referral"');
+const referralRoutesEnd = routes.indexOf('app.get("/api/admin/global-config"');
+assert.ok(trackReferralStart >= 0 && validateReferralStart > trackReferralStart && referralRoutesEnd > validateReferralStart);
+const trackReferralRoute = routes.slice(trackReferralStart, validateReferralStart);
+const validateReferralRoute = routes.slice(validateReferralStart, referralRoutesEnd);
+const securedReferralRoutes = `${trackReferralRoute}\n${validateReferralRoute}`;
+
+// Anonymous calls are blocked by the shared Firebase token middleware.
+assert.match(trackReferralRoute, /track-event", requireAuth/);
+assert.match(validateReferralRoute, /validate-referral", requireAuth/);
+// The body UID is never trusted; ownership comes from the verified token.
+assert.match(securedReferralRoutes, /const referredUid = \(req as any\)\.firebaseUid/);
+assert.match(securedReferralRoutes, /suppliedReferredUid !== referredUid/);
+assert.match(securedReferralRoutes, /status\(403\).*REFERRAL_OWNERSHIP_MISMATCH/);
+// Invalid payloads and self-referrals are rejected before Firestore writes.
+assert.match(securedReferralRoutes, /status\(400\).*INVALID_REFERRAL_PAYLOAD/);
+assert.match(securedReferralRoutes, /referrerUid === referredUid/);
+assert.match(securedReferralRoutes, /status\(400\).*SELF_REFERRAL_NOT_ALLOWED/);
+// Both real Auth users and the persisted onboarding flag are required.
+assert.match(securedReferralRoutes, /admin\.auth\(\)\.getUser\(referredUid\)/);
+assert.match(securedReferralRoutes, /admin\.auth\(\)\.getUser\(referrerUid\)/);
+assert.match(securedReferralRoutes, /onboarding_completed !== true/);
+// Deterministic pair identity plus a unique validation marker prevents double counting.
+assert.match(routes, /sha256.*referrerUid.*referredUid/);
+assert.match(validateReferralRoute, /validatedReferrals/);
+assert.match(validateReferralRoute, /validationDoc\.exists/);
+assert.match(validateReferralRoute, /status\(409\)/);
+assert.match(validateReferralRoute, /DUPLICATE_REFERRAL/);
+assert.match(validateReferralRoute, /transaction\.create\(validationRef/);
+// Validation, unique marker, counter increment and Premium grant share one transaction.
+assert.match(validateReferralRoute, /runTransaction/);
+assert.match(validateReferralRoute, /const newCount = validatedReferrals.size \+ 1/);
+assert.match(validateReferralRoute, /transaction\.set\(planRef, planUpdate/);
+assert.match(validateReferralRoute, /newCount === REFERRAL_REWARD_LIMIT/);
+assert.doesNotMatch(validateReferralRoute, /referralCount\s*=\s*body|body\.referralCount|planDoc\.data\(\)\?\.referralCount/);
+// Simple per-user rate limiting protects both mutation routes.
+assert.match(trackReferralRoute, /checkReferralRateLimit\(referredUid, "track"\)/);
+assert.match(validateReferralRoute, /checkReferralRateLimit\(referredUid, "validate"\)/);
+
+
+// Referral frontend sends a Firebase ID token and never trusts a client UID.
+assert.match(onboarding, /currentUser\.getIdToken\(\)/);
+assert.match(onboarding, /Authorization: `Bearer \$\{referralToken\}`/);
+assert.ok(onboarding.includes("/api/referral/track-event"));
+assert.ok(onboarding.includes("/api/referral/validate-referral"));
+assert.doesNotMatch(onboarding, /referredUID:/);
+const frontendTrackStart = onboarding.indexOf("/api/referral/track-event");
+const frontendValidateStart = onboarding.indexOf("/api/referral/validate-referral");
+assert.ok(frontendTrackStart >= 0 && frontendValidateStart > frontendTrackStart);
+const referralFrontend = onboarding.slice(frontendTrackStart, frontendValidateStart + 600);
+assert.match(referralFrontend, /status === 401 \|\| .*status === 403/);
+assert.match(onboarding, /if \(refUID && uid && currentUser\)/);
 const response = await fetch("https://revendasmart-backend-cc2743rkmq-uc.a.run.app/api/public/catalog/adriana-perfumes");
 assert.equal(response.status, 200);
 const catalog = await response.json() as any;
