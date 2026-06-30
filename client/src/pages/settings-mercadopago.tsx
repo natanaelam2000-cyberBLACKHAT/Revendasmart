@@ -299,14 +299,17 @@ export default function SettingsMercadoPago() {
 
         {/* Empty state */}
         {activeConnections.length === 0 && revokedConnections.length === 0 && (
-          <div className="py-10 flex flex-col items-center text-center">
-            <div className="w-16 h-16 bg-secondary rounded-[2rem] flex items-center justify-center mb-4">
-              <Link2 className="w-7 h-7 text-muted-foreground/40" />
+          <div className="rounded-[2rem] border border-dashed border-border/60 bg-white px-6 py-12 text-center flex flex-col items-center">
+            <div className="w-20 h-20 bg-primary/10 rounded-[2rem] flex items-center justify-center mb-4">
+              <Link2 className="w-8 h-8 text-primary/45" />
             </div>
-            <p className="font-bold text-sm text-muted-foreground">Nenhuma conta conectada</p>
-            <p className="text-[11px] text-muted-foreground/70 mt-1 max-w-[220px]">
-              Conecte sua conta Mercado Pago para receber os pagamentos diretamente.
+            <p className="font-black text-sm text-foreground">Nenhuma conexão Mercado Pago</p>
+            <p className="text-xs leading-relaxed text-muted-foreground mt-2 max-w-[260px]">
+              Conecte sua conta para receber pagamentos de pedidos e cobranças diretamente.
             </p>
+            <button onClick={handleConnect} disabled={connecting} className="rs-pressable mt-5 rounded-2xl bg-primary px-6 py-3 text-xs font-black uppercase text-white disabled:opacity-60">
+              {connecting ? "Conectando..." : "Conectar Mercado Pago"}
+            </button>
           </div>
         )}
 

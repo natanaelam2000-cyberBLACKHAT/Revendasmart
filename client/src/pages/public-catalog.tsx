@@ -116,7 +116,7 @@ const filteredProducts = (Array.isArray(products) ? products : []).filter(p => {
               {settings.showPrice!==false&&<p className="text-base sm:text-xl font-black text-primary mt-auto pt-3">R$ {price.toLocaleString("pt-BR",{minimumFractionDigits:2})}</p>}
             </div>
           </article>})}
-        </div>:<div className="bg-white rounded-3xl border border-dashed border-slate-300 py-20 text-center"><Package className="w-12 h-12 text-slate-300 mx-auto mb-3"/><p className="font-bold text-muted-foreground">Nenhum produto disponível</p></div>}
+        </div>:<div className="flex flex-col items-center rounded-3xl border border-dashed border-slate-300 bg-white px-6 py-20 text-center"><div className="mb-4 flex h-20 w-20 items-center justify-center rounded-[2rem] bg-slate-100"><Package className="h-10 w-10 text-slate-300"/></div><p className="font-black text-slate-800">Nenhum produto disponível</p><p className="mt-2 max-w-[280px] text-sm leading-relaxed text-muted-foreground">A loja ainda não publicou produtos neste catálogo. Volte em breve para conferir as novidades.</p></div>}
       </main>
       <footer className="py-8 text-center text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground">Criado com RevendaSmart</footer>
     </div>

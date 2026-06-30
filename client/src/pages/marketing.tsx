@@ -398,18 +398,19 @@ export default function Marketing() {
                 </div>
               ) : (
                 <div className="bg-white p-12 rounded-[2.5rem] border border-dashed border-border flex flex-col items-center justify-center text-center gap-4">
-                  <div className="w-16 h-16 bg-secondary rounded-full flex items-center justify-center">
-                    <Info className="w-8 h-8 text-muted-foreground/40" />
+                  <div className="w-20 h-20 bg-primary/10 rounded-[2rem] flex items-center justify-center">
+                    <Info className="w-9 h-9 text-primary/45" />
                   </div>
                   <div>
-                    <p className="text-xs font-bold text-muted-foreground uppercase">Nenhum produto selecionado</p>
-                    <p className="text-[10px] text-muted-foreground/60 px-4">Escolha um produto acima para gerar seu anúncio automático!</p>
+                    <p className="text-sm font-black text-foreground">Nenhum produto selecionado</p>
+                    <p className="mt-2 text-xs leading-relaxed text-muted-foreground px-4">Escolha um produto ou kit acima para gerar seu anúncio automático.</p>
                   </div>
+                  {products.length === 0 && <button onClick={() => window.location.href = "/add-product"} className="rs-pressable rounded-2xl bg-primary px-5 py-3 text-xs font-black uppercase text-white">Cadastrar produto</button>}
                 </div>
               )}
             </div>
           ) : (
-            <MarketingHistoryPanel entries={historyEntries} loading={historyLoading} onCopy={repeatCopy} onShare={repeatShare} onDownload={repeatDownload} onRemove={removeEntry} onClear={clearHistory} />
+            <MarketingHistoryPanel entries={historyEntries} loading={historyLoading} onCopy={repeatCopy} onShare={repeatShare} onDownload={repeatDownload} onRemove={removeEntry} onClear={clearHistory} onCreate={() => setActiveTab("generator")} />
           )}
         </div>
       </div>

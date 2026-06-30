@@ -253,7 +253,20 @@ export default function Clients() {
         )}
 
         <div className="space-y-4">
-          {filtered.map(client => {
+          {filtered.length === 0 ? (
+            <div className="rounded-[2rem] border border-dashed border-border/60 bg-white px-6 py-16 text-center flex flex-col items-center">
+              <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-[2rem] bg-primary/10">
+                <UserPlus className="h-9 w-9 text-primary/45" />
+              </div>
+              <p className="font-black text-foreground">{clients.length === 0 ? "Nenhum cliente cadastrado" : "Nenhum cliente encontrado"}</p>
+              <p className="mt-2 max-w-[260px] text-xs leading-relaxed text-muted-foreground">{clients.length === 0 ? "Cadastre clientes para acompanhar contatos, histórico e cobranças." : "Tente outro nome ou telefone para localizar o cliente."}</p>
+              {clients.length === 0 ? (
+                <button onClick={() => setShowAdd(true)} className="rs-pressable mt-5 rounded-2xl bg-primary px-5 py-3 text-xs font-black uppercase text-white">Cadastrar cliente</button>
+              ) : (
+                <button onClick={() => setSearch("")} className="rs-pressable mt-5 rounded-2xl bg-secondary px-5 py-3 text-xs font-black uppercase text-foreground">Limpar filtros</button>
+              )}
+            </div>
+          ) : filtered.map(client => {
             const balance = getBalance(client.id);
             const isSelected = selectedIds.includes(client.id);
             

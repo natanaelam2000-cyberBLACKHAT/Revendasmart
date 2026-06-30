@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
 import { Layout } from "@/components/layout";
 import { ProductImageCard } from "@/components/ProductImageCard";
-import { ChevronLeft, Package } from "lucide-react";
+import { ChevronLeft, Package, PlusCircle } from "lucide-react";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { parseISO } from "date-fns";
 
@@ -82,9 +82,13 @@ export default function ProductsSold() {
         {/* Products List */}
         <div className="space-y-3 pb-8">
           {productsSoldMetrics.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <Package className="w-12 h-12 mx-auto opacity-20 mb-2" />
-              <p>Nenhum produto vendido neste mês</p>
+            <div className="rounded-[2rem] border border-dashed border-border/60 bg-white px-6 py-12 text-center flex flex-col items-center">
+              <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-[2rem] bg-primary/10">
+                <Package className="h-9 w-9 text-primary/45" />
+              </div>
+              <p className="font-black text-foreground">Nenhum produto vendido neste mês</p>
+              <p className="mt-2 max-w-[260px] text-xs leading-relaxed text-muted-foreground">Assim que uma venda for registrada, seus campeões do mês aparecerão aqui.</p>
+              <button onClick={() => setLocation("/sale")} className="rs-pressable mt-5 flex items-center gap-2 rounded-2xl bg-primary px-5 py-3 text-xs font-black uppercase text-white"><PlusCircle className="h-4 w-4"/>Registrar venda</button>
             </div>
           ) : (
             productsSoldMetrics.map((product) => (

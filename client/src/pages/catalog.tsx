@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Layout } from "@/components/layout";
-import { Share2, Search, X, Copy, Check, ShoppingCart, Plus, Minus, Trash2, Send, Loader2 } from "lucide-react";
+import { Share2, Search, X, Copy, Check, ShoppingCart, Plus, Minus, Trash2, Send, Loader2, Package } from "lucide-react";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import type { Product } from "@/lib/mock-data";
@@ -256,12 +256,17 @@ export default function Catalog() {
 
         {/* Products Grid - Vitrine */}
         {filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
-            <div className="w-20 h-20 bg-white rounded-[2.5rem] shadow-sm flex items-center justify-center mb-4">
-              <Search className="w-8 h-8 text-muted-foreground/20" />
+          <div className="mx-4 my-8 flex flex-col items-center justify-center rounded-[2rem] border border-dashed border-border/60 bg-white px-6 py-16 text-center">
+            <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-[2rem] bg-primary/10">
+              {products.length === 0 ? <Package className="h-9 w-9 text-primary/50" /> : <Search className="h-9 w-9 text-primary/50" />}
             </div>
-            <p className="font-bold text-muted-foreground">Nenhum resultado</p>
-            <p className="text-xs text-muted-foreground/50 mt-1">Tente ajustar seus filtros.</p>
+            <p className="font-black text-foreground">{products.length === 0 ? "Nenhum produto no catálogo" : "Nenhum produto encontrado"}</p>
+            <p className="mt-2 max-w-[260px] text-xs leading-relaxed text-muted-foreground">{products.length === 0 ? "Cadastre produtos com estoque para montar sua vitrine digital." : "Tente outro termo ou limpe os filtros para voltar à vitrine completa."}</p>
+            {products.length === 0 ? (
+              <button onClick={() => window.location.href = "/add-product"} className="rs-pressable mt-5 rounded-2xl bg-primary px-5 py-3 text-xs font-black uppercase text-white">Cadastrar produto</button>
+            ) : (
+              <button onClick={() => { setSearch(""); setCategoryFilter("todos"); }} className="rs-pressable mt-5 rounded-2xl bg-secondary px-5 py-3 text-xs font-black uppercase text-foreground">Limpar filtros</button>
+            )}
           </div>
         ) : (
           <div className="p-4 grid grid-cols-2 gap-3">
@@ -329,10 +334,13 @@ export default function Catalog() {
 
           <div className="flex-1 overflow-y-auto p-6 space-y-4">
             {cart.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-center">
-                <ShoppingCart className="w-12 h-12 text-muted-foreground/20 mb-3" />
-                <p className="font-bold text-muted-foreground">Carrinho vazio</p>
-                <button onClick={() => setShowCart(false)} className="rs-pressable mt-5 rounded-xl bg-primary px-5 py-3 text-xs font-black text-white">Continuar comprando</button>
+              <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+                <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-[2rem] bg-primary/10">
+                  <ShoppingCart className="h-9 w-9 text-primary/45" />
+                </div>
+                <p className="font-black text-foreground">Seu carrinho está vazio</p>
+                <p className="mt-2 max-w-[240px] text-xs leading-relaxed text-muted-foreground">Adicione produtos ao pedido para enviar pelo WhatsApp ou pagar online.</p>
+                <button onClick={() => setShowCart(false)} className="rs-pressable mt-5 rounded-2xl bg-primary px-5 py-3 text-xs font-black uppercase text-white">Continuar comprando</button>
               </div>
             ) : (
               cart.map(item => (

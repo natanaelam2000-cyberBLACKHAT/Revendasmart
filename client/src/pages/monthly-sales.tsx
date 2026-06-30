@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
 import { Layout } from "@/components/layout";
-import { ChevronLeft, DollarSign, Package } from "lucide-react";
+import { ChevronLeft, DollarSign, Package, PlusCircle } from "lucide-react";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { parseISO } from "date-fns";
 
@@ -104,9 +104,13 @@ export default function MonthlySales() {
         {/* Sales List */}
         <div className="space-y-4 pb-8">
           {currentMonthSales.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <Package className="w-12 h-12 mx-auto opacity-20 mb-2" />
-              <p>Nenhuma venda neste mês</p>
+            <div className="rounded-[2rem] border border-dashed border-border/60 bg-white px-6 py-12 text-center flex flex-col items-center">
+              <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-[2rem] bg-primary/10">
+                <Package className="h-9 w-9 text-primary/45" />
+              </div>
+              <p className="font-black text-foreground">Nenhuma venda neste mês</p>
+              <p className="mt-2 max-w-[260px] text-xs leading-relaxed text-muted-foreground">Registre uma venda para acompanhar faturamento, produtos vendidos e estoque.</p>
+              <button onClick={() => setLocation("/sale")} className="rs-pressable mt-5 flex items-center gap-2 rounded-2xl bg-primary px-5 py-3 text-xs font-black uppercase text-white"><PlusCircle className="h-4 w-4"/>Registrar venda</button>
             </div>
           ) : (
             currentMonthSales.map((sale) => (

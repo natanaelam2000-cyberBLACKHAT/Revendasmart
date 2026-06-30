@@ -209,15 +209,24 @@ export default function Products() {
           />
         ) : filteredProducts.length === 0 ? (
           <EmptyState
-            title="Nenhum produto encontrado"
-            description={search ? "Tente ajustar sua busca ou filtros" : "Você ainda não possui produtos cadastrados. Cadastre seu primeiro produto para começar a controlar seu estoque."}
+            icon={<Search className="w-12 h-12 text-primary/40" />}
+            title={products.length === 0 ? "Nenhum produto cadastrado" : "Nenhum produto encontrado"}
+            description={products.length === 0 ? "Cadastre seu primeiro produto para começar a controlar estoque, lucro e catálogo." : "Tente outro termo ou limpe os filtros para ver todos os produtos."}
             action={
-              !search && (
+              products.length === 0 ? (
                 <Link href="/add-product">
                   <a className="rs-pressable w-full bg-primary text-white font-black py-3 rounded-2xl text-xs uppercase hover:shadow-lg">
-                    Cadastrar Primeiro Produto
+                    Cadastrar produto
                   </a>
                 </Link>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => { setSearch(""); setSelectedCategory("Todas"); setShowLowStock(true); setShowOutOfStock(true); }}
+                  className="rs-pressable w-full rounded-2xl bg-secondary py-3 text-xs font-black uppercase text-foreground hover:bg-secondary/80"
+                >
+                  Limpar filtros
+                </button>
               )
             }
           />

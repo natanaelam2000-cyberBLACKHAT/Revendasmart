@@ -371,20 +371,20 @@ if (type === "reminder") {
             {/* Charge cards */}
             <div className="space-y-3">
               {charges.length === 0 ? (
-                <div className="py-16 flex flex-col items-center text-center">
-                  <div className="w-16 h-16 bg-secondary rounded-[2rem] flex items-center justify-center mb-4">
-                    <Link2 className="w-7 h-7 text-muted-foreground/40" />
+                <div className="rounded-[2rem] border border-dashed border-border/60 bg-white px-6 py-16 text-center flex flex-col items-center">
+                  <div className="w-20 h-20 bg-primary/10 rounded-[2rem] flex items-center justify-center mb-4">
+                    <Link2 className="w-8 h-8 text-primary/45" />
                   </div>
-                  <p className="font-bold text-sm text-muted-foreground">Nenhum link gerado ainda</p>
-                  <p className="text-[11px] text-muted-foreground/70 mt-1 max-w-[200px]">
-                    Gere um link de pagamento para compartilhar com seus clientes.
+                  <p className="font-black text-sm text-foreground">Nenhuma cobrança criada</p>
+                  <p className="text-xs leading-relaxed text-muted-foreground mt-2 max-w-[240px]">
+                    Crie um link de pagamento para cobrar clientes por Pix ou cartão.
                   </p>
                   <button
                     data-testid="button-open-payment-modal-empty"
                     onClick={() => setShowPaymentModal(true)}
-                    className="mt-5 bg-primary text-white px-6 py-2.5 rounded-2xl text-xs font-black uppercase shadow-sm"
+                    className="rs-pressable mt-5 bg-primary text-white px-6 py-3 rounded-2xl text-xs font-black uppercase shadow-sm"
                   >
-                    Gerar primeiro link
+                    Criar cobrança
                   </button>
                 </div>
               ) : (

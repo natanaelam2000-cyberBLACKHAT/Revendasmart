@@ -137,12 +137,13 @@ export default function BillingCalendar() {
           />
 
           {Object.values(groups).every(g => g.length === 0) && (
-            <div className="text-center py-20">
-              <div className="w-16 h-16 bg-secondary rounded-full flex items-center justify-center mx-auto mb-4">
-                <CheckCircle className="w-8 h-8 text-muted-foreground/30" />
+            <div className="rounded-[2rem] border border-dashed border-border/60 bg-white px-6 py-16 text-center flex flex-col items-center">
+              <div className="w-20 h-20 bg-green-50 rounded-[2rem] flex items-center justify-center mb-4">
+                <CheckCircle className="w-9 h-9 text-green-500/60" />
               </div>
-              <p className="text-sm font-bold text-muted-foreground uppercase">Nenhuma cobrança pendente</p>
-              <p className="text-[10px] text-muted-foreground/60">Tudo em dia por aqui! ✨</p>
+              <p className="text-sm font-black text-foreground">Nenhuma cobrança pendente</p>
+              <p className="mt-2 max-w-[260px] text-xs leading-relaxed text-muted-foreground">Tudo em dia por aqui. Quando houver parcelas a vencer, elas aparecerão neste calendário.</p>
+              <button onClick={() => setLocation("/billings")} className="rs-pressable mt-5 rounded-2xl bg-primary px-5 py-3 text-xs font-black uppercase text-white">Criar cobrança</button>
             </div>
           )}
         </div>
