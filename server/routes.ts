@@ -23,6 +23,92 @@ function getRouteParam(req: Request, name: string): string {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
+const PUBLIC_CATALOG_RATE_LIMIT_WINDOW_MS = 60_000;
+const PUBLIC_CATALOG_RATE_LIMIT_MAX = 60;
+const PUBLIC_CATALOG_RATE_LIMIT_MAX_KEYS = 10_000;
+const publicCatalogRateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+export function resetPublicCatalogRateLimitsForTests(): void {
+  publicCatalogRateLimitMap.clear();
+}
+
+export function checkPublicCatalogRateLimit(
+  clientKey: string,
+  rawSlug: string,
+  now = Date.now(),
+): { allowed: boolean; remaining: number; retryAfterSeconds: number } {
+  const slug = normalizeCatalogSlug(rawSlug) || "invalid";
+  const key = `${clientKey}:${slug}`;
+  const current = publicCatalogRateLimitMap.get(key);
+
+  if (!current || now >= current.resetAt) {
+    if (publicCatalogRateLimitMap.size >= PUBLIC_CATALOG_RATE_LIMIT_MAX_KEYS) {
+      publicCatalogRateLimitMap.forEach((entry, storedKey) => {
+        if (now >= entry.resetAt) publicCatalogRateLimitMap.delete(storedKey);
+      });
+      if (publicCatalogRateLimitMap.size >= PUBLIC_CATALOG_RATE_LIMIT_MAX_KEYS) {
+        const oldestKey = publicCatalogRateLimitMap.keys().next().value;
+        if (oldestKey) publicCatalogRateLimitMap.delete(oldestKey);
+      }
+    }
+    publicCatalogRateLimitMap.set(key, {
+      count: 1,
+      resetAt: now + PUBLIC_CATALOG_RATE_LIMIT_WINDOW_MS,
+    });
+    return {
+      allowed: true,
+      remaining: PUBLIC_CATALOG_RATE_LIMIT_MAX - 1,
+      retryAfterSeconds: Math.ceil(PUBLIC_CATALOG_RATE_LIMIT_WINDOW_MS / 1000),
+    };
+  }
+
+  const retryAfterSeconds = Math.max(1, Math.ceil((current.resetAt - now) / 1000));
+  if (current.count >= PUBLIC_CATALOG_RATE_LIMIT_MAX) {
+    return { allowed: false, remaining: 0, retryAfterSeconds };
+  }
+
+  current.count += 1;
+  return {
+    allowed: true,
+    remaining: PUBLIC_CATALOG_RATE_LIMIT_MAX - current.count,
+    retryAfterSeconds,
+  };
+}
+
+function getPublicCatalogClientKey(req: Request): string {
+  const forwardedFor = req.headers["x-forwarded-for"];
+  const forwardedValue = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor;
+  return String(forwardedValue?.split(",")[0]?.trim() || req.ip || req.socket.remoteAddress || "unknown")
+    .slice(0, 128);
+}
+
+export function publicCatalogRateLimit(req: Request, res: Response, next: NextFunction) {
+  const decision = checkPublicCatalogRateLimit(
+    getPublicCatalogClientKey(req),
+    getRouteParam(req, "storeSlug"),
+  );
+  res.setHeader("X-RateLimit-Limit", String(PUBLIC_CATALOG_RATE_LIMIT_MAX));
+  res.setHeader("X-RateLimit-Remaining", String(decision.remaining));
+  if (!decision.allowed) {
+    res.setHeader("Retry-After", String(decision.retryAfterSeconds));
+    return res.status(429).json({ error: "CATALOG_RATE_LIMITED" });
+  }
+  return next();
+}
+
+export async function findPublicCatalogSettingsDoc(ref: any, rawSlug: string) {
+  const slug = normalizeCatalogSlug(rawSlug);
+  if (!slug) return null;
+  const candidates = Array.from(new Set([rawSlug.trim(), slug].filter(Boolean)));
+  for (const field of ["catalogSlug", "catalog_slug", "userSlug", "slug"]) {
+    for (const candidate of candidates) {
+      const snapshot = await ref.where(field, "==", candidate).limit(1).get();
+      if (!snapshot.empty) return snapshot.docs[0];
+    }
+  }
+  return null;
+}
+
 // Helper: Structured error response with audit context
 function errorResponse(
   res: Response,
@@ -373,24 +459,7 @@ export async function registerRoutes(
     const db = getFirebaseAdmin().firestore();
     const slug = normalizeCatalogSlug(rawSlug);
     if (!slug) return null;
-    const ref = db.collection("user_settings");
-    const candidates = Array.from(new Set([rawSlug, slug]));
-    let settingsDoc: any = null;
-    for (const field of ["catalogSlug", "catalog_slug", "userSlug", "slug"]) {
-      for (const candidate of candidates) {
-        const snapshot = await ref.where(field, "==", candidate).limit(1).get();
-        if (!snapshot.empty) { settingsDoc = snapshot.docs[0]; break; }
-      }
-      if (settingsDoc) break;
-    }
-    if (!settingsDoc) {
-      const snapshot = await ref.get();
-      settingsDoc = snapshot.docs.find((doc: any) => {
-        const data = doc.data();
-        return [data.catalogSlug, data.catalog_slug, data.userSlug, data.slug, data.storeName]
-          .some((value) => normalizeCatalogSlug(value) === slug);
-      }) ?? null;
-    }
+    const settingsDoc = await findPublicCatalogSettingsDoc(db.collection("user_settings"), rawSlug);
     if (!settingsDoc) return null;
     const settings = settingsDoc.data() ?? {};
     const catalogEnabled = settings.enablePublicCatalog ?? settings.catalogEnabled ?? settings.catalog_enabled ?? true;
@@ -401,9 +470,9 @@ export async function registerRoutes(
     return { uid, slug, settings: { ...settings, uid, catalogSlug: slug, catalog_slug: slug, userSlug: slug, enablePublicCatalog: catalogEnabled }, products };
   };
 
-  app.get("/api/public/catalog/:storeSlug", async (req, res) => {
+  app.get("/api/public/catalog/:storeSlug", publicCatalogRateLimit, async (req, res) => {
     try {
-      const catalog = await loadPublicCatalog(req.params.storeSlug);
+      const catalog = await loadPublicCatalog(getRouteParam(req, "storeSlug"));
       if (!catalog) return res.status(404).json({ error: "CATALOG_NOT_FOUND" });
       res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
       return res.json(catalog);
@@ -412,9 +481,9 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/u/:storeSlug", async (req, res, next) => {
+  app.get("/u/:storeSlug", publicCatalogRateLimit, async (req, res, next) => {
     try {
-      const catalog = await loadPublicCatalog(req.params.storeSlug);
+      const catalog = await loadPublicCatalog(getRouteParam(req, "storeSlug"));
       if (!catalog) return next();
       const indexPath = [path.resolve(__dirname || ".", "public/index.html"), path.resolve(process.cwd(), "dist/public/index.html"), path.resolve(".", "dist/public/index.html")]
         .find((candidate) => fs.existsSync(candidate));

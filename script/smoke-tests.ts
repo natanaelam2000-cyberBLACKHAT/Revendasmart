@@ -3,6 +3,7 @@ import fs from "node:fs";
 
 const read = (path: string) => fs.readFileSync(path, "utf8");
 const routes = read("server/routes.ts");
+const serverIndex = read("server/index.ts");
 const publicCatalog = read("client/src/pages/public-catalog.tsx");
 const layout = read("client/src/components/layout.tsx");
 const settings = read("client/src/pages/settings.tsx");
@@ -20,6 +21,19 @@ const vercel = JSON.parse(read("vercel.json"));
 
 assert.match(routes, /catalogSlug.*catalog_slug.*userSlug.*slug/);
 assert.match(routes, /catalogEnabled/);
+// Public catalog scalability regressions.
+const publicCatalogStart = routes.indexOf('export async function findPublicCatalogSettingsDoc');
+const publicCatalogEnd = routes.indexOf('// GET /api/user/settings/:userId');
+assert.ok(publicCatalogStart >= 0 && publicCatalogEnd > publicCatalogStart);
+const publicCatalogRoutes = routes.slice(publicCatalogStart, publicCatalogEnd);
+assert.doesNotMatch(publicCatalogRoutes, /(?:const|let) snapshot = await ref\.get\(\)/);
+assert.match(publicCatalogRoutes, /return null;/);
+assert.match(publicCatalogRoutes, /api\/public\/catalog\/:storeSlug", publicCatalogRateLimit/);
+assert.match(publicCatalogRoutes, /u\/:storeSlug", publicCatalogRateLimit/);
+assert.match(routes, /status\(429\).*CATALOG_RATE_LIMITED/);
+assert.doesNotMatch(serverIndex, /capturedJsonResponse|JSON\.stringify\(capturedJsonResponse\)/);
+assert.match(serverIndex, /content-length/);
+assert.match(serverIndex, /bytes=/);
 assert.match(publicCatalog, /catalogEnabled === false/);
 assert.match(images, /photoUrl/);
 assert.match(images, /onError/);
@@ -120,6 +134,50 @@ assert.ok(frontendTrackStart >= 0 && frontendValidateStart > frontendTrackStart)
 const referralFrontend = onboarding.slice(frontendTrackStart, frontendValidateStart + 600);
 assert.match(referralFrontend, /status === 401 \|\| .*status === 403/);
 assert.match(onboarding, /if \(refUID && uid && currentUser\)/);
+const { findPublicCatalogSettingsDoc, publicCatalogRateLimit, resetPublicCatalogRateLimitsForTests } = await import("../server/routes");
+const queriedFields: string[] = [];
+const fakeRef = {
+  where(field: string, _operator: string, candidate: string) {
+    queriedFields.push(`${field}:${candidate}`);
+    return {
+      limit(limitValue: number) {
+        assert.equal(limitValue, 1);
+        return {
+          async get() {
+            const found = field === "catalogSlug" && candidate === "adriana-perfumes";
+            return { empty: !found, docs: found ? [{ id: "owner-uid", data: () => ({ catalogSlug: candidate }) }] : [] };
+          },
+        };
+      },
+    };
+  },
+};
+assert.equal((await findPublicCatalogSettingsDoc(fakeRef, "adriana-perfumes"))?.id, "owner-uid");
+queriedFields.length = 0;
+assert.equal(await findPublicCatalogSettingsDoc(fakeRef, "Slug Inexistente QA"), null);
+assert.equal(queriedFields.length, 8);
+
+resetPublicCatalogRateLimitsForTests();
+let nextCalls = 0;
+let lastStatus = 0;
+const fakeRequest = {
+  headers: { "x-forwarded-for": "203.0.113.10" },
+  params: { storeSlug: "adriana-perfumes" },
+  ip: "203.0.113.10",
+  socket: {},
+} as any;
+for (let requestNumber = 1; requestNumber <= 61; requestNumber += 1) {
+  lastStatus = 0;
+  const fakeResponse = {
+    setHeader() {},
+    status(statusCode: number) { lastStatus = statusCode; return this; },
+    json(payload: any) { assert.equal(payload.error, "CATALOG_RATE_LIMITED"); return this; },
+  } as any;
+  publicCatalogRateLimit(fakeRequest, fakeResponse, () => { nextCalls += 1; });
+}
+assert.equal(nextCalls, 60);
+assert.equal(lastStatus, 429);
+
 const response = await fetch("https://revendasmart-backend-cc2743rkmq-uc.a.run.app/api/public/catalog/adriana-perfumes");
 assert.equal(response.status, 200);
 const catalog = await response.json() as any;

@@ -7,10 +7,37 @@ import {
   TrendingUp, Package, AlertCircle, Zap, Share2,
   Sparkles, ArrowRight, TrendingDown, Users, Bell as BellIcon
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { differenceInDays, isToday, parseISO } from "date-fns";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { useFeatureEnabled } from "@/lib/remote-config-context";
+import type { Client, Product, Sale } from "@/lib/mock-data";
+
+interface DashboardInsight {
+  title: string;
+  desc: string;
+  icon: LucideIcon;
+  color: string;
+  action: string;
+  link: string;
+  priority: number;
+}
+
+interface TopProductMetric {
+  product: Product;
+  quantity: number;
+  revenue: number;
+  profit: number;
+}
+
+const createEntityMap = <T extends { id: string }>(items: T[]) => {
+  const map = new Map<string, T>();
+  for (const item of items) {
+    map.set(item.id, item);
+  }
+  return map;
+};
 
 // Helper: Get stock badge for low stock products
 const getStockBadge = (stock: number) => {
@@ -75,42 +102,71 @@ export default function Dashboard() {
   }, [showFirstProductCTA]);
 
   // Declare all memo hooks here
-  const currentMonthSales = useMemo(() => {
-    const now = new Date();
-    return sales.filter(s => {
-      const saleDate = parseISO(s.date);
-      return saleDate.getMonth() === now.getMonth() && saleDate.getFullYear() === now.getFullYear();
-    });
-  }, [sales]);
+  const productById = useMemo(
+    () => createEntityMap(products as Product[]),
+    [products]
+  );
 
-  const monthMetrics = useMemo(() => {
+  const clientById = useMemo(
+    () => createEntityMap(clients as Client[]),
+    [clients]
+  );
+
+  const monthlyDashboardData = useMemo(() => {
+    const now = new Date();
+    const activeClientIds = new Set<string>();
+    const productQuantities = new Map<string, number>();
     let totalRevenue = 0;
     let totalProfit = 0;
     let totalProducts = 0;
 
-    currentMonthSales.forEach(sale => {
+    for (const sale of sales as Sale[]) {
+      const saleDate = parseISO(sale.date);
+      if (saleDate.getMonth() !== now.getMonth() || saleDate.getFullYear() !== now.getFullYear()) {
+        continue;
+      }
+
       totalRevenue += sale.totalPrice;
-      sale.products.forEach((sp: any) => {
+      activeClientIds.add(sale.clientId);
+
+      for (const sp of sale.products || []) {
         totalProducts += sp.quantity;
-        const product = products.find(p => p.id === sp.productId);
+        productQuantities.set(sp.productId, (productQuantities.get(sp.productId) || 0) + sp.quantity);
+        const product = productById.get(sp.productId);
         if (product && product.costPrice) {
           totalProfit += (sp.price - product.costPrice) * sp.quantity;
         }
-      });
-    });
+      }
+    }
 
     return {
-      revenue: totalRevenue,
-      profit: totalProfit,
-      products: totalProducts,
-      activeClients: new Set(currentMonthSales.map(s => s.clientId)).size
+      monthMetrics: {
+        revenue: totalRevenue,
+        profit: totalProfit,
+        products: totalProducts,
+        activeClients: activeClientIds.size
+      },
+      productQuantities
     };
-  }, [currentMonthSales, products]);
+  }, [sales, productById]);
+
+  const monthMetrics = monthlyDashboardData.monthMetrics;
 
 
   // Smart Suggestions Logic - Prioritized & Actionable
   const insights = useMemo(() => {
-    const list: { title: string, desc: string, icon: any, color: string, action: string, link: string, priority: number }[] = [];
+    const list: DashboardInsight[] = [];
+    const now = new Date();
+    const lastSaleDateByClientId = new Map<string, Date>();
+
+    for (const sale of sales as Sale[]) {
+      if (!sale.clientId) continue;
+      const saleDate = parseISO(sale.date);
+      const currentLastSaleDate = lastSaleDateByClientId.get(sale.clientId);
+      if (!currentLastSaleDate || saleDate > currentLastSaleDate) {
+        lastSaleDateByClientId.set(sale.clientId, saleDate);
+      }
+    }
 
     products.forEach(p => {
       // Low Stock (Priority 1 - highest urgency)
@@ -127,7 +183,7 @@ export default function Dashboard() {
       }
 
       // Fast Selling (Priority 2 - high opportunity)
-      if (p.lastSoldDate && differenceInDays(new Date(), parseISO(p.lastSoldDate)) <= 2 && p.stock < 5) {
+      if (p.lastSoldDate && differenceInDays(now, parseISO(p.lastSoldDate)) <= 2 && p.stock < 5) {
         list.push({
           title: "Vendendo Rápido! 🔥",
           desc: `${p.name} está com alta saída. Considere aumentar o estoque.`,
@@ -140,7 +196,7 @@ export default function Dashboard() {
       }
 
       // Stagnant products (Priority 3 - medium attention)
-      if (p.lastSoldDate && differenceInDays(new Date(), parseISO(p.lastSoldDate)) >= 30) {
+      if (p.lastSoldDate && differenceInDays(now, parseISO(p.lastSoldDate)) >= 30) {
         list.push({
           title: "Produto Parado (+30 dias)",
           desc: `${p.name} não vende há um mês. Criar uma oferta?`,
@@ -154,16 +210,10 @@ export default function Dashboard() {
   });
 
   // Inactive Clients (Priority 4 - medium attention)
-  clients.forEach(c => {
-    const clientSales = sales.filter(s => s.clientId === c.id);
-    const lastSale = clientSales.length > 0
-      ? clientSales.reduce((latest, s) => {
-          const d = parseISO(s.date);
-          return d > latest ? d : latest;
-        }, new Date(0))
-      : new Date(0);
+  clientById.forEach(c => {
+    const lastSale = lastSaleDateByClientId.get(c.id) || new Date(0);
 
-    if (differenceInDays(new Date(), lastSale) >= 60) {
+    if (differenceInDays(now, lastSale) >= 60) {
       list.push({
         title: "Cliente Inativo",
         desc: `${c.name} não compra há 60 dias. Que tal um "oi"?`,
@@ -191,7 +241,7 @@ export default function Dashboard() {
 
   // Sort by priority, take top 4
   return list.sort((a, b) => a.priority - b.priority).slice(0, 4);
-}, [products, settings, sales, clients]);
+}, [products, settings.lowStockThreshold, sales, clientById, enableReferralProgram]);
 
   // Compute derived values after all hooks
   const todayBillings = billings.filter(b => isToday(parseISO(b.dueDate)) && b.status !== 'paid');
@@ -199,25 +249,18 @@ export default function Dashboard() {
 
   // Top selling products in current month
   const topProducts = useMemo(() => {
-    const productMetrics = new Map<string, number>();
-    currentMonthSales.forEach(sale => {
-      sale.products?.forEach((sp: any) => {
-        const current = productMetrics.get(sp.productId) || 0;
-        productMetrics.set(sp.productId, current + sp.quantity);
-      });
-    });
-
-    return Array.from(productMetrics.entries())
+    return Array.from(monthlyDashboardData.productQuantities.entries())
       .map(([productId, qty]) => {
-        const product = products.find(p => p.id === productId);
-        const revenue = product ? product.salePrice * qty : 0;
-        const profit = product ? (product.salePrice - (product.costPrice || 0)) * qty : 0;
+        const product = productById.get(productId);
+        if (!product) return null;
+        const revenue = product.salePrice * qty;
+        const profit = (product.salePrice - (product.costPrice || 0)) * qty;
         return { product, quantity: qty, revenue, profit };
       })
-      .filter(item => item.product)
+      .filter((item): item is TopProductMetric => item !== null)
       .sort((a, b) => b.quantity - a.quantity)
       .slice(0, 5);
-  }, [currentMonthSales, products]);
+  }, [monthlyDashboardData.productQuantities, productById]);
 
   // Low stock alert products
   const lowStockProducts = useMemo(() => {
