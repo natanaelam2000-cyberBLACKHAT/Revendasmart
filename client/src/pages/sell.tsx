@@ -8,6 +8,7 @@ import { useLocation } from "wouter";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { useClientsData } from "@/hooks/useClientsData";
 import { getFirebaseAuth, logError, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";
+import { notifyError, notifySuccess, notifyWarning } from "@/lib/notify";
 import { getApiUrl } from "@/lib/api-config";
 
 export default function Sell() {
@@ -191,7 +192,8 @@ export default function Sell() {
         if (!chargeResponse.ok) {
           const errorData = await chargeResponse.json().catch(() => ({}));
           const errorMsg = errorData.message || errorData.error || `HTTP ${chargeResponse.status}`;
-          setSaveError(`⚠️ Venda salva, mas cobrança falhou: ${errorMsg}. Crie o link manualmente em Cobranças.`);
+          setSaveError("Venda registrada, mas a cobrança não foi criada. Crie o link manualmente em Cobranças.");
+          notifyWarning("Venda registrada sem cobrança.", "Crie o link manualmente em Cobranças.");
           logError("sale_charge_creation_failed", errorMsg, {
             context: {
               saleId: saleResult.saleId,
@@ -207,10 +209,12 @@ export default function Sell() {
       }
 
       setSuccess(true);
+      notifySuccess("Venda registrada.");
       setTimeout(() => setLocation("/"), 2000);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : "Erro desconhecido";
-      setSaveError(`Erro ao salvar: ${errorMsg}`);
+      setSaveError("Erro ao registrar venda. Tente novamente.");
+      notifyError("Erro ao registrar venda.");
       console.error("[sell] Checkout error:", err);
       
       // Log to Crashlytics
@@ -242,7 +246,7 @@ export default function Sell() {
             <CheckCircle2 className="w-12 h-12 text-green-600" />
           </div>
           <h2 className="text-2xl font-bold text-foreground mb-2">Venda Registrada!</h2>
-          <p className="text-muted-foreground mb-4">Salva no Firestore com sucesso!</p>
+          <p className="text-muted-foreground mb-4">Venda registrada com sucesso.</p>
         </div>
       </Layout>
     );

@@ -21,6 +21,7 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { getStorage } from "firebase/storage";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { usePlanData } from "@/hooks/usePlanData";
+import { notifyError, notifySuccess } from "@/lib/notify";
 import { checkProductLimit } from "@/lib/plan-helpers";
 import {
   getNichoConfig, getMergedCategories,
@@ -418,6 +419,7 @@ const productId = id || productRef.id;
         console.log("[DEBUG] checkProductLimit exists:", checkProductLimit);
 if (!uid) {
   setFormError("Usuário não autenticado.");
+  notifyError("Sessão expirada. Faça login novamente.");
   return;
 }
 
@@ -462,12 +464,14 @@ if (!allowed) {
           const errorMsg = (writeErr as Error)?.message || "unknown error";
           console.error("[add-product] Create failed:", errorMsg);
           setDebugStatus({ uid: uid, saveAttempted: true, saveError: `CREATE failed: ${errorMsg}` });
-          setFormError(`Erro ao salvar: ${errorMsg}`);
+          setFormError("Erro ao salvar produto.");
+          notifyError("Erro ao salvar produto.");
           throw writeErr;
         }
       }
 
       setSuccess(true);
+      notifySuccess(id ? "Produto atualizado." : "Produto salvo.");
       
       const userId = auth?.currentUser?.uid;
       if (userId && !id) {
@@ -486,6 +490,7 @@ if (!allowed) {
       
       setTimeout(() => setLocation("/products"), 1500);
     } catch (err) {
+      notifyError("Erro ao salvar produto.");
       console.error("[add-product] handleSubmit failed:", err);
     }
   };
@@ -506,6 +511,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
 
     if (!compressedBlob) {
       setFormError("Erro ao processar a imagem.");
+      notifyError("Erro ao processar a imagem.");
       return;
     }
 

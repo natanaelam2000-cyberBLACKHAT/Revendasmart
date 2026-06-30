@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { Layout } from "@/components/layout";
+import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
+import { notifyError, notifySuccess, notifyWarning } from "@/lib/notify";
 import {
   Link2, CheckCircle, XCircle, AlertCircle, RefreshCw,
   ExternalLink, Shield, Clock, Star, Trash2, ChevronLeft
@@ -39,14 +41,17 @@ export default function SettingsMercadoPago() {
     const params = new URLSearchParams(window.location.search);
     const status = params.get("status");
     if (status === "success") {
-      setFeedback({ type: "success", message: "Conta Mercado Pago conectada com sucesso!" });
+      notifySuccess("Conta Mercado Pago conectada.");
+      setFeedback(null);
       window.history.replaceState({}, "", window.location.pathname);
     } else if (status === "denied") {
-      setFeedback({ type: "error", message: "Autorização negada pelo Mercado Pago." });
+      notifyWarning("Operação cancelada.");
+      setFeedback(null);
       window.history.replaceState({}, "", window.location.pathname);
     } else if (status === "error") {
       const reason = params.get("reason") ?? "unknown";
-      setFeedback({ type: "error", message: `Erro na conexão: ${reason}` });
+      notifyError("Não foi possível conectar o Mercado Pago.");
+      setFeedback(null);
       window.history.replaceState({}, "", window.location.pathname);
     }
   }, []);
@@ -59,26 +64,23 @@ export default function SettingsMercadoPago() {
       if (result?.authUrl) {
         window.location.href = result.authUrl;
       } else {
-        setFeedback({ type: "error", message: "Erro ao iniciar conexão. Verifique a configuração." });
+        notifyError("Não foi possível iniciar a conexão.");
       }
     } catch {
-      setFeedback({ type: "error", message: "Erro inesperado ao iniciar conexão." });
+      notifyError("Não foi possível iniciar a conexão.");
     } finally {
       setConnecting(false);
     }
   };
 
   const handleRevoke = async (conn: MPConnectionSafeView) => {
-    if (!confirm(`Deseja desconectar a conta ${conn.accountEmail}?\nIsso não apagará o histórico.`)) {
-      return;
-    }
     setActionLoading(conn.id);
     try {
       const ok = await revokeMPConnection(conn.id);
       if (ok) {
-        setFeedback({ type: "success", message: "Conta desconectada com sucesso." });
+        notifySuccess("Conta desconectada.");
       } else {
-        setFeedback({ type: "error", message: "Erro ao desconectar conta." });
+        notifyError("Não foi possível desconectar a conta.");
       }
     } finally {
       setActionLoading(null);
@@ -90,9 +92,9 @@ export default function SettingsMercadoPago() {
     try {
       const ok = await setDefaultMPConnection(conn.id);
       if (ok) {
-        setFeedback({ type: "success", message: "Conta padrão atualizada." });
+        notifySuccess("Conta padrão atualizada.");
       } else {
-        setFeedback({ type: "error", message: "Erro ao definir conta padrão." });
+        notifyError("Não foi possível definir a conta padrão.");
       }
     } finally {
       setActionLoading(null);
@@ -271,15 +273,23 @@ export default function SettingsMercadoPago() {
                         {actionLoading === conn.id ? "..." : "Definir padrão"}
                       </button>
                     )}
-                    <button
-                      data-testid={`button-revoke-${conn.id}`}
-                      onClick={() => handleRevoke(conn)}
+                    <ConfirmActionDialog
+                      title="Desconectar Mercado Pago"
+                      description={<><p>Deseja desconectar a conta <strong>{conn.accountEmail}</strong>?</p><p className="mt-2">Isso não apagará o histórico, mas novos pagamentos não usarão esta conexão.</p></>}
+                      confirmLabel="Desconectar"
                       disabled={actionLoading === conn.id}
-                      className="flex items-center gap-1.5 text-[10px] font-black px-3 py-1.5 rounded-xl uppercase bg-red-50 text-red-600 disabled:opacity-50"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                      {actionLoading === conn.id ? "..." : "Desconectar"}
-                    </button>
+                      onConfirm={() => handleRevoke(conn)}
+                      trigger={
+                        <button
+                          data-testid={`button-revoke-${conn.id}`}
+                          disabled={actionLoading === conn.id}
+                          className="flex items-center gap-1.5 text-[10px] font-black px-3 py-1.5 rounded-xl uppercase bg-red-50 text-red-600 disabled:opacity-50"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          {actionLoading === conn.id ? "..." : "Desconectar"}
+                        </button>
+                      }
+                    />
                   </div>
                 </div>
               ))}

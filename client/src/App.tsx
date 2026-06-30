@@ -33,6 +33,7 @@ import Signup from "@/pages/signup";
 import NotFound from "@/pages/not-found";
 import { MaintenanceBanner } from "@/components/MaintenanceBanner";
 import { PageSkeleton } from "@/components/PageSkeleton";
+import { UserFeedbackHost } from "@/components/UserFeedbackHost";
 
 
 function Router() {
@@ -127,6 +128,7 @@ function Router() {
   return (
     <>
       <MaintenanceBanner />
+      <UserFeedbackHost />
       <Switch>
         <Route path="/login" component={Login} />
         <Route path="/signup" component={Signup} />

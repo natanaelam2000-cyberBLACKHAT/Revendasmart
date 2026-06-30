@@ -1,12 +1,14 @@
 import { useState, useMemo } from "react";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Layout } from "@/components/layout";
+import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import { Installment, defaultSettings } from "@/lib/mock-data";
 import { Search, UserPlus, ChevronRight, Download, CheckSquare, Square, Send, AlertCircle, Pencil, Trash2 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useClientsData } from "@/hooks/useClientsData";
 import { usePlanData } from "@/hooks/usePlanData";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";
+import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
 
 export default function Clients() {
   const { clients, loading, error, addClient, updateClient, deleteClient } = useClientsData();
@@ -66,6 +68,7 @@ export default function Clients() {
       }
     });
     
+    notifyInfo("Mensagens abertas no WhatsApp.");
     setIsSelectionMode(false);
     setSelectedIds([]);
   };
@@ -99,19 +102,25 @@ export default function Clients() {
       logTelemetryEvent("client_created", { clientId }, user?.uid);
       trackAnalyticsEvent("client_created", { client_id: clientId });
       
+      notifySuccess(editingId ? "Cliente atualizado." : "Cliente cadastrado.");
       setShowAdd(false);
       setEditingId(null);
       setNewClient({ name: '', phone: '', email: '', notes: '' });
       setCreateError(""); // Clear any previous errors
     } else {
-      setCreateError("Erro ao criar cliente. Verifique os dados e tente novamente.");
+      setCreateError("Erro ao salvar cliente. Verifique os dados e tente novamente.");
+      notifyError("Erro ao salvar cliente.");
     }
     
     setIsCreating(false);
   };
 
   const openEdit = (client: any) => { setEditingId(client.id); setNewClient({ name: client.name || "", phone: client.phone || "", email: client.email || "", notes: client.notes || "" }); setShowAdd(true); };
-  const handleDeleteClient = async (id: string, name: string) => { if (window.confirm(`Excluir ${name}?`)) await deleteClient(id); };
+  const handleDeleteClient = async (id: string) => {
+    const ok = await deleteClient(id);
+    if (ok) notifySuccess("Cliente removido.");
+    else notifyError("Não foi possível remover o cliente.");
+  };
 
   const exportCSV = () => {
     const headers = "ID,Nome,Telefone,Email,Notas\n";
@@ -280,7 +289,7 @@ export default function Clients() {
                     </div>
                   </a>
                 </Link>
-                {!isSelectionMode && <div className="flex flex-col gap-1"><button onClick={() => openEdit(client)} className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center"><Pencil className="w-4 h-4" /></button><button onClick={() => handleDeleteClient(client.id, client.name)} className="w-9 h-9 rounded-xl bg-red-50 text-red-600 flex items-center justify-center"><Trash2 className="w-4 h-4" /></button></div>}
+                {!isSelectionMode && <div className="flex flex-col gap-1"><button onClick={() => openEdit(client)} className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center"><Pencil className="w-4 h-4" /></button><ConfirmActionDialog title="Excluir cliente" description={<><p>Deseja excluir <strong>{client.name}</strong>?</p><p className="mt-2">Essa ação não pode ser desfeita.</p></>} confirmLabel="Excluir" onConfirm={() => handleDeleteClient(client.id)} trigger={<button className="w-9 h-9 rounded-xl bg-red-50 text-red-600 flex items-center justify-center" aria-label={`Excluir ${client.name}`}><Trash2 className="w-4 h-4" /></button>} /></div>}
               </div>
             );
           })}

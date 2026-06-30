@@ -21,6 +21,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { getFirestore, collection, onSnapshot, doc, deleteDoc, getDoc } from "firebase/firestore";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { Layout } from "@/components/layout";
+import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
 
 export default function Products() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -32,7 +33,6 @@ export default function Products() {
   const [showLowStock, setShowLowStock] = useState(true);
   const [deleteError, setDeleteError] = useState("");
   const [deletingProductId, setDeletingProductId] = useState<string | null>(null);
-  const [deleteSuccess, setDeleteSuccess] = useState("");
   const { settings } = useUserSettings();
 
   useEffect(() => {
@@ -128,6 +128,7 @@ export default function Products() {
     
     const user = getFirebaseAuth()?.currentUser;
     logTelemetryEvent("product_quick_shared", { productId: product.id }, user?.uid);
+    notifyInfo("Compartilhamento aberto no WhatsApp.");
   };
 
   const [deleteConfirm, setDeleteConfirm] = useState<{ show: boolean; productId?: string }>({ show: false });
@@ -137,6 +138,7 @@ export default function Products() {
     if (!id || !products.some(product => product.id === id)) {
       console.error("[products/delete] Invalid product id", { hasId: Boolean(id) });
       setDeleteError("Não foi possível identificar este produto.");
+      notifyError("Não foi possível identificar este produto.");
       return;
     }
     setDeleteError("");
@@ -161,8 +163,7 @@ export default function Products() {
       if (deletedSnapshot.exists()) throw new Error("Produto ainda existe após deleteDoc");
       if (product.imageId) await deleteImage(product.imageId);
       setDeleteConfirm({ show: false });
-      setDeleteSuccess(`${String(product.name || "Produto")} foi excluído.`);
-      window.setTimeout(() => setDeleteSuccess(""), 3000);
+      notifySuccess("Produto removido.");
     } catch (error: any) {
       console.error("[products/delete] Firestore deletion failed", {
         productId: id,
@@ -171,6 +172,7 @@ export default function Products() {
         message: error instanceof Error ? error.message : String(error),
       });
       setDeleteError("Não foi possível excluir o produto. Verifique sua conexão e tente novamente.");
+      notifyError("Não foi possível excluir o produto.", "Verifique sua conexão e tente novamente.");
     } finally {
       setDeletingProductId(null);
     }
@@ -179,7 +181,6 @@ export default function Products() {
   return (
     <Layout>
       <div className="min-h-full bg-slate-50 pb-28 lg:pb-8">
-      {deleteSuccess && <div className="fixed left-1/2 top-20 z-[80] -translate-x-1/2 rounded-full bg-green-600 px-4 py-2 text-xs font-bold text-white shadow-xl">{deleteSuccess}</div>}
       <div className="bg-white border-b border-border/50">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-5 lg:py-7 space-y-4">
           <div className="flex items-center justify-between gap-4">

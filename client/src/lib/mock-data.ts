@@ -1,3 +1,5 @@
+import { notifyWarning } from "@/lib/notify";
+
 export type Category = string;
 /** Brand agora é string livre — suporta marcas pré-definidas e digitadas manualmente */
 export type Brand = string;
@@ -247,7 +249,7 @@ export const saveStored = (key: string, data: any) => {
   } catch (e) {
     console.error("Storage write error:", e);
     if (e instanceof DOMException && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED')) {
-      alert("Memória cheia! Tente excluir fotos ou dados antigos.");
+      notifyWarning("Memória cheia.", "Tente excluir fotos ou dados antigos.");
     }
   }
 };

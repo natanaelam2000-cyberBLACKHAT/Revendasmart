@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Layout } from "@/components/layout";
+import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import {
   Receipt, Calendar, CheckCircle, Clock, AlertCircle, MessageSquare,
   Download, Bell, Link2, Copy, Check, RefreshCw, ExternalLink, Plus
@@ -16,6 +17,7 @@ import { useUserSettings } from "@/hooks/useUserSettings";
 import { PaymentLinkModal } from "@/components/PaymentLinkModal";
 import { PartialPaymentModal } from "@/components/PartialPaymentModal";
 import { getApiUrl } from "@/lib/api-config";
+import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
 import type { Charge } from "../../../shared/charges";
 
 type BillingTab = "installments" | "charges";
@@ -221,6 +223,7 @@ if (type === "reminder") {
     try {
       await navigator.clipboard.writeText(charge.paymentUrl);
       setCopiedId(charge.id);
+      notifySuccess("Link copiado.");
       setTimeout(() => setCopiedId(null), 2000);
       
       // Track copy event (both telemetry and analytics)
@@ -229,6 +232,7 @@ if (type === "reminder") {
       trackAnalyticsEvent("payment_link_copied", { value: charge.amount });
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : "Erro desconhecido";
+      notifyError("Não foi possível copiar o link.");
       logError("copy_charge_link_error", errorMsg, {
         error: err instanceof Error ? err : undefined,
         context: { chargeId: charge.id },
@@ -242,6 +246,7 @@ if (type === "reminder") {
     const name = client?.name ?? "cliente";
     const msg = `Olá ${name}! Segue o link para pagamento de R$ ${charge.amount.toFixed(2)}: ${charge.paymentUrl} 💳`;
     window.open(`https://wa.me/${client?.phone ?? ""}?text=${encodeURIComponent(msg)}`, "_blank");
+    notifyInfo("Cobrança aberta no WhatsApp.");
   };
 
   const resyncCharge = async (charge: Charge) => {
@@ -255,7 +260,9 @@ if (type === "reminder") {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });
+      notifySuccess("Cobrança sincronizada.");
     } catch (err) {
+      notifyError("Não foi possível sincronizar a cobrança.");
       console.error("[billings] resync error:", err);
     } finally {
       setResyncingId(null);
@@ -263,9 +270,6 @@ if (type === "reminder") {
   };
 
   const deleteCharge = async (charge: Charge) => {
-    const confirmed = confirm(`Tem certeza que deseja remover o link de pagamento de R$ ${charge.amount.toFixed(2)}?`);
-    if (!confirmed) return;
-
     const auth = getFirebaseAuth();
     const user = auth?.currentUser;
     if (!user) return;
@@ -283,11 +287,12 @@ if (type === "reminder") {
       }
       
       logTelemetryEvent("payment_link_deleted", { chargeId: charge.id }, user?.uid);
-      setPaymentError("Link de pagamento removido com sucesso!");
-      setTimeout(() => setPaymentError(""), 3000);
+      notifySuccess("Cobrança removida.");
+      setPaymentError("");
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : "Erro desconhecido";
       console.error("[billings] delete error:", err);
+      notifyError("Não foi possível remover a cobrança.");
       setPaymentError(errorMsg);
       setTimeout(() => setPaymentError(""), 5000);
     } finally {

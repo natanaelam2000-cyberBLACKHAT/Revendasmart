@@ -11,6 +11,7 @@ import { MarketingHistoryPanel } from "@/components/MarketingHistoryPanel";
 import { MarketingStats } from "@/components/MarketingStats";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { createMarketingCard, downloadMarketingCard } from "@/lib/marketing-card";
+import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
 
 export default function Marketing() {
   const { products, loading, error } = useDashboardData();
@@ -29,7 +30,6 @@ export default function Marketing() {
   const [ctaText, setCtaText] = useState('Me chama no WhatsApp!');
   const [includePayment, setIncludePayment] = useState(false);
   const [activeTab, setActiveTab] = useState<"generator" | "history">("generator");
-  const [feedback, setFeedback] = useState("");
   const generatedKeys = useRef(new Set<string>());
   const { entries: historyEntries, loading: historyLoading, recordAction, removeEntry, clearHistory } = useMarketingHistory();
 
@@ -125,16 +125,11 @@ export default function Marketing() {
     void registerAction("generated");
   }, [selectedItem?.id, template]);
 
-  const showFeedback = (message: string) => {
-    setFeedback(message);
-    window.setTimeout(() => setFeedback(""), 2500);
-  };
-
   const handleCopy = async () => {
     await navigator.clipboard.writeText(generatedText);
     setCopied(true); window.setTimeout(() => setCopied(false), 2000);
     await registerAction("copied");
-    showFeedback("Anúncio copiado");
+    notifySuccess("Anúncio copiado.");
     const productId = selectedProductId || selectedKitId;
     const user = getFirebaseAuth()?.currentUser;
     logTelemetryEvent("ad_text_copied", { productId, template }, user?.uid);
@@ -143,7 +138,7 @@ export default function Marketing() {
 
   const handleShare = async () => {
     await registerAction("shared");
-    showFeedback("Compartilhamento aberto no WhatsApp");
+    notifyInfo("Compartilhamento aberto no WhatsApp.");
     window.open(`https://wa.me/?text=${encodeURIComponent(generatedText)}`, "_blank");
     const productId = selectedProductId || selectedKitId;
     const user = getFirebaseAuth()?.currentUser;
@@ -163,10 +158,11 @@ export default function Marketing() {
       const blob = await createMarketingCard(payload);
       downloadMarketingCard(blob, payload.productName);
       await recordAction(payload);
-      showFeedback("Download concluído");
+      notifySuccess("Card salvo.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Não foi possível baixar o card";
       setImageError(message);
+      notifyError("Não foi possível salvar o card.");
       logError("ad_image_generation_failed", message, { context: { template, hasProduct: !!selectedProductId, hasKit: !!selectedKitId } });
     }
   };
@@ -179,16 +175,17 @@ export default function Marketing() {
   const repeatCopy = async (entry: MarketingHistoryEntry) => {
     await navigator.clipboard.writeText(entry.generatedText);
     await recordAction(repeatPayload(entry, "copied"));
-    showFeedback("Anúncio copiado");
+    notifySuccess("Anúncio copiado.");
   };
   const repeatShare = async (entry: MarketingHistoryEntry) => {
     await recordAction(repeatPayload(entry, "shared"));
     window.open(`https://wa.me/?text=${encodeURIComponent(entry.generatedText)}`, "_blank");
+    notifyInfo("Compartilhamento aberto no WhatsApp.");
   };
   const repeatDownload = async (entry: MarketingHistoryEntry) => {
     await downloadEntryCard(entry);
     await recordAction(repeatPayload(entry, "downloaded"));
-    showFeedback("Download concluído");
+    notifySuccess("Card salvo.");
   };
 
   if (loading) return <Layout title="Anúncios"><PageSkeleton variant="dashboard" /></Layout>;
@@ -216,7 +213,6 @@ export default function Marketing() {
             <button onClick={() => setActiveTab("generator")} className={`flex items-center justify-center gap-2 rounded-xl py-3 text-xs font-black transition-all ${activeTab === "generator" ? "bg-white text-primary shadow-sm" : "text-muted-foreground"}`}><WandSparkles className="h-4 w-4"/>Gerador</button>
             <button onClick={() => setActiveTab("history")} className={`flex items-center justify-center gap-2 rounded-xl py-3 text-xs font-black transition-all ${activeTab === "history" ? "bg-white text-primary shadow-sm" : "text-muted-foreground"}`}><History className="h-4 w-4"/>Histórico</button>
           </div>
-          {feedback && <div className="fixed left-1/2 top-20 z-[80] -translate-x-1/2 rounded-full bg-foreground px-4 py-2 text-xs font-bold text-background shadow-xl animate-in fade-in">{feedback}</div>}
           {activeTab === "generator" ? (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
               {/* New Templates Notice - Controlled by marketing_templates_v2_enabled flag */}

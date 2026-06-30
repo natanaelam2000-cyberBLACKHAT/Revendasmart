@@ -2,6 +2,7 @@ import { useState } from "react";
 import { X, Loader2, Copy, Check } from "lucide-react";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";
 import { getApiUrl } from "@/lib/api-config";
+import { notifyError, notifySuccess } from "@/lib/notify";
 
 interface Client {
   id: string;
@@ -102,6 +103,7 @@ export function PaymentLinkModal({
       }
 
       setResult({ chargeId: data.chargeId, paymentUrl: data.paymentUrl });
+      notifySuccess("Cobrança criada.");
       
       // Track payment link generated event (both telemetry and analytics)
       logTelemetryEvent("payment_link_generated", {
@@ -117,8 +119,9 @@ export function PaymentLinkModal({
       
       onSuccess?.(data.chargeId, data.paymentUrl);
     } catch (err) {
-      const friendlyMsg = err instanceof Error ? err.message : "Erro desconhecido ao gerar link";
+      const friendlyMsg = err instanceof Error ? err.message : "Não foi possível gerar o link.";
       setError(friendlyMsg);
+      notifyError("Não foi possível gerar o link.");
     } finally {
       setLoading(false);
     }
@@ -127,6 +130,7 @@ export function PaymentLinkModal({
   const copyLink = async () => {
     if (!result?.paymentUrl) return;
     await navigator.clipboard.writeText(result.paymentUrl);
+    notifySuccess("Link copiado.");
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -155,7 +159,7 @@ export function PaymentLinkModal({
           {result ? (
             <>
               <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl">
-                <p className="font-black text-emerald-900 text-sm">✅ Link gerado com sucesso!</p>
+                <p className="font-black text-emerald-900 text-sm">✅ Link gerado.</p>
                 <p className="text-xs text-emerald-700 break-all mt-2 font-mono bg-white p-2 rounded mt-2">
                   {result.paymentUrl}
                 </p>
@@ -172,7 +176,7 @@ export function PaymentLinkModal({
               >
                 {copied ? (
                   <>
-                    <Check className="w-4 h-4" /> Link copiado!
+                    <Check className="w-4 h-4" /> Link copiado
                   </>
                 ) : (
                   <>

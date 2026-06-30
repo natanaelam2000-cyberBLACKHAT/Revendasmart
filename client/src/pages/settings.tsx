@@ -1,5 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { Layout } from "@/components/layout";
+import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
+import { notifyError, notifySuccess, notifyWarning } from "@/lib/notify";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import {
   AppSettings,
@@ -101,6 +103,8 @@ export default function Settings() {
   const [saveMessage, setSaveMessage] = useState("");
   const [openHelpIndex, setOpenHelpIndex] = useState<number | null>(null);
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const [pendingBackupFile, setPendingBackupFile] = useState<File | null>(null);
+  const [showBackupRestoreConfirm, setShowBackupRestoreConfirm] = useState(false);
   const logoInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -136,6 +140,7 @@ export default function Settings() {
   const handleSave = async () => {
     if (!firebaseUid) {
       setSaveMessage("Erro: usuário não autenticado.");
+      notifyError("Sessão expirada. Faça login novamente.");
       return;
     }
 
@@ -164,7 +169,8 @@ export default function Settings() {
 
       const result = await response.json();
       if (result.success) {
-        setSaveMessage("Configurações salvas com sucesso! ✨");
+        setSaveMessage("Configurações salvas.");
+        notifySuccess("Configurações salvas.");
         // Update form with returned settings to ensure sync
         if (result.settings) {
           setFormSettings(result.settings);
@@ -174,8 +180,8 @@ export default function Settings() {
         throw new Error(result.error || "Erro ao salvar");
       }
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : "Erro desconhecido";
-      setSaveMessage(`Erro ao salvar: ${errorMsg}`);
+      setSaveMessage("Erro ao salvar.");
+      notifyError("Erro ao salvar.");
       console.error("[settings] Save error:", err);
     } finally {
       setIsSaving(false);
@@ -247,14 +253,51 @@ export default function Settings() {
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       setFormSettings(nextSettings);
-      setSaveMessage("Logo atualizado com sucesso!");
+      setSaveMessage("Logo atualizado.");
+      notifySuccess("Logo atualizado.");
     } catch (error) {
       console.error("[settings] Logo upload failed:", error);
-      setSaveMessage(`Erro ao salvar logo: ${error instanceof Error ? error.message : "erro desconhecido"}`);
+      setSaveMessage("Erro ao salvar logo.");
+      notifyError("Erro ao salvar logo.");
     } finally {
       setIsUploadingLogo(false);
     }
   };
+
+  const restoreBackupFromFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const id = getCurrentUserId();
+        if (!id) {
+          setSaveMessage("Erro: usuário não identificado.");
+          return;
+        }
+        const backup = JSON.parse(event.target?.result as string);
+        const prefix = `rs:${id}:`;
+        Object.keys(backup).forEach(key => {
+          if (key.startsWith(prefix)) {
+            localStorage.setItem(key, backup[key]);
+          }
+        });
+        setSaveMessage('Backup restaurado.');
+        notifySuccess("Backup restaurado.");
+        setTimeout(() => window.location.reload(), 1500);
+      } catch {
+        setSaveMessage('Arquivo inválido.');
+        notifyError("Arquivo de backup inválido.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const confirmBackupRestore = () => {
+    const file = pendingBackupFile;
+    setPendingBackupFile(null);
+    setShowBackupRestoreConfirm(false);
+    if (file) restoreBackupFromFile(file);
+  };
+
   const displayName = formSettings?.sellerName || currentUserEmail?.split("@")[0] || "Usuário";
   const accountMenu = [
     { title: "Minha Conta", subtitle: "Perfil e dados pessoais", icon: User, color: "bg-primary/10 text-primary", path: "/settings?tab=account" },
@@ -305,6 +348,20 @@ export default function Settings() {
   }
   return (
     <Layout>
+      <ConfirmActionDialog
+        open={showBackupRestoreConfirm}
+        onOpenChange={(open) => {
+          setShowBackupRestoreConfirm(open);
+          if (!open && pendingBackupFile) {
+            setPendingBackupFile(null);
+            setSaveMessage("");
+          }
+        }}
+        title="Restaurar backup"
+        description="Isso substituirá seus dados atuais neste dispositivo. Essa ação não pode ser desfeita."
+        confirmLabel="Restaurar"
+        onConfirm={confirmBackupRestore}
+      />
       <div className="flex flex-col h-full bg-background">
         <div className="p-3 px-6 bg-primary/5 border-b border-primary/10 flex justify-between items-center min-h-[2.5rem]">
           <p className="text-[8px] font-black text-primary uppercase tracking-[0.2em]">
@@ -649,16 +706,19 @@ export default function Settings() {
                           navigator.share({ title: "RevendaSmart", text })
                             .then(() => {
                               logTelemetryEvent("referral_share_success", { method: "native_share" }).catch(() => {});
-                              setSaveMessage("Compartilhado com sucesso!");
+                              setSaveMessage("Compartilhado.");
+                              notifySuccess("Catálogo compartilhado.");
                               setTimeout(() => setSaveMessage(""), 3000);
                             })
                             .catch((err) => {
+                              notifyWarning("Operação cancelada.");
                               logTelemetryEvent("referral_share_failed", { method: "native_share", reason: err?.message || "unknown" }).catch(() => {});
                             });
                         } else {
                           navigator.clipboard.writeText(text);
                           logTelemetryEvent("referral_share_success", { method: "direct_share" }).catch(() => {});
-                          setSaveMessage("Texto copiado para compartilhar!");
+                          setSaveMessage("Texto copiado.");
+                          notifySuccess("Texto copiado.");
                           setTimeout(() => setSaveMessage(""), 3000);
                         }
                       }}
@@ -711,9 +771,10 @@ export default function Settings() {
                       const date = new Date().toISOString().split('T')[0];
                       a.download = `revendasmart-backup-${date}.json`;
                       a.click();
-                      setSaveMessage("Backup exportado com sucesso! ✨");
+                      setSaveMessage("Backup exportado.");
+                      notifySuccess("Backup exportado.");
                       setTimeout(() => setSaveMessage(""), 3000);
-                    } catch { setSaveMessage("Erro ao exportar."); }
+                    } catch { setSaveMessage("Erro ao exportar."); notifyError("Erro ao exportar backup."); }
                   }}
                   className="w-full bg-primary text-white font-black py-3 rounded-xl text-[10px] uppercase tracking-widest flex items-center justify-center gap-2"
                 >
@@ -735,35 +796,12 @@ export default function Settings() {
                     accept=".json"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
+                      e.target.value = "";
                       if (!file) return;
-                      setSaveMessage("⚠️ Isso substituirá seus dados atuais!");
-                      const confirmed = confirm('Isso substituirá seus dados atuais. Continuar?');
-                      if (!confirmed) {
-                        setSaveMessage("");
-                        return;
-                      }
-                      const reader = new FileReader();
-                      reader.onload = (event) => {
-                        try {
-                          const id = getCurrentUserId();
-                          if (!id) {
-                            setSaveMessage("Erro: usuário não identificado.");
-                            return;
-                          }
-                          const backup = JSON.parse(event.target?.result as string);
-                          const prefix = `rs:${id}:`;
-                          Object.keys(backup).forEach(key => {
-                            if (key.startsWith(prefix)) {
-                              localStorage.setItem(key, backup[key]);
-                            }
-                          });
-                          setSaveMessage('Backup restaurado com sucesso! ✨');
-                          setTimeout(() => window.location.reload(), 1500);
-                        } catch {
-                          setSaveMessage('Erro ao importar: arquivo inválido.');
-                        }
-                      };
-                      reader.readAsText(file);
+                      setSaveMessage("Aguardando confirmação.");
+                      notifyWarning("Confirme para restaurar o backup.");
+                      setPendingBackupFile(file);
+                      setShowBackupRestoreConfirm(true);
                     }}
                   />
                 </label>
