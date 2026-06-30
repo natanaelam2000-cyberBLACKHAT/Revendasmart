@@ -199,7 +199,7 @@ export default function Products() {
       {/* Conteúdo Principal */}
       <div className="max-w-6xl mx-auto p-4 sm:p-6 lg:px-8">
         {loading ? (
-          <PageSkeleton variant="cards" />
+          <PageSkeleton variant="products" count={6} />
         ) : error ? (
           <EmptyState
             icon={<AlertTriangle className="w-12 h-12 text-red-400" />}

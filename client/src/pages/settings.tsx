@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { Layout } from "@/components/layout";
+import { PageSkeleton } from "@/components/PageSkeleton";
 import {
   AppSettings,
   logout, APP_VERSION, getCurrentUserId, getStored, STORAGE_KEYS
@@ -266,6 +267,14 @@ export default function Settings() {
     { title: "Preferências", subtitle: "Notificações e ajustes", icon: Bell, color: "bg-slate-100 text-slate-700", path: "/settings?tab=preferences" },
     { title: "Suporte", subtitle: "Ajuda, FAQ e contato", icon: HelpCircle, color: "bg-amber-100 text-amber-700", path: "/settings?tab=support" },
   ];
+
+  if (settingsLoading && !hasInitialized.current) {
+    return (
+      <Layout>
+        <PageSkeleton variant="settings" />
+      </Layout>
+    );
+  }
 
   if (activeTab === "menu") {
     return (
