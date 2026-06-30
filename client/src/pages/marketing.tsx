@@ -270,7 +270,7 @@ export default function Marketing() {
                     <button 
                       key={key}
                       onClick={() => setTemplate(key)}
-                      className={`flex flex-col items-center gap-1 p-3 rounded-2xl border transition-all ${template === key ? 'bg-primary/5 border-primary text-primary shadow-sm' : 'bg-white border-border text-muted-foreground'}`}
+                      className={`rs-card-interactive flex flex-col items-center gap-1 p-3 rounded-2xl border ${template === key ? 'bg-primary/5 border-primary text-primary shadow-sm' : 'bg-white border-border text-muted-foreground'}`}
                     >
                       <span className="text-lg">{t.emoji}</span>
                       <span className="text-[8px] font-black uppercase text-center leading-tight">{t.label}</span>
@@ -380,7 +380,7 @@ export default function Marketing() {
 
                     <button 
                       onClick={handleShare}
-                      className="w-full bg-[#25D366] text-white font-black py-3.5 rounded-2xl text-[10px] uppercase tracking-wider flex items-center justify-center gap-2 shadow-md hover:shadow-lg active:scale-95 transition-all mb-3"
+                      className="rs-pressable w-full bg-[#25D366] text-white font-black py-3.5 rounded-2xl text-[10px] uppercase tracking-wider flex items-center justify-center gap-2 shadow-md hover:shadow-lg mb-3"
                       data-testid="button-share-whatsapp-ad"
                     >
                       <MessageSquare className="w-4 h-4" /> Compartilhar no WhatsApp
@@ -389,7 +389,7 @@ export default function Marketing() {
                     {imageError && <p className="mb-3 rounded-xl bg-red-50 p-3 text-center text-[10px] font-bold text-red-700">{imageError}</p>}
                     <button 
                       onClick={handleDownloadImage}
-                      className="w-full bg-white text-primary font-black py-3 rounded-2xl text-[10px] uppercase tracking-wider flex items-center justify-center gap-2 shadow-sm hover:bg-primary/5 active:scale-95 transition-all border border-primary/20"
+                      className="rs-pressable w-full bg-white text-primary font-black py-3 rounded-2xl text-[10px] uppercase tracking-wider flex items-center justify-center gap-2 shadow-sm hover:bg-primary/5 border border-primary/20"
                       data-testid="button-download-ad-image"
                     >
                       <ImageIcon className="w-4 h-4" /> Baixar Card

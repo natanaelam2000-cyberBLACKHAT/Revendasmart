@@ -81,3 +81,93 @@
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+
+/* Premium microinteractions: short, subtle, and motion-safe */
+@layer components {
+  .rs-pressable {
+    transition-property: transform, box-shadow, background-color, border-color, color, opacity;
+    transition-duration: 180ms;
+    transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+    will-change: transform;
+  }
+
+  .rs-pressable:active {
+    transform: scale(0.98);
+  }
+
+  .rs-icon-press {
+    transition-property: transform, background-color, box-shadow, color, opacity;
+    transition-duration: 160ms;
+    transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+    will-change: transform;
+  }
+
+  .rs-icon-press:active {
+    transform: scale(0.94);
+  }
+
+  .rs-card-interactive {
+    transition-property: transform, box-shadow, border-color, background-color;
+    transition-duration: 190ms;
+    transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+    will-change: transform;
+  }
+
+  .rs-card-interactive:hover {
+    border-color: hsl(var(--primary) / 0.28);
+    box-shadow: 0 12px 28px hsl(var(--foreground) / 0.07);
+  }
+
+  .rs-card-interactive:active {
+    transform: scale(0.985);
+  }
+
+  .rs-sheet-enter {
+    animation: rs-sheet-up 190ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .rs-dialog-enter {
+    animation: rs-dialog-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .rs-toast-enter {
+    animation: rs-toast-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+}
+
+@keyframes rs-sheet-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes rs-dialog-in {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes rs-toast-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rs-pressable,
+  .rs-icon-press,
+  .rs-card-interactive {
+    transition-duration: 1ms;
+    will-change: auto;
+  }
+
+  .rs-pressable:active,
+  .rs-icon-press:active,
+  .rs-card-interactive:active {
+    transform: none;
+  }
+
+  .rs-sheet-enter,
+  .rs-dialog-enter,
+  .rs-toast-enter {
+    animation: none;
+  }
+}

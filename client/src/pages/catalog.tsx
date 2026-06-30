@@ -271,7 +271,7 @@ export default function Catalog() {
               return (
                 <div
                   key={product.id}
-                  className="bg-white rounded-[2rem] border border-border/40 shadow-sm overflow-hidden flex flex-col transition-all active:scale-[0.98]"
+                  className="rs-card-interactive bg-white rounded-[2rem] border border-border/40 shadow-sm overflow-hidden flex flex-col"
                 >
                   {/* Imagem em destaque */}
                   <div className="aspect-square bg-[#F1F3F5] overflow-hidden relative">
@@ -301,12 +301,12 @@ export default function Catalog() {
                     {/* Botão de ação */}
                     {cartQty > 0 ? (
                       <div className="flex items-center justify-between gap-2 bg-secondary/50 p-2 rounded-xl">
-                        <button onClick={() => updateQuantity(product.id, cartQty - 1)} className="w-6 h-6 rounded-lg bg-white flex items-center justify-center shadow-sm"><Minus className="w-3 h-3"/></button>
+                        <button onClick={() => updateQuantity(product.id, cartQty - 1)} className="rs-icon-press w-6 h-6 rounded-lg bg-white flex items-center justify-center shadow-sm"><Minus className="w-3 h-3"/></button>
                         <span className="text-[10px] font-black flex-1 text-center">{cartQty}</span>
-                        <button onClick={() => addToCart(product)} disabled={cartQty >= product.stock} className="w-6 h-6 rounded-lg bg-primary text-white flex items-center justify-center shadow-sm disabled:opacity-30"><Plus className="w-3 h-3"/></button>
+                        <button onClick={() => addToCart(product)} disabled={cartQty >= product.stock} className="rs-icon-press w-6 h-6 rounded-lg bg-primary text-white flex items-center justify-center shadow-sm disabled:opacity-30"><Plus className="w-3 h-3"/></button>
                       </div>
                     ) : (
-                      <button onClick={() => addToCart(product)} className="w-full bg-primary text-white font-black py-3 rounded-xl text-xs uppercase tracking-widest shadow-lg shadow-primary/20">
+                      <button onClick={() => addToCart(product)} className="rs-pressable w-full bg-primary text-white font-black py-3 rounded-xl text-xs uppercase tracking-widest shadow-lg shadow-primary/20">
                         Adicionar
                       </button>
                     )}
@@ -320,9 +320,9 @@ export default function Catalog() {
 
       {/* Cart Modal */}
       {showCart && (
-        <div className="fixed inset-0 bg-white z-[70] flex flex-col animate-in slide-in-from-bottom-full duration-300">
+        <div className="rs-sheet-enter fixed inset-0 bg-white z-[70] flex flex-col">
           <div className="px-5 pt-[max(1.25rem,env(safe-area-inset-top))] pb-4 flex items-center justify-between border-b border-border/40">
-            <button onClick={() => setShowCart(false)} className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center"><X className="w-5 h-5" /></button>
+            <button onClick={() => setShowCart(false)} className="rs-icon-press w-10 h-10 rounded-full bg-secondary flex items-center justify-center"><X className="w-5 h-5" /></button>
             <h3 className="font-black text-lg">Meu Pedido</h3>
             <div className="w-10" />
           </div>
@@ -332,11 +332,11 @@ export default function Catalog() {
               <div className="h-full flex flex-col items-center justify-center text-center">
                 <ShoppingCart className="w-12 h-12 text-muted-foreground/20 mb-3" />
                 <p className="font-bold text-muted-foreground">Carrinho vazio</p>
-                <button onClick={() => setShowCart(false)} className="mt-5 rounded-xl bg-primary px-5 py-3 text-xs font-black text-white">Continuar comprando</button>
+                <button onClick={() => setShowCart(false)} className="rs-pressable mt-5 rounded-xl bg-primary px-5 py-3 text-xs font-black text-white">Continuar comprando</button>
               </div>
             ) : (
               cart.map(item => (
-                <div key={item.product.id} className="flex gap-4 p-4 bg-[#F8F9FA] rounded-[2rem] border border-border/40">
+                <div key={item.product.id} className="rs-card-interactive flex gap-4 p-4 bg-[#F8F9FA] rounded-[2rem] border border-border/40">
                   <div className="w-16 h-16 bg-white rounded-2xl overflow-hidden border border-border/20">
                     <ProductImageCard product={item.product} size="md" objectFit="contain" />
                   </div>
@@ -346,10 +346,10 @@ export default function Catalog() {
                     <p className="text-[10px] text-muted-foreground mt-1">Preço unitário: R$ {item.product.salePrice.toFixed(2)}</p>
                     <p className="text-xs font-black text-primary mt-1">Subtotal: R$ {(item.product.salePrice * item.quantity).toFixed(2)}</p>
                     <div className="flex items-center justify-between gap-2 mt-3"><div className="flex items-center gap-2"><span className="text-[9px] font-bold text-muted-foreground mr-1">Quantidade:</span>
-                      <button onClick={() => updateQuantity(item.product.id, item.quantity - 1)} className="w-7 h-7 rounded-full bg-white shadow-sm flex items-center justify-center"><Minus className="w-3 h-3"/></button>
+                      <button onClick={() => updateQuantity(item.product.id, item.quantity - 1)} className="rs-icon-press w-7 h-7 rounded-full bg-white shadow-sm flex items-center justify-center"><Minus className="w-3 h-3"/></button>
                       <span className="text-xs font-black">{item.quantity}</span>
-                      <button onClick={() => updateQuantity(item.product.id, item.quantity + 1)} disabled={item.quantity >= item.product.stock} className="w-7 h-7 rounded-full bg-white shadow-sm flex items-center justify-center"><Plus className="w-3 h-3"/></button></div>
-                      <button onClick={() => removeFromCart(item.product.id)} className="flex items-center gap-1 text-[9px] font-bold text-red-600"><Trash2 className="w-3.5 h-3.5"/>Remover</button>
+                      <button onClick={() => updateQuantity(item.product.id, item.quantity + 1)} disabled={item.quantity >= item.product.stock} className="rs-icon-press w-7 h-7 rounded-full bg-white shadow-sm flex items-center justify-center"><Plus className="w-3 h-3"/></button></div>
+                      <button onClick={() => removeFromCart(item.product.id)} className="rs-pressable flex items-center gap-1 text-[9px] font-bold text-red-600"><Trash2 className="w-3.5 h-3.5"/>Remover</button>
                     </div>
                   </div>
                 </div>
@@ -363,17 +363,17 @@ export default function Catalog() {
                 <div className="flex items-center justify-between"><span className="text-[10px] font-bold text-muted-foreground">Itens</span><span className="text-sm font-black">{cartCount}</span></div>
                 <div className="flex items-center justify-between border-t border-border/30 pt-2"><span className="text-[10px] font-black uppercase tracking-widest">Total</span><span className="text-2xl font-black text-foreground">R$ {cartTotal.toFixed(2)}</span></div>
               </div>
-              <button onClick={() => setShowCart(false)} className="w-full py-3 text-xs font-black text-primary">Continuar comprando</button>
+              <button onClick={() => setShowCart(false)} className="rs-pressable w-full py-3 text-xs font-black text-primary">Continuar comprando</button>
               <button 
                 onClick={handleSendOrderWhatsApp} 
-                className="w-full bg-[#25D366] text-white font-black py-5 rounded-[2rem] flex items-center justify-center gap-3 shadow-xl shadow-green-200"
+                className="rs-pressable w-full bg-[#25D366] text-white font-black py-5 rounded-[2rem] flex items-center justify-center gap-3 shadow-xl shadow-green-200"
               >
                 <Send className="w-5 h-5" /> Enviar Pedido no WhatsApp
               </button>
               <button 
                 onClick={handleMercadoPagoCheckout} 
                 disabled={checkoutLoading} 
-                className="w-full bg-primary text-white font-black py-5 rounded-[2rem] flex items-center justify-center gap-3 shadow-xl shadow-primary/20"
+                className="rs-pressable w-full bg-primary text-white font-black py-5 rounded-[2rem] flex items-center justify-center gap-3 shadow-xl shadow-primary/20"
               >
                 {checkoutLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ShoppingCart className="w-5 h-5" />}
                 Pagar com Pix / Cartão de Crédito
@@ -387,23 +387,23 @@ export default function Catalog() {
       {/* Share Modal */}
       {showShareModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-end justify-center p-0 sm:p-4">
-          <div className="bg-white w-full max-w-md rounded-t-[2rem] sm:rounded-[2rem] px-5 pt-5 pb-[calc(7rem+env(safe-area-inset-bottom))] sm:p-7 space-y-5 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain animate-in slide-in-from-bottom-full">
+          <div className="rs-sheet-enter bg-white w-full max-w-md rounded-t-[2rem] sm:rounded-[2rem] px-5 pt-5 pb-[calc(7rem+env(safe-area-inset-bottom))] sm:p-7 space-y-5 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain">
             <div className="flex items-center justify-between">
               <h3 className="font-black text-2xl">Compartilhar Catálogo</h3>
-              <button onClick={() => setShowShareModal(false)} className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center"><X className="w-5 h-5" /></button>
+              <button onClick={() => setShowShareModal(false)} className="rs-icon-press w-10 h-10 rounded-full bg-secondary flex items-center justify-center"><X className="w-5 h-5" /></button>
             </div>
             <div className="bg-secondary/30 rounded-2xl p-3 border border-border/40"><p className="text-[9px] font-black text-muted-foreground uppercase mb-1">Link do catálogo</p><p className="text-xs font-mono break-all text-foreground">{catalogUrl}</p></div>
             <div className="grid grid-cols-2 gap-4">
               <button 
                 onClick={handleShareWhatsApp} 
-                className="flex flex-col items-center gap-3 p-5 bg-green-50 rounded-[2rem] border border-green-100"
+                className="rs-pressable flex flex-col items-center gap-3 p-5 bg-green-50 rounded-[2rem] border border-green-100"
               >
                 <div className="w-12 h-12 bg-green-500 rounded-2xl flex items-center justify-center shadow-lg shadow-green-200"><Share2 className="w-6 h-6 text-white" /></div>
                 <span className="text-[10px] font-black uppercase tracking-widest text-green-700">WhatsApp</span>
               </button>
               <button 
                 onClick={handleCopyLink} 
-                className="flex flex-col items-center gap-3 p-5 bg-primary/5 rounded-[2rem] border border-primary/10"
+                className="rs-pressable flex flex-col items-center gap-3 p-5 bg-primary/5 rounded-[2rem] border border-primary/10"
               >
                 <div className="w-12 h-12 bg-primary rounded-2xl flex items-center justify-center shadow-lg shadow-primary/20">
                   {copied ? <Check className="w-6 h-6 text-white" /> : <Copy className="w-6 h-6 text-white" />}
@@ -418,7 +418,7 @@ export default function Catalog() {
       {/* Share Button */}
       <button 
         onClick={() => setShowShareModal(true)}
-        className="fixed bottom-24 right-6 bg-white border border-border/40 p-4 rounded-full shadow-2xl flex items-center gap-2 active:scale-95 transition-all z-40"
+        className="rs-pressable fixed bottom-24 right-6 bg-white border border-border/40 p-4 rounded-full shadow-2xl flex items-center gap-2 z-40"
       >
         <Share2 className="w-5 h-5 text-primary" />
         <span className="text-[10px] font-black uppercase tracking-widest pr-2">Compartilhar</span>

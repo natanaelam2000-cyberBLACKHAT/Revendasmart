@@ -214,7 +214,7 @@ export default function Products() {
             action={
               !search && (
                 <Link href="/add-product">
-                  <a className="w-full bg-primary text-white font-black py-3 rounded-2xl text-xs uppercase hover:shadow-lg transition-all active:scale-95">
+                  <a className="rs-pressable w-full bg-primary text-white font-black py-3 rounded-2xl text-xs uppercase hover:shadow-lg">
                     Cadastrar Primeiro Produto
                   </a>
                 </Link>
@@ -224,7 +224,7 @@ export default function Products() {
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
             {filteredProducts.map((product) => (
-              <article key={product.id} className="min-w-0 overflow-hidden rounded-2xl border border-border/60 bg-white shadow-sm flex flex-col">
+              <article key={product.id} className="rs-card-interactive min-w-0 overflow-hidden rounded-2xl border border-border/60 bg-white shadow-sm flex flex-col">
                 <ProductCard product={product} lowStockThreshold={settings?.lowStockThreshold} />
                 <div className="grid grid-cols-3 gap-1.5 border-t border-border/40 p-2 mt-auto">
                   <button onClick={() => handleQuickShare(product)} className="min-w-0 py-2 px-1 bg-green-50 text-green-700 rounded-xl flex items-center justify-center gap-1 text-[8px] sm:text-[10px] font-bold" title="Compartilhar WhatsApp"><Share2 className="w-3.5 h-3.5 flex-shrink-0" /><span className="truncate">Compartilhar</span></button>
@@ -239,7 +239,7 @@ export default function Products() {
       {/* Delete Confirmation Modal */}
       {deleteConfirm.show && deleteConfirm.productId && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end justify-center z-50 p-4">
-          <div className="w-full max-w-md bg-white rounded-t-[2rem] sm:rounded-[3rem] px-6 pt-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] space-y-6 animate-in slide-in-from-bottom-full max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain">
+          <div className="rs-sheet-enter w-full max-w-md bg-white rounded-t-[2rem] sm:rounded-[3rem] px-6 pt-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] space-y-6 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain">
             <div className="text-center">
               <h2 className="text-xl font-black text-foreground">Excluir produto?</h2>
               <p className="text-sm text-muted-foreground mt-1">Confira os dados antes de confirmar.</p>

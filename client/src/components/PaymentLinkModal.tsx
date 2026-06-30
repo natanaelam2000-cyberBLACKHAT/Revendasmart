@@ -137,7 +137,7 @@ export function PaymentLinkModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 z-[70] flex items-end justify-center">
-      <div className="bg-white w-full max-w-md rounded-t-3xl max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain flex flex-col animate-in slide-in-from-bottom-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+      <div className="rs-sheet-enter bg-white w-full max-w-md rounded-t-3xl max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain flex flex-col pb-[max(1rem,env(safe-area-inset-bottom))]">
         {/* Header - Sticky */}
         <div className="sticky top-0 bg-white border-b border-border/30 p-6 flex items-center justify-between flex-shrink-0">
           <div>
@@ -264,7 +264,7 @@ export function PaymentLinkModal({
                 <button
                   type="submit"
                   disabled={loading || !isFormValid}
-                  className="w-full py-3 bg-primary text-white font-black text-sm rounded-2xl hover:bg-primary/90 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  className="rs-pressable w-full py-3 bg-primary text-white font-black text-sm rounded-2xl hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                   data-testid="button-generate-payment-link"
                 >
                   {loading ? (

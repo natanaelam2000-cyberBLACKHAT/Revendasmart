@@ -47,7 +47,7 @@ export function UserFeedbackHost() {
 
   return (
     <div className="fixed left-1/2 top-[max(1rem,env(safe-area-inset-top))] z-[120] w-[calc(100vw-2rem)] max-w-sm -translate-x-1/2 pointer-events-none" aria-live="polite" aria-atomic="true">
-      <div className={`pointer-events-auto flex items-start gap-3 rounded-2xl border px-4 py-3 shadow-xl backdrop-blur animate-in fade-in slide-in-from-top-2 motion-reduce:animate-none ${visual.className}`}>
+      <div className={`rs-toast-enter pointer-events-auto flex items-start gap-3 rounded-2xl border px-4 py-3 shadow-xl backdrop-blur ${visual.className}`}>
         <Icon className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <p className="text-xs font-black uppercase tracking-wider">{visual.label}</p>

@@ -24,7 +24,7 @@ export const SettingsCard = ({
     <div 
       onClick={onClick}
       className={`bg-white border border-border/50 rounded-[1.5rem] p-4 transition-all ${
-        isClickable ? 'cursor-pointer hover:shadow-md hover:border-primary/30 active:scale-[0.98]' : ''
+        isClickable ? 'rs-card-interactive cursor-pointer hover:shadow-md hover:border-primary/30' : ''
       } ${className}`}
     >
       <div className="flex items-start gap-3">

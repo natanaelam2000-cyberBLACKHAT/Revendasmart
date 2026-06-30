@@ -286,7 +286,7 @@ export default function Sell() {
             {filteredProducts.map(product => {
               const qty = cart.find(c => c.product.id === product.id)?.quantity || 0;
               return (
-                <div key={product.id} className={`bg-white rounded-3xl p-3 border transition-all ${qty > 0 ? 'border-primary ring-4 ring-primary/5' : 'border-border/40'}`}>
+                <div key={product.id} className={`rs-card-interactive bg-white rounded-3xl p-3 border ${qty > 0 ? 'border-primary ring-4 ring-primary/5' : 'border-border/40'}`}>
                   <div className="aspect-square bg-secondary/30 rounded-2xl mb-2 flex items-center justify-center overflow-hidden relative">
                     <ProductImageCard product={product} size="full" objectFit="contain" className="!rounded-none !border-0" />
                     <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-md text-white text-[8px] font-black px-2 py-1 rounded-lg uppercase">
@@ -297,9 +297,9 @@ export default function Sell() {
                   <div className="flex items-center justify-between mt-2">
                     <span className="text-xs font-black">R$ {Number(product.salePrice || 0).toFixed(2)}</span>
                     <div className="flex items-center gap-1">
-                      {qty > 0 && <button onClick={() => removeFromCart(product.id)} className="w-7 h-7 rounded-full bg-secondary flex items-center justify-center active:scale-90"><Minus className="w-3.5 h-3.5"/></button>}
+                      {qty > 0 && <button onClick={() => removeFromCart(product.id)} className="rs-icon-press w-7 h-7 rounded-full bg-secondary flex items-center justify-center"><Minus className="w-3.5 h-3.5"/></button>}
                       {qty > 0 && <span className="text-xs font-black w-4 text-center">{qty}</span>}
-                      <button onClick={() => addToCart(product)} className="w-7 h-7 rounded-full bg-primary text-white flex items-center justify-center active:scale-90 shadow-sm"><Plus className="w-3.5 h-3.5"/></button>
+                      <button onClick={() => addToCart(product)} className="rs-icon-press w-7 h-7 rounded-full bg-primary text-white flex items-center justify-center shadow-sm"><Plus className="w-3.5 h-3.5"/></button>
                     </div>
                   </div>
                 </div>
@@ -310,7 +310,7 @@ export default function Sell() {
 
         {cart.length > 0 && (
           <div className="fixed bottom-24 left-0 right-0 p-4 max-w-md mx-auto z-40">
-            <div className="bg-white rounded-2xl p-5 shadow-xl border border-border/20 animate-in slide-in-from-bottom-5 max-h-[calc(100dvh-8rem)] overflow-y-auto">
+            <div className="rs-sheet-enter bg-white rounded-2xl p-5 shadow-xl border border-border/20 max-h-[calc(100dvh-8rem)] overflow-y-auto">
               <div className="mb-3"><p className="text-[9px] text-muted-foreground font-black uppercase tracking-widest">Resumo da Venda</p></div>
               <div className="mb-4 rounded-xl bg-secondary/20 p-3 space-y-3">
                 <div className="flex items-center justify-between"><span className="text-[10px] font-bold text-muted-foreground">Subtotal</span><span className="text-sm font-bold">R$ {subtotal.toFixed(2)}</span></div>
@@ -424,7 +424,7 @@ export default function Sell() {
                 data-testid="button-finalize-sale"
                 onClick={handleCheckout}
                 disabled={!selectedClient || cart.length === 0 || isSaving || (paymentType === 'installments' && installments < 1)}
-                className="w-full bg-gradient-to-r from-primary to-primary/90 text-white font-black py-4 rounded-xl shadow-lg hover:shadow-xl disabled:opacity-40 disabled:cursor-not-allowed uppercase tracking-wider text-sm active:scale-95 transition-all border border-primary/20"
+                className="rs-pressable w-full bg-gradient-to-r from-primary to-primary/90 text-white font-black py-4 rounded-xl shadow-lg hover:shadow-xl disabled:opacity-40 disabled:cursor-not-allowed uppercase tracking-wider text-sm border border-primary/20"
               >
                 {isSaving ? (
                   <>

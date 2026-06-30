@@ -39,7 +39,7 @@ export function ConfirmActionDialog({
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       {trigger ? <AlertDialogTrigger asChild>{trigger}</AlertDialogTrigger> : null}
-      <AlertDialogContent className="w-[calc(100vw-2rem)] max-w-sm rounded-[2rem] border-0 bg-white p-6 shadow-2xl sm:rounded-[2rem] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+      <AlertDialogContent className="rs-dialog-enter w-[calc(100vw-2rem)] max-w-sm rounded-[2rem] border-0 bg-white p-6 shadow-2xl sm:rounded-[2rem] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
         <AlertDialogHeader className="text-left">
           <AlertDialogTitle className="text-xl font-black text-foreground">{title}</AlertDialogTitle>
           <AlertDialogDescription asChild>
@@ -47,13 +47,13 @@ export function ConfirmActionDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter className="mt-2 flex-col-reverse gap-3 sm:flex-col-reverse sm:space-x-0">
-          <AlertDialogCancel className="mt-0 h-12 rounded-2xl border-border bg-secondary text-sm font-black text-foreground">
+          <AlertDialogCancel className="rs-pressable mt-0 h-12 rounded-2xl border-border bg-secondary text-sm font-black text-foreground">
             {cancelLabel}
           </AlertDialogCancel>
           <AlertDialogAction
             disabled={disabled}
             onClick={onConfirm}
-            className={`h-12 rounded-2xl text-sm font-black shadow-none disabled:opacity-60 ${
+            className={`rs-pressable h-12 rounded-2xl text-sm font-black shadow-none disabled:opacity-60 ${
               destructive ? "bg-red-600 text-white hover:bg-red-700" : "bg-primary text-white"
             }`}
           >
