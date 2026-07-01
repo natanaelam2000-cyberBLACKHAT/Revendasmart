@@ -31,6 +31,12 @@ assert.doesNotMatch(publicCatalogRoutes, /(?:const|let) snapshot = await ref\.ge
 assert.match(publicCatalogRoutes, /return null;/);
 assert.match(publicCatalogRoutes, /api\/public\/catalog\/:storeSlug", publicCatalogRateLimit/);
 assert.match(publicCatalogRoutes, /u\/:storeSlug", publicCatalogRateLimit/);
+assert.match(publicCatalogRoutes, /api\/public\/catalog\/:storeSlug\/products", publicCatalogRateLimit/);
+assert.match(publicCatalogRoutes, /limit\(limit \+ 1\)/);
+assert.match(publicCatalogRoutes, /orderBy\("stock", "desc"\)/);
+assert.doesNotMatch(publicCatalogRoutes, /collection\("products"\)\.get\(\)/);
+assert.doesNotMatch(publicCatalogRoutes, /catalog\.products\.find/);
+assert.match(publicCatalog, /Carregar mais/);
 assert.match(routes, /status\(429\).*CATALOG_RATE_LIMITED/);
 assert.doesNotMatch(serverIndex, /capturedJsonResponse|JSON\.stringify\(capturedJsonResponse\)/);
 assert.match(serverIndex, /content-length/);

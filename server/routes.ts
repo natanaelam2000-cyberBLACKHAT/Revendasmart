@@ -23,6 +23,46 @@ function getRouteParam(req: Request, name: string): string {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
+const PUBLIC_CATALOG_DEFAULT_LIMIT = 24;
+const PUBLIC_CATALOG_MAX_LIMIT = 48;
+
+type PublicCatalogCursor = {
+  stock: number;
+  id: string;
+};
+
+function parsePublicCatalogLimit(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return PUBLIC_CATALOG_DEFAULT_LIMIT;
+  return Math.min(Math.floor(parsed), PUBLIC_CATALOG_MAX_LIMIT);
+}
+
+function normalizePublicCatalogGender(value: unknown): string | undefined {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized || normalized === "todos" || normalized === "all") return undefined;
+  return normalized;
+}
+
+function encodePublicCatalogCursor(cursor: PublicCatalogCursor): string {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+function decodePublicCatalogCursor(value: unknown): PublicCatalogCursor | null {
+  if (!value || Array.isArray(value)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(String(value), "base64url").toString("utf8"));
+    if (!parsed || typeof parsed.id !== "string" || !Number.isFinite(Number(parsed.stock))) return null;
+    return { id: parsed.id, stock: Number(parsed.stock) };
+  } catch {
+    return null;
+  }
+}
+
+function getPublicCatalogProductImage(product: Record<string, any> | null | undefined): string | undefined {
+  const image = product?.imageUrl || product?.photoUrl || product?.image;
+  return typeof image === "string" && image.trim() ? image : undefined;
+}
+
 const PUBLIC_CATALOG_RATE_LIMIT_WINDOW_MS = 60_000;
 const PUBLIC_CATALOG_RATE_LIMIT_MAX = 60;
 const PUBLIC_CATALOG_RATE_LIMIT_MAX_KEYS = 10_000;
@@ -455,7 +495,7 @@ export async function registerRoutes(
     }
   });
 
-  const loadPublicCatalog = async (rawSlug: string) => {
+  const loadPublicCatalogSettings = async (rawSlug: string) => {
     const db = getFirebaseAdmin().firestore();
     const slug = normalizeCatalogSlug(rawSlug);
     if (!slug) return null;
@@ -465,14 +505,68 @@ export async function registerRoutes(
     const catalogEnabled = settings.enablePublicCatalog ?? settings.catalogEnabled ?? settings.catalog_enabled ?? true;
     if (catalogEnabled === false || settings.disablePublicCatalog === true) return null;
     const uid = settings.uid || settingsDoc.id;
-    const productDocs = await db.collection("users").doc(uid).collection("products").get();
-    const products = productDocs.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
-    return { uid, slug, settings: { ...settings, uid, catalogSlug: slug, catalog_slug: slug, userSlug: slug, enablePublicCatalog: catalogEnabled }, products };
+    return {
+      uid,
+      slug,
+      settings: { ...settings, uid, catalogSlug: slug, catalog_slug: slug, userSlug: slug, enablePublicCatalog: catalogEnabled },
+    };
+  };
+
+  const loadPublicCatalogProductsPage = async ({
+    uid,
+    cursor,
+    gender,
+    limit,
+  }: {
+    uid: string;
+    cursor?: PublicCatalogCursor | null;
+    gender?: string;
+    limit: number;
+  }) => {
+    const admin = getFirebaseAdmin();
+    const db = admin.firestore();
+    const documentId = admin.firestore.FieldPath.documentId();
+    let productsQuery: any = db.collection("users").doc(uid).collection("products");
+    if (gender) productsQuery = productsQuery.where("gender", "==", gender);
+    productsQuery = productsQuery.orderBy("stock", "desc").orderBy(documentId).limit(limit + 1);
+    if (cursor) productsQuery = productsQuery.startAfter(cursor.stock, cursor.id);
+
+    const snapshot = await productsQuery.get();
+    const docs = snapshot.docs.slice(0, limit);
+    const products = docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+    const lastDoc = docs[docs.length - 1];
+    const hasMore = snapshot.docs.length > limit;
+    const nextCursor = hasMore && lastDoc
+      ? encodePublicCatalogCursor({ stock: Number(lastDoc.get("stock") || 0), id: lastDoc.id })
+      : null;
+
+    return { products, nextCursor, hasMore };
+  };
+
+  const loadPublicCatalogOgImage = async (uid: string) => {
+    const db = getFirebaseAdmin().firestore();
+    const snapshot = await db.collection("users").doc(uid).collection("products").orderBy("imageUrl").limit(1).get();
+    const product = snapshot.docs[0]?.data();
+    return getPublicCatalogProductImage(product) || "https://revendasmart.vercel.app/favicon.png";
+  };
+
+  const loadPublicCatalog = async (rawSlug: string, options: { cursor?: PublicCatalogCursor | null; gender?: string; limit?: number } = {}) => {
+    const catalogSettings = await loadPublicCatalogSettings(rawSlug);
+    if (!catalogSettings) return null;
+    const page = await loadPublicCatalogProductsPage({
+      uid: catalogSettings.uid,
+      cursor: options.cursor,
+      gender: options.gender,
+      limit: options.limit ?? PUBLIC_CATALOG_DEFAULT_LIMIT,
+    });
+    return { ...catalogSettings, ...page };
   };
 
   app.get("/api/public/catalog/:storeSlug", publicCatalogRateLimit, async (req, res) => {
     try {
-      const catalog = await loadPublicCatalog(getRouteParam(req, "storeSlug"));
+      const limit = parsePublicCatalogLimit(req.query.limit);
+      const gender = normalizePublicCatalogGender(req.query.gender);
+      const catalog = await loadPublicCatalog(getRouteParam(req, "storeSlug"), { gender, limit });
       if (!catalog) return res.status(404).json({ error: "CATALOG_NOT_FOUND" });
       res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
       return res.json(catalog);
@@ -481,17 +575,31 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/public/catalog/:storeSlug/products", publicCatalogRateLimit, async (req, res) => {
+    try {
+      const catalogSettings = await loadPublicCatalogSettings(getRouteParam(req, "storeSlug"));
+      if (!catalogSettings) return res.status(404).json({ error: "CATALOG_NOT_FOUND" });
+      const limit = parsePublicCatalogLimit(req.query.limit);
+      const cursor = decodePublicCatalogCursor(req.query.cursor);
+      const gender = normalizePublicCatalogGender(req.query.gender);
+      const page = await loadPublicCatalogProductsPage({ uid: catalogSettings.uid, cursor, gender, limit });
+      res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
+      return res.json(page);
+    } catch (error) {
+      return errorResponse(res, 503, "CATALOG_PRODUCTS_TEMPORARILY_UNAVAILABLE", error instanceof Error ? error.message : "Unknown error");
+    }
+  });
+
   app.get("/u/:storeSlug", publicCatalogRateLimit, async (req, res, next) => {
     try {
-      const catalog = await loadPublicCatalog(getRouteParam(req, "storeSlug"));
+      const catalog = await loadPublicCatalogSettings(getRouteParam(req, "storeSlug"));
       if (!catalog) return next();
       const indexPath = [path.resolve(__dirname || ".", "public/index.html"), path.resolve(process.cwd(), "dist/public/index.html"), path.resolve(".", "dist/public/index.html")]
         .find((candidate) => fs.existsSync(candidate));
       if (!indexPath) return next();
       const storeName = catalog.settings.storeName || "Minha Loja";
       const description = catalog.settings.catalogDescription || `Confira os produtos disponíveis no catálogo de ${storeName}.`;
-      const featured: any = catalog.products.find((p: any) => p?.imageUrl || p?.image || p?.photoUrl);
-      const image = featured?.imageUrl || featured?.image || featured?.photoUrl || "https://revendasmart.vercel.app/favicon.png";
+      const image = await loadPublicCatalogOgImage(catalog.uid);
       const url = `https://revendasmart.vercel.app/u/${catalog.slug}`;
       const meta = `<title>${escapeHtml(storeName)} | Catálogo</title>
 <meta name="description" content="${escapeHtml(description)}" />

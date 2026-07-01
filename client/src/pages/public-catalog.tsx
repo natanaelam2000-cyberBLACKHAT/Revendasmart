@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams } from "wouter";
 
 import {
@@ -26,7 +26,11 @@ const [selectedGender, setSelectedGender] = useState("todos");
 const [targetUser, setTargetUser] = useState<any>(null);
 const [products, setProducts] = useState<Product[]>([]);
 const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+const [nextCursor, setNextCursor] = useState<string | null>(null);
+const [hasMore, setHasMore] = useState(false);
 const [loading, setLoading] = useState(true);
+const [loadingMore, setLoadingMore] = useState(false);
+const [loadMoreError, setLoadMoreError] = useState("");
 const [loadFailed, setLoadFailed] = useState(false);
 const [logoFailed, setLogoFailed] = useState(false);
 
@@ -46,6 +50,9 @@ useEffect(() => {
         setTargetUser({ uid: data.uid || data.settings?.uid || "public" });
         setSettings({ ...defaultSettings, ...(data.settings || {}) });
         setProducts(Array.isArray(data.products) ? data.products : []);
+        setNextCursor(typeof data.nextCursor === "string" ? data.nextCursor : null);
+        setHasMore(data.hasMore === true);
+        setLoadMoreError("");
         setLoading(false);
         return;
       } catch (err) {
@@ -55,6 +62,8 @@ useEffect(() => {
     }
     if (!cancelled) {
       setTargetUser(null);
+      setNextCursor(null);
+      setHasMore(false);
       setLoadFailed(true);
       setLoading(false);
     }
@@ -62,6 +71,32 @@ useEffect(() => {
   loadCatalog();
   return () => { cancelled = true; };
 }, [storeSlug]);
+
+
+const loadMoreProducts = useCallback(async () => {
+  if (!storeSlug || !nextCursor || loadingMore) return;
+  setLoadingMore(true);
+  setLoadMoreError("");
+  try {
+    const params = new URLSearchParams({ cursor: nextCursor, limit: "24" });
+    if (selectedGender !== "todos") params.set("gender", selectedGender);
+    const response = await fetch(getApiUrl(`/api/public/catalog/${encodeURIComponent(storeSlug)}/products?${params.toString()}`));
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    const nextProducts = Array.isArray(data.products) ? data.products : [];
+    setProducts((current) => {
+      const seen = new Set(current.map((product) => product.id));
+      return [...current, ...nextProducts.filter((product: Product) => product?.id && !seen.has(product.id))];
+    });
+    setNextCursor(typeof data.nextCursor === "string" ? data.nextCursor : null);
+    setHasMore(data.hasMore === true);
+  } catch (err) {
+    console.warn("[CATALOG] Falha ao carregar mais produtos:", err);
+    setLoadMoreError("Não foi possível carregar mais produtos agora. Tente novamente.");
+  } finally {
+    setLoadingMore(false);
+  }
+}, [loadingMore, nextCursor, selectedGender, storeSlug]);
 
   if (loading) {
     return <PageSkeleton variant="publicCatalog" />;
@@ -105,7 +140,7 @@ const filteredProducts = (Array.isArray(products) ? products : []).filter(p => {
         <div className="flex gap-2 overflow-x-auto pb-4 hide-scrollbar">
           {["todos","masculino","feminino","unisex"].map(g=><button key={g} onClick={()=>setSelectedGender(g)} className={`min-h-11 px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap border ${selectedGender===g?"bg-primary text-white border-primary":"bg-white text-muted-foreground border-slate-200"}`}>{g==="todos"?"Todos":g.charAt(0).toUpperCase()+g.slice(1)}</button>)}
         </div>
-        {filteredProducts.length>0?<div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-5">
+        {filteredProducts.length>0?<><div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-5">
           {filteredProducts.map(product=>{const price=Number(product.salePrice||0); return <article key={product.id} className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
             <div className="aspect-[4/5] bg-slate-50"><ProductImageCard product={product} size="full" objectFit="contain" className="!rounded-none !border-0" /></div>
             <div className="p-3 sm:p-4 flex-1 flex flex-col">
@@ -116,7 +151,7 @@ const filteredProducts = (Array.isArray(products) ? products : []).filter(p => {
               {settings.showPrice!==false&&<p className="text-base sm:text-xl font-black text-primary mt-auto pt-3">R$ {price.toLocaleString("pt-BR",{minimumFractionDigits:2})}</p>}
             </div>
           </article>})}
-        </div>:<div className="flex flex-col items-center rounded-3xl border border-dashed border-slate-300 bg-white px-6 py-20 text-center"><div className="mb-4 flex h-20 w-20 items-center justify-center rounded-[2rem] bg-slate-100"><Package className="h-10 w-10 text-slate-300"/></div><p className="font-black text-slate-800">Nenhum produto disponível</p><p className="mt-2 max-w-[280px] text-sm leading-relaxed text-muted-foreground">A loja ainda não publicou produtos neste catálogo. Volte em breve para conferir as novidades.</p></div>}
+        </div>{hasMore&&<div className="flex flex-col items-center gap-3 pt-6">{loadMoreError&&<p className="text-xs font-semibold text-red-500 text-center">{loadMoreError}</p>}<button type="button" onClick={loadMoreProducts} disabled={loadingMore} className="min-h-11 rounded-full bg-primary px-6 py-3 text-xs font-bold text-white shadow-sm disabled:opacity-60">{loadingMore?"Carregando...":"Carregar mais"}</button></div>}</>:<div className="flex flex-col items-center rounded-3xl border border-dashed border-slate-300 bg-white px-6 py-20 text-center"><div className="mb-4 flex h-20 w-20 items-center justify-center rounded-[2rem] bg-slate-100"><Package className="h-10 w-10 text-slate-300"/></div><p className="font-black text-slate-800">Nenhum produto disponível</p><p className="mt-2 max-w-[280px] text-sm leading-relaxed text-muted-foreground">A loja ainda não publicou produtos neste catálogo. Volte em breve para conferir as novidades.</p></div>}
       </main>
       <footer className="py-8 text-center text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground">Criado com RevendaSmart</footer>
     </div>
