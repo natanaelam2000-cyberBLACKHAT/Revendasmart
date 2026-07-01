@@ -3,12 +3,16 @@ import { useLocation } from "wouter";
 import { Layout } from "@/components/layout";
 import { ProductImageCard } from "@/components/ProductImageCard";
 import { ChevronLeft, Package, PlusCircle } from "lucide-react";
-import { useDashboardData } from "@/hooks/useDashboardData";
+import { useProductsData } from "@/hooks/useProductsData";
+import { useSalesData } from "@/hooks/useSalesData";
 import { parseISO } from "date-fns";
 
 export default function ProductsSold() {
   const [, setLocation] = useLocation();
-  const { products, sales, loading, error } = useDashboardData();
+  const { products, loading: productsLoading, error: productsError } = useProductsData();
+  const { sales, loading: salesLoading, error: salesError } = useSalesData();
+  const loading = productsLoading || salesLoading;
+  const error = productsError || salesError;
 
   // Aggregate products sold in current month
   const productsSoldMetrics = useMemo(() => {

@@ -5,16 +5,16 @@ import { Layout } from "@/components/layout";
 import { ProductImageCard } from "@/components/ProductImageCard";
 import { Search, ShoppingBag, Plus, Minus, CheckCircle2, AlertCircle } from "lucide-react";
 import { useLocation } from "wouter";
-import { useDashboardData } from "@/hooks/useDashboardData";
-import { useClientsData } from "@/hooks/useClientsData";
+import { useProductsData } from "@/hooks/useProductsData";
+import { useClientsLiteData } from "@/hooks/useClientsLiteData";
 import { getFirebaseAuth, logError, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";
 import { notifyError, notifySuccess, notifyWarning } from "@/lib/notify";
 import { getApiUrl } from "@/lib/api-config";
 
 export default function Sell() {
   const [, setLocation] = useLocation();
-  const { products, loading: productsLoading } = useDashboardData();
-  const { clients, loading: clientsLoading } = useClientsData();
+  const { products, loading: productsLoading } = useProductsData();
+  const { clients, loading: clientsLoading } = useClientsLiteData();
   
   const [search, setSearch] = useState("");
   const [selectedClient, setSelectedClient] = useState<string>("");
@@ -257,7 +257,7 @@ export default function Sell() {
       <div className="flex flex-col h-full">
         <div className="p-6 bg-white border-b border-border/50 space-y-4">
           <div>
-            <label className="text-[10px] font-black text-muted-foreground uppercase mb-1 block">Cliente (Obrigatório)</label>
+            <label className="text-xs font-semibold text-muted-foreground mb-1 block">Cliente (Obrigatório)</label>
             <select 
               required
               className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none"
@@ -289,16 +289,16 @@ export default function Sell() {
                 <div key={product.id} className={`rs-card-interactive bg-white rounded-3xl p-3 border ${qty > 0 ? 'border-primary ring-4 ring-primary/5' : 'border-border/40'}`}>
                   <div className="aspect-square bg-secondary/30 rounded-2xl mb-2 flex items-center justify-center overflow-hidden relative">
                     <ProductImageCard product={product} size="full" objectFit="contain" className="!rounded-none !border-0" />
-                    <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-md text-white text-[8px] font-black px-2 py-1 rounded-lg uppercase">
+                    <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-md text-white text-[10px] font-semibold px-2 py-1 rounded-lg">
                       {product.stock} un
                     </div>
                   </div>
                   <h3 className="text-[11px] font-bold truncate">{product.name}</h3>
                   <div className="flex items-center justify-between mt-2">
-                    <span className="text-xs font-black">R$ {Number(product.salePrice || 0).toFixed(2)}</span>
+                    <span className="text-xs font-semibold">R$ {Number(product.salePrice || 0).toFixed(2)}</span>
                     <div className="flex items-center gap-1">
                       {qty > 0 && <button onClick={() => removeFromCart(product.id)} className="rs-icon-press w-7 h-7 rounded-full bg-secondary flex items-center justify-center"><Minus className="w-3.5 h-3.5"/></button>}
-                      {qty > 0 && <span className="text-xs font-black w-4 text-center">{qty}</span>}
+                      {qty > 0 && <span className="text-xs font-semibold w-4 text-center">{qty}</span>}
                       <button onClick={() => addToCart(product)} className="rs-icon-press w-7 h-7 rounded-full bg-primary text-white flex items-center justify-center shadow-sm"><Plus className="w-3.5 h-3.5"/></button>
                     </div>
                   </div>
@@ -311,25 +311,25 @@ export default function Sell() {
         {cart.length > 0 && (
           <div className="fixed bottom-24 left-0 right-0 p-4 max-w-md mx-auto z-40">
             <div className="rs-sheet-enter bg-white rounded-2xl p-5 shadow-xl border border-border/20 max-h-[calc(100dvh-8rem)] overflow-y-auto">
-              <div className="mb-3"><p className="text-[9px] text-muted-foreground font-black uppercase tracking-widest">Resumo da Venda</p></div>
+              <div className="mb-3"><p className="text-xs text-muted-foreground font-semibold">Resumo da Venda</p></div>
               <div className="mb-4 rounded-xl bg-secondary/20 p-3 space-y-3">
                 <div className="flex items-center justify-between"><span className="text-[10px] font-bold text-muted-foreground">Subtotal</span><span className="text-sm font-bold">R$ {subtotal.toFixed(2)}</span></div>
                 <div className="grid grid-cols-[auto_1fr] gap-2">
                   <div className="flex bg-white rounded-lg p-1 border border-border/40">
-                    <button type="button" onClick={() => setDiscountType('fixed')} className={`px-3 py-2 rounded-md text-[9px] font-black ${discountType === 'fixed' ? 'bg-primary text-white' : 'text-muted-foreground'}`}>R$</button>
-                    <button type="button" onClick={() => setDiscountType('percent')} className={`px-3 py-2 rounded-md text-[9px] font-black ${discountType === 'percent' ? 'bg-primary text-white' : 'text-muted-foreground'}`}>%</button>
+                    <button type="button" onClick={() => setDiscountType('fixed')} className={`px-3 py-2 rounded-md text-[10px] font-semibold ${discountType === 'fixed' ? 'bg-primary text-white' : 'text-muted-foreground'}`}>R$</button>
+                    <button type="button" onClick={() => setDiscountType('percent')} className={`px-3 py-2 rounded-md text-[10px] font-semibold ${discountType === 'percent' ? 'bg-primary text-white' : 'text-muted-foreground'}`}>%</button>
                   </div>
                   <input type="number" min="0" max={discountType === 'percent' ? 100 : subtotal} step="0.01" value={discountValue} onChange={e => setDiscountValue(Math.max(0, Number(e.target.value)))} placeholder="Desconto" className="min-w-0 bg-white border border-border/40 rounded-lg px-3 text-sm font-bold outline-none focus:ring-1 focus:ring-primary" />
                 </div>
-                {discountAmount > 0 && <div className="flex items-center justify-between text-green-700"><span className="text-[10px] font-bold">Desconto aplicado</span><span className="text-sm font-black">- R$ {discountAmount.toFixed(2)}</span></div>}
-                <div className="flex items-center justify-between border-t border-border/30 pt-2"><span className="text-[10px] font-black uppercase">Total</span><span className="text-2xl font-black">R$ {total.toFixed(2)}</span></div>
+                {discountAmount > 0 && <div className="flex items-center justify-between text-green-700"><span className="text-[10px] font-bold">Desconto aplicado</span><span className="text-sm font-semibold">- R$ {discountAmount.toFixed(2)}</span></div>}
+                <div className="flex items-center justify-between border-t border-border/30 pt-2"><span className="text-xs font-semibold text-muted-foreground">Total</span><span className="text-2xl font-semibold">R$ {total.toFixed(2)}</span></div>
               </div>
               {/* Payment Type Toggle */}
               <div className="flex gap-3 mb-4">
                 <button 
                   data-testid="button-payment-cash"
                   onClick={() => setPaymentType('cash')}
-                  className={`flex-1 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${
+                  className={`flex-1 px-4 py-2.5 rounded-xl text-xs font-semibold transition-all ${
                     paymentType === 'cash' 
                       ? 'bg-primary text-white shadow-sm' 
                       : 'bg-secondary/40 text-muted-foreground'
@@ -340,7 +340,7 @@ export default function Sell() {
                 <button 
                   data-testid="button-payment-installments"
                   onClick={() => setPaymentType('installments')}
-                  className={`flex-1 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${
+                  className={`flex-1 px-4 py-2.5 rounded-xl text-xs font-semibold transition-all ${
                     paymentType === 'installments' 
                       ? 'bg-primary text-white shadow-sm' 
                       : 'bg-secondary/40 text-muted-foreground'
@@ -353,7 +353,7 @@ export default function Sell() {
               {/* Payment Details - Compact */}
               {paymentType === 'cash' ? (
                 <div className="mb-4 pb-4 border-b border-border/20 space-y-2">
-                  <p className="text-[9px] text-muted-foreground font-black uppercase">Forma de pagamento</p>
+                  <p className="text-xs text-muted-foreground font-semibold">Forma de pagamento</p>
                   <div className="grid grid-cols-2 gap-2">
                     {[['pix','Pix'],['dinheiro','Dinheiro'],['credito','Cartão de crédito'],['debito','Cartão de débito']].map(([value,label]) => <button type="button" key={value} onClick={() => setPaymentMethod(value as typeof paymentMethod)} className={`py-2.5 px-2 rounded-xl text-[9px] font-bold border ${paymentMethod === value ? 'bg-primary text-white border-primary' : 'bg-white text-muted-foreground border-border/50'}`}>{label}</button>)}
                   </div>
@@ -362,7 +362,7 @@ export default function Sell() {
                 <div className="mb-4 pb-4 border-b border-border/20 space-y-2">
                   {/* Entrada */}
                   <div>
-                    <label className="text-[8px] font-black text-muted-foreground uppercase block mb-1">Entrada (Opcional)</label>
+                    <label className="text-[10px] font-semibold text-muted-foreground block mb-1">Entrada (Opcional)</label>
                     <input 
                       data-testid="input-installment-down-payment"
                       type="number" 
@@ -376,7 +376,7 @@ export default function Sell() {
                   </div>
 
                   {downPayment > 0 && <div>
-                    <label className="text-[8px] font-black text-muted-foreground uppercase block mb-1">Forma da entrada</label>
+                    <label className="text-[10px] font-semibold text-muted-foreground block mb-1">Forma da entrada</label>
                     <div className="grid grid-cols-2 gap-2">
                       {[['pix','Pix'],['dinheiro','Dinheiro'],['credito','Cartão de crédito'],['debito','Cartão de débito']].map(([value,label]) => <button type="button" key={value} onClick={() => setDownPaymentMethod(value as typeof downPaymentMethod)} className={`py-2 px-2 rounded-lg text-[9px] font-bold border ${downPaymentMethod === value ? 'bg-primary text-white border-primary' : 'bg-white text-muted-foreground border-border/50'}`}>{label}</button>)}
                     </div>
@@ -384,7 +384,7 @@ export default function Sell() {
                   {/* Parcelas + Valor grid */}
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="text-[8px] font-black text-muted-foreground uppercase block mb-1">Parcelas</label>
+                      <label className="text-[10px] font-semibold text-muted-foreground block mb-1">Parcelas</label>
                       <input 
                         data-testid="input-installment-count"
                         type="number" 
@@ -396,7 +396,7 @@ export default function Sell() {
                       />
                     </div>
                     <div>
-                      <label className="text-[8px] font-black text-muted-foreground uppercase block mb-1">Valor/Parc</label>
+                      <label className="text-[10px] font-semibold text-muted-foreground block mb-1">Valor/Parc</label>
                       <div className="bg-primary/5 border border-primary/10 rounded-lg p-2 text-xs font-bold text-primary text-center">
                         {remainingBalance > 0 && installments > 0 
                           ? `R$ ${(remainingBalance / installments).toFixed(2)}`
@@ -410,13 +410,13 @@ export default function Sell() {
 
               {/* Validation Messages - Discrete */}
               {!selectedClient && (
-                <p className="text-[8px] text-muted-foreground font-medium mb-2">⚠ Selecione um cliente</p>
+                <p className="text-[10px] text-muted-foreground font-medium mb-2">⚠ Selecione um cliente</p>
               )}
               {paymentType === 'installments' && installments < 1 && (
-                <p className="text-[8px] text-muted-foreground font-medium mb-2">⚠ Defina parcelas</p>
+                <p className="text-[10px] text-muted-foreground font-medium mb-2">⚠ Defina parcelas</p>
               )}
               {saveError && (
-                <p className="text-[8px] text-destructive font-medium mb-2">{saveError}</p>
+                <p className="text-[10px] text-destructive font-medium mb-2">{saveError}</p>
               )}
 
               {/* CTA Button - Primary Action */}
@@ -424,7 +424,7 @@ export default function Sell() {
                 data-testid="button-finalize-sale"
                 onClick={handleCheckout}
                 disabled={!selectedClient || cart.length === 0 || isSaving || (paymentType === 'installments' && installments < 1)}
-                className="rs-pressable w-full bg-gradient-to-r from-primary to-primary/90 text-white font-black py-4 rounded-xl shadow-lg hover:shadow-xl disabled:opacity-40 disabled:cursor-not-allowed uppercase tracking-wider text-sm border border-primary/20"
+                className="rs-pressable w-full bg-gradient-to-r from-primary to-primary/90 text-white font-semibold py-4 rounded-xl shadow-md hover:shadow-lg disabled:opacity-40 disabled:cursor-not-allowed text-sm border border-primary/20"
               >
                 {isSaving ? (
                   <>

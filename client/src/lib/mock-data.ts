@@ -115,6 +115,7 @@ export interface Installment {
 export interface Sale {
   id: string;
   clientId: string;
+  clientName?: string;
   products: { productId: string; quantity: number; price: number }[];
   totalPrice: number;
   paymentType: 'cash' | 'installments' | 'avista' | 'prazo';

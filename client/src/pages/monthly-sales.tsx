@@ -2,12 +2,16 @@ import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
 import { Layout } from "@/components/layout";
 import { ChevronLeft, DollarSign, Package, PlusCircle } from "lucide-react";
-import { useDashboardData } from "@/hooks/useDashboardData";
+import { useProductsData } from "@/hooks/useProductsData";
+import { useSalesData } from "@/hooks/useSalesData";
 import { parseISO } from "date-fns";
 
 export default function MonthlySales() {
   const [, setLocation] = useLocation();
-  const { products, sales, loading, error } = useDashboardData();
+  const { products, loading: productsLoading, error: productsError } = useProductsData();
+  const { sales, loading: salesLoading, error: salesError } = useSalesData();
+  const loading = productsLoading || salesLoading;
+  const error = productsError || salesError;
 
   // Filter sales for current month
   const currentMonthSales = useMemo(() => {

@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, useRef } from "react";
 import { Layout } from "@/components/layout";
 import { defaultSettings, getProductImage } from "@/lib/mock-data";
-import { useDashboardData } from "@/hooks/useDashboardData";
+import { useProductsData } from "@/hooks/useProductsData";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, logError } from "@/lib/firebase";
 import { useFeatureEnabled } from "@/lib/remote-config-context";
@@ -14,7 +14,7 @@ import { createMarketingCard, downloadMarketingCard } from "@/lib/marketing-card
 import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
 
 export default function Marketing() {
-  const { products, loading, error } = useDashboardData();
+  const { products, loading, error } = useProductsData();
   const { settings: firestoreSettings } = useUserSettings();
   const settings = firestoreSettings || defaultSettings;
   const v2TemplatesEnabled = useFeatureEnabled("marketing_templates_v2_enabled");
@@ -196,7 +196,7 @@ export default function Marketing() {
         <div className="p-6 text-center">
           <p className="text-destructive font-bold mb-2">Ocorreu um erro temporário.</p>
           <p className="text-muted-foreground text-sm mb-4">Não foi possível carregar os produtos para o Marketing.</p>
-          <button onClick={() => window.location.reload()} className="rounded-xl bg-primary px-5 py-3 text-xs font-black text-white">Tentar novamente</button>
+          <button onClick={() => window.location.reload()} className="rounded-xl bg-primary px-5 py-3 text-xs font-semibold text-white">Tentar novamente</button>
         </div>
       </Layout>
     );
@@ -210,8 +210,8 @@ export default function Marketing() {
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 pb-32 space-y-5">
           <MarketingStats entries={historyEntries} />
           <div className="grid grid-cols-2 gap-2 rounded-2xl bg-secondary/50 p-1.5">
-            <button onClick={() => setActiveTab("generator")} className={`flex items-center justify-center gap-2 rounded-xl py-3 text-xs font-black transition-all ${activeTab === "generator" ? "bg-white text-primary shadow-sm" : "text-muted-foreground"}`}><WandSparkles className="h-4 w-4"/>Gerador</button>
-            <button onClick={() => setActiveTab("history")} className={`flex items-center justify-center gap-2 rounded-xl py-3 text-xs font-black transition-all ${activeTab === "history" ? "bg-white text-primary shadow-sm" : "text-muted-foreground"}`}><History className="h-4 w-4"/>Histórico</button>
+            <button onClick={() => setActiveTab("generator")} className={`flex items-center justify-center gap-2 rounded-xl py-3 text-xs font-semibold transition-all ${activeTab === "generator" ? "bg-white text-primary shadow-sm" : "text-muted-foreground"}`}><WandSparkles className="h-4 w-4"/>Gerador</button>
+            <button onClick={() => setActiveTab("history")} className={`flex items-center justify-center gap-2 rounded-xl py-3 text-xs font-semibold transition-all ${activeTab === "history" ? "bg-white text-primary shadow-sm" : "text-muted-foreground"}`}><History className="h-4 w-4"/>Histórico</button>
           </div>
           {activeTab === "generator" ? (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
@@ -229,7 +229,7 @@ export default function Marketing() {
               {/* Product/Kit Selection */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-muted-foreground uppercase tracking-widest px-1">Produto Solo</label>
+                  <label className="text-xs font-semibold text-muted-foreground px-1">Produto Solo</label>
                   <select 
                     className="w-full bg-white border border-border rounded-2xl p-4 text-xs focus:ring-2 focus:ring-primary/20 outline-none"
                     value={selectedProductId}
@@ -243,7 +243,7 @@ export default function Marketing() {
                   </select>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-muted-foreground uppercase tracking-widest px-1">Ou um Kit</label>
+                  <label className="text-xs font-semibold text-muted-foreground px-1">Ou um Kit</label>
                   <select 
                     className="w-full bg-white border border-border rounded-2xl p-4 text-xs focus:ring-2 focus:ring-primary/20 outline-none"
                     value={selectedKitId}
@@ -264,7 +264,7 @@ export default function Marketing() {
 
               {/* Template Selection */}
               <div className="space-y-2">
-                <label className="text-[10px] font-black text-muted-foreground uppercase tracking-widest px-1">Escolha o Tema</label>
+                <label className="text-xs font-semibold text-muted-foreground px-1">Escolha o Tema</label>
                 <div className="grid grid-cols-3 gap-2">
                   {Object.entries(templates).map(([key, t]) => (
                     <button 
@@ -273,7 +273,7 @@ export default function Marketing() {
                       className={`rs-card-interactive flex flex-col items-center gap-1 p-3 rounded-2xl border ${template === key ? 'bg-primary/5 border-primary text-primary shadow-sm' : 'bg-white border-border text-muted-foreground'}`}
                     >
                       <span className="text-lg">{t.emoji}</span>
-                      <span className="text-[8px] font-black uppercase text-center leading-tight">{t.label}</span>
+                      <span className="text-[10px] font-semibold text-center leading-tight">{t.label}</span>
                     </button>
                   ))}
                 </div>
@@ -282,7 +282,7 @@ export default function Marketing() {
               {/* Options */}
               <div className="space-y-4 bg-white p-6 rounded-3xl border border-border/50 shadow-sm">
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-black text-muted-foreground uppercase tracking-widest px-1">Preço Especial (Opcional)</label>
+                  <label className="text-xs font-semibold text-muted-foreground px-1">Preço Especial (Opcional)</label>
                   <input 
                     type="number" 
                     placeholder="Ex: 89.90"
@@ -301,7 +301,7 @@ export default function Marketing() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-black text-muted-foreground uppercase tracking-widest px-1">Nota Curta</label>
+                  <label className="text-xs font-semibold text-muted-foreground px-1">Nota Curta</label>
                   <input 
                     type="text" 
                     placeholder="Ex: Só hoje!, Frete Grátis"
@@ -311,7 +311,7 @@ export default function Marketing() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-black text-muted-foreground uppercase tracking-widest px-1">Chamada (CTA)</label>
+                  <label className="text-xs font-semibold text-muted-foreground px-1">Chamada (CTA)</label>
                   <input 
                     type="text" 
                     className="w-full bg-secondary/30 border-none rounded-xl p-3 text-sm"
@@ -324,7 +324,7 @@ export default function Marketing() {
                   <div className="flex items-center justify-between pt-2 border-t border-border/50 mt-2">
                     <div className="flex items-center gap-2">
                       <Wallet className="w-4 h-4 text-primary" />
-                      <span className="text-[10px] font-black text-muted-foreground uppercase">Incluir Pagamento</span>
+                      <span className="text-xs font-semibold text-muted-foreground">Incluir Pagamento</span>
                     </div>
                     <input 
                       type="checkbox" 
@@ -356,7 +356,7 @@ export default function Marketing() {
                         })()}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-[10px] font-black text-green-700 uppercase tracking-widest mb-1">Preview WhatsApp</p>
+                        <p className="text-xs font-semibold text-green-700 mb-1">Preview WhatsApp</p>
                         <div className="bg-white p-3 rounded-2xl text-[11px] font-medium whitespace-pre-wrap leading-relaxed shadow-sm">
                           {generatedText}
                         </div>
@@ -366,7 +366,7 @@ export default function Marketing() {
                     {/* CTA Hierarchy: Primary > Secondary > Tertiary */}
                     <button 
                       onClick={handleCopy}
-                      className={`w-full font-black py-4 rounded-2xl text-[10px] uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all mb-3 border ${
+                      className={`w-full font-semibold py-4 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all mb-3 border ${
                         copied
                           ? "bg-green-500 text-white border-green-600"
                           : "bg-primary text-white border-primary/20 hover:shadow-xl"
@@ -380,7 +380,7 @@ export default function Marketing() {
 
                     <button 
                       onClick={handleShare}
-                      className="rs-pressable w-full bg-[#25D366] text-white font-black py-3.5 rounded-2xl text-[10px] uppercase tracking-wider flex items-center justify-center gap-2 shadow-md hover:shadow-lg mb-3"
+                      className="rs-pressable w-full bg-[#25D366] text-white font-semibold py-3.5 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-md hover:shadow-lg mb-3"
                       data-testid="button-share-whatsapp-ad"
                     >
                       <MessageSquare className="w-4 h-4" /> Compartilhar no WhatsApp
@@ -389,7 +389,7 @@ export default function Marketing() {
                     {imageError && <p className="mb-3 rounded-xl bg-red-50 p-3 text-center text-[10px] font-bold text-red-700">{imageError}</p>}
                     <button 
                       onClick={handleDownloadImage}
-                      className="rs-pressable w-full bg-white text-primary font-black py-3 rounded-2xl text-[10px] uppercase tracking-wider flex items-center justify-center gap-2 shadow-sm hover:bg-primary/5 border border-primary/20"
+                      className="rs-pressable w-full bg-white text-primary font-semibold py-3 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-sm hover:bg-primary/5 border border-primary/20"
                       data-testid="button-download-ad-image"
                     >
                       <ImageIcon className="w-4 h-4" /> Baixar Card
@@ -402,10 +402,10 @@ export default function Marketing() {
                     <Info className="w-9 h-9 text-primary/45" />
                   </div>
                   <div>
-                    <p className="text-sm font-black text-foreground">Nenhum produto selecionado</p>
+                    <p className="text-sm font-semibold text-foreground">Nenhum produto selecionado</p>
                     <p className="mt-2 text-xs leading-relaxed text-muted-foreground px-4">Escolha um produto ou kit acima para gerar seu anúncio automático.</p>
                   </div>
-                  {products.length === 0 && <button onClick={() => window.location.href = "/add-product"} className="rs-pressable rounded-2xl bg-primary px-5 py-3 text-xs font-black uppercase text-white">Cadastrar produto</button>}
+                  {products.length === 0 && <button onClick={() => window.location.href = "/add-product"} className="rs-pressable rounded-2xl bg-primary px-5 py-3 text-xs font-semibold text-white">Cadastrar produto</button>}
                 </div>
               )}
             </div>
