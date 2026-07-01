@@ -10,6 +10,7 @@ const settings = read("client/src/pages/settings.tsx");
 const images = read("client/src/components/ProductImageCard.tsx");
 const subscribe = read("client/src/pages/subscribe.tsx");
 const dashboard = read("client/src/pages/dashboard.tsx");
+const dashboardMetrics = read("client/src/lib/dashboard-metrics.ts");
 const sell = read("client/src/pages/sell.tsx");
 const subscriptions = read("server/subscriptions.ts");
 const payments = read("server/payments.ts");
@@ -42,7 +43,7 @@ for (const label of ["Início", "Produtos", "Vendas", "Catálogo", "Anúncios", 
 for (const path of ["/clients", "/billings", "/subscribe"]) assert.ok(settings.includes(`path: "${path}"`));
 assert.match(subscribe, /Plano atual/);
 assert.match(subscribe, /Number\.isNaN/);
-assert.match(dashboard, /slice\(0, 5\)/);
+assert.match(dashboardMetrics, /slice\(0, 5\)/);
 assert.match(dashboard, /Lucro/);
 assert.ok(routes.includes("/api/sales/finalize"));
 assert.match(routes, /runTransaction/);

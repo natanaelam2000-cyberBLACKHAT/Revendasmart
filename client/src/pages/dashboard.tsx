@@ -7,39 +7,20 @@ import {
   TrendingUp, Package, AlertCircle, Zap, Share2,
   Sparkles, ArrowRight, TrendingDown, Users, Bell as BellIcon
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
-import { differenceInDays, isToday, parseISO } from "date-fns";
+import { isToday, parseISO } from "date-fns";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { useClientsLiteData } from "@/hooks/useClientsLiteData";
 import { useProductsData } from "@/hooks/useProductsData";
 import { useSalesData } from "@/hooks/useSalesData";
 import { useFeatureEnabled } from "@/lib/remote-config-context";
-import type { Client, Product, Sale } from "@/lib/mock-data";
-
-interface DashboardInsight {
-  title: string;
-  desc: string;
-  icon: LucideIcon;
-  color: string;
-  action: string;
-  link: string;
-  priority: number;
-}
-
-interface TopProductMetric {
-  product: Product;
-  quantity: number;
-  revenue: number;
-  profit: number;
-}
-
-const createEntityMap = <T extends { id: string }>(items: T[]) => {
-  const map = new Map<string, T>();
-  for (const item of items) {
-    map.set(item.id, item);
-  }
-  return map;
-};
+import {
+  calculateDashboardInsights,
+  calculateLowStockProducts,
+  calculateMonthlyMetrics,
+  calculateTopProducts,
+  createClientMap,
+  createProductMap,
+} from "@/lib/dashboard-metrics";
 
 // Helper: Get stock badge for low stock products
 const getStockBadge = (stock: number) => {
@@ -108,173 +89,51 @@ export default function Dashboard() {
   }, [showFirstProductCTA]);
 
   // Declare all memo hooks here
-  const productById = useMemo(
-    () => createEntityMap(products as Product[]),
-    [products]
+  const productById = useMemo(() => createProductMap(products), [products]);
+
+  const clientById = useMemo(() => createClientMap(clients), [clients]);
+
+  const monthlyDashboardData = useMemo(
+    () => calculateMonthlyMetrics(sales, productById),
+    [sales, productById]
   );
-
-  const clientById = useMemo(
-    () => createEntityMap(clients as Client[]),
-    [clients]
-  );
-
-  const monthlyDashboardData = useMemo(() => {
-    const now = new Date();
-    const activeClientIds = new Set<string>();
-    const productQuantities = new Map<string, number>();
-    let totalRevenue = 0;
-    let totalProfit = 0;
-    let totalProducts = 0;
-
-    for (const sale of sales as Sale[]) {
-      const saleDate = parseISO(sale.date);
-      if (saleDate.getMonth() !== now.getMonth() || saleDate.getFullYear() !== now.getFullYear()) {
-        continue;
-      }
-
-      totalRevenue += sale.totalPrice;
-      activeClientIds.add(sale.clientId);
-
-      for (const sp of sale.products || []) {
-        totalProducts += sp.quantity;
-        productQuantities.set(sp.productId, (productQuantities.get(sp.productId) || 0) + sp.quantity);
-        const product = productById.get(sp.productId);
-        if (product && product.costPrice) {
-          totalProfit += (sp.price - product.costPrice) * sp.quantity;
-        }
-      }
-    }
-
-    return {
-      monthMetrics: {
-        revenue: totalRevenue,
-        profit: totalProfit,
-        products: totalProducts,
-        activeClients: activeClientIds.size
-      },
-      productQuantities
-    };
-  }, [sales, productById]);
 
   const monthMetrics = monthlyDashboardData.monthMetrics;
 
-
   // Smart Suggestions Logic - Prioritized & Actionable
-  const insights = useMemo(() => {
-    const list: DashboardInsight[] = [];
-    const now = new Date();
-    const lastSaleDateByClientId = new Map<string, Date>();
-
-    for (const sale of sales as Sale[]) {
-      if (!sale.clientId) continue;
-      const saleDate = parseISO(sale.date);
-      const currentLastSaleDate = lastSaleDateByClientId.get(sale.clientId);
-      if (!currentLastSaleDate || saleDate > currentLastSaleDate) {
-        lastSaleDateByClientId.set(sale.clientId, saleDate);
-      }
-    }
-
-    products.forEach(p => {
-      // Low Stock (Priority 1 - highest urgency)
-      if (p.stock > 0 && p.stock <= settings.lowStockThreshold) {
-        list.push({
-          title: "Alerta de Estoque Baixo",
-          desc: `${p.name} tem apenas ${p.stock} unidades. Repor em breve?`,
-          icon: AlertCircle,
-          color: "destructive",
-          action: "Ver Produto",
-          link: "/products",
-          priority: 1
-        });
-      }
-
-      // Fast Selling (Priority 2 - high opportunity)
-      if (p.lastSoldDate && differenceInDays(now, parseISO(p.lastSoldDate)) <= 2 && p.stock < 5) {
-        list.push({
-          title: "Vendendo Rápido! 🔥",
-          desc: `${p.name} está com alta saída. Considere aumentar o estoque.`,
-          icon: Zap,
-          color: "green",
-          action: "Repor Agora",
-          link: "/add",
-          priority: 2
-        });
-      }
-
-      // Stagnant products (Priority 3 - medium attention)
-      if (p.lastSoldDate && differenceInDays(now, parseISO(p.lastSoldDate)) >= 30) {
-        list.push({
-          title: "Produto Parado (+30 dias)",
-          desc: `${p.name} não vende há um mês. Criar uma oferta?`,
-          icon: TrendingDown,
-          color: "orange",
-          action: "Criar Promo",
-          link: "/marketing",
-          priority: 3
-        });
-      }
-  });
-
-  // Inactive Clients (Priority 4 - medium attention)
-  clientById.forEach(c => {
-    const lastSale = lastSaleDateByClientId.get(c.id) || new Date(0);
-
-    if (differenceInDays(now, lastSale) >= 60) {
-      list.push({
-        title: "Cliente Inativo",
-        desc: `${c.name} não compra há 60 dias. Que tal um "oi"?`,
-        icon: Users,
-        color: "primary",
-        action: "Mensagem",
-        link: "/clients",
-        priority: 4
-      });
-    }
-  });
-
-  // Growth suggestion (only if referral_program_enabled)
-  if (enableReferralProgram && products.length > 2) {
-    list.push({
-      title: "Crescimento Ligado!",
-      desc: "Você está pronta para crescer. Ative programa de indicação.",
-      icon: Share2,
-      color: "primary",
-      action: "Indicar",
-      link: "/settings?tab=growth",
-      priority: 5
-    });
-  }
-
-  // Sort by priority, take top 4
-  return list.sort((a, b) => a.priority - b.priority).slice(0, 4);
-}, [products, settings.lowStockThreshold, sales, clientById, enableReferralProgram]);
+  const insights = useMemo(
+    () => calculateDashboardInsights({
+      products,
+      sales,
+      clientById,
+      lowStockThreshold: settings.lowStockThreshold,
+      enableReferralProgram,
+      icons: {
+        AlertCircle,
+        Zap,
+        TrendingDown,
+        Users,
+        Share2,
+      },
+    }),
+    [products, sales, clientById, settings.lowStockThreshold, enableReferralProgram]
+  );
 
   // Compute derived values after all hooks
   const todayBillings = billings.filter(b => isToday(parseISO(b.dueDate)) && b.status !== 'paid');
   const todayPosts = posts.filter(p => isToday(parseISO(p.scheduledDate)) && p.status !== 'posted');
 
   // Top selling products in current month
-  const topProducts = useMemo(() => {
-    return Array.from(monthlyDashboardData.productQuantities.entries())
-      .map(([productId, qty]) => {
-        const product = productById.get(productId);
-        if (!product) return null;
-        const revenue = product.salePrice * qty;
-        const profit = (product.salePrice - (product.costPrice || 0)) * qty;
-        return { product, quantity: qty, revenue, profit };
-      })
-      .filter((item): item is TopProductMetric => item !== null)
-      .sort((a, b) => b.quantity - a.quantity)
-      .slice(0, 5);
-  }, [monthlyDashboardData.productQuantities, productById]);
+  const topProducts = useMemo(
+    () => calculateTopProducts(monthlyDashboardData.productQuantities, productById),
+    [monthlyDashboardData.productQuantities, productById]
+  );
 
   // Low stock alert products
-  const lowStockProducts = useMemo(() => {
-    return products
-      .filter(p => p.stock > 0 && p.stock <= settings.lowStockThreshold)
-      .sort((a, b) => a.stock - b.stock)
-      .slice(0, 3);
-  }, [products, settings.lowStockThreshold]);
+  const lowStockProducts = useMemo(
+    () => calculateLowStockProducts(products, settings.lowStockThreshold),
+    [products, settings.lowStockThreshold]
+  );
 
   // Show loading while checking onboarding status
   if (settingsLoading || dataLoading) {
