@@ -10,7 +10,9 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { differenceInDays, isToday, parseISO } from "date-fns";
 import { useUserSettings } from "@/hooks/useUserSettings";
-import { useDashboardData } from "@/hooks/useDashboardData";
+import { useClientsLiteData } from "@/hooks/useClientsLiteData";
+import { useProductsData } from "@/hooks/useProductsData";
+import { useSalesData } from "@/hooks/useSalesData";
 import { useFeatureEnabled } from "@/lib/remote-config-context";
 import type { Client, Product, Sale } from "@/lib/mock-data";
 
@@ -67,7 +69,11 @@ export default function Dashboard() {
   // Call all hooks before any conditional returns
   const [, setLocation] = useLocation();
   const { onboarding_completed, loading: settingsLoading, settings } = useUserSettings();
-  const { products, sales, clients, loading: dataLoading, error: dataError } = useDashboardData();
+  const { products, loading: productsLoading, error: productsError } = useProductsData();
+  const { sales, loading: salesLoading, error: salesError } = useSalesData();
+  const { clients, loading: clientsLoading, error: clientsError } = useClientsLiteData();
+  const dataLoading = productsLoading || salesLoading || clientsLoading;
+  const dataError = productsError || salesError || clientsError;
   const showInsights = useFeatureEnabled("insights_enabled");
   const enableReferralProgram = useFeatureEnabled("referral_program_enabled");
 
@@ -298,7 +304,7 @@ export default function Dashboard() {
       <div className="px-6 pt-12 pb-6 bg-primary/5 rounded-b-[2.5rem] relative">
         <div className="flex items-start justify-between mb-4">
           <div>
-            <h1 className="text-xl font-black text-foreground">{settings.storeName}</h1>
+            <h1 className="text-xl font-semibold text-foreground">{settings.storeName}</h1>
             <p className="text-xs text-muted-foreground">Resumo deste mês</p>
           </div>
           {(todayBillings.length > 0 || todayPosts.length > 0) && (
@@ -313,25 +319,25 @@ export default function Dashboard() {
 
         <div className="grid grid-cols-2 gap-2">
           <button onClick={() => setLocation("/monthly-sales")} className="bg-white p-3 rounded-2xl border border-border/50 text-left">
-            <p className="text-[9px] text-muted-foreground font-black uppercase">Vendas</p>
-            <p className="text-base font-black">R$ {monthMetrics.revenue.toFixed(2)}</p>
+            <p className="text-[10px] text-muted-foreground font-medium">Vendas</p>
+            <p className="text-base font-semibold">R$ {monthMetrics.revenue.toFixed(2)}</p>
           </button>
           <div className="bg-white p-3 rounded-2xl border border-border/50">
-            <p className="text-[9px] text-muted-foreground font-black uppercase">Lucro</p>
-            <p className="text-base font-black text-green-600">R$ {monthMetrics.profit.toFixed(2)}</p>
+            <p className="text-[10px] text-muted-foreground font-medium">Lucro</p>
+            <p className="text-base font-semibold text-green-600">R$ {monthMetrics.profit.toFixed(2)}</p>
           </div>
           <div className="bg-white p-3 rounded-2xl border border-border/50">
-            <p className="text-[9px] text-muted-foreground font-black uppercase">Clientes</p>
-            <p className="text-base font-black">{monthMetrics.activeClients}</p>
+            <p className="text-[10px] text-muted-foreground font-medium">Clientes</p>
+            <p className="text-base font-semibold">{monthMetrics.activeClients}</p>
           </div>
           <button onClick={() => setLocation("/products")} className="bg-white p-3 rounded-2xl border border-border/50 text-left">
-            <p className="text-[9px] text-muted-foreground font-black uppercase">Estoque baixo</p>
-            <p className="text-base font-black text-orange-600">{lowStockProducts.length}</p>
+            <p className="text-[10px] text-muted-foreground font-medium">Estoque baixo</p>
+            <p className="text-base font-semibold text-orange-600">{lowStockProducts.length}</p>
           </button>
           <button onClick={() => setLocation("/products-sold")} className="col-span-2 bg-white p-3 rounded-2xl border border-amber-200 flex items-center gap-3 text-left">
             <div className="w-9 h-9 rounded-xl bg-amber-100 flex items-center justify-center text-lg">🏆</div>
-            <div className="flex-1 min-w-0"><p className="text-[9px] text-amber-700 font-black uppercase">Campeão de vendas</p><p className="text-sm font-black truncate">{topProducts[0]?.product?.name || "Sem vendas no mês"}</p></div>
-            <div className="text-right flex-shrink-0"><p className="text-xs font-black text-primary">{topProducts[0]?.quantity || 0} un</p><p className="text-[10px] text-muted-foreground">R$ {topProducts[0]?.revenue.toFixed(2) || "0,00"}</p></div>
+            <div className="flex-1 min-w-0"><p className="text-[10px] text-amber-700 font-semibold">Campeão de vendas</p><p className="text-sm font-semibold truncate">{topProducts[0]?.product?.name || "Sem vendas no mês"}</p></div>
+            <div className="text-right flex-shrink-0"><p className="text-xs font-semibold text-primary">{topProducts[0]?.quantity || 0} un</p><p className="text-[10px] text-muted-foreground">R$ {topProducts[0]?.revenue.toFixed(2) || "0,00"}</p></div>
           </button>
         </div>      </div>
 
@@ -341,7 +347,7 @@ export default function Dashboard() {
           <div className="mb-8 p-5 bg-primary/5 rounded-[2rem] border-2 border-primary/30 space-y-4 animate-in fade-in slide-in-from-top-4">
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1 space-y-2">
-                <h3 className="text-sm font-black text-primary uppercase tracking-widest flex items-center gap-2">
+                <h3 className="text-sm font-semibold text-primary flex items-center gap-2">
                   <Package className="w-5 h-5" /> Comece agora! 🚀
                 </h3>
                 <p className="text-[11px] text-muted-foreground leading-relaxed">
@@ -358,7 +364,7 @@ export default function Dashboard() {
             </div>
             <button
               onClick={() => setLocation("/add")}
-              className="w-full bg-primary text-white font-black px-6 py-4 rounded-[2rem] uppercase text-xs flex items-center justify-center gap-2 active:scale-95 transition-all shadow-lg shadow-primary/20 hover:shadow-xl"
+              className="w-full bg-primary text-white font-semibold px-6 py-4 rounded-[2rem] text-xs flex items-center justify-center gap-2 active:scale-95 transition-all shadow-lg shadow-primary/20 hover:shadow-xl"
               data-testid="button-create-first-product"
             >
               <Package className="w-4 h-4" /> Criar Primeiro Produto
@@ -369,7 +375,7 @@ export default function Dashboard() {
         {/* Smart Suggestions Section - Controlled by insights_enabled flag */}
         {showInsights && (
           <div className="mb-8 space-y-4">
-            <h2 className="text-[10px] font-black text-primary uppercase tracking-[0.2em] flex items-center gap-2">
+            <h2 className="text-xs font-semibold text-primary flex items-center gap-2">
               <Sparkles className="w-3.5 h-3.5" /> Sugestões Inteligentes
             </h2>
             {insights.length > 0 ? (
@@ -398,7 +404,7 @@ export default function Dashboard() {
                     <h3 className="text-xs font-bold leading-tight">{insight.title}</h3>
                   </div>
                   <p className="text-[11px] text-muted-foreground leading-relaxed">{insight.desc}</p>
-                  <div className="flex items-center text-primary text-[10px] font-black uppercase tracking-widest mt-1">
+                  <div className="flex items-center text-primary text-[10px] font-semibold mt-1">
                     {insight.action} <ArrowRight className="w-3 h-3 ml-2" />
                   </div>
                 </div>
@@ -415,7 +421,7 @@ export default function Dashboard() {
         {/* Top Selling Products Section - Compact Premium */}
         {topProducts.length > 0 && (
           <div className="mb-8 space-y-4">
-            <h2 className="text-[10px] font-black text-primary uppercase tracking-[0.2em] flex items-center gap-2">
+            <h2 className="text-xs font-semibold text-primary flex items-center gap-2">
               <TrendingUp className="w-3.5 h-3.5" /> Campeões de Venda
             </h2>
             <div className="flex gap-3 overflow-x-auto pb-2 hide-scrollbar -mx-6 px-6">
@@ -441,7 +447,7 @@ export default function Dashboard() {
                     {/* Info Container - Compacto */}
                     <div className="p-3 pl-0 flex-1 min-w-0 flex flex-col justify-between">
                       <div className="min-h-[3rem] flex flex-col justify-center">
-                        <p className="text-[8px] font-black text-primary uppercase mb-0.5 truncate">{product.brand}</p>
+                        <p className="text-[10px] font-semibold text-primary mb-0.5 truncate">{product.brand}</p>
                         <p className="text-[10px] font-bold text-foreground truncate line-clamp-2">{product.name}</p>
                       </div>
 
@@ -468,7 +474,7 @@ export default function Dashboard() {
         {/* Low Stock Alerts Section - Premium Horizontal Scroll */}
         {lowStockProducts.length > 0 && (
           <div className="mb-8 space-y-4">
-            <h2 className="text-[10px] font-black text-destructive uppercase tracking-[0.2em] flex items-center gap-2">
+            <h2 className="text-xs font-semibold text-destructive flex items-center gap-2">
               <AlertCircle className="w-3.5 h-3.5" /> Estoque Baixo
             </h2>
             <div className="flex gap-3 overflow-x-auto pb-2 hide-scrollbar -mx-6 px-6">
@@ -495,7 +501,7 @@ export default function Dashboard() {
                     {/* Info Container */}
                     <div className="p-3 flex-1 flex flex-col justify-between">
                       <div>
-                        <p className="text-[9px] font-black text-primary uppercase mb-1 truncate">{product.brand}</p>
+                        <p className="text-[10px] font-semibold text-primary mb-1 truncate">{product.brand}</p>
                         <p className="text-xs font-bold text-foreground truncate mb-2">{product.name}</p>
                       </div>
 
