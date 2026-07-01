@@ -1,13 +1,18 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { getFirebaseAuth } from "@/lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
-import { getFirestore, collection, onSnapshot, query, orderBy } from "firebase/firestore";
+import { getFirestore, collection, onSnapshot, query, orderBy, limit, startAfter, getDocs, type DocumentData, type QueryDocumentSnapshot } from "firebase/firestore";
 import type { Charge } from "../../../shared/charges";
+
+const CHARGES_PAGE_SIZE = 30;
 
 export interface UseChargesResult {
   charges: Charge[];
   loading: boolean;
+  loadingMoreCharges: boolean;
   error: string;
+  hasMoreCharges: boolean;
+  loadMoreCharges: () => Promise<void>;
 }
 
 /**
@@ -18,6 +23,10 @@ export function useCharges(): UseChargesResult {
   const [charges, setCharges] = useState<Charge[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [loadingMoreCharges, setLoadingMoreCharges] = useState(false);
+  const [hasMoreCharges, setHasMoreCharges] = useState(false);
+  const uidRef = useRef<string | null>(null);
+  const lastChargeDocRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
 
   useEffect(() => {
     const auth = getFirebaseAuth();
@@ -31,14 +40,18 @@ export function useCharges(): UseChargesResult {
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
       unsubscribeSnapshot?.();
       if (!user) {
+        uidRef.current = null;
+        lastChargeDocRef.current = null;
         setLoading(false);
         setCharges([]);
+        setHasMoreCharges(false);
         return;
       }
 
+      uidRef.current = user.uid;
       const db = getFirestore();
       const chargesRef = collection(db, "users", user.uid, "charges");
-      const q = query(chargesRef, orderBy("createdAt", "desc"));
+      const q = query(chargesRef, orderBy("createdAt", "desc"), limit(CHARGES_PAGE_SIZE));
 
       unsubscribeSnapshot = onSnapshot(
         q,
@@ -47,13 +60,16 @@ export function useCharges(): UseChargesResult {
             ...doc.data(),
             id: doc.id,
           })) as Charge[];
+          lastChargeDocRef.current = snapshot.docs[snapshot.docs.length - 1] ?? null;
           setCharges(data);
+          setHasMoreCharges(snapshot.docs.length === CHARGES_PAGE_SIZE);
           setLoading(false);
           setError("");
         },
         (err) => {
           console.error("[useCharges] Firestore error:", err);
           setError("Erro ao carregar cobranças");
+          setHasMoreCharges(false);
           setLoading(false);
         }
       );
@@ -63,7 +79,38 @@ export function useCharges(): UseChargesResult {
     return () => { unsubscribeSnapshot?.(); unsubscribeAuth(); };
   }, []);
 
-  return { charges, loading, error };
+  const loadMoreCharges = useCallback(async () => {
+    if (loadingMoreCharges || !hasMoreCharges || !uidRef.current || !lastChargeDocRef.current) return;
+    setLoadingMoreCharges(true);
+    try {
+      const db = getFirestore();
+      const chargesRef = collection(db, "users", uidRef.current, "charges");
+      const nextQuery = query(
+        chargesRef,
+        orderBy("createdAt", "desc"),
+        startAfter(lastChargeDocRef.current),
+        limit(CHARGES_PAGE_SIZE)
+      );
+      const snapshot = await getDocs(nextQuery);
+      const nextCharges = snapshot.docs.map((doc) => ({ ...doc.data(), id: doc.id })) as Charge[];
+      lastChargeDocRef.current = snapshot.docs[snapshot.docs.length - 1] ?? lastChargeDocRef.current;
+      setCharges((current) => {
+        const byId = new Map<string, Charge>();
+        for (const charge of current) byId.set(charge.id, charge);
+        for (const charge of nextCharges) byId.set(charge.id, charge);
+        return Array.from(byId.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      });
+      setHasMoreCharges(snapshot.docs.length === CHARGES_PAGE_SIZE);
+      setError("");
+    } catch (err) {
+      console.error("[useCharges] Load more error:", err);
+      setError("Erro ao carregar mais cobranças");
+    } finally {
+      setLoadingMoreCharges(false);
+    }
+  }, [hasMoreCharges, loadingMoreCharges]);
+
+  return { charges, loading, loadingMoreCharges, error, hasMoreCharges, loadMoreCharges };
 }
 
 // ---------------------------------------------------------------------------
