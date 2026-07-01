@@ -4,27 +4,22 @@ import { Layout } from "@/components/layout";
 import { ProductImageCard } from "@/components/ProductImageCard";
 import { ChevronLeft, Package, PlusCircle } from "lucide-react";
 import { useProductsData } from "@/hooks/useProductsData";
-import { useSalesData } from "@/hooks/useSalesData";
+import { useMonthlySalesData } from "@/hooks/useMonthlySalesData";
 import { parseISO } from "date-fns";
 
 export default function ProductsSold() {
   const [, setLocation] = useLocation();
+  const currentDate = useMemo(() => new Date(), []);
   const { products, loading: productsLoading, error: productsError } = useProductsData();
-  const { sales, loading: salesLoading, error: salesError } = useSalesData();
+  const { sales, loading: salesLoading, error: salesError } = useMonthlySalesData(currentDate.getMonth(), currentDate.getFullYear());
   const loading = productsLoading || salesLoading;
   const error = productsError || salesError;
 
-  // Aggregate products sold in current month
+  // Aggregate products sold in current month. Sales are already scoped by Firestore query.
   const productsSoldMetrics = useMemo(() => {
-    const now = new Date();
-    const monthSales = sales.filter(s => {
-      const saleDate = parseISO(s.date);
-      return saleDate.getMonth() === now.getMonth() && saleDate.getFullYear() === now.getFullYear();
-    });
-
     const metricsMap = new Map<string, { quantity: number; revenue: number }>();
 
-    monthSales.forEach(sale => {
+    sales.forEach(sale => {
       sale.products?.forEach((sp: any) => {
         const existing = metricsMap.get(sp.productId) || { quantity: 0, revenue: 0 };
         metricsMap.set(sp.productId, {

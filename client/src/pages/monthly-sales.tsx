@@ -3,23 +3,20 @@ import { useLocation } from "wouter";
 import { Layout } from "@/components/layout";
 import { ChevronLeft, DollarSign, Package, PlusCircle } from "lucide-react";
 import { useProductsData } from "@/hooks/useProductsData";
-import { useSalesData } from "@/hooks/useSalesData";
+import { useMonthlySalesData } from "@/hooks/useMonthlySalesData";
 import { parseISO } from "date-fns";
 
 export default function MonthlySales() {
   const [, setLocation] = useLocation();
+  const currentDate = useMemo(() => new Date(), []);
   const { products, loading: productsLoading, error: productsError } = useProductsData();
-  const { sales, loading: salesLoading, error: salesError } = useSalesData();
+  const { sales, loading: salesLoading, error: salesError } = useMonthlySalesData(currentDate.getMonth(), currentDate.getFullYear());
   const loading = productsLoading || salesLoading;
   const error = productsError || salesError;
 
-  // Filter sales for current month
+  // Monthly sales are already scoped by Firestore query; keep a defensive sort for legacy data.
   const currentMonthSales = useMemo(() => {
-    const now = new Date();
-    return sales.filter(s => {
-      const saleDate = parseISO(s.date);
-      return saleDate.getMonth() === now.getMonth() && saleDate.getFullYear() === now.getFullYear();
-    }).sort((a, b) => parseISO(b.date).getTime() - parseISO(a.date).getTime());
+    return [...sales].sort((a, b) => parseISO(b.date).getTime() - parseISO(a.date).getTime());
   }, [sales]);
 
   // Calculate metrics
