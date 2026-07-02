@@ -51,7 +51,7 @@ export function PartialPaymentModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4">
-      <div className="rs-sheet-enter bg-white rounded-t-3xl sm:rounded-2xl max-w-sm w-full shadow-xl max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+      <div className="rs-sheet-enter bg-white rounded-t-3xl sm:rounded-2xl max-w-sm w-full shadow-xl max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain pb-[max(1.25rem,env(safe-area-inset-bottom))]">
         {/* Header */}
         <div className="border-b border-border/30 p-6 flex items-center justify-between">
           <div>
@@ -82,6 +82,8 @@ export function PartialPaymentModal({
             </label>
             <input
               type="number"
+              inputMode="decimal"
+              enterKeyHint="done"
               step="0.01"
               min="0"
               max={remainingAmount}

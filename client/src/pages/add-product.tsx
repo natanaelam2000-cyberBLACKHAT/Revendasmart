@@ -683,7 +683,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
 
   return (
     <Layout title={id ? "Editar Produto" : "Novo Produto"}>
-      <div className="px-6 py-4 pb-32">
+      <div className="px-4 sm:px-6 py-4 pb-[max(8rem,calc(env(safe-area-inset-bottom)+7rem))] max-w-4xl mx-auto">
         <button onClick={() => setLocation("/products")} className="flex items-center gap-2 text-muted-foreground mb-6 font-medium">
           <ChevronLeft className="w-4 h-4" /> Voltar
         </button>
@@ -783,6 +783,9 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
             <div className="flex gap-2">
               <input
                 type="text"
+                inputMode="numeric"
+                enterKeyHint="next"
+                autoComplete="off"
                 placeholder="Escaneie ou digite..."
                 className="flex-1 bg-white border border-border rounded-2xl px-4 py-3 text-sm focus:outline-none"
                 value={formData.barcode}
@@ -806,6 +809,8 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
             <input
               required
               type="text"
+              enterKeyHint="next"
+              autoComplete="off"
               placeholder={nichoConfig.productNamePlaceholder}
               className="w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm focus:outline-none"
               value={formData.name}
@@ -862,6 +867,8 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                   <input
                     type="text"
                     list="brand-suggestions"
+                    enterKeyHint="next"
+                    autoComplete="off"
                     className="w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm focus:outline-none"
                     value={formData.brand}
                     onChange={e => setFormData({ ...formData, brand: e.target.value })}
@@ -951,22 +958,22 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-muted-foreground uppercase px-1">Preço Custo</label>
-              <input required type="number" step="0.01" min="0" className="w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm" value={formData.costPrice} onChange={e => setFormData({ ...formData, costPrice: parseFloat(e.target.value) || 0 })} data-testid="input-cost-price" />
+              <input required type="number" inputMode="decimal" enterKeyHint="next" step="0.01" min="0" className="w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm" value={formData.costPrice} onChange={e => setFormData({ ...formData, costPrice: parseFloat(e.target.value) || 0 })} data-testid="input-cost-price" />
             </div>
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-muted-foreground uppercase px-1">Preço Venda</label>
-              <input required type="number" step="0.01" min="0" className="w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm" value={formData.salePrice} onChange={e => setFormData({ ...formData, salePrice: parseFloat(e.target.value) || 0 })} data-testid="input-sale-price" />
+              <input required type="number" inputMode="decimal" enterKeyHint="next" step="0.01" min="0" className="w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm" value={formData.salePrice} onChange={e => setFormData({ ...formData, salePrice: parseFloat(e.target.value) || 0 })} data-testid="input-sale-price" />
             </div>
           </div>
 
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-muted-foreground uppercase px-1">Quantidade em Estoque</label>
-            <input required type="number" min="0" className="w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm" value={formData.stock} onChange={e => setFormData({ ...formData, stock: parseInt(e.target.value) || 0 })} data-testid="input-stock" />
+            <input required type="number" inputMode="numeric" enterKeyHint="next" min="0" className="w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm" value={formData.stock} onChange={e => setFormData({ ...formData, stock: parseInt(e.target.value) || 0 })} data-testid="input-stock" />
           </div>
 
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-muted-foreground uppercase px-1">Descrição</label>
-            <textarea className="w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm h-32 focus:outline-none" placeholder={nichoConfig.descriptionPlaceholder} value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} data-testid="input-description" />
+            <textarea className="w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm h-32 focus:outline-none" placeholder={nichoConfig.descriptionPlaceholder} value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} enterKeyHint="done" data-testid="input-description" />
           </div>
 
           {/* === CAMPOS EXTRAS — isolados por nicho === */}
@@ -994,7 +1001,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
             {formData.isOnSale && (
               <div className="space-y-1.5">
                 <label className="text-[10px] font-bold text-muted-foreground uppercase px-1">% de Desconto</label>
-                <input type="number" min="0" max="100" className="w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm" placeholder="Ex: 10, 20, 30..." value={formData.discountPercent} onChange={e => setFormData({ ...formData, discountPercent: parseInt(e.target.value) || 0 })} data-testid="input-discount-percent" />
+                <input type="number" inputMode="numeric" enterKeyHint="done" min="0" max="100" className="w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm" placeholder="Ex: 10, 20, 30..." value={formData.discountPercent} onChange={e => setFormData({ ...formData, discountPercent: parseInt(e.target.value) || 0 })} data-testid="input-discount-percent" />
               </div>
             )}
           </div>
@@ -1005,7 +1012,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
 
           <button
             type="submit"
-            className="w-full bg-primary text-white font-bold rounded-2xl py-4 mt-4 shadow-lg shadow-primary/20 active:scale-95 transition-all"
+            className="rs-pressable min-h-12 w-full bg-primary text-white font-bold rounded-2xl py-4 mt-4 shadow-lg shadow-primary/20 active:scale-95 transition-all"
             data-testid="button-save-product"
           >
             {id ? 'Atualizar Produto' : 'Salvar no Estoque'}

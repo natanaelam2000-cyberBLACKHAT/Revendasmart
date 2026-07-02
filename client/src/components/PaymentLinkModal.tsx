@@ -230,6 +230,8 @@ export function PaymentLinkModal({
                   </label>
                   <input
                     type="text"
+                    enterKeyHint="next"
+                    autoComplete="off"
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     placeholder="Ex: Pedido de perfumes"
@@ -246,6 +248,8 @@ export function PaymentLinkModal({
                   </label>
                   <input
                     type="number"
+                    inputMode="decimal"
+                    enterKeyHint="done"
                     step="0.01"
                     min="0.01"
                     value={amount}

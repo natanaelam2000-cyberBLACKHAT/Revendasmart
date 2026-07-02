@@ -238,7 +238,10 @@ export default function Marketing() {
                 <div className="relative">
                   <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground" />
                   <input
-                    type="text"
+                    type="search"
+                    inputMode="search"
+                    enterKeyHint="search"
+                    autoComplete="off"
                     placeholder="Pesquisar produto..."
                     className="w-full bg-white border border-border rounded-2xl py-3 pl-11 pr-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none"
                     value={search}
@@ -311,7 +314,7 @@ export default function Marketing() {
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-muted-foreground px-1">Preço Especial (Opcional)</label>
                   <input
-                    type="number"
+                    type="number" inputMode="decimal" enterKeyHint="next"
                     placeholder="Ex: 89.90"
                     className="w-full bg-secondary/30 border-none rounded-xl p-3 text-sm"
                     value={priceOverride}

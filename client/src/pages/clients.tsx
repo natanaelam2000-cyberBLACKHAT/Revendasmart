@@ -205,12 +205,15 @@ export default function Clients() {
 
   return (
     <Layout title="Clientes" hideBottomNav={showAdd}>
-      <div className="p-6">
+      <div className="px-4 sm:px-6 lg:px-8 py-6 pb-[max(8rem,calc(env(safe-area-inset-bottom)+7rem))] max-w-5xl mx-auto">
         <div className="flex gap-3 mb-6">
           <div className="relative flex-1">
             <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <input
-              type="text"
+              type="search"
+              inputMode="search"
+              enterKeyHint="search"
+              autoComplete="off"
               placeholder="Buscar cliente..."
               className="w-full bg-white border border-border rounded-full py-3 pl-11 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
               value={search}
@@ -335,7 +338,7 @@ export default function Clients() {
               <button onClick={() => setShowAdd(false)} className="text-sm font-medium text-muted-foreground">Fechar</button>
             </div>
             <form onSubmit={handleAdd} className="space-y-4">
-              <input required placeholder="Nome completo" disabled={isCreating} className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none disabled:opacity-50" value={newClient.name} onChange={e => setNewClient({...newClient, name: e.target.value})} />
+              <input required autoFocus enterKeyHint="next" autoComplete="name" placeholder="Nome completo" disabled={isCreating} className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none disabled:opacity-50" value={newClient.name} onChange={e => setNewClient({...newClient, name: e.target.value})} />
               <input
                 required
                 placeholder="WhatsApp (apenas números)"
@@ -348,7 +351,7 @@ export default function Clients() {
                 data-testid="input-client-phone"
               />
               <input
-                type="email"
+                type="email" inputMode="email" enterKeyHint="next" autoComplete="email"
                 placeholder="E-mail (opcional)"
                 disabled={isCreating}
                 className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none disabled:opacity-50"
@@ -356,7 +359,7 @@ export default function Clients() {
                 onChange={e => setNewClient({...newClient, email: e.target.value})}
                 data-testid="input-client-email"
               />
-              <textarea placeholder="Observações" disabled={isCreating} className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm h-24 focus:ring-2 focus:ring-primary/20 outline-none disabled:opacity-50" value={newClient.notes} onChange={e => setNewClient({...newClient, notes: e.target.value})} />
+              <textarea enterKeyHint="done" placeholder="Observações" disabled={isCreating} className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm h-24 focus:ring-2 focus:ring-primary/20 outline-none disabled:opacity-50" value={newClient.notes} onChange={e => setNewClient({...newClient, notes: e.target.value})} />
               {createError && <p className="text-sm text-destructive font-bold">{createError}</p>}
               <button type="submit" disabled={isCreating} className="w-full bg-primary text-white font-bold py-4 rounded-full shadow-lg disabled:opacity-50">
                 {isCreating ? "Salvando..." : editingId ? "Salvar alterações" : "Cadastrar cliente"}

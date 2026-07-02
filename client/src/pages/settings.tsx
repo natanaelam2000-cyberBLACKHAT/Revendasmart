@@ -498,7 +498,7 @@ export default function Settings() {
               <div className="space-y-1.5">
                 <label className="text-[10px] font-black text-muted-foreground uppercase px-1 tracking-widest">Avisar quantos dias antes?</label>
                 <input
-                  type="number"
+                  type="number" inputMode="numeric" enterKeyHint="next"
                   className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none"
                   value={formSettings?.notification_settings?.reminder_days_before_due || 1}
                   onChange={e => setFormSettings({
@@ -1133,7 +1133,7 @@ Dica: Descreva seu problema e se possível anexe uma screenshot do erro.`
           )}
         </div>
 
-        <div className="fixed bottom-24 left-0 right-0 p-4 max-w-md mx-auto z-40">
+        <div className="fixed bottom-[calc(6rem+env(safe-area-inset-bottom))] left-0 right-0 p-4 max-w-md mx-auto z-40">
           <button onClick={handleSave} className="w-full bg-primary text-white font-black py-4 rounded-[2rem] shadow-xl flex items-center justify-center gap-2 uppercase text-xs">
             <Save className="w-4 h-4" /> Salvar Alterações
           </button>
