@@ -8,6 +8,7 @@ export interface Product {
   id: string;
   name: string;
   brand: Brand;
+  origin?: string;
   category: Category;
   /** Tipo de nicho do produto — usado quando o usuário tem múltiplos tipos de negócio */
   productType?: string;
@@ -167,6 +168,7 @@ export interface AppSettings {
   templateReceived: string;
   templateThanks: string;
   lowStockThreshold: number;
+  monthlyGoal?: number;
   enablePublicCatalog: boolean;
   showPrice: boolean;
   showStock: boolean;
@@ -448,6 +450,7 @@ export const defaultSettings: AppSettings = {
   templateReceived: 'Olá {client}! Recebi seu pagamento de R$ {value}. Obrigado! ✅',
   templateThanks: 'Olá {client}! Obrigado pela compra! 💖',
   lowStockThreshold: 3,
+  monthlyGoal: 10000,
   enablePublicCatalog: true,
   showPrice: true,
   showStock: true,

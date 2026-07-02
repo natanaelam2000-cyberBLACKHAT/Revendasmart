@@ -81,9 +81,40 @@ async function compressImage(
   });
 }
 
+
+const normalizeBrandInput = (value: string) => value
+  .trim()
+  .replace(/\s+/g, " ")
+  .toLocaleLowerCase("pt-BR")
+  .replace(/(^|\s|[-'])[a-záàâãéèêíïóôõöúçñ]/g, (match) => match.toLocaleUpperCase("pt-BR"));
+
+const brandSuggestionStorageKey = (nicho: string) => `rs:brand-suggestions:${nicho}`;
+
+function loadLocalBrandSuggestions(nicho: string): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(brandSuggestionStorageKey(nicho));
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalBrandSuggestion(nicho: string, value: string, existing: string[]): string[] {
+  const normalized = normalizeBrandInput(value);
+  if (!normalized) return existing;
+  const merged = [normalized, ...existing.filter((item) => item.toLocaleLowerCase("pt-BR") !== normalized.toLocaleLowerCase("pt-BR"))].slice(0, 20);
+  if (typeof window !== "undefined") {
+    try { localStorage.setItem(brandSuggestionStorageKey(nicho), JSON.stringify(merged)); } catch {}
+  }
+  return merged;
+}
+
 interface ProductFormData {
   name: string;
   brand: string;
+  origin: string;
   category: string;
   costPrice: number;
   salePrice: number;
@@ -131,7 +162,7 @@ const [, setLocation] = useLocation();
 
   // Active product nicho: if user has multiple types, user selects manually
   const [activeNicho, setActiveNicho] = useState<NichoId>(
-businessTypes[0] as NichoId || 'Geral'
+    businessTypes[0] as NichoId || 'Geral'
   );
   const nichoConfig = getNichoConfig(activeNicho);
 
@@ -141,11 +172,13 @@ businessTypes[0] as NichoId || 'Geral'
 
   // For brand: track if user is typing custom brand
   const [brandMode, setBrandMode] = useState<'predefined' | 'custom'>('predefined');
+  const [localBrandSuggestions, setLocalBrandSuggestions] = useState<string[]>(() => loadLocalBrandSuggestions(activeNicho));
   const hasPredefinedBrands = !!nichoConfig.predefinedBrands;
 
  const [formData, setFormData] = useState<ProductFormData>({
   name: "",
   brand: hasPredefinedBrands ? (nichoConfig.predefinedBrands![0] || "") : "",
+  origin: nichoConfig.originOptions[0] || "",
   category: baseCategorySuggestions[0] || "",
   costPrice: 0,
   salePrice: 0,
@@ -168,6 +201,19 @@ businessTypes[0] as NichoId || 'Geral'
     }
     return nichoConfig.categories;
   }, [formData.category, nichoConfig.categories]);
+  const brandSuggestions = useMemo(() => {
+    const seen = new Set<string>();
+    const merged: string[] = [];
+    for (const brand of [...(nichoConfig.predefinedBrands || []), ...localBrandSuggestions]) {
+      const key = brand.toLocaleLowerCase("pt-BR");
+      if (!seen.has(key)) {
+        seen.add(key);
+        merged.push(brand);
+      }
+    }
+    return merged;
+  }, [localBrandSuggestions, nichoConfig.predefinedBrands]);
+
 
  useEffect(() => {
   return () => {
@@ -180,6 +226,7 @@ businessTypes[0] as NichoId || 'Geral'
   useEffect(() => {
     const newConfig = getNichoConfig(activeNicho);
     const newHasPredefined = !!newConfig.predefinedBrands;
+    setLocalBrandSuggestions(loadLocalBrandSuggestions(activeNicho));
     console.log("[add-product] Active nicho changed to:", activeNicho);
 
     setFormData(prev => {
@@ -192,6 +239,7 @@ businessTypes[0] as NichoId || 'Geral'
         ...prev,
         category: validCategory,
         brand: newHasPredefined ? (newConfig.predefinedBrands![0] || "") : "",
+        origin: newConfig.originOptions[0] || "",
         productType: activeNicho,
         // CRITICAL: Clean extras to prevent spillover from previous nicho
         extras: {},
@@ -224,6 +272,7 @@ businessTypes[0] as NichoId || 'Geral'
               setFormData({
                 name: product.name,
                 brand: product.brand || "",
+                origin: product.origin || product.extras?.origin || "",
                 category: product.category || "",
                 costPrice: product.costPrice,
                 salePrice: product.salePrice,
@@ -365,8 +414,14 @@ const productId = id || productRef.id;
         }
       }
 
+      const normalizedBrand = normalizeBrandInput(formData.brand);
+      if (normalizedBrand && brandMode === "custom") {
+        setLocalBrandSuggestions((current) => saveLocalBrandSuggestion(activeNicho, normalizedBrand, current));
+      }
+
      const productData = {
   ...formData,
+  brand: normalizedBrand,
   gender: formData.gender || "unisex",
   imageUrl,
   storagePath,
@@ -795,7 +850,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                     onChange={e => setFormData({ ...formData, brand: e.target.value })}
                     data-testid="select-brand"
                   >
-                    {nichoConfig.predefinedBrands!.map(b => (
+                    {brandSuggestions.map(b => (
                       <option key={b} value={b}>{b}</option>
                     ))}
                   </select>
@@ -806,22 +861,40 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                 <div className="relative">
                   <input
                     type="text"
-                    list={hasPredefinedBrands ? "brand-suggestions" : undefined}
+                    list="brand-suggestions"
                     className="w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm focus:outline-none"
                     value={formData.brand}
                     onChange={e => setFormData({ ...formData, brand: e.target.value })}
+                    onBlur={e => setFormData({ ...formData, brand: normalizeBrandInput(e.target.value) })}
                     placeholder={nichoConfig.brandPlaceholder}
                     data-testid="input-brand-custom"
                   />
-                  {hasPredefinedBrands && (
-                    <datalist id="brand-suggestions">
-                      {nichoConfig.predefinedBrands!.map(b => (
-                        <option key={b} value={b} />
-                      ))}
-                    </datalist>
-                  )}
+                  <datalist id="brand-suggestions">
+                    {brandSuggestions.map(b => (
+                      <option key={b} value={b} />
+                    ))}
+                  </datalist>
                 </div>
               )}
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-muted-foreground uppercase px-1">Origem</label>
+              <div className="relative">
+                <select
+                  className="w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm appearance-none focus:outline-none"
+                  value={formData.origin}
+                  onChange={e => setFormData({ ...formData, origin: e.target.value })}
+                  data-testid="select-origin"
+                >
+                  <option value="">Selecione a origem...</option>
+                  {nichoConfig.originOptions.map(origin => (
+                    <option key={origin} value={origin}>{origin}</option>
+                  ))}
+                </select>
+                <ChevronDown className="w-4 h-4 absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+              </div>
+              <p className="text-[9px] text-muted-foreground px-1">Marca e origem ficam separadas para organizar melhor o catálogo.</p>
             </div>
 
             {/* CATEGORIA — dinâmica por nicho */}

@@ -62,7 +62,8 @@ export interface AttentionItem {
 
 export interface WorstProductMetric {
   product: Product;
-  daysWithoutSale: number;
+  daysWithoutSale: number | null;
+  statusLabel: string;
 }
 
 function safeParseDate(value?: string | null): Date | null {
@@ -358,9 +359,15 @@ export function calculateWorstProduct(products: Product[], referenceDate = new D
   for (const product of products) {
     if (product.stock <= 0) continue;
     const lastSoldDate = safeParseDate(product.lastSoldDate);
-    const daysWithoutSale = lastSoldDate ? differenceInDays(referenceDate, lastSoldDate) : 999;
-    if (!worst || daysWithoutSale > worst.daysWithoutSale || (daysWithoutSale === worst.daysWithoutSale && product.stock > worst.product.stock)) {
-      worst = { product, daysWithoutSale };
+    const daysWithoutSale = lastSoldDate ? differenceInDays(referenceDate, lastSoldDate) : null;
+    const score = daysWithoutSale ?? Number.MAX_SAFE_INTEGER;
+    const worstScore = worst?.daysWithoutSale ?? Number.MAX_SAFE_INTEGER;
+    if (!worst || score > worstScore || (score === worstScore && product.stock > worst.product.stock)) {
+      worst = {
+        product,
+        daysWithoutSale,
+        statusLabel: daysWithoutSale === null ? "Ainda não vendido" : `${daysWithoutSale} dias`,
+      };
     }
   }
 

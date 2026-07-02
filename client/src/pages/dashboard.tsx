@@ -10,6 +10,9 @@ import {
 } from "lucide-react";
 import { isToday, parseISO } from "date-fns";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
+import { getApiUrl } from "@/lib/api-config";
+import { getFirebaseAuth } from "@/lib/firebase";
+import { notifyError, notifySuccess } from "@/lib/notify";
 import { useClientsLiteData } from "@/hooks/useClientsLiteData";
 import { useProductsData } from "@/hooks/useProductsData";
 import { useSalesData } from "@/hooks/useSalesData";
@@ -56,7 +59,7 @@ const getSalesRankBadge = (index: number) => {
 export default function Dashboard() {
   // Call all hooks before any conditional returns
   const [, setLocation] = useLocation();
-  const { onboarding_completed, loading: settingsLoading, settings } = useUserSettings();
+  const { onboarding_completed, loading: settingsLoading, settings, refresh: refreshSettings } = useUserSettings();
   const { products, loading: productsLoading, error: productsError } = useProductsData();
   const { sales, loading: salesLoading, error: salesError } = useSalesData();
   const { clients, loading: clientsLoading, error: clientsError } = useClientsLiteData();
@@ -70,6 +73,8 @@ export default function Dashboard() {
   const [posts] = useState<any[]>([]);
 
   const [showFirstProductCTA, setShowFirstProductCTA] = useState<boolean>(false);
+  const [monthlyGoalInput, setMonthlyGoalInput] = useState("10000");
+  const [isSavingGoal, setIsSavingGoal] = useState(false);
 
   // Declare all effect hooks here
   useEffect(() => {
@@ -94,6 +99,51 @@ export default function Dashboard() {
       }
     }
   }, [showFirstProductCTA]);
+
+  useEffect(() => {
+    const configuredGoal = Number(
+      (settings as typeof settings & { monthlyGoal?: number; monthlyRevenueGoal?: number; salesGoal?: number }).monthlyGoal ||
+      (settings as typeof settings & { monthlyGoal?: number; monthlyRevenueGoal?: number; salesGoal?: number }).monthlyRevenueGoal ||
+      (settings as typeof settings & { monthlyGoal?: number; monthlyRevenueGoal?: number; salesGoal?: number }).salesGoal ||
+      10000
+    );
+    setMonthlyGoalInput(String(configuredGoal));
+  }, [settings]);
+
+  const handleSaveMonthlyGoal = async () => {
+    const nextGoal = Number(monthlyGoalInput);
+    if (!Number.isFinite(nextGoal) || nextGoal <= 0) {
+      notifyError("Informe uma meta válida.");
+      return;
+    }
+
+    const user = getFirebaseAuth()?.currentUser;
+    if (!user) {
+      notifyError("Sessão expirada. Faça login novamente.");
+      return;
+    }
+
+    setIsSavingGoal(true);
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch(getApiUrl(`/api/user/settings/${user.uid}`), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ ...settings, monthlyGoal: nextGoal }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      notifySuccess("Meta mensal salva.");
+      refreshSettings();
+    } catch (error) {
+      console.error("[dashboard] Failed to save monthly goal:", error);
+      notifyError("Erro ao salvar meta mensal.");
+    } finally {
+      setIsSavingGoal(false);
+    }
+  };
 
   // Declare all memo hooks here
   const productById = useMemo(() => createProductMap(products), [products]);
@@ -285,6 +335,25 @@ export default function Dashboard() {
             <div className="h-3 rounded-full bg-secondary overflow-hidden">
               <div className={`h-full rounded-full transition-all ${monthlyGoal.color === "green" ? "bg-green-500" : monthlyGoal.color === "yellow" ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${monthlyGoal.percent}%` }} />
             </div>
+            <div className="mt-4 grid grid-cols-[1fr_auto] gap-2">
+              <input
+                type="number"
+                min="1"
+                step="100"
+                value={monthlyGoalInput}
+                onChange={(event) => setMonthlyGoalInput(event.target.value)}
+                className="min-w-0 rounded-2xl border border-border/60 bg-secondary/30 px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-primary/20"
+                aria-label="Meta de vendas do mês"
+              />
+              <button
+                type="button"
+                onClick={() => void handleSaveMonthlyGoal()}
+                disabled={isSavingGoal}
+                className="rounded-2xl bg-primary px-4 py-3 text-xs font-semibold text-white disabled:opacity-60"
+              >
+                {isSavingGoal ? "Salvando..." : "Salvar"}
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
@@ -340,7 +409,7 @@ export default function Dashboard() {
             <h2 className="text-xs font-semibold text-orange-700">📉 Produto parado</h2>
             <p className="text-base font-semibold truncate">{worstProduct?.product.name || "Nenhum produto parado"}</p>
             <div className="grid grid-cols-2 gap-2 text-xs">
-              <div><p className="text-muted-foreground">Sem vender</p><p className="font-bold">{worstProduct ? `${worstProduct.daysWithoutSale} dias` : "—"}</p></div>
+              <div><p className="text-muted-foreground">Sem vender</p><p className="font-bold">{worstProduct?.statusLabel || "—"}</p></div>
               <div><p className="text-muted-foreground">Estoque</p><p className="font-bold">{worstProduct?.product.stock || 0} un</p></div>
             </div>
             {worstProduct && <p className="text-[11px] text-muted-foreground">Considere fazer uma promoção.</p>}

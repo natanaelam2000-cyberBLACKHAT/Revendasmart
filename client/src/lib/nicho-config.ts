@@ -5,8 +5,8 @@
  *
  * Regras:
  * - Categorias são isoladas por nicho (sem mistura)
- * - Marcas pré-definidas existem só para Cosméticos & Perfumes
- * - Demais nichos usam marca livre (campo texto)
+ * - Marcas pré-definidas são sugestões por nicho, sempre com opção livre
+ * - Origem é separada de marca
  * - Campos extras são específicos por nicho (sem "validade" em roupas, etc)
  */
 
@@ -43,6 +43,8 @@ export interface NichoConfig {
   predefinedBrands?: string[];
   brandLabel: string;
   brandPlaceholder: string;
+  originOptions: string[];
+  originPlaceholder: string;
   extraFields: ExtraFieldConfig[];
   /** Filtros disponíveis no catálogo para este nicho */
   catalogFilters: string[];
@@ -76,9 +78,54 @@ export const NICHO_CONFIG: Record<NichoId, NichoConfig> = {
       'Quem Disse Berenice',
       "L'Oréal",
       'Nivea',
+      'La Roche-Posay',
+      'Vichy',
+      'CeraVe',
+      'Neutrogena',
+      'Dove',
+      'Granado',
+      'Phebo',
+      'Jequiti',
+      'Hinode',
+      'O.U.i',
+      'Quem Disse, Berenice?',
+      'MAC',
+      'Maybelline',
+      'Ruby Rose',
+      'Vult',
+      'Dailus',
+      'Bruna Tavares',
+      'Salon Line',
+      'Skala',
+      'Elseve',
+      'Pantene',
+      'Garnier',
+      'Bio-Oil',
+      'Bioderma',
+      'ISDIN',
+      'Adcos',
+      'Principia',
+      'Sallve',
+      'The Body Shop',
+      "Victoria's Secret",
+      'Bath & Body Works',
+      'Lancôme',
+      'Dior',
+      'Chanel',
+      'Carolina Herrera',
+      'Paco Rabanne',
+      'Calvin Klein',
+      'Hugo Boss',
+      'Yves Saint Laurent',
+      'Armani',
+      'Versace',
+      'Givenchy',
+      'Zara',
     ],
     brandLabel: 'Marca',
     brandPlaceholder: 'Selecione ou digite a marca...',
+    originOptions: ['Nacional', 'Importado', 'Revenda', 'Artesanal', 'Produção própria', 'Sem marca', 'Outros'],
+    originPlaceholder: 'Ex: Nacional, Importado, Revenda...',
     productNamePlaceholder: 'Ex: Essencial Exclusivo Feminino',
     descriptionPlaceholder: 'Detalhes do produto, fragrância, volume, linha...',
     extraFields: [
@@ -125,6 +172,8 @@ export const NICHO_CONFIG: Record<NichoId, NichoConfig> = {
     ],
     brandLabel: 'Marca',
     brandPlaceholder: 'Ex: Boutique, Shein, Sem marca...',
+    originOptions: ['Nacional', 'Importado', 'Revenda', 'Artesanal', 'Sem marca', 'Outros'],
+    originPlaceholder: 'Ex: Nacional, Importado, Revenda...',
     productNamePlaceholder: 'Ex: Blusa canelada feminina',
     descriptionPlaceholder: 'Tamanho, tecido, cor, medidas, estado...',
     extraFields: [
@@ -170,6 +219,8 @@ export const NICHO_CONFIG: Record<NichoId, NichoConfig> = {
     ],
     brandLabel: 'Marca / Coleção',
     brandPlaceholder: 'Ex: Vivara, Prata 925, Sem marca...',
+    originOptions: ['Nacional', 'Importado', 'Artesanal', 'Revenda', 'Sem marca', 'Outros'],
+    originPlaceholder: 'Ex: Importado, Artesanal, Revenda...',
     productNamePlaceholder: 'Ex: Bolsa transversal feminina',
     descriptionPlaceholder: 'Material, cor, tamanho, modelo, conservação...',
     extraFields: [
@@ -209,6 +260,8 @@ export const NICHO_CONFIG: Record<NichoId, NichoConfig> = {
     ],
     brandLabel: 'Fornecedor / Marca',
     brandPlaceholder: 'Ex: Produção própria, Caseiro...',
+    originOptions: ['Produção própria', 'Artesanal', 'Caseiro', 'Revenda', 'Outros'],
+    originPlaceholder: 'Ex: Produção própria, Artesanal...',
     productNamePlaceholder: 'Ex: Bolo de pote chocolate',
     descriptionPlaceholder: 'Sabor, peso, validade, ingredientes, alergênicos...',
     extraFields: [
@@ -249,6 +302,8 @@ export const NICHO_CONFIG: Record<NichoId, NichoConfig> = {
     ],
     brandLabel: 'Marca / Origem',
     brandPlaceholder: 'Ex: Importado, Nacional, Sem marca...',
+    originOptions: ['Nacional', 'Importado', 'Artesanal', 'Produção própria', 'Revenda', 'Sem marca', 'Outros'],
+    originPlaceholder: 'Ex: Nacional, Importado, Artesanal...',
     productNamePlaceholder: 'Ex: Garrafa térmica inox',
     descriptionPlaceholder: 'Características, medidas, estado, observações...',
     extraFields: [
