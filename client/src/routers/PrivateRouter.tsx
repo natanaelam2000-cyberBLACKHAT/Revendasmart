@@ -114,6 +114,7 @@ function PrivateRoutes() {
         <Route path="/add-product" component={AddProduct} />
         <Route path="/edit-product/:id" component={AddProduct} />
         <Route path="/sale" component={Sell} />
+        <Route path="/sell" component={Sell} />
         <Route path="/catalog" component={Catalog} />
         <Route path="/clients" component={Clients} />
         <Route path="/clients/:id" component={ClientDetail} />
