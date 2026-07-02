@@ -31,6 +31,12 @@ import {
   createClientMap,
   createProductMap,
 } from "@/lib/dashboard-metrics";
+import {
+  calculateBusinessInsights,
+  calculateMonthlyComparison,
+  calculateMonthlyProjection,
+  calculateStockMetrics,
+} from "@/lib/business-insights";
 
 // Helper: Get stock badge for low stock products
 const getStockBadge = (stock: number) => {
@@ -54,6 +60,13 @@ const getSalesRankBadge = (index: number) => {
     return { icon: "🥉", label: "Destaque", color: "bg-orange-100 text-orange-700" };
   }
   return null;
+};
+
+const money = (value: number) => `R$ ${value.toFixed(2)}`;
+
+const percentLabel = (value?: number) => {
+  const safeValue = Number.isFinite(value) ? Number(value) : 0;
+  return `${safeValue > 0 ? "+" : ""}${safeValue}%`;
 };
 
 export default function Dashboard() {
@@ -174,6 +187,26 @@ export default function Dashboard() {
     [monthMetrics.revenue, monthlyGoalTarget]
   );
 
+  const monthlyComparison = useMemo(
+    () => calculateMonthlyComparison(sales, productById),
+    [sales, productById]
+  );
+
+  const monthlyProjection = useMemo(
+    () => calculateMonthlyProjection(monthMetrics.revenue, monthMetrics.profit, monthlyGoalTarget),
+    [monthMetrics.revenue, monthMetrics.profit, monthlyGoalTarget]
+  );
+
+  const businessInsights = useMemo(
+    () => calculateBusinessInsights(products, sales, clients, productById),
+    [products, sales, clients, productById]
+  );
+
+  const smartStock = useMemo(
+    () => calculateStockMetrics(products, settings.lowStockThreshold),
+    [products, settings.lowStockThreshold]
+  );
+
   const stockExecutive = useMemo(
     () => calculateStockExecutiveMetrics(products, settings.lowStockThreshold),
     [products, settings.lowStockThreshold]
@@ -233,6 +266,25 @@ export default function Dashboard() {
     }),
     [billings, inactiveClientCount, monthlyGoal, stockExecutive.lowStockCount]
   );
+
+  const comparisonCards = [
+    { label: "Receita", value: money(monthlyComparison.revenue.current), previous: money(monthlyComparison.revenue.previous), change: monthlyComparison.revenue.changePercent, direction: monthlyComparison.revenue.direction },
+    { label: "Lucro", value: money(monthlyComparison.profit.current), previous: money(monthlyComparison.profit.previous), change: monthlyComparison.profit.changePercent, direction: monthlyComparison.profit.direction },
+    { label: "Produtos", value: String(monthlyComparison.productsSold.current), previous: String(monthlyComparison.productsSold.previous), change: monthlyComparison.productsSold.changePercent, direction: monthlyComparison.productsSold.direction },
+    { label: "Clientes", value: String(monthlyComparison.activeClients.current), previous: String(monthlyComparison.activeClients.previous), change: monthlyComparison.activeClients.changePercent, direction: monthlyComparison.activeClients.direction },
+  ];
+
+  const commercialInsightCards = [
+    { label: "Categoria mais lucrativa", value: businessInsights.mostProfitableCategory?.label || "Sem dados", detail: businessInsights.mostProfitableCategory ? money(businessInsights.mostProfitableCategory.profit) : "" },
+    { label: "Marca mais lucrativa", value: businessInsights.mostProfitableBrand?.label || "Sem dados", detail: businessInsights.mostProfitableBrand ? money(businessInsights.mostProfitableBrand.profit) : "" },
+    { label: "Maior faturamento", value: businessInsights.topRevenueCategory?.label || "Sem dados", detail: businessInsights.topRevenueCategory ? money(businessInsights.topRevenueCategory.revenue) : "" },
+    { label: "Maior margem", value: businessInsights.highestMarginProduct?.product.name || "Sem dados", detail: businessInsights.highestMarginProduct ? `${businessInsights.highestMarginProduct.marginPercent}%` : "" },
+    { label: "Menor margem", value: businessInsights.lowestMarginProduct?.product.name || "Sem dados", detail: businessInsights.lowestMarginProduct ? `${businessInsights.lowestMarginProduct.marginPercent}%` : "" },
+    { label: "Mais cresceu", value: businessInsights.productMostGrew?.product.name || "Sem dados", detail: businessInsights.productMostGrew?.changePercent !== undefined ? percentLabel(businessInsights.productMostGrew.changePercent) : "" },
+    { label: "Mais caiu", value: businessInsights.productMostDropped?.product.name || "Sem dados", detail: businessInsights.productMostDropped?.changePercent !== undefined ? percentLabel(businessInsights.productMostDropped.changePercent) : "" },
+    { label: "Maior giro", value: businessInsights.highestTurnoverProduct?.product.name || "Sem dados", detail: businessInsights.highestTurnoverProduct ? `${businessInsights.highestTurnoverProduct.quantity} un` : "" },
+    { label: "Menor giro", value: businessInsights.lowestTurnoverProduct?.product.name || "Sem dados", detail: businessInsights.lowestTurnoverProduct ? `${businessInsights.lowestTurnoverProduct.quantity} un` : "" },
+  ];
 
   const quickActions = [
     { label: "Cadastrar produto", path: "/add-product", icon: Plus },
@@ -370,6 +422,55 @@ export default function Dashboard() {
                 <p className="text-sm font-semibold mt-1">{value}</p>
               </div>
             ))}
+          </div>
+        </section>
+
+        <section className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-xs font-semibold text-primary flex items-center gap-2"><TrendingUp className="w-4 h-4" /> Inteligência comercial</h2>
+            <span className="text-[10px] font-semibold text-muted-foreground">Mês atual x anterior</span>
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+            {comparisonCards.map((card) => (
+              <div key={card.label} className="bg-white rounded-2xl border border-border/50 p-3 shadow-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[10px] text-muted-foreground font-medium">{card.label}</p>
+                  <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${card.direction === "up" ? "bg-green-100 text-green-700" : card.direction === "down" ? "bg-red-100 text-red-700" : "bg-secondary text-muted-foreground"}`}>{percentLabel(card.change)}</span>
+                </div>
+                <p className="text-sm font-semibold mt-1">{card.value}</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">Anterior: {card.previous}</p>
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+            <div className="bg-white rounded-2xl border border-border/50 p-3 shadow-sm"><p className="text-[10px] text-muted-foreground font-medium">Projeção faturamento</p><p className="text-sm font-semibold mt-1">{money(monthlyProjection.projectedRevenue)}</p></div>
+            <div className="bg-white rounded-2xl border border-border/50 p-3 shadow-sm"><p className="text-[10px] text-muted-foreground font-medium">Projeção lucro</p><p className="text-sm font-semibold mt-1 text-green-600">{money(monthlyProjection.projectedProfit)}</p></div>
+            <div className="bg-white rounded-2xl border border-border/50 p-3 shadow-sm"><p className="text-[10px] text-muted-foreground font-medium">Ritmo necessário</p><p className="text-sm font-semibold mt-1">{money(monthlyProjection.requiredDailyRevenue)}/dia</p></div>
+            <div className="bg-white rounded-2xl border border-border/50 p-3 shadow-sm"><p className="text-[10px] text-muted-foreground font-medium">Meta atingida</p><p className="text-sm font-semibold mt-1 text-primary">{monthlyProjection.goalPercent}%</p><p className="text-[10px] text-muted-foreground">{monthlyProjection.daysRemaining} dias restantes</p></div>
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <div className="lg:col-span-2 bg-white rounded-[2rem] border border-border/50 p-5 shadow-sm">
+              <h3 className="text-xs font-semibold text-primary mb-3 flex items-center gap-2"><Sparkles className="w-4 h-4" /> Insights automáticos</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {commercialInsightCards.map((card) => (
+                  <div key={card.label} className="rounded-2xl bg-secondary/30 p-3 min-w-0">
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">{card.label}</p>
+                    <p className="text-xs font-bold mt-1 truncate">{card.value}</p>
+                    {card.detail && <p className="text-[10px] text-primary font-semibold mt-1">{card.detail}</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="bg-white rounded-[2rem] border border-border/50 p-5 shadow-sm space-y-3">
+              <h3 className="text-xs font-semibold text-primary flex items-center gap-2"><Package className="w-4 h-4" /> Estoque inteligente</h3>
+              <div className="rounded-2xl bg-secondary/30 p-3"><p className="text-[10px] text-muted-foreground">Valor total</p><p className="text-sm font-bold">{money(smartStock.totalInventoryValue)}</p></div>
+              <div className="rounded-2xl bg-orange-50 p-3"><p className="text-[10px] text-orange-700">Estoque parado</p><p className="text-sm font-bold text-orange-700">{money(smartStock.stagnantInventoryValue)}</p></div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="rounded-2xl bg-red-50 p-3"><p className="font-bold text-red-700">{smartStock.outOfStockProducts.length}</p><p className="text-muted-foreground">Sem estoque</p></div>
+                <div className="rounded-2xl bg-amber-50 p-3"><p className="font-bold text-amber-700">{smartStock.lowStockProducts.length}</p><p className="text-muted-foreground">Acabando</p></div>
+              </div>
+              <p className="text-[11px] text-muted-foreground">{smartStock.unsoldOver90Days.length} produto(s) sem venda há mais de 90 dias.</p>
+            </div>
           </div>
         </section>
 
