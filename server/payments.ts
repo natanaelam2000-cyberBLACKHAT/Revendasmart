@@ -11,7 +11,7 @@
  *   POST /api/payments/resync/:chargeId
  */
 
-import type { Express, Request, Response } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 import * as crypto from "crypto";
 import { MercadoPagoConfig, Preference, Payment as MPPayment } from "mercadopago";
 import { getFirebaseAdmin } from "./firebase-admin-init";
@@ -54,6 +54,101 @@ const CENTRAL_ACCESS_TOKEN = process.env.MERCADOPAGO_ACCESS_TOKEN ?? "";
 const WEBHOOK_SECRET = process.env.MERCADOPAGO_WEBHOOK_SECRET ?? "";
 const APP_BASE_URL = process.env.APP_BASE_URL ?? "https://revendasmart-backend-164193806378.us-central1.run.app";
 const FRONTEND_URL = process.env.FRONTEND_URL ?? "https://revendasmart.vercel.app";
+const PAYMENT_WEBHOOK_MAX_AGE_MS = 5 * 60 * 1000;
+const PAYMENT_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const PAYMENT_RATE_LIMIT_MAX_KEYS = 10_000;
+
+type RateLimitDecision = {
+  allowed: boolean;
+  remaining: number;
+  retryAfterSeconds: number;
+};
+
+const paymentRateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+function getClientRateLimitKey(req: Request): string {
+  const forwardedFor = req.headers["x-forwarded-for"];
+  const firstForwardedFor = Array.isArray(forwardedFor)
+    ? forwardedFor[0]
+    : forwardedFor?.split(",")[0]?.trim();
+  return req.ip ?? firstForwardedFor ?? "unknown";
+}
+
+function checkPaymentRateLimit(
+  key: string,
+  max: number,
+  windowMs = PAYMENT_RATE_LIMIT_WINDOW_MS,
+): RateLimitDecision {
+  const nowMs = Date.now();
+  const current = paymentRateLimitMap.get(key);
+
+  if (!current || nowMs > current.resetAt) {
+    if (paymentRateLimitMap.size >= PAYMENT_RATE_LIMIT_MAX_KEYS) {
+      for (const [entryKey, entry] of Array.from(paymentRateLimitMap.entries())) {
+        if (nowMs > entry.resetAt) paymentRateLimitMap.delete(entryKey);
+      }
+    }
+    paymentRateLimitMap.set(key, { count: 1, resetAt: nowMs + windowMs });
+    return {
+      allowed: true,
+      remaining: Math.max(0, max - 1),
+      retryAfterSeconds: Math.ceil(windowMs / 1000),
+    };
+  }
+
+  const retryAfterSeconds = Math.max(1, Math.ceil((current.resetAt - nowMs) / 1000));
+  if (current.count >= max) {
+    return { allowed: false, remaining: 0, retryAfterSeconds };
+  }
+
+  current.count += 1;
+  return {
+    allowed: true,
+    remaining: Math.max(0, max - current.count),
+    retryAfterSeconds,
+  };
+}
+
+function paymentRateLimit(
+  max: number,
+  keyPrefix: string,
+  getKey: (req: Request) => string,
+) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const key = `${keyPrefix}:${getKey(req)}`;
+    const decision = checkPaymentRateLimit(key, max);
+    res.setHeader("X-RateLimit-Remaining", String(decision.remaining));
+
+    if (!decision.allowed) {
+      res.setHeader("Retry-After", String(decision.retryAfterSeconds));
+      return res.status(429).json({ error: "RATE_LIMITED" });
+    }
+
+    return next();
+  };
+}
+
+const paymentWebhookRateLimit = paymentRateLimit(120, "payments:webhook", getClientRateLimitKey);
+const paymentCreateLinkRateLimit = paymentRateLimit(
+  30,
+  "payments:create-link",
+  (req) => (req as any).firebaseUid ?? getClientRateLimitKey(req),
+);
+const paymentStatusRateLimit = paymentRateLimit(
+  120,
+  "payments:status",
+  (req) => (req as any).firebaseUid ?? getClientRateLimitKey(req),
+);
+const paymentResyncRateLimit = paymentRateLimit(
+  30,
+  "payments:resync",
+  (req) => (req as any).firebaseUid ?? getClientRateLimitKey(req),
+);
+const paymentDeleteRateLimit = paymentRateLimit(
+  30,
+  "payments:delete",
+  (req) => (req as any).firebaseUid ?? getClientRateLimitKey(req),
+);
 
 if (!CENTRAL_ACCESS_TOKEN) {
   console.warn("[payments] Central payment credential is not configured");
@@ -104,6 +199,21 @@ async function fetchCharge(uid: string, chargeId: string): Promise<Charge | null
  *
  * @see https://www.mercadopago.com.br/developers/pt/docs/your-integrations/notifications/webhooks
  */
+function getSingleHeader(req: Request, name: "x-signature" | "x-request-id"): string {
+  const value = req.headers[name];
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function safeHexEqual(received: string, expected: string): boolean {
+  if (!/^[a-f0-9]{64}$/i.test(received) || !/^[a-f0-9]{64}$/i.test(expected)) {
+    return false;
+  }
+  const receivedBuffer = Buffer.from(received, "hex");
+  const expectedBuffer = Buffer.from(expected, "hex");
+  return receivedBuffer.length === expectedBuffer.length &&
+    crypto.timingSafeEqual(receivedBuffer, expectedBuffer);
+}
+
 function verifyWebhookSignature(req: Request, rawBody: Buffer): boolean {
   if (!WEBHOOK_SECRET) {
     console.error("[payments/webhook] Webhook secret is not configured");
@@ -111,48 +221,57 @@ function verifyWebhookSignature(req: Request, rawBody: Buffer): boolean {
   }
 
   try {
-    const xSignature = req.headers["x-signature"] as string;
-    const xRequestId = req.headers["x-request-id"] as string;
+    const xSignature = getSingleHeader(req, "x-signature");
+    const xRequestId = getSingleHeader(req, "x-request-id");
 
-    if (!xSignature) {
-      console.warn("[payments/webhook] Missing x-signature header");
+    if (!xSignature || !xRequestId) {
+      console.warn("[payments/webhook] Missing webhook signature headers");
       return false;
     }
 
-    // Parse ts and v1 from x-signature
-    const parts = xSignature.split(",");
     let ts = "";
     let v1 = "";
-    for (const part of parts) {
-      const [key, val] = part.split("=");
-      if (key.trim() === "ts") ts = val.trim();
-      if (key.trim() === "v1") v1 = val.trim();
+    for (const rawPart of xSignature.split(",")) {
+      const separatorIndex = rawPart.indexOf("=");
+      if (separatorIndex < 0) continue;
+      const key = rawPart.slice(0, separatorIndex).trim();
+      const value = rawPart.slice(separatorIndex + 1).trim();
+      if (key === "ts") ts = value;
+      if (key === "v1") v1 = value;
     }
 
-    if (!ts || !v1) {
+    if (!ts || !v1 || !/^\d{10,13}$/.test(ts)) {
       console.warn("[payments/webhook] Invalid x-signature format");
       return false;
     }
 
-    // Extract data.id from body (Mercado Pago sends this as the payment id)
-    const body = JSON.parse(rawBody.toString());
-    const dataId = body?.data?.id ?? "";
+    const timestampMs = ts.length === 10 ? Number(ts) * 1000 : Number(ts);
+    if (!Number.isFinite(timestampMs) || Math.abs(Date.now() - timestampMs) > PAYMENT_WEBHOOK_MAX_AGE_MS) {
+      console.warn("[payments/webhook] Expired webhook signature timestamp");
+      return false;
+    }
 
-    // Build the manifest string exactly as MP specifies
-    const manifest = `id:${dataId};request-id:${xRequestId ?? ""};ts:${ts};`;
+    const body = JSON.parse(rawBody.toString());
+    const rawDataId = body?.data?.id;
+    const dataId = typeof rawDataId === "string" || typeof rawDataId === "number"
+      ? String(rawDataId).trim()
+      : "";
+
+    if (!dataId) {
+      console.warn("[payments/webhook] Missing data.id in signed payload");
+      return false;
+    }
+
+    const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
 
     const expectedHash = crypto
       .createHmac("sha256", WEBHOOK_SECRET)
       .update(manifest)
       .digest("hex");
 
-    const isValid = crypto.timingSafeEqual(
-      Buffer.from(v1, "hex"),
-      Buffer.from(expectedHash, "hex")
-    );
-
+    const isValid = safeHexEqual(v1, expectedHash);
     if (!isValid) {
-      console.warn("[payments/webhook] Signature mismatch — possible tampered request");
+      console.warn("[payments/webhook] Signature mismatch");
     }
 
     return isValid;
@@ -409,13 +528,13 @@ async function handleCreateLink(req: Request, res: Response) {
       if (mpErrorMessage.includes("invalid_access_token") || mpErrorMessage.includes("Unauthorized")) {
         userMessage = "Token Mercado Pago inválido ou expirado. Reconecte em Ajustes > Mercado Pago";
       } else if (mpErrorMessage.includes("validation") || mpErrorMessage.includes("invalid")) {
-        userMessage = `Campo inválido no pagamento: ${mpErrorMessage}`;
+        userMessage = "Algum dado do pagamento foi rejeitado. Revise as informações e tente novamente.";
       } else if (mpErrorMessage.includes("statement_descriptor")) {
-        userMessage = "Campo 'statement_descriptor' rejeitado pelo Mercado Pago";
+        userMessage = "Algum dado do pagamento foi rejeitado. Revise as informações e tente novamente.";
       } else if (mpErrorMessage.includes("notification_url")) {
-        userMessage = "URL de notificação inválida";
+        userMessage = "Não foi possível configurar a notificação do pagamento.";
       } else if (mpErrorMessage.includes("back_url")) {
-        userMessage = "URL de retorno inválida";
+        userMessage = "Não foi possível configurar o retorno do pagamento.";
       } else if (mpErrorStatus === 429) {
         userMessage = "Limite de requisições atingido. Tente novamente em alguns segundos";
       } else if (mpErrorStatus === 401 || mpErrorStatus === 403) {
@@ -423,12 +542,8 @@ async function handleCreateLink(req: Request, res: Response) {
       }
 
       return res.status(502).json({
-        error: "Failed to create payment preference on Mercado Pago",
+        error: "PAYMENT_PREFERENCE_FAILED",
         userMessage,
-        mpMessage: mpErrorMessage,
-        mpCode: mpErrorCode,
-        mpStatus: mpErrorStatus,
-        details: userMessage,
       });
     }
     stage = "extract_preference_urls";
@@ -541,8 +656,7 @@ async function handleCreateLink(req: Request, res: Response) {
     
     const tokenAuthenticationFailure = /Unsupported state|unable to authenticate|decrypt|auth tag/i.test(errorMsg);
     return res.status(tokenAuthenticationFailure ? 503 : 500).json({
-      error: "Erro ao gerar link de pagamento",
-      stage: stage ?? "unknown",
+      error: "PAYMENT_LINK_FAILED",
       userMessage: tokenAuthenticationFailure
         ? "A conexão com o Mercado Pago precisa ser renovada. Reconecte sua conta em Ajustes."
         : "Não foi possível iniciar o pagamento agora. Tente novamente em instantes.",
@@ -567,7 +681,7 @@ async function handleWebhook(req: Request, res: Response) {
   }
 
   const payload = req.body as MPWebhookPayload;
-  const eventId = (req.headers["x-request-id"] as string) ?? "";
+  const eventId = getSingleHeader(req, "x-request-id");
 
   console.info("[payments/webhook] Signed event received", {
     action: payload.action,
@@ -584,7 +698,7 @@ async function handleWebhook(req: Request, res: Response) {
   let webhookUid: string | null = null;
   let webhookChargeId: string | null = null;
   if (!mpPaymentId) {
-    return res.status(200).json({ received: true, skipped: "missing data.id" });
+    return res.status(400).json({ received: false, error: "INVALID_WEBHOOK_PAYLOAD" });
   }
 
   try {
@@ -623,7 +737,7 @@ async function handleWebhook(req: Request, res: Response) {
     webhookUid = uid;
     webhookChargeId = chargeId;
     await syncPaymentFromMP(uid, chargeId, mpPaymentId, eventId, prefetchedPayment);
-    return res.status(200).json({ received: true, chargeId, uid });
+    return res.status(200).json({ received: true });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logPaymentError("webhook_process", webhookUid, msg, {
@@ -678,7 +792,7 @@ async function handleGetStatus(req: Request, res: Response) {
       chargeId,
       errorName: err instanceof Error ? err.name : "UnknownError",
     });
-    return res.status(500).json({ error: "Failed to get charge status", message: msg });
+    return res.status(500).json({ error: "PAYMENT_STATUS_FAILED" });
   }
 }
 
@@ -728,7 +842,7 @@ async function handleResync(req: Request, res: Response) {
       chargeId,
       errorName: err instanceof Error ? err.name : "UnknownError",
     });
-    return res.status(500).json({ error: "Failed to resync charge", message: msg });
+    return res.status(500).json({ error: "PAYMENT_RESYNC_FAILED" });
   }
 }
 
@@ -771,7 +885,7 @@ async function handleDeleteCharge(req: Request, res: Response) {
       chargeId: req.params.chargeId,
       errorName: err instanceof Error ? err.name : "UnknownError",
     });
-    return res.status(500).json({ error: "Failed to delete charge", message: msg });
+    return res.status(500).json({ error: "PAYMENT_DELETE_FAILED" });
   }
 }
 
@@ -780,13 +894,13 @@ export function registerPaymentRoutes(
   requireAuth: (req: Request, res: Response, next: any) => void
 ): void {
   // Public webhook — no auth (MP calls this, no user token)
-  app.post("/api/payments/webhook", handleWebhook);
+  app.post("/api/payments/webhook", paymentWebhookRateLimit, handleWebhook);
 
   // Authenticated routes
-  app.post("/api/payments/create-link", requireAuth, handleCreateLink);
-  app.get("/api/payments/status/:chargeId", requireAuth, handleGetStatus);
-  app.post("/api/payments/resync/:chargeId", requireAuth, handleResync);
-  app.delete("/api/payments/:chargeId", requireAuth, handleDeleteCharge);
+  app.post("/api/payments/create-link", requireAuth, paymentCreateLinkRateLimit, handleCreateLink);
+  app.get("/api/payments/status/:chargeId", requireAuth, paymentStatusRateLimit, handleGetStatus);
+  app.post("/api/payments/resync/:chargeId", requireAuth, paymentResyncRateLimit, handleResync);
+  app.delete("/api/payments/:chargeId", requireAuth, paymentDeleteRateLimit, handleDeleteCharge);
 
   // Subscription stubs — wired but not implemented (prevents 404 in future)
   app.post("/api/subscriptions/create", requireAuth, (_req, res) => {

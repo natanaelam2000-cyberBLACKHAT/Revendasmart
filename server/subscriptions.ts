@@ -26,7 +26,7 @@ POST /api/app-subscription/webhook     → Receive MP preapproval events
 */
 
 
-import type { Express, Request, Response } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 import * as crypto from "crypto";
 import { MercadoPagoConfig, PreApproval } from "mercadopago";
 import { getFirebaseAdmin } from "./firebase-admin-init";
@@ -68,6 +68,73 @@ console.error(`[subscriptions] ERROR-${eid} op=${op}`, {
   contextKeys: ctx ? Object.keys(ctx) : [],
 });
 }
+
+const SUBSCRIPTION_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const SUBSCRIPTION_RATE_LIMIT_MAX_KEYS = 10_000;
+const subscriptionRateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+function getSubscriptionClientKey(req: Request): string {
+  const forwardedFor = req.headers["x-forwarded-for"];
+  const firstForwardedFor = Array.isArray(forwardedFor)
+    ? forwardedFor[0]
+    : forwardedFor?.split(",")[0]?.trim();
+  return req.ip ?? firstForwardedFor ?? "unknown";
+}
+
+function subscriptionRateLimit(
+  max: number,
+  keyPrefix: string,
+  getKey: (req: Request) => string,
+) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const key = `${keyPrefix}:${getKey(req)}`;
+    const nowMs = Date.now();
+    const current = subscriptionRateLimitMap.get(key);
+
+    if (!current || nowMs > current.resetAt) {
+      if (subscriptionRateLimitMap.size >= SUBSCRIPTION_RATE_LIMIT_MAX_KEYS) {
+        for (const [entryKey, entry] of Array.from(subscriptionRateLimitMap.entries())) {
+          if (nowMs > entry.resetAt) subscriptionRateLimitMap.delete(entryKey);
+        }
+      }
+      subscriptionRateLimitMap.set(key, {
+        count: 1,
+        resetAt: nowMs + SUBSCRIPTION_RATE_LIMIT_WINDOW_MS,
+      });
+      return next();
+    }
+
+    if (current.count >= max) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((current.resetAt - nowMs) / 1000));
+      res.setHeader("Retry-After", String(retryAfterSeconds));
+      return res.status(429).json({ error: "RATE_LIMITED" });
+    }
+
+    current.count += 1;
+    return next();
+  };
+}
+
+const subscriptionWebhookRateLimit = subscriptionRateLimit(
+  120,
+  "subscriptions:webhook",
+  getSubscriptionClientKey,
+);
+const subscriptionCreateRateLimit = subscriptionRateLimit(
+  20,
+  "subscriptions:create",
+  (req) => (req as any).firebaseUid ?? getSubscriptionClientKey(req),
+);
+const subscriptionStatusRateLimit = subscriptionRateLimit(
+  120,
+  "subscriptions:status",
+  (req) => (req as any).firebaseUid ?? getSubscriptionClientKey(req),
+);
+const subscriptionMutationRateLimit = subscriptionRateLimit(
+  30,
+  "subscriptions:mutation",
+  (req) => (req as any).firebaseUid ?? getSubscriptionClientKey(req),
+);
 
 function normalizeStatus(status?: string | null): string {
 return (status ?? "").toLowerCase().trim();
@@ -410,7 +477,7 @@ export function registerSubscriptionRoutes(
 ) {
 
   // ✅ ADMIN ROUTE (AGORA NO LUGAR CERTO)
-  app.post("/api/admin/premium/grant", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/admin/premium/grant", requireAuth, subscriptionMutationRateLimit, async (req: Request, res: Response) => {
     const uid = req.body.uid;
 
     if ((req as any).userRole !== "admin") {
@@ -434,7 +501,7 @@ export function registerSubscriptionRoutes(
 
 
   // ✅ CREATE SUBSCRIPTION
-  app.post("/api/app-subscription/create", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/app-subscription/create", requireAuth, subscriptionCreateRateLimit, async (req: Request, res: Response) => {
     const uid = (req as any).firebaseUid as string;
 
 console.info("[subscriptions/create] Request received");
@@ -496,23 +563,20 @@ console.info("[subscriptions/create] Request received");
 });
 
     } catch (error) {
-  console.log("❌ ERRO AO CRIAR ASSINATURA:");
-  console.log(error);
-
-  if (error instanceof Error) {
-    console.log("MESSAGE:", error.message);
-    console.log("STACK:", error.stack);
-  }
+  const msg = error instanceof Error ? error.message : String(error);
+  logSubError("create_subscription", uid, msg, {
+    errorName: error instanceof Error ? error.name : "UnknownError",
+  });
 
   return res.status(500).json({
     error: "SUBSCRIPTION_CREATE_ERROR",
-    message: error instanceof Error ? error.message : JSON.stringify(error),
+    message: "Não foi possível iniciar a assinatura agora. Tente novamente em instantes.",
   });
 }
 });
 
   // ✅ CANCEL
-  app.post("/api/app-subscription/cancel", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/app-subscription/cancel", requireAuth, subscriptionMutationRateLimit, async (req: Request, res: Response) => {
     const uid = (req as any).firebaseUid as string;
 
     try {
@@ -542,16 +606,20 @@ console.info("[subscriptions/create] Request received");
       return res.json({ success: true });
 
     } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logSubError("cancel_subscription", uid, msg, {
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
       return res.status(500).json({
         error: "SUBSCRIPTION_CANCEL_ERROR",
-        message: error instanceof Error ? error.message : "Erro desconhecido",
+        message: "Não foi possível cancelar a assinatura agora. Tente novamente em instantes.",
       });
     }
   });
 
 
   // ✅ STATUS
-  app.get("/api/app-subscription/status", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/app-subscription/status", requireAuth, subscriptionStatusRateLimit, async (req: Request, res: Response) => {
     const uid = (req as any).firebaseUid as string;
 
     try {
@@ -592,13 +660,17 @@ currentPlan: premiumActive ? "premium" : "free",
       });
 
     } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logSubError("subscription_status", uid, msg, {
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
       return res.status(500).json({
         error: "SUBSCRIPTION_STATUS_ERROR",
-        message: error instanceof Error ? error.message : "Erro desconhecido",
+        message: "Não foi possível carregar a assinatura agora. Tente novamente em instantes.",
       });
     }
   });
-app.post("/api/app-subscription/webhook", async (req: Request, res: Response) => {
+app.post("/api/app-subscription/webhook", subscriptionWebhookRateLimit, async (req: Request, res: Response) => {
   try {
     if (!WEBHOOK_SECRET) {
       console.error("[subscriptions/webhook] Rejected: webhook secret is not configured");

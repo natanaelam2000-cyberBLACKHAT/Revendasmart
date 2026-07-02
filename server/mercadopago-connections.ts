@@ -18,7 +18,7 @@
  *   - Revoke: soft-delete (status="revoked", tokens cleared, audit preserved)
  */
 
-import type { Express, Request, Response } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 import * as crypto from "crypto";
 import { getFirebaseAdmin } from "./firebase-admin-init";
 import { encryptToken, decryptToken } from "./mercadopago-crypto";
@@ -65,6 +65,78 @@ const MP_TOKEN_URL = "https://api.mercadopago.com/oauth/token";
 function now(): string {
   return new Date().toISOString();
 }
+
+const MP_CONNECTION_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const MP_CONNECTION_RATE_LIMIT_MAX_KEYS = 10_000;
+const mpConnectionRateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+function getMPConnectionClientKey(req: Request): string {
+  const forwardedFor = req.headers["x-forwarded-for"];
+  const firstForwardedFor = Array.isArray(forwardedFor)
+    ? forwardedFor[0]
+    : forwardedFor?.split(",")[0]?.trim();
+  return req.ip ?? firstForwardedFor ?? "unknown";
+}
+
+function getQueryValue(value: unknown): string {
+  if (Array.isArray(value)) return String(value[0] ?? "");
+  return typeof value === "string" ? value : "";
+}
+
+function mpConnectionRateLimit(
+  max: number,
+  keyPrefix: string,
+  getKey: (req: Request) => string,
+) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const key = `${keyPrefix}:${getKey(req)}`;
+    const nowMs = Date.now();
+    const current = mpConnectionRateLimitMap.get(key);
+
+    if (!current || nowMs > current.resetAt) {
+      if (mpConnectionRateLimitMap.size >= MP_CONNECTION_RATE_LIMIT_MAX_KEYS) {
+        for (const [entryKey, entry] of Array.from(mpConnectionRateLimitMap.entries())) {
+          if (nowMs > entry.resetAt) mpConnectionRateLimitMap.delete(entryKey);
+        }
+      }
+      mpConnectionRateLimitMap.set(key, {
+        count: 1,
+        resetAt: nowMs + MP_CONNECTION_RATE_LIMIT_WINDOW_MS,
+      });
+      return next();
+    }
+
+    if (current.count >= max) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((current.resetAt - nowMs) / 1000));
+      res.setHeader("Retry-After", String(retryAfterSeconds));
+      return res.status(429).json({ error: "RATE_LIMITED" });
+    }
+
+    current.count += 1;
+    return next();
+  };
+}
+
+const mpOAuthCallbackRateLimit = mpConnectionRateLimit(
+  60,
+  "mp-oauth:callback",
+  (req) => `${getMPConnectionClientKey(req)}:${getQueryValue(req.query.state)}`,
+);
+const mpOAuthStartRateLimit = mpConnectionRateLimit(
+  10,
+  "mp-oauth:start",
+  (req) => (req as any).firebaseUid ?? getMPConnectionClientKey(req),
+);
+const mpConnectionListRateLimit = mpConnectionRateLimit(
+  120,
+  "mp-connections:list",
+  (req) => (req as any).firebaseUid ?? getMPConnectionClientKey(req),
+);
+const mpConnectionMutationRateLimit = mpConnectionRateLimit(
+  30,
+  "mp-connections:mutation",
+  (req) => (req as any).firebaseUid ?? getMPConnectionClientKey(req),
+);
 
 // ---------------------------------------------------------------------------
 // Firestore helpers
@@ -133,40 +205,40 @@ async function consumeOAuthState(
 ): Promise<MPOAuthState | null> {
   const db = getDB();
   const ref = db.collection("mercadopago_oauth_states").doc(nonce);
-  const doc = await ref.get();
 
-  if (!doc.exists) {
-    console.warn("[mp-connections] OAuth state not found");
-    return null;
-  }
+  return db.runTransaction(async (transaction) => {
+    const doc = await transaction.get(ref);
 
-  const state = doc.data() as MPOAuthState;
+    if (!doc.exists) {
+      console.warn("[mp-connections] OAuth state not found");
+      return null;
+    }
 
-  // Validate: not expired
-  if (new Date(state.expiresAt) < new Date()) {
-    console.warn("[mp-connections] OAuth state expired");
-    await ref.delete(); // Clean up expired states
-    return null;
-  }
+    const state = doc.data() as MPOAuthState;
 
-  // Validate: not already used
-  if (state.used) {
-    console.warn("[mp-connections] OAuth state already used");
-    return null;
-  }
+    if (new Date(state.expiresAt) < new Date()) {
+      console.warn("[mp-connections] OAuth state expired");
+      transaction.delete(ref);
+      return null;
+    }
 
-  // Validate: bound to the expected uid
-  if (state.uid !== expectedUid) {
-    console.warn("[mp-connections] OAuth state owner mismatch");
-    return null;
-  }
+    if (state.used) {
+      console.warn("[mp-connections] OAuth state already used");
+      return null;
+    }
 
-  // Invalidate: mark as used (one-time use)
-  await ref.update({ used: true, usedAt: now() });
-  console.info("[mp-connections] OAuth state consumed");
+    if (state.uid !== expectedUid) {
+      console.warn("[mp-connections] OAuth state owner mismatch");
+      return null;
+    }
 
-  return state;
+    transaction.update(ref, { used: true, usedAt: now() });
+    console.info("[mp-connections] OAuth state consumed");
+
+    return state;
+  });
 }
+
 
 // ---------------------------------------------------------------------------
 // Token exchange & refresh
@@ -464,16 +536,22 @@ async function handleStartAuth(req: Request, res: Response) {
 // uid is recovered from the nonce stored in Firestore.
 // ---------------------------------------------------------------------------
 async function handleCallback(req: Request, res: Response) {
-  const { code, state: nonce, error: oauthError } = req.query as Record<string, string>;
+  const code = getQueryValue(req.query.code);
+  const nonce = getQueryValue(req.query.state);
+  const oauthError = getQueryValue(req.query.error);
 
   // Handle MP OAuth error (user denied permission)
   if (oauthError) {
-    console.warn(`[mp-connections/callback] MP returned error: ${oauthError}`);
+    console.warn("[mp-connections/callback] MP returned OAuth error");
     return res.redirect(`${FRONTEND_URL}/settings/mercadopago?status=denied`);
   }
 
   if (!code || !nonce) {
     return res.redirect(`${FRONTEND_URL}/settings/mercadopago?status=error&reason=missing_params`);
+  }
+
+  if (!/^[a-f0-9]{64}$/i.test(nonce) || code.length > 2048) {
+    return res.redirect(`${FRONTEND_URL}/settings/mercadopago?status=error&reason=invalid_state`);
   }
 
   try {
@@ -562,9 +640,7 @@ async function handleCallback(req: Request, res: Response) {
 
     await connRef.set(connection);
 
-    console.log(
-      `[mp-connections/callback] Connection created: uid=${uid}, merchantId=${tokens.user_id}, env=${environment}`
-    );
+    console.info("[mp-connections/callback] Connection created", { environment });
 
     return res.redirect(
       `${FRONTEND_URL}/settings/mercadopago?status=success&connectionId=${connRef.id}`
@@ -623,7 +699,7 @@ async function handleRevoke(req: Request, res: Response) {
             client_secret: CLIENT_SECRET,
           }),
         });
-        console.log(`[mp-connections/revoke] MP notified of revocation for ${connectionId}`);
+        console.info("[mp-connections/revoke] MP notified of revocation");
       } catch (err) {
         console.warn(`[mp-connections/revoke] MP revoke call failed (continuing):`, err);
       }
@@ -653,7 +729,7 @@ async function handleRevoke(req: Request, res: Response) {
       connectionId: req.params.connectionId,
       errorName: err instanceof Error ? err.name : "UnknownError",
     });
-    return res.status(500).json({ error: "Failed to revoke connection", message: msg });
+    return res.status(500).json({ error: "MP_CONNECTION_REVOKE_FAILED" });
   }
 }
 
@@ -683,7 +759,7 @@ async function handleListConnections(req: Request, res: Response) {
     logMPConnectionError("list_connections", uid, msg, {
       errorName: err instanceof Error ? err.name : "UnknownError",
     });
-    return res.status(500).json({ error: "Failed to list connections", message: msg });
+    return res.status(500).json({ error: "MP_CONNECTIONS_LIST_FAILED" });
   }
 }
 
@@ -739,7 +815,7 @@ async function handleSetDefault(req: Request, res: Response) {
       connectionId: req.params.connectionId,
       errorName: err instanceof Error ? err.name : "UnknownError",
     });
-    return res.status(500).json({ error: "Failed to set default connection", message: msg });
+    return res.status(500).json({ error: "MP_CONNECTION_SET_DEFAULT_FAILED" });
   }
 }
 
@@ -751,13 +827,13 @@ export function registerConnectionRoutes(
   requireAuth: (req: Request, res: Response, next: any) => void
 ): void {
   // OAuth callback is PUBLIC (MP redirects here, no Bearer token)
-  app.get("/api/mercadopago/callback", handleCallback);
+  app.get("/api/mercadopago/callback", mpOAuthCallbackRateLimit, handleCallback);
 
   // All other routes require auth
-  app.post("/api/mercadopago/start-auth", requireAuth, handleStartAuth);
-  app.post("/api/mercadopago/revoke/:connectionId", requireAuth, handleRevoke);
-  app.get("/api/mercadopago/connections", requireAuth, handleListConnections);
-  app.post("/api/mercadopago/set-default/:connectionId", requireAuth, handleSetDefault);
+  app.post("/api/mercadopago/start-auth", requireAuth, mpOAuthStartRateLimit, handleStartAuth);
+  app.post("/api/mercadopago/revoke/:connectionId", requireAuth, mpConnectionMutationRateLimit, handleRevoke);
+  app.get("/api/mercadopago/connections", requireAuth, mpConnectionListRateLimit, handleListConnections);
+  app.post("/api/mercadopago/set-default/:connectionId", requireAuth, mpConnectionMutationRateLimit, handleSetDefault);
 
   console.log("[mp-connections] Routes registered: /api/mercadopago/{start-auth,callback,revoke,connections,set-default}");
 }
