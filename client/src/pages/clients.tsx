@@ -5,13 +5,13 @@ import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import { Installment, defaultSettings } from "@/lib/mock-data";
 import { Search, UserPlus, ChevronRight, Download, CheckSquare, Square, Send, AlertCircle, Pencil, Trash2 } from "lucide-react";
 import { Link, useLocation } from "wouter";
-import { useClientsData } from "@/hooks/useClientsData";
+import { usePaginatedClientsData } from "@/hooks/usePaginatedClientsData";
 import { usePlanData } from "@/hooks/usePlanData";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";
 import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
 
 export default function Clients() {
-  const { clients, loading, error, addClient, updateClient, deleteClient } = useClientsData();
+  const { clients, loading, loadingMore, error, hasMore, totalCount, loadMore, addClient, updateClient, deleteClient } = usePaginatedClientsData();
   const { activePlan } = usePlanData();
   const [, setLocation] = useLocation();
   const [billings] = useState<Installment[]>([]);
@@ -23,26 +23,26 @@ export default function Clients() {
   const [isCreating, setIsCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [createError, setCreateError] = useState("");
-  
+
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
 
   const filtered = useMemo(() => {
-    return clients.filter(c => 
-      c.name.toLowerCase().includes(search.toLowerCase()) || 
+    return clients.filter(c =>
+      c.name.toLowerCase().includes(search.toLowerCase()) ||
       c.phone.includes(search)
     );
   }, [clients, search]);
 
   const toggleSelection = (id: string) => {
-    setSelectedIds(prev => 
+    setSelectedIds(prev =>
       prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
     );
   };
 
   const handleBroadcast = () => {
     if (selectedIds.length === 0) return;
-    
+
     const storeName = settings?.storeName || "minha-loja";
     const slug = settings?.catalogSlug || storeName
       .toLowerCase()
@@ -51,12 +51,12 @@ export default function Clients() {
       .replace(/[^a-z0-9]/g, "-")
       .replace(/-+/g, "-")
       .replace(/^-|-$/g, "");
-    
+
     const origin = typeof window !== "undefined" ? window.location.origin : "";
     const catalogLink = `${origin}/u/${slug}`;
-    
+
     const message = `Olá! Temos novidades disponíveis. ✨\nVeja no catálogo:\n${catalogLink}`;
-    
+
     // Send to all selected clients
     selectedIds.forEach((clientId, index) => {
       const client = clients.find(c => c.id === clientId);
@@ -67,7 +67,7 @@ export default function Clients() {
         }, index * 500);
       }
     });
-    
+
     notifyInfo("Mensagens abertas no WhatsApp.");
     setIsSelectionMode(false);
     setSelectedIds([]);
@@ -81,9 +81,9 @@ export default function Clients() {
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     // Validate plan limits for new clients
-    if (clients.length >= 50 && activePlan === 'free') {
+    if ((totalCount ?? clients.length) >= 50 && activePlan === 'free') {
       setShowLimitModal(true);
       setCreateError("Limite de 50 clientes atingido no plano Grátis.");
       return;
@@ -101,7 +101,7 @@ export default function Clients() {
       const user = getFirebaseAuth()?.currentUser;
       logTelemetryEvent("client_created", { clientId }, user?.uid);
       trackAnalyticsEvent("client_created", { client_id: clientId });
-      
+
       notifySuccess(editingId ? "Cliente atualizado." : "Cliente cadastrado.");
       setShowAdd(false);
       setEditingId(null);
@@ -111,7 +111,7 @@ export default function Clients() {
       setCreateError("Erro ao salvar cliente. Verifique os dados e tente novamente.");
       notifyError("Erro ao salvar cliente.");
     }
-    
+
     setIsCreating(false);
   };
 
@@ -124,6 +124,7 @@ export default function Clients() {
 
   const exportCSV = () => {
     const headers = "ID,Nome,Telefone,Email,Notas\n";
+    notifyInfo("Exportando clientes carregados.");
     const rows = clients.map(c => `${c.id},${c.name},${c.phone},${c.email || ''},${c.notes || ''}`).join("\n");
     const blob = new Blob([headers + rows], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
@@ -160,7 +161,7 @@ export default function Clients() {
           <div className="w-20 h-20 bg-amber-100 rounded-full flex items-center justify-center">
             <AlertCircle className="w-12 h-12 text-amber-600" />
           </div>
-          
+
           <div className="text-center space-y-3">
             <h2 className="text-2xl font-bold text-foreground">Limite de Clientes Atingido</h2>
             <p className="text-sm text-muted-foreground">
@@ -208,19 +209,19 @@ export default function Clients() {
         <div className="flex gap-3 mb-6">
           <div className="relative flex-1">
             <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            <input 
-              type="text" 
-              placeholder="Buscar cliente..." 
+            <input
+              type="text"
+              placeholder="Buscar cliente..."
               className="w-full bg-white border border-border rounded-full py-3 pl-11 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <button 
+          <button
             onClick={() => {
               setIsSelectionMode(!isSelectionMode);
               setSelectedIds([]);
-            }} 
+            }}
             className={`w-12 h-12 rounded-full flex items-center justify-center shadow-sm transition-all ${isSelectionMode ? 'bg-primary text-white' : 'bg-secondary text-foreground'}`}
           >
             <CheckSquare className="w-5 h-5" />
@@ -230,7 +231,7 @@ export default function Clients() {
               <button onClick={exportCSV} className="bg-secondary text-foreground w-12 h-12 rounded-full flex items-center justify-center shadow-sm">
                 <Download className="w-5 h-5" />
               </button>
-              <button 
+              <button
                 onClick={() => setShowAdd(true)}
                 className="bg-primary text-white w-12 h-12 rounded-full flex items-center justify-center shadow-lg active:scale-95 transition-all"
               >
@@ -243,13 +244,19 @@ export default function Clients() {
         {isSelectionMode && selectedIds.length > 0 && (
           <div className="mb-6 p-4 bg-primary/10 border border-primary/20 rounded-3xl flex items-center justify-between animate-in fade-in slide-in-from-top-2">
             <p className="text-xs font-bold text-primary">{selectedIds.length} selecionados</p>
-            <button 
+            <button
               onClick={handleBroadcast}
-              className="bg-primary text-white font-black py-2 px-6 rounded-xl text-[10px] uppercase tracking-widest flex items-center gap-2 shadow-md active:scale-95 transition-all"
+              className="bg-primary text-white font-semibold py-2.5 px-5 rounded-xl text-xs flex items-center gap-2 shadow-md active:scale-95 transition-all"
             >
               <Send className="w-3 h-3" /> Enviar Mensagem
             </button>
           </div>
+        )}
+
+        {search && hasMore && (
+          <p className="mb-4 text-center text-[11px] font-medium text-muted-foreground">
+            Carregue mais clientes para ampliar a busca.
+          </p>
         )}
 
         <div className="space-y-4">
@@ -258,54 +265,65 @@ export default function Clients() {
               <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-[2rem] bg-primary/10">
                 <UserPlus className="h-9 w-9 text-primary/45" />
               </div>
-              <p className="font-black text-foreground">{clients.length === 0 ? "Nenhum cliente cadastrado" : "Nenhum cliente encontrado"}</p>
+              <p className="font-semibold text-foreground">{clients.length === 0 ? "Nenhum cliente cadastrado" : "Nenhum cliente encontrado"}</p>
               <p className="mt-2 max-w-[260px] text-xs leading-relaxed text-muted-foreground">{clients.length === 0 ? "Cadastre clientes para acompanhar contatos, histórico e cobranças." : "Tente outro nome ou telefone para localizar o cliente."}</p>
               {clients.length === 0 ? (
-                <button onClick={() => setShowAdd(true)} className="rs-pressable mt-5 rounded-2xl bg-primary px-5 py-3 text-xs font-black uppercase text-white">Cadastrar cliente</button>
+                <button onClick={() => setShowAdd(true)} className="rs-pressable mt-5 rounded-2xl bg-primary px-5 py-3 text-xs font-semibold text-white">Cadastrar cliente</button>
               ) : (
-                <button onClick={() => setSearch("")} className="rs-pressable mt-5 rounded-2xl bg-secondary px-5 py-3 text-xs font-black uppercase text-foreground">Limpar filtros</button>
+                <button onClick={() => setSearch("")} className="rs-pressable mt-5 rounded-2xl bg-secondary px-5 py-3 text-xs font-semibold text-foreground">Limpar filtros</button>
               )}
             </div>
-          ) : filtered.map(client => {
-            const balance = getBalance(client.id);
-            const isSelected = selectedIds.includes(client.id);
-            
-            return (
-              <div key={client.id} className="flex items-center gap-3">
-                {isSelectionMode && (
-                  <button onClick={() => toggleSelection(client.id)} className="flex-shrink-0">
-                    {isSelected ? <CheckSquare className="w-6 h-6 text-primary" /> : <Square className="w-6 h-6 text-muted-foreground/30" />}
+          ) : (
+            <>
+              {filtered.map(client => {
+                const balance = getBalance(client.id);
+                const isSelected = selectedIds.includes(client.id);
+
+                return (
+                  <div key={client.id} className="flex items-center gap-3">
+                    {isSelectionMode && (
+                      <button onClick={() => toggleSelection(client.id)} className="flex-shrink-0">
+                        {isSelected ? <CheckSquare className="w-6 h-6 text-primary" /> : <Square className="w-6 h-6 text-muted-foreground/30" />}
+                      </button>
+                    )}
+                    <Link href={isSelectionMode ? "#" : `/clients/${client.id}`} className="flex-1">
+                      <a
+                        onClick={(e) => {
+                          if (isSelectionMode) {
+                            e.preventDefault();
+                            toggleSelection(client.id);
+                          }
+                        }}
+                        className={`bg-white p-4 rounded-3xl border border-border/50 flex items-center gap-4 shadow-sm active:bg-secondary/30 transition-colors group w-full ${isSelected ? 'border-primary ring-2 ring-primary/5' : ''}`}
+                      >
+                        <div className="w-12 h-12 bg-primary/10 rounded-2xl flex items-center justify-center text-primary font-bold group-hover:bg-primary group-hover:text-white transition-colors">
+                          {client.name.charAt(0)}
+                        </div>
+                        <div className="flex-1">
+                          <h3 className="font-bold text-sm">{client.name}</h3>
+                          <p className="text-xs text-muted-foreground">{client.phone}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className={`text-xs font-bold ${balance > 0 ? 'text-destructive' : 'text-green-600'}`}>
+                            {balance > 0 ? `R$ ${balance.toFixed(2)}` : 'Em dia'}
+                          </p>
+                          <ChevronRight className="w-4 h-4 text-muted-foreground ml-auto mt-1" />
+                        </div>
+                      </a>
+                    </Link>
+                    {!isSelectionMode && <div className="flex flex-col gap-1"><button onClick={() => openEdit(client)} className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center"><Pencil className="w-4 h-4" /></button><ConfirmActionDialog title="Excluir cliente" description={<><p>Deseja excluir <strong>{client.name}</strong>?</p><p className="mt-2">Essa ação não pode ser desfeita.</p></>} confirmLabel="Excluir" onConfirm={() => handleDeleteClient(client.id)} trigger={<button className="w-9 h-9 rounded-xl bg-red-50 text-red-600 flex items-center justify-center" aria-label={`Excluir ${client.name}`}><Trash2 className="w-4 h-4" /></button>} /></div>}
+                  </div>
+                );
+              })}
+              {hasMore && (
+                <div className="flex justify-center pt-2">
+                  <button type="button" onClick={loadMore} disabled={loadingMore} className="rs-pressable rounded-2xl bg-white px-5 py-3 text-xs font-semibold text-primary border border-primary/20 shadow-sm disabled:opacity-60">
+                    {loadingMore ? "Carregando..." : "Carregar mais"}
                   </button>
-                )}
-                <Link href={isSelectionMode ? "#" : `/clients/${client.id}`} className="flex-1">
-                  <a 
-                    onClick={(e) => {
-                      if (isSelectionMode) {
-                        e.preventDefault();
-                        toggleSelection(client.id);
-                      }
-                    }}
-                    className={`bg-white p-4 rounded-3xl border border-border/50 flex items-center gap-4 shadow-sm active:bg-secondary/30 transition-colors group w-full ${isSelected ? 'border-primary ring-2 ring-primary/5' : ''}`}
-                  >
-                    <div className="w-12 h-12 bg-primary/10 rounded-2xl flex items-center justify-center text-primary font-bold group-hover:bg-primary group-hover:text-white transition-colors">
-                      {client.name.charAt(0)}
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="font-bold text-sm">{client.name}</h3>
-                      <p className="text-xs text-muted-foreground">{client.phone}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className={`text-xs font-bold ${balance > 0 ? 'text-destructive' : 'text-green-600'}`}>
-                        {balance > 0 ? `R$ ${balance.toFixed(2)}` : 'Em dia'}
-                      </p>
-                      <ChevronRight className="w-4 h-4 text-muted-foreground ml-auto mt-1" />
-                    </div>
-                  </a>
-                </Link>
-                {!isSelectionMode && <div className="flex flex-col gap-1"><button onClick={() => openEdit(client)} className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center"><Pencil className="w-4 h-4" /></button><ConfirmActionDialog title="Excluir cliente" description={<><p>Deseja excluir <strong>{client.name}</strong>?</p><p className="mt-2">Essa ação não pode ser desfeita.</p></>} confirmLabel="Excluir" onConfirm={() => handleDeleteClient(client.id)} trigger={<button className="w-9 h-9 rounded-xl bg-red-50 text-red-600 flex items-center justify-center" aria-label={`Excluir ${client.name}`}><Trash2 className="w-4 h-4" /></button>} /></div>}
-              </div>
-            );
-          })}
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
 
@@ -318,23 +336,23 @@ export default function Clients() {
             </div>
             <form onSubmit={handleAdd} className="space-y-4">
               <input required placeholder="Nome completo" disabled={isCreating} className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none disabled:opacity-50" value={newClient.name} onChange={e => setNewClient({...newClient, name: e.target.value})} />
-              <input 
-                required 
-                placeholder="WhatsApp (apenas números)" 
-                disabled={isCreating} 
-                className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none disabled:opacity-50" 
-                value={newClient.phone} 
+              <input
+                required
+                placeholder="WhatsApp (apenas números)"
+                disabled={isCreating}
+                className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none disabled:opacity-50"
+                value={newClient.phone}
                 onChange={e => setNewClient({...newClient, phone: e.target.value.replace(/\D/g, '')})}
                 pattern="\d{10,15}"
                 title="WhatsApp deve ter de 10 a 15 dígitos"
                 data-testid="input-client-phone"
               />
-              <input 
+              <input
                 type="email"
-                placeholder="E-mail (opcional)" 
-                disabled={isCreating} 
-                className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none disabled:opacity-50" 
-                value={newClient.email} 
+                placeholder="E-mail (opcional)"
+                disabled={isCreating}
+                className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none disabled:opacity-50"
+                value={newClient.email}
                 onChange={e => setNewClient({...newClient, email: e.target.value})}
                 data-testid="input-client-email"
               />
