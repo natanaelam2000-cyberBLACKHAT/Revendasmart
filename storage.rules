@@ -8,7 +8,11 @@ service firebase.storage {
     function isValidImageUpload() {
       return request.resource != null
         && request.resource.size < 5 * 1024 * 1024
-        && request.resource.contentType.matches('image/.*');
+        && (
+          request.resource.contentType == 'image/jpeg'
+          || request.resource.contentType == 'image/png'
+          || request.resource.contentType == 'image/webp'
+        );
     }
 
     match /users/{uid}/products/{allPaths=**} {
