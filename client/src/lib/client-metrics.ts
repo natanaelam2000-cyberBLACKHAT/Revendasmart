@@ -50,13 +50,28 @@ export interface ClientMonthlyEvolutionItem {
   purchases: number;
 }
 
+export interface ClientTimelineMonthGroup {
+  monthKey: string;
+  monthLabel: string;
+  items: ClientTimelineItem[];
+}
+
+export interface ClientBehaviorItem {
+  title: string;
+  description: string;
+  tone: "green" | "purple" | "amber" | "blue";
+}
+
 export interface ClientCrmMetrics {
   summary: ClientPurchaseSummary;
   classification: ClientClassificationResult;
   timeline: ClientTimelineItem[];
+  favoriteProducts: ClientPreferenceItem[];
   favoriteCategories: ClientPreferenceItem[];
   favoriteBrands: ClientPreferenceItem[];
   monthlyEvolution: ClientMonthlyEvolutionItem[];
+  timelineByMonth: ClientTimelineMonthGroup[];
+  behaviorSummary: ClientBehaviorItem[];
 }
 
 const INACTIVE_DAYS = 60;
@@ -155,7 +170,8 @@ export function buildClientTimeline(clientSales: Sale[], productById: Map<string
     .sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
 }
 
-export function calculateClientPreferences(clientSales: Sale[], productById: Map<string, Product>): { favoriteCategories: ClientPreferenceItem[]; favoriteBrands: ClientPreferenceItem[] } {
+export function calculateClientPreferences(clientSales: Sale[], productById: Map<string, Product>): { favoriteProducts: ClientPreferenceItem[]; favoriteCategories: ClientPreferenceItem[]; favoriteBrands: ClientPreferenceItem[] } {
+  const products = new Map<string, { quantity: number; revenue: number }>();
   const categories = new Map<string, { quantity: number; revenue: number }>();
   const brands = new Map<string, { quantity: number; revenue: number }>();
 
@@ -164,8 +180,11 @@ export function calculateClientPreferences(clientSales: Sale[], productById: Map
       const product = productById.get(soldProduct.productId);
       const quantity = Number(soldProduct.quantity || 0);
       const revenue = quantity * Number(soldProduct.price || 0);
+      const productName = product?.name || "Produto removido";
       const category = product?.category || "Sem categoria";
       const brand = product?.brand || "Sem marca";
+      const productCurrent = products.get(productName) || { quantity: 0, revenue: 0 };
+      products.set(productName, { quantity: productCurrent.quantity + quantity, revenue: productCurrent.revenue + revenue });
       const categoryCurrent = categories.get(category) || { quantity: 0, revenue: 0 };
       categories.set(category, { quantity: categoryCurrent.quantity + quantity, revenue: categoryCurrent.revenue + revenue });
       const brandCurrent = brands.get(brand) || { quantity: 0, revenue: 0 };
@@ -173,7 +192,7 @@ export function calculateClientPreferences(clientSales: Sale[], productById: Map
     }
   }
 
-  return { favoriteCategories: buildPreferenceList(categories), favoriteBrands: buildPreferenceList(brands) };
+  return { favoriteProducts: buildPreferenceList(products), favoriteCategories: buildPreferenceList(categories), favoriteBrands: buildPreferenceList(brands) };
 }
 
 export function calculateClientMonthlyEvolution(clientSales: Sale[]): ClientMonthlyEvolutionItem[] {
@@ -191,15 +210,52 @@ export function calculateClientMonthlyEvolution(clientSales: Sale[]): ClientMont
     .slice(-6);
 }
 
+export function groupClientTimelineByMonth(timeline: ClientTimelineItem[]): ClientTimelineMonthGroup[] {
+  const groups = new Map<string, ClientTimelineMonthGroup>();
+  for (const item of timeline) {
+    const key = item.date ? format(item.date, "yyyy-MM") : "sem-data";
+    const label = item.date ? format(item.date, "MMMM yyyy") : "Sem data";
+    const current = groups.get(key) || { monthKey: key, monthLabel: label, items: [] };
+    current.items.push(item);
+    groups.set(key, current);
+  }
+  return Array.from(groups.values()).sort((a, b) => b.monthKey.localeCompare(a.monthKey));
+}
+
+export function calculateClientBehaviorSummary(summary: ClientPurchaseSummary, monthlyEvolution: ClientMonthlyEvolutionItem[]): ClientBehaviorItem[] {
+  const items: ClientBehaviorItem[] = [];
+  if (summary.purchaseCount >= FREQUENT_MIN_PURCHASES) {
+    items.push({ title: "Compra frequentemente", description: `${summary.purchaseCount} compras registradas.`, tone: "green" });
+  }
+  if (summary.averageTicket >= 200 || summary.totalSpent >= VIP_MIN_TOTAL) {
+    items.push({ title: "Compra alto valor", description: `Ticket médio de R$ ${summary.averageTicket.toFixed(2)}.`, tone: "purple" });
+  }
+  if (monthlyEvolution.length >= 3) {
+    items.push({ title: "Compra sazonal", description: "Há compras distribuídas em diferentes meses.", tone: "blue" });
+  }
+  if (summary.daysWithoutPurchase !== null && summary.daysWithoutPurchase >= INACTIVE_DAYS) {
+    items.push({ title: "Cliente em risco", description: `Sem comprar há ${summary.daysWithoutPurchase} dias.`, tone: "amber" });
+  }
+  if (items.length === 0) {
+    items.push({ title: "Relacionamento em construção", description: "Ainda há poucos dados para detectar padrões.", tone: "blue" });
+  }
+  return items;
+}
+
 export function calculateClientCrmMetrics(clientSales: Sale[], productById: Map<string, Product>, referenceDate = new Date()): ClientCrmMetrics {
   const summary = calculateClientPurchaseSummary(clientSales, referenceDate);
   const preferences = calculateClientPreferences(clientSales, productById);
+  const timeline = buildClientTimeline(clientSales, productById);
+  const monthlyEvolution = calculateClientMonthlyEvolution(clientSales);
   return {
     summary,
     classification: classifyClient(summary),
-    timeline: buildClientTimeline(clientSales, productById),
+    timeline,
+    favoriteProducts: preferences.favoriteProducts,
     favoriteCategories: preferences.favoriteCategories,
     favoriteBrands: preferences.favoriteBrands,
-    monthlyEvolution: calculateClientMonthlyEvolution(clientSales),
+    monthlyEvolution,
+    timelineByMonth: groupClientTimelineByMonth(timeline),
+    behaviorSummary: calculateClientBehaviorSummary(summary, monthlyEvolution),
   };
 }

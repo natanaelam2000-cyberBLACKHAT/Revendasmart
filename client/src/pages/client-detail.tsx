@@ -7,7 +7,7 @@ import { useSalesData } from "@/hooks/useSalesData";
 import { Layout } from "@/components/layout";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { EmptyState } from "@/components/EmptyState";
-import { AlertTriangle, BarChart3, Calendar, ChevronLeft, Clock, Heart, MessageSquare, Phone, ShoppingBag, UserRound } from "lucide-react";
+import { Activity, AlertTriangle, BarChart3, Calendar, ChevronLeft, Clock, Heart, MessageSquare, Phone, ShoppingBag, Star, UserRound } from "lucide-react";
 import { format } from "date-fns";
 import { calculateClientCrmMetrics, filterClientSales, type ClientClassificationTone, type ClientPreferenceItem } from "@/lib/client-metrics";
 
@@ -15,6 +15,13 @@ const currency = (value: number) => `R$ ${value.toFixed(2)}`;
 const formatDate = (date: Date | null) => date ? format(date, "dd/MM/yyyy") : "Sem registro";
 
 const classificationClasses: Record<ClientClassificationTone, string> = {
+  blue: "bg-blue-50 text-blue-700 border-blue-100",
+  green: "bg-green-50 text-green-700 border-green-100",
+  purple: "bg-purple-50 text-purple-700 border-purple-100",
+  amber: "bg-amber-50 text-amber-700 border-amber-100",
+};
+
+const behaviorClasses = {
   blue: "bg-blue-50 text-blue-700 border-blue-100",
   green: "bg-green-50 text-green-700 border-green-100",
   purple: "bg-purple-50 text-purple-700 border-purple-100",
@@ -47,6 +54,22 @@ function PreferenceList({ title, items }: { title: string; items: ClientPreferen
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function BehaviorSummary({ items }: { items: Array<{ title: string; description: string; tone: keyof typeof behaviorClasses }> }) {
+  return (
+    <div className="bg-white rounded-[2rem] border border-border/50 p-5 shadow-sm mb-8">
+      <h3 className="text-sm font-bold flex items-center gap-2 mb-4"><Activity className="w-4 h-4 text-primary" /> Resumo de comportamento</h3>
+      <div className="grid sm:grid-cols-2 gap-3">
+        {items.map(item => (
+          <div key={item.title} className={`rounded-2xl border px-4 py-3 ${behaviorClasses[item.tone]}`}>
+            <p className="text-xs font-black">{item.title}</p>
+            <p className="mt-1 text-[11px] font-semibold opacity-80">{item.description}</p>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -107,6 +130,17 @@ export default function ClientDetail() {
           </div>
         )}
 
+        <section className="bg-white rounded-[2rem] border border-border/50 p-5 shadow-sm mb-6">
+          <div className="mb-4 flex items-center gap-2"><Star className="w-4 h-4 text-primary" /><h3 className="text-sm font-black">Resumo do cliente</h3></div>
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+            <MetricCard label="Cliente desde" value={formatDate(crm.summary.firstPurchaseDate)} />
+            <MetricCard label="Última compra" value={formatDate(crm.summary.lastPurchaseDate)} />
+            <MetricCard label="Ticket médio" value={currency(crm.summary.averageTicket)} />
+            <MetricCard label="Total gasto" value={currency(crm.summary.totalSpent)} />
+            <MetricCard label="Compras" value={String(crm.summary.purchaseCount)} />
+          </div>
+        </section>
+
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
           <MetricCard label="Total gasto" value={currency(crm.summary.totalSpent)} />
           <MetricCard label="Ticket médio" value={currency(crm.summary.averageTicket)} />
@@ -123,7 +157,9 @@ export default function ClientDetail() {
           <div className="flex items-end justify-between gap-4"><h3 className="text-3xl font-black text-destructive">{currency(totalDebt)}</h3><button onClick={() => sendWhatsApp(`Olá ${client.name}, passando para lembrar do seu saldo pendente de ${currency(totalDebt)}. Como podemos acertar? 😊`)} className="rs-pressable text-[10px] font-bold bg-destructive text-white px-3 py-2 rounded-full uppercase">Cobrar</button></div>
         </div>
 
-        <div className="grid lg:grid-cols-2 gap-5 mb-8"><PreferenceList title="Categorias favoritas" items={crm.favoriteCategories} /><PreferenceList title="Marcas favoritas" items={crm.favoriteBrands} /></div>
+        <div className="grid lg:grid-cols-3 gap-5 mb-8"><PreferenceList title="Produtos favoritos" items={crm.favoriteProducts} /><PreferenceList title="Categorias favoritas" items={crm.favoriteCategories} /><PreferenceList title="Marcas favoritas" items={crm.favoriteBrands} /></div>
+
+        <BehaviorSummary items={crm.behaviorSummary} />
 
         <div className="bg-white rounded-[2rem] border border-border/50 p-5 shadow-sm mb-8">
           <h3 className="text-sm font-bold flex items-center gap-2 mb-4"><BarChart3 className="w-4 h-4 text-primary" /> Evolução mensal</h3>
@@ -141,11 +177,16 @@ export default function ClientDetail() {
         <div className="space-y-8">
           <div>
             <h3 className="text-sm font-bold flex items-center gap-2 mb-4"><Calendar className="w-4 h-4 text-primary" /> Timeline de Compras</h3>
-            <div className="space-y-3">
-              {crm.timeline.map((item, index) => (
-                <div key={item.sale.id} className="bg-white p-4 rounded-3xl border border-border/40 shadow-sm">
-                  <div className="flex justify-between items-start gap-3 mb-3"><div><span className="text-[10px] font-bold text-muted-foreground uppercase">{item.date ? format(item.date, "dd/MM/yyyy") : "Data indisponível"}</span><p className="mt-1 text-xs text-muted-foreground flex items-center gap-1"><Clock className="w-3 h-3" /> Compra #{crm.timeline.length - index}</p></div><span className="text-sm font-bold text-primary">{currency(item.sale.totalPrice)}</span></div>
-                  <div className="flex flex-wrap gap-1.5">{item.products.map(product => <span key={`${item.sale.id}-${product.productId}`} className="text-[10px] bg-secondary px-2 py-1 rounded-full">{product.name} ({product.quantity}x)</span>)}</div>
+            <div className="space-y-5">
+              {crm.timelineByMonth.map((group) => (
+                <div key={group.monthKey} className="space-y-3">
+                  <div className="sticky top-16 z-10 w-fit rounded-full bg-primary/10 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-primary backdrop-blur capitalize">{group.monthLabel}</div>
+                  {group.items.map((item, index) => (
+                    <div key={item.sale.id} className="bg-white p-4 rounded-3xl border border-border/40 shadow-sm">
+                      <div className="flex justify-between items-start gap-3 mb-3"><div><span className="text-[10px] font-bold text-muted-foreground uppercase">{item.date ? format(item.date, "dd 'de' MMMM 'de' yyyy") : "Data indisponível"}</span><p className="mt-1 text-xs text-muted-foreground flex items-center gap-1"><Clock className="w-3 h-3" /> Compra #{crm.timeline.length - index}</p></div><span className="text-base font-black text-primary">{currency(item.sale.totalPrice)}</span></div>
+                      <div className="flex flex-wrap gap-1.5">{item.products.map(product => <span key={`${item.sale.id}-${product.productId}`} className="text-[10px] bg-secondary px-2 py-1 rounded-full">{product.name} ({product.quantity}x)</span>)}</div>
+                    </div>
+                  ))}
                 </div>
               ))}
               {crm.timeline.length === 0 && <EmptyState icon={<Calendar className="w-12 h-12 text-muted-foreground/30" />} title="Nenhuma compra registrada" description="Quando este cliente comprar, o histórico aparecerá aqui com os produtos e valores." action={<button onClick={() => setLocation("/sale")} className="rs-pressable w-full rounded-2xl bg-primary px-5 py-3 text-xs font-bold uppercase text-white">Registrar venda</button>} className="py-10" />}

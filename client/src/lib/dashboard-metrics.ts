@@ -60,6 +60,15 @@ export interface AttentionItem {
   tone: "warning" | "success";
 }
 
+export interface DashboardPremiumIndicator {
+  label: string;
+  value: number;
+  kind: "currency" | "number" | "percent";
+  detail: string;
+  tone: "positive" | "negative" | "neutral";
+  direction: "up" | "down" | "flat";
+}
+
 export interface WorstProductMetric {
   product: Product;
   daysWithoutSale: number | null;
@@ -410,4 +419,45 @@ export function calculateAttentionItems(input: {
   if (input.monthlyGoal.percent >= 80 && input.monthlyGoal.percent < 100) items.push({ label: `Meta do mês em ${input.monthlyGoal.percent}%`, tone: "warning" });
   if (items.length === 0) items.push({ label: "Está tudo em dia.", tone: "success" });
   return items;
+}
+
+export function calculateDashboardPremiumIndicators(
+  summary: ExecutiveSummaryMetrics,
+  monthlyGoal: MonthlyGoalMetric,
+  stock: StockExecutiveMetrics
+): DashboardPremiumIndicator[] {
+  return [
+    {
+      label: "Receita do mês",
+      value: summary.revenue,
+      kind: "currency",
+      detail: monthlyGoal.percent >= 100 ? "Meta batida" : `${monthlyGoal.percent}% da meta`,
+      tone: monthlyGoal.percent >= 80 ? "positive" : monthlyGoal.percent >= 50 ? "neutral" : "negative",
+      direction: monthlyGoal.percent >= 80 ? "up" : monthlyGoal.percent >= 50 ? "flat" : "down",
+    },
+    {
+      label: "Lucro estimado",
+      value: summary.profit,
+      kind: "currency",
+      detail: `${summary.averageMargin.toFixed(0)}% de margem`,
+      tone: summary.profit > 0 ? "positive" : "neutral",
+      direction: summary.profit > 0 ? "up" : "flat",
+    },
+    {
+      label: "Clientes ativos",
+      value: summary.activeClients,
+      kind: "number",
+      detail: "Compraram no mês",
+      tone: summary.activeClients > 0 ? "positive" : "neutral",
+      direction: summary.activeClients > 0 ? "up" : "flat",
+    },
+    {
+      label: "Estoque crítico",
+      value: stock.lowStockCount + stock.outOfStockCount,
+      kind: "number",
+      detail: "Precisam atenção",
+      tone: stock.lowStockCount + stock.outOfStockCount > 0 ? "negative" : "positive",
+      direction: stock.lowStockCount + stock.outOfStockCount > 0 ? "down" : "up",
+    },
+  ];
 }

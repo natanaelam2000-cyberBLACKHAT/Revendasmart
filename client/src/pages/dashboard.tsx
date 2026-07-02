@@ -20,6 +20,7 @@ import { useFeatureEnabled } from "@/lib/remote-config-context";
 import {
   calculateAttentionItems,
   calculateDashboardInsights,
+  calculateDashboardPremiumIndicators,
   calculateExecutiveSummary,
   calculateInactiveClientCount,
   calculateLowStockProducts,
@@ -68,6 +69,20 @@ const percentLabel = (value?: number) => {
   const safeValue = Number.isFinite(value) ? Number(value) : 0;
   return `${safeValue > 0 ? "+" : ""}${safeValue}%`;
 };
+
+const formatPremiumIndicatorValue = (value: number, kind: "currency" | "number" | "percent") => {
+  if (kind === "currency") return money(value);
+  if (kind === "percent") return `${value.toFixed(0)}%`;
+  return value.toLocaleString("pt-BR", { maximumFractionDigits: 0 });
+};
+
+const premiumToneClasses = {
+  positive: "border-emerald-100 bg-emerald-50/70 text-emerald-700",
+  negative: "border-rose-100 bg-rose-50/70 text-rose-700",
+  neutral: "border-border/60 bg-white text-muted-foreground",
+};
+
+const directionSymbol = { up: "↑", down: "↓", flat: "→" };
 
 export default function Dashboard() {
   // Call all hooks before any conditional returns
@@ -210,6 +225,11 @@ export default function Dashboard() {
   const stockExecutive = useMemo(
     () => calculateStockExecutiveMetrics(products, settings.lowStockThreshold),
     [products, settings.lowStockThreshold]
+  );
+
+  const premiumIndicators = useMemo(
+    () => calculateDashboardPremiumIndicators(executiveSummary, monthlyGoal, stockExecutive),
+    [executiveSummary, monthlyGoal, stockExecutive]
   );
 
   const inactiveClientCount = useMemo(
@@ -360,6 +380,28 @@ export default function Dashboard() {
         </div>      </div>
 
       <div className="p-6 space-y-6">
+        <section className="rounded-[2rem] border border-primary/10 bg-gradient-to-br from-white via-primary/5 to-rose-50 p-5 shadow-sm">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-primary">Mini resumo executivo</p>
+              <h2 className="mt-1 text-lg font-black tracking-tight text-foreground">Saúde comercial do mês</h2>
+            </div>
+            <span className="rounded-full bg-white px-3 py-1 text-[10px] font-bold text-muted-foreground shadow-sm">Premium 2.0</span>
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            {premiumIndicators.map((item) => (
+              <div key={item.label} className={`rounded-2xl border p-4 shadow-sm ${premiumToneClasses[item.tone]}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[10px] font-black uppercase tracking-wide opacity-80">{item.label}</p>
+                  <span className="text-sm font-black">{directionSymbol[item.direction]}</span>
+                </div>
+                <p className="mt-2 text-lg font-black text-foreground">{formatPremiumIndicatorValue(item.value, item.kind)}</p>
+                <p className="mt-1 text-[11px] font-semibold opacity-80">{item.detail}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
         <section className="bg-white rounded-[2rem] border border-border/50 p-5 shadow-sm">
           <div className="flex items-center justify-between gap-3 mb-3">
             <h2 className="text-xs font-semibold text-primary flex items-center gap-2"><AlertCircle className="w-4 h-4" /> Atenção hoje</h2>

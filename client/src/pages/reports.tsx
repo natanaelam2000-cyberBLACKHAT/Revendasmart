@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { Layout } from "@/components/layout";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { useClientsLiteData } from "@/hooks/useClientsLiteData";
@@ -44,6 +44,8 @@ import {
   type ComparisonMetric,
   type RankingItem,
 } from "@/lib/report-metrics";
+import { exportReportToExcel, exportReportToPdf, printReport } from "@/lib/report-export";
+import { notifyError, notifySuccess } from "@/lib/notify";
 
 const COLORS = ["#ec4899", "#f43f5e", "#fb7185", "#fda4af", "#be5363", "#9f4150"];
 
@@ -132,6 +134,32 @@ export default function Reports() {
   const comparisons = useMemo(() => calculateComparisons(sales, products), [sales, products]);
   const charts = useMemo(() => calculateReportCharts(sales, products), [sales, products]);
   const indicators = useMemo(() => calculateIndicators(sales, products), [sales, products]);
+  const exportPayload = useMemo(() => ({
+    storeName: "RevendaSmart",
+    periodLabel: "Dados consolidados do sistema",
+    generatedAt: new Date(),
+    summary,
+    rankings,
+    comparisons,
+    indicators,
+  }), [summary, rankings, comparisons, indicators]);
+
+  const handleExportPdf = useCallback(() => {
+    const opened = exportReportToPdf(exportPayload);
+    if (opened) notifySuccess("Relatório PDF preparado.");
+    else notifyError("Não foi possível abrir a janela de impressão.");
+  }, [exportPayload]);
+
+  const handleExportExcel = useCallback(() => {
+    exportReportToExcel(exportPayload);
+    notifySuccess("Relatório Excel gerado.");
+  }, [exportPayload]);
+
+  const handlePrintReport = useCallback(() => {
+    const opened = printReport(exportPayload);
+    if (opened) notifySuccess("Relatório enviado para impressão.");
+    else notifyError("Não foi possível abrir a impressão.");
+  }, [exportPayload]);
 
   const hasReportData = products.length > 0 || clients.length > 0 || sales.length > 0;
 
@@ -158,9 +186,9 @@ export default function Reports() {
               </p>
             </div>
             <div className="grid grid-cols-3 gap-2">
-              <button type="button" className="min-h-12 rounded-2xl bg-white px-3 text-[11px] font-black text-muted-foreground shadow-sm opacity-75" title="Exportação completa em sprint futura"><FileSpreadsheet className="mx-auto mb-1 h-4 w-4" /> Excel</button>
-              <button type="button" className="min-h-12 rounded-2xl bg-white px-3 text-[11px] font-black text-muted-foreground shadow-sm opacity-75" title="PDF profissional em sprint futura"><ReceiptText className="mx-auto mb-1 h-4 w-4" /> PDF</button>
-              <button type="button" className="min-h-12 rounded-2xl bg-white px-3 text-[11px] font-black text-muted-foreground shadow-sm opacity-75" title="Impressão em sprint futura"><Printer className="mx-auto mb-1 h-4 w-4" /> Imprimir</button>
+              <button type="button" onClick={handleExportExcel} className="min-h-12 rounded-2xl bg-white px-3 text-[11px] font-black text-primary shadow-sm transition-all active:scale-95" title="Exportar planilha CSV compatível com Excel"><FileSpreadsheet className="mx-auto mb-1 h-4 w-4" /> Excel</button>
+              <button type="button" onClick={handleExportPdf} className="min-h-12 rounded-2xl bg-white px-3 text-[11px] font-black text-primary shadow-sm transition-all active:scale-95" title="Gerar visual de PDF para impressão"><ReceiptText className="mx-auto mb-1 h-4 w-4" /> PDF</button>
+              <button type="button" onClick={handlePrintReport} className="min-h-12 rounded-2xl bg-white px-3 text-[11px] font-black text-primary shadow-sm transition-all active:scale-95" title="Imprimir relatório"><Printer className="mx-auto mb-1 h-4 w-4" /> Imprimir</button>
             </div>
           </div>
         </section>
@@ -310,7 +338,7 @@ export default function Reports() {
             <div>
               <h3 className="text-sm font-black text-foreground">Exportação profissional preparada</h3>
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                A tela já separa os blocos de dados para PDF, Excel e impressão. A geração completa dos arquivos pode entrar em sprint própria sem alterar os cálculos.
+                Exportação client-side preparada com cabeçalho, resumo financeiro e tabelas profissionais. O PDF usa o fluxo de impressão do navegador e o Excel baixa uma planilha CSV compatível.
               </p>
             </div>
           </div>
