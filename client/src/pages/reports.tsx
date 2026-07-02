@@ -5,8 +5,8 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
   PieChart, Pie, Cell, LineChart, Line, Legend
 } from "recharts";
-import { TrendingUp, Users, AlertCircle, ArrowUpRight, ArrowDownRight, DollarSign } from "lucide-react";
-import { differenceInDays, parseISO, format } from "date-fns";
+import { TrendingUp, Users, AlertCircle, ArrowUpRight, ArrowDownRight, DollarSign, BarChart3 } from "lucide-react";
+import { differenceInDays, parseISO } from "date-fns";
 
 export default function Reports() {
   const [products] = useState<Product[]>(() => getStored(STORAGE_KEYS.PRODUCTS, initialProducts));
@@ -62,11 +62,23 @@ export default function Reports() {
 
   const COLORS = ['#ec4899', '#f43f5e', '#fb7185', '#fda4af', '#e11d48'];
 
+  const hasReportData = products.length > 0 || clients.length > 0 || billings.length > 0;
+
   return (
     <Layout title="Relatórios Avançados">
-      <div className="p-6 space-y-8">
+      <div className="px-4 sm:px-6 lg:px-8 py-6 pb-32 max-w-5xl mx-auto space-y-6">
+        {!hasReportData && (
+          <div className="rounded-[2rem] border border-dashed border-border/60 bg-white px-6 py-12 text-center flex flex-col items-center">
+            <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-[2rem] bg-primary/10">
+              <BarChart3 className="h-9 w-9 text-primary/45" />
+            </div>
+            <p className="font-black text-foreground">Relatórios em preparação</p>
+            <p className="mt-2 max-w-[300px] text-xs leading-relaxed text-muted-foreground">Cadastre produtos, clientes ou cobranças para visualizar indicadores avançados.</p>
+          </div>
+        )}
+
         {/* Quick Stats */}
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4">
           <div className="bg-white p-4 rounded-3xl border border-border/50 shadow-sm">
             <p className="text-[10px] font-bold text-muted-foreground uppercase mb-1">Inadimplência</p>
             <div className="flex items-end gap-2">
@@ -90,7 +102,7 @@ export default function Reports() {
         </div>
 
         {/* Aging de Cobrança */}
-        <div className="bg-white p-6 rounded-[2.5rem] border border-border/50 shadow-sm">
+        <div className="bg-white p-4 sm:p-6 rounded-[2rem] sm:rounded-[2.5rem] border border-border/50 shadow-sm">
           <h3 className="text-sm font-bold mb-6 flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-primary" /> Aging de Cobrança
           </h3>
@@ -118,7 +130,7 @@ export default function Reports() {
         </div>
 
         {/* Ranking Clientes */}
-        <div className="bg-white p-6 rounded-[2.5rem] border border-border/50 shadow-sm">
+        <div className="bg-white p-4 sm:p-6 rounded-[2rem] sm:rounded-[2.5rem] border border-border/50 shadow-sm">
           <h3 className="text-sm font-bold mb-6 flex items-center gap-2">
             <Users className="w-4 h-4 text-primary" /> Ranking de Compras (R$)
           </h3>
@@ -136,7 +148,7 @@ export default function Reports() {
         </div>
 
         {/* Margem por Produto */}
-        <div className="bg-white p-6 rounded-[2.5rem] border border-border/50 shadow-sm">
+        <div className="bg-white p-4 sm:p-6 rounded-[2rem] sm:rounded-[2.5rem] border border-border/50 shadow-sm">
           <h3 className="text-sm font-bold mb-6 flex items-center gap-2">
             <TrendingUp className="w-4 h-4 text-primary" /> Top Margem (%)
           </h3>

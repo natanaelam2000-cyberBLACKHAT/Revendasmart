@@ -4,7 +4,9 @@ import { Installment, type Sale } from "@/lib/mock-data";
 import { useClientsData } from "@/hooks/useClientsData";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { Layout } from "@/components/layout";
-import { Phone, MessageSquare, ShoppingBag, ChevronLeft, Calendar } from "lucide-react";
+import { PageSkeleton } from "@/components/PageSkeleton";
+import { EmptyState } from "@/components/EmptyState";
+import { Phone, MessageSquare, ShoppingBag, ChevronLeft, Calendar, UserRound } from "lucide-react";
 import { format, parseISO } from "date-fns";
 
 export default function ClientDetail() {
@@ -20,8 +22,19 @@ export default function ClientDetail() {
   const clientBillings = useMemo(() => billings.filter(b => b.clientId === id), [billings, id]);
   const totalDebt = useMemo(() => clientBillings.filter(b => b.status !== 'paid').reduce((a, b) => a + (b.amount - b.paidAmount), 0), [clientBillings]);
 
-  if (clientsLoading || dashboardLoading) return <Layout><div className="p-8 text-center">Carregando cliente...</div></Layout>;
-  if (!client) return <Layout><div className="p-8 text-center">Cliente não encontrado</div></Layout>;
+  if (clientsLoading || dashboardLoading) return <Layout><PageSkeleton variant="list" count={3} /></Layout>;
+  if (!client) return (
+    <Layout>
+      <div className="px-4 sm:px-6 lg:px-8 py-6 pb-32 max-w-4xl mx-auto">
+        <EmptyState
+          icon={<UserRound className="w-12 h-12 text-muted-foreground/30" />}
+          title="Cliente não encontrado"
+          description="Não encontramos esse cadastro. Volte para a lista e confira os clientes disponíveis."
+          action={<button onClick={() => setLocation("/clients")} className="rs-pressable w-full rounded-2xl bg-primary px-5 py-3 text-xs font-bold uppercase text-white">Voltar para clientes</button>}
+        />
+      </div>
+    </Layout>
+  );
 
   const sendWhatsApp = (msg: string) => {
     window.open(`https://wa.me/${client.phone}?text=${encodeURIComponent(msg)}`, '_blank');
@@ -29,7 +42,7 @@ export default function ClientDetail() {
 
   return (
     <Layout>
-      <div className="p-6 pb-32">
+      <div className="px-4 sm:px-6 lg:px-8 py-6 pb-32 max-w-4xl mx-auto">
         <button onClick={() => setLocation("/clients")} className="flex items-center gap-2 text-muted-foreground mb-6 font-medium">
           <ChevronLeft className="w-4 h-4" /> Voltar
         </button>
@@ -39,8 +52,8 @@ export default function ClientDetail() {
             <div className="w-16 h-16 bg-primary/10 rounded-3xl flex items-center justify-center text-primary text-2xl font-bold">
               {client.name.charAt(0)}
             </div>
-            <div>
-              <h2 className="text-xl font-bold">{client.name}</h2>
+            <div className="min-w-0">
+              <h2 className="text-xl font-bold truncate">{client.name}</h2>
               <p className="text-sm text-muted-foreground flex items-center gap-1 mt-1">
                 <Phone className="w-3 h-3" /> {client.phone}
               </p>
@@ -98,7 +111,15 @@ export default function ClientDetail() {
                   </div>
                 </div>
               ))}
-              {clientSales.length === 0 && <p className="text-xs text-muted-foreground text-center py-4">Nenhuma compra registrada.</p>}
+              {clientSales.length === 0 && (
+                <EmptyState
+                  icon={<Calendar className="w-12 h-12 text-muted-foreground/30" />}
+                  title="Nenhuma compra registrada"
+                  description="Quando este cliente comprar, o histórico aparecerá aqui com os produtos e valores."
+                  action={<button onClick={() => setLocation("/sale")} className="rs-pressable w-full rounded-2xl bg-primary px-5 py-3 text-xs font-bold uppercase text-white">Registrar venda</button>}
+                  className="py-10"
+                />
+              )}
             </div>
           </div>
         </div>

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { Layout } from "@/components/layout";
+import { PageSkeleton } from "@/components/PageSkeleton";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import { notifyError, notifySuccess, notifyWarning } from "@/lib/notify";
 import {
@@ -122,7 +123,7 @@ export default function SettingsMercadoPago() {
 
   return (
     <Layout title="Mercado Pago">
-      <div className="p-6 max-w-lg mx-auto">
+      <div className="px-4 sm:px-6 lg:px-8 py-6 pb-32 max-w-3xl mx-auto">
         {/* Back button */}
         <button
           data-testid="button-back-mp-settings"

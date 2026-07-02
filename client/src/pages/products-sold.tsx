@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
 import { Layout } from "@/components/layout";
+import { PageSkeleton } from "@/components/PageSkeleton";
 import { ProductImageCard } from "@/components/ProductImageCard";
 import { ChevronLeft, Package, PlusCircle } from "lucide-react";
 import { useProductsData } from "@/hooks/useProductsData";
@@ -43,14 +44,7 @@ export default function ProductsSold() {
   }, [sales, products]);
 
   if (loading) {
-    return (
-      <Layout>
-        <div className="flex flex-col items-center justify-center py-12">
-          <div className="w-12 h-12 rounded-full border-4 border-primary/20 border-t-primary animate-spin"></div>
-          <p className="text-muted-foreground mt-4">Carregando produtos vendidos...</p>
-        </div>
-      </Layout>
-    );
+    return <Layout><PageSkeleton variant="list" count={4} /></Layout>;
   }
 
   if (error) {
@@ -66,7 +60,7 @@ export default function ProductsSold() {
 
   return (
     <Layout>
-      <div className="px-6 pt-6 pb-4">
+      <div className="px-4 sm:px-6 lg:px-8 pt-6 pb-32 max-w-4xl mx-auto">
         <div className="flex items-center gap-3 mb-6">
           <button
             onClick={() => setLocation("/")}
@@ -79,7 +73,7 @@ export default function ProductsSold() {
         </div>
 
         {/* Products List */}
-        <div className="space-y-3 pb-8">
+        <div className="space-y-3 pb-16">
           {productsSoldMetrics.length === 0 ? (
             <div className="rounded-[2rem] border border-dashed border-border/60 bg-white px-6 py-12 text-center flex flex-col items-center">
               <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-[2rem] bg-primary/10">
