@@ -226,19 +226,19 @@ async function requireAdmin(req: Request, res: Response, next: NextFunction) {
     const isAdminClaim = userRecord.customClaims?.['admin'] === true;
     
     if (isAdminClaim) {
-      console.log("[requireAdmin] Access granted via custom claim for:", firebaseUid);
+      console.log("[requireAdmin] Access granted via custom claim");
       next();
       return;
     }
     
     // FALLBACK: Legacy email check (deprecated, for transition period only)
     if (ADMIN_UIDS_LEGACY.has(userRecord.email || "")) {
-      console.warn("[requireAdmin] MIGRATION: Using legacy email check (deprecated) for:", userRecord.email, "— Set custom claim to remove fallback");
+      console.warn("[requireAdmin] MIGRATION: Using legacy email check (deprecated) — set custom claim to remove fallback");
       next();
       return;
     }
     
-    console.warn("[requireAdmin] Access denied for non-admin user:", firebaseUid, "email:", userRecord.email);
+    console.warn("[requireAdmin] Access denied for non-admin user");
     return res.status(403).json({ error: "Forbidden: admin access required" });
   } catch (e) {
     console.error("[requireAdmin] Error checking admin status:", e);

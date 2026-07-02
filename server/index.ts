@@ -1,5 +1,9 @@
-import "dotenv/config";
+import { config as loadDotenv } from "dotenv";
 import * as Sentry from "@sentry/node";
+
+if (process.env.NODE_ENV !== "production") {
+  loadDotenv();
+}
 
 Sentry.init({
   dsn: "https://32752c8db032da58f02a989ae3e95805@o4511473504354304.ingest.us.sentry.io/4511474807144448",
@@ -48,25 +52,40 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
+function normalizeCorsOrigin(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+
+  try {
+    return new URL(trimmed).origin;
+  } catch {
+    return null;
+  }
+}
+
+function parseCorsOrigins(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map(normalizeCorsOrigin)
+    .filter((origin): origin is string => Boolean(origin));
+}
+
+const allowedCorsOrigins = new Set([
+  "https://revendasmart.vercel.app",
+  "http://localhost:3000",
+  "http://localhost:5000",
+  ...parseCorsOrigins(process.env.FRONTEND_URL),
+  ...parseCorsOrigins(process.env.CORS_ALLOWED_ORIGINS),
+  ...parseCorsOrigins(process.env.VERCEL_PREVIEW_ORIGINS),
+]);
+
 // CORS Configuration
 app.use((req, res, next) => {
   const origin = req.headers.origin;
 
-  const allowedOrigins = [
-    "https://revendasmart.vercel.app",
-    "https://revendasmart-7210hr3iv-natanaelam2000-9106s-projects.vercel.app",
-    "http://localhost:3000",
-    "http://localhost:5000",
-  ];
-
-  if (
-    origin &&
-    (
-      allowedOrigins.includes(origin) ||
-      origin.includes("vercel.app")
-    )
-  ) {
+  if (origin && allowedCorsOrigins.has(origin)) {
     res.header("Access-Control-Allow-Origin", origin);
+    res.header("Vary", "Origin");
   }
 
   res.header(
@@ -142,19 +161,33 @@ app.get("/health", (_req, res) => {
     console.log("[STARTUP] Routes registered successfully");
 
     app.use((err: any, req: Request, res: Response, next: NextFunction) => {
-  Sentry.captureException(err);
+      Sentry.captureException(err);
 
-  const status = err.status || err.statusCode || 500;
-  const message = err.message || "Internal Server Error";
+      const rawStatus = Number(err?.status ?? err?.statusCode ?? 500);
+      const status = Number.isInteger(rawStatus) && rawStatus >= 400 && rawStatus < 600
+        ? rawStatus
+        : 500;
+      const technicalMessage = err instanceof Error
+        ? err.message
+        : "Internal Server Error";
+      const publicMessage = process.env.NODE_ENV === "production"
+        ? "Ocorreu um erro temporário."
+        : technicalMessage;
 
-  console.error("[ERROR]", err);
+      console.error("[ERROR]", {
+        method: req.method,
+        path: req.path,
+        status,
+        message: technicalMessage,
+        stack: err instanceof Error ? err.stack : undefined,
+      });
 
-  if (res.headersSent) {
-    return next(err);
-  }
+      if (res.headersSent) {
+        return next(err);
+      }
 
-  return res.status(status).json({ message });
-});
+      return res.status(status).json({ message: publicMessage });
+    });
 
     if (process.env.NODE_ENV === "production") {
       serveStatic(app);
