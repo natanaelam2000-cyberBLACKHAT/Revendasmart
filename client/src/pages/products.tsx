@@ -18,7 +18,7 @@ import { FilterChips } from "@/components/FilterChips";
 import { EmptyState } from "@/components/EmptyState";
 import { getFirebaseAuth, logTelemetryEvent } from "@/lib/firebase";
 import { getFirestore, doc, deleteDoc, getDoc } from "firebase/firestore";
-import { useUserSettings } from "@/hooks/useUserSettings";
+import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { Layout } from "@/components/layout";
 import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
 import { usePaginatedProductsData } from "@/hooks/usePaginatedProductsData";

@@ -8,7 +8,7 @@ import {
   Sparkles, ArrowRight, TrendingDown, Users, Bell as BellIcon
 } from "lucide-react";
 import { isToday, parseISO } from "date-fns";
-import { useUserSettings } from "@/hooks/useUserSettings";
+import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { useClientsLiteData } from "@/hooks/useClientsLiteData";
 import { useProductsData } from "@/hooks/useProductsData";
 import { useSalesData } from "@/hooks/useSalesData";

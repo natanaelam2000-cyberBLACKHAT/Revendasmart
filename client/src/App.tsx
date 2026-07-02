@@ -6,7 +6,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useEffect, useState, lazy, Suspense } from "react";
 import { getFirebaseAuth, logTelemetryEvent } from "@/lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
-import { useUserSettings } from "@/hooks/useUserSettings";
+import { useUserSettings, UserSettingsProvider } from "@/providers/UserSettingsProvider";
+import { PlanProvider } from "@/providers/PlanProvider";
 import { getApiUrl } from "@/lib/api-config";
 
 const Dashboard = lazy(() => import("@/pages/dashboard"));
@@ -167,7 +168,11 @@ function Router() {
         <TooltipProvider>
           {/* <Toaster /> -- Disabled: causes insertBefore DOM error on initial render */}
          <Suspense fallback={<PageSkeleton variant="dashboard" />}>
-  <Router />
+          <UserSettingsProvider>
+            <PlanProvider>
+              <Router />
+            </PlanProvider>
+          </UserSettingsProvider>
 </Suspense>
         </TooltipProvider>
      </>

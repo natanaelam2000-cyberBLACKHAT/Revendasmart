@@ -6,13 +6,13 @@ import { Installment, defaultSettings } from "@/lib/mock-data";
 import { Search, UserPlus, ChevronRight, Download, CheckSquare, Square, Send, AlertCircle, Pencil, Trash2 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { usePaginatedClientsData } from "@/hooks/usePaginatedClientsData";
-import { usePlanData } from "@/hooks/usePlanData";
+import { usePlan } from "@/providers/PlanProvider";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";
 import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
 
 export default function Clients() {
   const { clients, loading, loadingMore, error, hasMore, totalCount, loadMore, addClient, updateClient, deleteClient } = usePaginatedClientsData();
-  const { activePlan } = usePlanData();
+  const { activePlan } = usePlan();
   const [, setLocation] = useLocation();
   const [billings] = useState<Installment[]>([]);
   const [settings] = useState(() => defaultSettings);

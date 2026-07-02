@@ -12,7 +12,7 @@ import { useLocation } from "wouter";
 import { getApiUrl } from "@/lib/api-config";
 import { QRCodeSVG } from "qrcode.react";
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { useUserSettings } from "@/hooks/useUserSettings";
+import { useUserSettings } from "@/providers/UserSettingsProvider";
 import {
   Store, CreditCard,
   Download, Save, ChevronRight, Bell, Upload, RefreshCw, Users, Share2, ExternalLink, FileSpreadsheet, QrCode, Copy, Mail, Scale, HelpCircle, ChevronDown, User, KeyRound, LogOut, ArrowLeft, Receipt
@@ -22,7 +22,7 @@ import {
 // to prevent recreation on every render (which was causing focus loss)
 const InputField = ({ label, value, onChange, placeholder = "", type = "text", disabled = false }: any) => (
   <div className="space-y-1.5">
-    <label className="text-[10px] font-black text-muted-foreground uppercase px-1 tracking-widest">{label}</label>
+    <label className="text-xs font-semibold text-muted-foreground px-1">{label}</label>
     <input
       type={type}
       disabled={disabled}
@@ -330,7 +330,7 @@ export default function Settings() {
                 <span className="absolute inset-x-0 bottom-0 bg-black/45 text-[8px] font-bold py-0.5">{isUploadingLogo ? "Enviando" : "Alterar"}</span>
               </button>
               <input ref={logoInputRef} type="file" accept="image/*" className="hidden" onChange={handleLogoChange} />
-              <div><p className="text-sm font-bold text-white/75">RevendaSmart</p><h1 className="text-2xl lg:text-3xl font-black mt-1">Olá, {displayName}!</h1><p className="text-sm text-white/75 mt-1">Gerencie sua conta e sua loja.</p></div>
+              <div><p className="text-sm font-medium text-white/75">RevendaSmart</p><h1 className="text-2xl lg:text-3xl font-semibold tracking-tight mt-1">Olá, {displayName}!</h1><p className="text-sm text-white/75 mt-1">Gerencie sua conta e sua loja.</p></div>
             </div>
           </section>
           <div className="bg-white rounded-[2rem] border border-border/60 shadow-sm overflow-hidden divide-y divide-border/50">
@@ -386,7 +386,7 @@ export default function Settings() {
         <div className="flex-1 w-full max-w-4xl mx-auto p-4 sm:p-6 lg:p-8 pb-32 space-y-6">
           {activeTab === 'account' && (
             <div className="space-y-5 animate-in fade-in slide-in-from-right-4">
-              <div><p className="text-xs font-black text-primary uppercase tracking-wider">Minha Conta</p><h2 className="text-2xl font-black mt-1">Perfil e dados pessoais</h2><p className="text-sm text-muted-foreground mt-1">Atualize seus dados de contato e identificação.</p></div>
+              <div><p className="text-xs font-semibold text-primary">Minha Conta</p><h2 className="text-2xl font-semibold tracking-tight mt-1">Perfil e dados pessoais</h2><p className="text-sm text-muted-foreground mt-1">Atualize seus dados de contato e identificação.</p></div>
               <div className="bg-white border border-border/60 rounded-3xl p-5 space-y-4 shadow-sm">
                 <InputField label="Nome" value={formSettings?.sellerName} onChange={(v: string) => setFormSettings({...formSettings, sellerName: v})} />
                 <InputField label="E-mail" value={currentUserEmail || ""} disabled={true} />
@@ -541,7 +541,7 @@ export default function Settings() {
               ) : (
                 <div className="p-6 bg-white rounded-2xl border border-border space-y-5">
                   <div>
-                    <h3 className="text-xs font-black uppercase tracking-widest text-foreground mb-4">Suas Indicações Convertidas</h3>
+                    <h3 className="text-xs font-semiboldst text-foreground mb-4">Suas Indicações Convertidas</h3>
 
                     {(() => {
                       const conversions = firestoreSettings?.referral_conversions || 0;
@@ -576,7 +576,7 @@ export default function Settings() {
                             </div>
                             <div className="flex-1">
                               <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Indicações Convertidas</p>
-                              <p className="text-[9px] text-muted-foreground mt-0.5">Amigas que completaram o cadastro</p>
+                              <p className="text-[10px] text-muted-foreground mt-0.5">Amigas que completaram o cadastro</p>
                             </div>
                           </div>
                           {lastConversionDate && (
@@ -873,7 +873,7 @@ export default function Settings() {
               <div><p className="text-xs font-black text-amber-700 uppercase tracking-wider">Suporte</p><h2 className="text-2xl font-black mt-1">Ajuda, FAQ e contato</h2><p className="text-sm text-muted-foreground mt-1">Encontre respostas ou fale com o suporte.</p></div>
               {/* Header Info */}
               <div className="bg-gradient-to-br from-primary/10 to-primary/5 p-6 rounded-3xl border border-primary/20 space-y-3">
-                <h2 className="text-lg font-black text-primary">Central de Ajuda</h2>
+                <h2 className="text-lg font-semibold text-primary">Central de Ajuda</h2>
                 <p className="text-xs text-muted-foreground leading-relaxed">Encontre respostas rápidas e entenda melhor como usar RevendaSmart para vender mais.</p>
               </div>
 
