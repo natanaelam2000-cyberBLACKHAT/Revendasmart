@@ -452,8 +452,8 @@ export const defaultSettings: AppSettings = {
   showPrice: true,
   showStock: true,
   allowWhatsappOrders: true,
-  businessType: 'Cosméticos & Perfumes',
-  businessTypes: ['Cosméticos & Perfumes'],
+  businessType: 'Geral',
+  businessTypes: ['Geral'],
   catalogSlug: '',
   notification_settings: {
     enable_billing_reminders: true,

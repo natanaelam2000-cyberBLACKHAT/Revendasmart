@@ -46,6 +46,8 @@ export interface NichoConfig {
   extraFields: ExtraFieldConfig[];
   /** Filtros disponíveis no catálogo para este nicho */
   catalogFilters: string[];
+  productNamePlaceholder: string;
+  descriptionPlaceholder: string;
 }
 
 export const NICHO_CONFIG: Record<NichoId, NichoConfig> = {
@@ -72,11 +74,13 @@ export const NICHO_CONFIG: Record<NichoId, NichoConfig> = {
       'Eudora',
       'Mary Kay',
       'Quem Disse Berenice',
-      'L\'Oréal',
+      "L'Oréal",
       'Nivea',
     ],
     brandLabel: 'Marca',
     brandPlaceholder: 'Selecione ou digite a marca...',
+    productNamePlaceholder: 'Ex: Essencial Exclusivo Feminino',
+    descriptionPlaceholder: 'Detalhes do produto, fragrância, volume, linha...',
     extraFields: [
       { key: 'volume_ml', label: 'Volume (ml)', placeholder: '50ml, 100ml...', type: 'text', halfWidth: true },
       { key: 'scent_family', label: 'Família Olfativa', placeholder: 'Floral, Amadeirado...', type: 'text', halfWidth: true },
@@ -92,23 +96,42 @@ export const NICHO_CONFIG: Record<NichoId, NichoConfig> = {
     iconName: 'Shirt',
     categories: [
       'Camiseta',
-      'Vestido',
+      'Blusa',
       'Calça',
+      'Shorts',
       'Short',
+      'Vestido',
       'Saia',
-      'Conjunto',
-      'Infantil',
-      'Fitness',
       'Jaqueta',
+      'Moda Íntima',
+      'Infantil',
+      'Calçados',
+      'Kit/Conjunto',
+      'Conjunto',
+      'Fitness',
       'Outros',
     ],
-    predefinedBrands: undefined,
+    predefinedBrands: [
+      'Sem marca',
+      'Boutique',
+      'Shein',
+      'Renner',
+      'C&A',
+      'Riachuelo',
+      'Marisa',
+      'Zara',
+      'Nike',
+      'Adidas',
+    ],
     brandLabel: 'Marca',
-    brandPlaceholder: 'Ex: Renner, Zara, Marca própria...',
+    brandPlaceholder: 'Ex: Boutique, Shein, Sem marca...',
+    productNamePlaceholder: 'Ex: Blusa canelada feminina',
+    descriptionPlaceholder: 'Tamanho, tecido, cor, medidas, estado...',
     extraFields: [
-      { key: 'public_type', label: 'Público / Gênero', placeholder: 'Selecione...', type: 'select', options: ['Feminino', 'Masculino', 'Unissex', 'Infantil', 'Plus Size'] },
       { key: 'size', label: 'Tamanho', placeholder: 'P, M, G, 42...', type: 'text', halfWidth: true },
       { key: 'color', label: 'Cor', placeholder: 'Azul, Preto...', type: 'text', halfWidth: true },
+      { key: 'public_type', label: 'Gênero / Público', placeholder: 'Selecione...', type: 'select', options: ['Feminino', 'Masculino', 'Unissex', 'Infantil', 'Plus Size'] },
+      { key: 'variation', label: 'Variação', placeholder: 'Modelo, estampa, coleção...', type: 'text' },
       { key: 'material', label: 'Material', placeholder: 'Algodão, Jeans, Poliéster...', type: 'text' },
     ],
     catalogFilters: ['Todos', 'Feminino', 'Masculino', 'Infantil', 'Plus Size', 'Promoções'],
@@ -123,19 +146,36 @@ export const NICHO_CONFIG: Record<NichoId, NichoConfig> = {
       'Bolsa',
       'Relógio',
       'Óculos',
+      'Joia',
+      'Semijoia',
+      'Bijuteria',
       'Joia/Bijuteria',
       'Cinto',
       'Carteira',
       'Boné',
+      'Presilha',
       'Kit',
       'Outros',
     ],
-    predefinedBrands: undefined,
+    predefinedBrands: [
+      'Sem marca',
+      'Prata 925',
+      'Rommanel',
+      'Pandora',
+      'Vivara',
+      'Chilli Beans',
+      'Ray-Ban',
+      'Kipling',
+      'Outros',
+    ],
     brandLabel: 'Marca / Coleção',
-    brandPlaceholder: 'Ex: Vivara, marca própria...',
+    brandPlaceholder: 'Ex: Vivara, Prata 925, Sem marca...',
+    productNamePlaceholder: 'Ex: Bolsa transversal feminina',
+    descriptionPlaceholder: 'Material, cor, tamanho, modelo, conservação...',
     extraFields: [
       { key: 'color', label: 'Cor', placeholder: 'Dourado, Prata, Preto...', type: 'text', halfWidth: true },
       { key: 'material', label: 'Material', placeholder: 'Couro, Metal, Silicone...', type: 'text', halfWidth: true },
+      { key: 'model', label: 'Modelo', placeholder: 'Transversal, redondo, argola...', type: 'text' },
     ],
     catalogFilters: ['Todos', 'Bolsas', 'Óculos', 'Relógios', 'Joias/Bijus', 'Promoções'],
   },
@@ -150,19 +190,32 @@ export const NICHO_CONFIG: Record<NichoId, NichoConfig> = {
       'Trufa',
       'Brigadeiro',
       'Marmita',
-      'Bebida',
-      'Combo',
       'Salgado',
+      'Doce',
+      'Bebida',
+      'Pão',
+      'Congelado',
+      'Kit/Festa',
       'Kit Festa',
+      'Combo',
       'Outros',
     ],
-    predefinedBrands: undefined,
+    predefinedBrands: [
+      'Produção própria',
+      'Caseiro',
+      'Artesanal',
+      'Sem marca',
+      'Outros',
+    ],
     brandLabel: 'Fornecedor / Marca',
-    brandPlaceholder: 'Ex: Cozinha da Maria, artesanal...',
+    brandPlaceholder: 'Ex: Produção própria, Caseiro...',
+    productNamePlaceholder: 'Ex: Bolo de pote chocolate',
+    descriptionPlaceholder: 'Sabor, peso, validade, ingredientes, alergênicos...',
     extraFields: [
-      { key: 'weight', label: 'Peso / Quantidade', placeholder: '200g, 1kg, 12 unid...', type: 'text', halfWidth: true },
-      { key: 'flavor', label: 'Sabor', placeholder: 'Chocolate, Morango...', type: 'text', halfWidth: true },
       { key: 'expiration_date', label: 'Validade', placeholder: '', type: 'date' },
+      { key: 'weight', label: 'Peso / Volume', placeholder: '200g, 1kg, 500ml...', type: 'text', halfWidth: true },
+      { key: 'flavor', label: 'Sabor', placeholder: 'Chocolate, Morango...', type: 'text', halfWidth: true },
+      { key: 'availability', label: 'Entrega', placeholder: 'Selecione...', type: 'select', options: ['Pronta entrega', 'Sob encomenda'] },
     ],
     catalogFilters: ['Todos', 'Doces', 'Bolos', 'Bebidas', 'Marmitas', 'Combos', 'Promoções'],
   },
@@ -173,15 +226,31 @@ export const NICHO_CONFIG: Record<NichoId, NichoConfig> = {
     desc: 'Variedades ou outros nichos...',
     iconName: 'Box',
     categories: [
-      'Produto Geral',
+      'Produto',
+      'Eletrônico',
+      'Casa',
+      'Decoração',
+      'Papelaria',
+      'Presente',
+      'Brinquedo',
+      'Utilidade',
       'Kit',
+      'Produto Geral',
       'Variados',
       'Item Personalizado',
       'Outros',
     ],
-    predefinedBrands: undefined,
+    predefinedBrands: [
+      'Sem marca',
+      'Importado',
+      'Nacional',
+      'Artesanal',
+      'Outros',
+    ],
     brandLabel: 'Marca / Origem',
-    brandPlaceholder: 'Ex: marca própria, fornecedor...',
+    brandPlaceholder: 'Ex: Importado, Nacional, Sem marca...',
+    productNamePlaceholder: 'Ex: Garrafa térmica inox',
+    descriptionPlaceholder: 'Características, medidas, estado, observações...',
     extraFields: [
       { key: 'extra_notes', label: 'Observações Extras', placeholder: 'Detalhes relevantes...', type: 'text' },
     ],
@@ -232,7 +301,7 @@ export function inferNichoFromCategory(category: string): NichoId {
  * Backward compat: se vazio, retorna 'Cosméticos & Perfumes'
  */
 export function getPrimaryNicho(businessTypes: string[]): NichoId {
-  if (!businessTypes || businessTypes.length === 0) return 'Cosméticos & Perfumes';
+  if (!businessTypes || businessTypes.length === 0) return 'Geral';
   return (NICHO_CONFIG[businessTypes[0] as NichoId] ? businessTypes[0] : 'Geral') as NichoId;
 }
 
@@ -245,7 +314,7 @@ export function toBusinessTypesArray(
 ): string[] {
   if (businessTypes && businessTypes.length > 0) return businessTypes;
   if (businessType) return [businessType];
-  return ['Cosméticos & Perfumes'];
+  return ['Geral'];
 }
 
 /**

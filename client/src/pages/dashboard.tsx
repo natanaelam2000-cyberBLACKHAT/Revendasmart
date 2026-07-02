@@ -5,7 +5,8 @@ import { Layout } from "@/components/layout";
 import { ProductImageCard } from "@/components/ProductImageCard";
 import {
   TrendingUp, Package, AlertCircle, Zap, Share2,
-  Sparkles, ArrowRight, TrendingDown, Users, Bell as BellIcon
+  Sparkles, ArrowRight, TrendingDown, Users, Bell as BellIcon,
+  Plus, ShoppingCart, Receipt, Megaphone, BookOpen
 } from "lucide-react";
 import { isToday, parseISO } from "date-fns";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
@@ -14,10 +15,16 @@ import { useProductsData } from "@/hooks/useProductsData";
 import { useSalesData } from "@/hooks/useSalesData";
 import { useFeatureEnabled } from "@/lib/remote-config-context";
 import {
+  calculateAttentionItems,
   calculateDashboardInsights,
+  calculateExecutiveSummary,
+  calculateInactiveClientCount,
   calculateLowStockProducts,
+  calculateMonthlyGoal,
   calculateMonthlyMetrics,
+  calculateStockExecutiveMetrics,
   calculateTopProducts,
+  calculateWorstProduct,
   createClientMap,
   createProductMap,
 } from "@/lib/dashboard-metrics";
@@ -100,6 +107,38 @@ export default function Dashboard() {
 
   const monthMetrics = monthlyDashboardData.monthMetrics;
 
+  const monthlyGoalTarget = Number(
+    (settings as typeof settings & { monthlyGoal?: number; monthlyRevenueGoal?: number; salesGoal?: number }).monthlyGoal ||
+    (settings as typeof settings & { monthlyGoal?: number; monthlyRevenueGoal?: number; salesGoal?: number }).monthlyRevenueGoal ||
+    (settings as typeof settings & { monthlyGoal?: number; monthlyRevenueGoal?: number; salesGoal?: number }).salesGoal ||
+    10000
+  );
+
+  const executiveSummary = useMemo(
+    () => calculateExecutiveSummary(monthMetrics),
+    [monthMetrics]
+  );
+
+  const monthlyGoal = useMemo(
+    () => calculateMonthlyGoal(monthMetrics.revenue, monthlyGoalTarget),
+    [monthMetrics.revenue, monthlyGoalTarget]
+  );
+
+  const stockExecutive = useMemo(
+    () => calculateStockExecutiveMetrics(products, settings.lowStockThreshold),
+    [products, settings.lowStockThreshold]
+  );
+
+  const inactiveClientCount = useMemo(
+    () => calculateInactiveClientCount(clients, sales),
+    [clients, sales]
+  );
+
+  const worstProduct = useMemo(
+    () => calculateWorstProduct(products),
+    [products]
+  );
+
   // Smart Suggestions Logic - Prioritized & Actionable
   const insights = useMemo(
     () => calculateDashboardInsights({
@@ -134,6 +173,24 @@ export default function Dashboard() {
     () => calculateLowStockProducts(products, settings.lowStockThreshold),
     [products, settings.lowStockThreshold]
   );
+
+  const attentionItems = useMemo(
+    () => calculateAttentionItems({
+      lowStockCount: stockExecutive.lowStockCount,
+      overdueChargesCount: billings.filter(b => parseISO(b.dueDate) < new Date() && b.status !== 'paid').length,
+      inactiveClientCount,
+      monthlyGoal,
+    }),
+    [billings, inactiveClientCount, monthlyGoal, stockExecutive.lowStockCount]
+  );
+
+  const quickActions = [
+    { label: "Cadastrar produto", path: "/add-product", icon: Plus },
+    { label: "Registrar venda", path: "/sale", icon: ShoppingCart },
+    { label: "Nova cobrança", path: "/billings", icon: Receipt },
+    { label: "Gerar anúncio", path: "/marketing", icon: Megaphone },
+    { label: "Abrir catálogo", path: "/catalog", icon: BookOpen },
+  ];
 
   // Show loading while checking onboarding status
   if (settingsLoading || dataLoading) {
@@ -200,7 +257,96 @@ export default function Dashboard() {
           </button>
         </div>      </div>
 
-      <div className="p-6">
+      <div className="p-6 space-y-6">
+        <section className="bg-white rounded-[2rem] border border-border/50 p-5 shadow-sm">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <h2 className="text-xs font-semibold text-primary flex items-center gap-2"><AlertCircle className="w-4 h-4" /> Atenção hoje</h2>
+            <span className="text-[10px] text-muted-foreground font-semibold">Prioridades</span>
+          </div>
+          <div className="space-y-2">
+            {attentionItems.map((item) => (
+              <div key={item.label} className={`flex items-center gap-2 rounded-2xl px-3 py-2 text-xs font-semibold ${item.tone === "success" ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>
+                <span>{item.tone === "success" ? "✅" : "⚠"}</span>
+                <span>{item.label}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="grid grid-cols-1 lg:grid-cols-[1.1fr_1fr] gap-4">
+          <div className="bg-white rounded-[2rem] border border-border/50 p-5 shadow-sm">
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wide">Meta mensal</p>
+                <p className="text-2xl font-semibold mt-1">R$ {monthlyGoal.current.toLocaleString('pt-BR', { minimumFractionDigits: 0 })} <span className="text-sm text-muted-foreground">/ R$ {monthlyGoal.target.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}</span></p>
+              </div>
+              <span className={`rounded-full px-3 py-1 text-xs font-bold ${monthlyGoal.color === "green" ? "bg-green-100 text-green-700" : monthlyGoal.color === "yellow" ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"}`}>{monthlyGoal.percent}%</span>
+            </div>
+            <div className="h-3 rounded-full bg-secondary overflow-hidden">
+              <div className={`h-full rounded-full transition-all ${monthlyGoal.color === "green" ? "bg-green-500" : monthlyGoal.color === "yellow" ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${monthlyGoal.percent}%` }} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              ["Receita", `R$ ${executiveSummary.revenue.toFixed(2)}`],
+              ["Lucro", `R$ ${executiveSummary.profit.toFixed(2)}`],
+              ["Produtos vendidos", String(executiveSummary.productsSold)],
+              ["Ticket médio", `R$ ${executiveSummary.averageTicket.toFixed(2)}`],
+              ["Clientes ativos", String(executiveSummary.activeClients)],
+              ["Margem média", `${executiveSummary.averageMargin.toFixed(0)}%`],
+            ].map(([label, value]) => (
+              <div key={label} className="bg-white rounded-2xl border border-border/50 p-3 shadow-sm">
+                <p className="text-[10px] text-muted-foreground font-medium">{label}</p>
+                <p className="text-sm font-semibold mt-1">{value}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+          {quickActions.map((action) => {
+            const Icon = action.icon;
+            return (
+              <button key={action.path} onClick={() => setLocation(action.path)} className="rs-card-interactive bg-white rounded-2xl border border-border/50 p-4 text-left shadow-sm min-h-[88px] flex flex-col justify-between">
+                <Icon className="w-5 h-5 text-primary" />
+                <span className="text-xs font-semibold leading-tight">{action.label}</span>
+              </button>
+            );
+          })}
+        </section>
+
+        <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="bg-white rounded-[2rem] border border-border/50 p-5 shadow-sm space-y-3">
+            <h2 className="text-xs font-semibold text-primary flex items-center gap-2"><Package className="w-4 h-4" /> Estoque</h2>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="rounded-2xl bg-red-50 p-3"><p className="text-red-700 font-bold">{stockExecutive.outOfStockCount}</p><p className="text-muted-foreground">Sem estoque</p></div>
+              <div className="rounded-2xl bg-amber-50 p-3"><p className="text-amber-700 font-bold">{stockExecutive.lowStockCount}</p><p className="text-muted-foreground">Acabando</p></div>
+            </div>
+            <div className="rounded-2xl bg-secondary/40 p-3 text-xs"><p className="text-muted-foreground">Valor parado em estoque</p><p className="font-semibold">R$ {stockExecutive.inventoryValue.toFixed(2)}</p></div>
+            <div className="rounded-2xl bg-secondary/40 p-3 text-xs"><p className="text-muted-foreground">Maior estoque</p><p className="font-semibold truncate">{stockExecutive.highestStockProduct?.name || "Sem produtos"}</p></div>
+          </div>
+
+          <button onClick={() => setLocation("/products-sold")} className="bg-white rounded-[2rem] border border-amber-200 p-5 shadow-sm text-left space-y-3">
+            <h2 className="text-xs font-semibold text-amber-700">🏆 Produto campeão</h2>
+            <p className="text-base font-semibold truncate">{topProducts[0]?.product.name || "Sem vendas no mês"}</p>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div><p className="text-muted-foreground">Quantidade</p><p className="font-bold text-primary">{topProducts[0]?.quantity || 0} un</p></div>
+              <div><p className="text-muted-foreground">Receita</p><p className="font-bold text-green-600">R$ {topProducts[0]?.revenue.toFixed(2) || "0,00"}</p></div>
+            </div>
+          </button>
+
+          <button onClick={() => setLocation("/marketing")} className="bg-white rounded-[2rem] border border-border/50 p-5 shadow-sm text-left space-y-3">
+            <h2 className="text-xs font-semibold text-orange-700">📉 Produto parado</h2>
+            <p className="text-base font-semibold truncate">{worstProduct?.product.name || "Nenhum produto parado"}</p>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div><p className="text-muted-foreground">Sem vender</p><p className="font-bold">{worstProduct ? `${worstProduct.daysWithoutSale} dias` : "—"}</p></div>
+              <div><p className="text-muted-foreground">Estoque</p><p className="font-bold">{worstProduct?.product.stock || 0} un</p></div>
+            </div>
+            {worstProduct && <p className="text-[11px] text-muted-foreground">Considere fazer uma promoção.</p>}
+          </button>
+        </section>
+
         {/* First Product CTA - Show if triggered and not dismissed */}
         {showFirstProductCTA && (
           <div className="mb-8 p-5 bg-primary/5 rounded-[2rem] border-2 border-primary/30 space-y-4 animate-in fade-in slide-in-from-top-4">

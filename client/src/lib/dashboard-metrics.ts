@@ -31,6 +31,50 @@ export interface MonthlyDashboardData {
   productQuantities: Map<string, number>;
 }
 
+
+export interface ExecutiveSummaryMetrics {
+  revenue: number;
+  profit: number;
+  productsSold: number;
+  averageTicket: number;
+  activeClients: number;
+  averageMargin: number;
+}
+
+export interface MonthlyGoalMetric {
+  target: number;
+  current: number;
+  percent: number;
+  color: "red" | "yellow" | "green";
+}
+
+export interface StockExecutiveMetrics {
+  outOfStockCount: number;
+  lowStockCount: number;
+  inventoryValue: number;
+  highestStockProduct: Product | null;
+}
+
+export interface AttentionItem {
+  label: string;
+  tone: "warning" | "success";
+}
+
+export interface WorstProductMetric {
+  product: Product;
+  daysWithoutSale: number;
+}
+
+function safeParseDate(value?: string | null): Date | null {
+  if (!value) return null;
+  const parsed = parseISO(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isSameMonth(date: Date, referenceDate: Date): boolean {
+  return date.getMonth() === referenceDate.getMonth() && date.getFullYear() === referenceDate.getFullYear();
+}
+
 export interface DashboardInsightIcons {
   AlertCircle: LucideIcon;
   Zap: LucideIcon;
@@ -76,11 +120,8 @@ export function calculateMonthlyMetrics(
   let totalProducts = 0;
 
   for (const sale of sales) {
-    const saleDate = parseISO(sale.date);
-    if (
-      saleDate.getMonth() !== referenceDate.getMonth() ||
-      saleDate.getFullYear() !== referenceDate.getFullYear()
-    ) {
+    const saleDate = safeParseDate(sale.date);
+    if (!saleDate || !isSameMonth(saleDate, referenceDate)) {
       continue;
     }
 
@@ -155,7 +196,8 @@ export function calculateDashboardInsights({
   for (const sale of sales) {
     if (!sale.clientId) continue;
 
-    const saleDate = parseISO(sale.date);
+    const saleDate = safeParseDate(sale.date);
+    if (!saleDate) continue;
     const currentLastSaleDate = lastSaleDateByClientId.get(sale.clientId);
     if (!currentLastSaleDate || saleDate > currentLastSaleDate) {
       lastSaleDateByClientId.set(sale.clientId, saleDate);
@@ -177,7 +219,8 @@ export function calculateDashboardInsights({
 
     if (
       product.lastSoldDate &&
-      differenceInDays(now, parseISO(product.lastSoldDate)) <= 2 &&
+      safeParseDate(product.lastSoldDate) &&
+      differenceInDays(now, safeParseDate(product.lastSoldDate)!) <= 2 &&
       product.stock < 5
     ) {
       list.push({
@@ -191,7 +234,7 @@ export function calculateDashboardInsights({
       });
     }
 
-    if (product.lastSoldDate && differenceInDays(now, parseISO(product.lastSoldDate)) >= 30) {
+    if (product.lastSoldDate && safeParseDate(product.lastSoldDate) && differenceInDays(now, safeParseDate(product.lastSoldDate)!) >= 30) {
       list.push({
         title: "Produto Parado (+30 dias)",
         desc: `${product.name} não vende há um mês. Criar uma oferta?`,
@@ -220,6 +263,43 @@ export function calculateDashboardInsights({
     }
   });
 
+  const monthlyData = calculateMonthlyMetrics(sales, createProductMap(products), now);
+  const summary = calculateExecutiveSummary(monthlyData.monthMetrics);
+  const stock = calculateStockExecutiveMetrics(products, lowStockThreshold);
+  if (summary.averageMargin >= 40) {
+    list.push({
+      title: "Margem Saudável",
+      desc: `Sua margem média está em ${summary.averageMargin.toFixed(0)}%. Continue priorizando produtos lucrativos.`,
+      icon: icons.Zap,
+      color: "green",
+      action: "Ver vendas",
+      link: "/monthly-sales",
+      priority: 4,
+    });
+  }
+  if (stock.lowStockCount === 0 && stock.outOfStockCount === 0 && products.length > 0) {
+    list.push({
+      title: "Estoque saudável",
+      desc: "Nenhum produto crítico no momento. Bom controle de reposição.",
+      icon: icons.Zap,
+      color: "green",
+      action: "Ver estoque",
+      link: "/products",
+      priority: 4,
+    });
+  }
+  if (new Set(products.map((product) => product.category).filter(Boolean)).size >= 4) {
+    list.push({
+      title: "Boa diversidade",
+      desc: "Seu catálogo tem variedade para diferentes perfis de cliente.",
+      icon: icons.Share2,
+      color: "primary",
+      action: "Abrir catálogo",
+      link: "/catalog",
+      priority: 5,
+    });
+  }
+
   if (enableReferralProgram && products.length > 2) {
     list.push({
       title: "Crescimento Ligado!",
@@ -233,4 +313,94 @@ export function calculateDashboardInsights({
   }
 
   return list.sort((a, b) => a.priority - b.priority).slice(0, 4);
+}
+
+
+export function calculateExecutiveSummary(monthMetrics: MonthMetrics): ExecutiveSummaryMetrics {
+  const averageTicket = monthMetrics.activeClients > 0 ? monthMetrics.revenue / monthMetrics.activeClients : 0;
+  const averageMargin = monthMetrics.revenue > 0 ? (monthMetrics.profit / monthMetrics.revenue) * 100 : 0;
+  return {
+    revenue: monthMetrics.revenue,
+    profit: monthMetrics.profit,
+    productsSold: monthMetrics.products,
+    averageTicket,
+    activeClients: monthMetrics.activeClients,
+    averageMargin,
+  };
+}
+
+export function calculateMonthlyGoal(currentRevenue: number, configuredGoal?: number | null): MonthlyGoalMetric {
+  const target = configuredGoal && configuredGoal > 0 ? configuredGoal : 10000;
+  const percent = Math.min(100, Math.round((currentRevenue / target) * 100));
+  const color = percent >= 80 ? "green" : percent >= 50 ? "yellow" : "red";
+  return { target, current: currentRevenue, percent, color };
+}
+
+export function calculateStockExecutiveMetrics(products: Product[], lowStockThreshold: number): StockExecutiveMetrics {
+  let outOfStockCount = 0;
+  let lowStockCount = 0;
+  let inventoryValue = 0;
+  let highestStockProduct: Product | null = null;
+
+  for (const product of products) {
+    if (product.stock === 0) outOfStockCount += 1;
+    if (product.stock > 0 && product.stock <= lowStockThreshold) lowStockCount += 1;
+    inventoryValue += (product.costPrice || 0) * product.stock;
+    if (!highestStockProduct || product.stock > highestStockProduct.stock) highestStockProduct = product;
+  }
+
+  return { outOfStockCount, lowStockCount, inventoryValue, highestStockProduct };
+}
+
+export function calculateWorstProduct(products: Product[], referenceDate = new Date()): WorstProductMetric | null {
+  let worst: WorstProductMetric | null = null;
+
+  for (const product of products) {
+    if (product.stock <= 0) continue;
+    const lastSoldDate = safeParseDate(product.lastSoldDate);
+    const daysWithoutSale = lastSoldDate ? differenceInDays(referenceDate, lastSoldDate) : 999;
+    if (!worst || daysWithoutSale > worst.daysWithoutSale || (daysWithoutSale === worst.daysWithoutSale && product.stock > worst.product.stock)) {
+      worst = { product, daysWithoutSale };
+    }
+  }
+
+  return worst;
+}
+
+export function calculateInactiveClientCount(
+  clients: Client[],
+  sales: Sale[],
+  inactiveDays = 60,
+  referenceDate = new Date()
+): number {
+  const lastSaleDateByClientId = new Map<string, Date>();
+  for (const sale of sales) {
+    if (!sale.clientId) continue;
+    const saleDate = safeParseDate(sale.date);
+    if (!saleDate) continue;
+    const current = lastSaleDateByClientId.get(sale.clientId);
+    if (!current || saleDate > current) lastSaleDateByClientId.set(sale.clientId, saleDate);
+  }
+
+  let count = 0;
+  for (const client of clients) {
+    const lastSale = lastSaleDateByClientId.get(client.id);
+    if (!lastSale || differenceInDays(referenceDate, lastSale) >= inactiveDays) count += 1;
+  }
+  return count;
+}
+
+export function calculateAttentionItems(input: {
+  lowStockCount: number;
+  overdueChargesCount: number;
+  inactiveClientCount: number;
+  monthlyGoal: MonthlyGoalMetric;
+}): AttentionItem[] {
+  const items: AttentionItem[] = [];
+  if (input.lowStockCount > 0) items.push({ label: `${input.lowStockCount} produtos com estoque baixo`, tone: "warning" });
+  if (input.overdueChargesCount > 0) items.push({ label: `${input.overdueChargesCount} cobranças vencidas`, tone: "warning" });
+  if (input.inactiveClientCount > 0) items.push({ label: `${input.inactiveClientCount} clientes sem comprar há mais de 60 dias`, tone: "warning" });
+  if (input.monthlyGoal.percent >= 80 && input.monthlyGoal.percent < 100) items.push({ label: `Meta do mês em ${input.monthlyGoal.percent}%`, tone: "warning" });
+  if (items.length === 0) items.push({ label: "Está tudo em dia.", tone: "success" });
+  return items;
 }

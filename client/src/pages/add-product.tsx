@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, lazy, Suspense } from "react";
+import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from "react";
 import { Layout } from "@/components/layout";
 import { Camera, CheckCircle2, ChevronDown, ScanLine, Wand2, Sparkles, ChevronLeft, ImagePlus, AlertCircle } from "lucide-react";
 import { useLocation, useParams } from "wouter";
@@ -9,13 +9,13 @@ const BarcodeScanner = lazy(
 import { Product, defaultSettings } from "@/lib/mock-data";
 import type { PlanType } from "@shared/monetization";
 import { getFirebaseAuth, getFirebaseIdToken, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";
-import { 
-  getFirestore, 
-  doc, 
-  setDoc, 
-  getDoc, 
-  getDocs, 
-  collection 
+import {
+  getFirestore,
+  doc,
+  setDoc,
+  getDoc,
+  getDocs,
+  collection
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { getStorage } from "firebase/storage";
@@ -24,8 +24,10 @@ import { usePlanData } from "@/hooks/usePlanData";
 import { notifyError, notifySuccess } from "@/lib/notify";
 import { checkProductLimit } from "@/lib/plan-helpers";
 import {
-  getNichoConfig, getMergedCategories,
-  inferNichoFromCategory, toBusinessTypesArray, type NichoId
+  getNichoConfig,
+  inferNichoFromCategory,
+  toBusinessTypesArray,
+  type NichoId
 } from "@/lib/nicho-config";
 
 /**
@@ -129,13 +131,13 @@ const [, setLocation] = useLocation();
 
   // Active product nicho: if user has multiple types, user selects manually
   const [activeNicho, setActiveNicho] = useState<NichoId>(
-    businessTypes[0] as NichoId || 'Cosméticos & Perfumes'
+businessTypes[0] as NichoId || 'Geral'
   );
   const nichoConfig = getNichoConfig(activeNicho);
 
   // Categories: ALWAYS from the active nicho only (never mix nichos)
   // Even with multiple business types, show only categories of the currently selected type
-  const categorySuggestions = nichoConfig.categories;
+  const baseCategorySuggestions = nichoConfig.categories;
 
   // For brand: track if user is typing custom brand
   const [brandMode, setBrandMode] = useState<'predefined' | 'custom'>('predefined');
@@ -144,7 +146,7 @@ const [, setLocation] = useLocation();
  const [formData, setFormData] = useState<ProductFormData>({
   name: "",
   brand: hasPredefinedBrands ? (nichoConfig.predefinedBrands![0] || "") : "",
-  category: categorySuggestions[0] || "",
+  category: baseCategorySuggestions[0] || "",
   costPrice: 0,
   salePrice: 0,
   stock: 0,
@@ -159,6 +161,14 @@ const [, setLocation] = useLocation();
   productType: activeNicho as string,
   gender: "unisex"
 });
+
+  const categorySuggestions = useMemo<string[]>(() => {
+    if (formData.category && !nichoConfig.categories.includes(formData.category)) {
+      return [...nichoConfig.categories, formData.category];
+    }
+    return nichoConfig.categories;
+  }, [formData.category, nichoConfig.categories]);
+
  useEffect(() => {
   return () => {
     if (formData.imageUrl) {
@@ -171,13 +181,13 @@ const [, setLocation] = useLocation();
     const newConfig = getNichoConfig(activeNicho);
     const newHasPredefined = !!newConfig.predefinedBrands;
     console.log("[add-product] Active nicho changed to:", activeNicho);
-    
+
     setFormData(prev => {
       const newCategory = prev.category;
       // If current category doesn't belong to new nicho, reset to first category of new nicho
       const categoryExists = newConfig.categories.includes(newCategory);
       const validCategory = categoryExists ? newCategory : (newConfig.categories[0] || "");
-      
+
       return {
         ...prev,
         category: validCategory,
@@ -246,7 +256,7 @@ const [, setLocation] = useLocation();
   /** Renderiza campo extra (text, date, number, ou select) */
   const renderExtraField = (field: any) => {
     const commonClass = "w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm focus:outline-none";
-    
+
     if (field.type === 'select' && field.options) {
       return (
         <select
@@ -262,7 +272,7 @@ const [, setLocation] = useLocation();
         </select>
       );
     }
-    
+
     return (
       <input
         type={field.type === 'select' ? 'text' : field.type}
@@ -317,7 +327,7 @@ const [, setLocation] = useLocation();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     try {
       setUploadError("");
       setFormError("");
@@ -334,7 +344,7 @@ const [, setLocation] = useLocation();
       setDebugStatus({ uid: uid, saveAttempted: true, saveError: "" });
 let imageUrl = formData.imageUrl || "";      let storagePath = formData.storagePath || "";
       const file = selectedFileRef.current;
-      const firestore = getFirestore(); 
+      const firestore = getFirestore();
 const productRef = doc(collection(firestore, "users", uid, "products"));
 const productId = id || productRef.id;
 
@@ -395,7 +405,7 @@ const productId = id || productRef.id;
         extraFieldsCount: Object.keys(productData.extras).length,
       });
 
-   
+
 
       if (id) {
         try {
@@ -472,7 +482,7 @@ if (!allowed) {
 
       setSuccess(true);
       notifySuccess(id ? "Produto atualizado." : "Produto salvo.");
-      
+
       const userId = auth?.currentUser?.uid;
       if (userId && !id) {
      logTelemetryEvent("product_created", {
@@ -487,7 +497,7 @@ if (!allowed) {
           items: [{ item_id: productId, item_name: formData.name, price: formData.salePrice }],
         });
       }
-      
+
       setTimeout(() => setLocation("/products"), 1500);
     } catch (err) {
       notifyError("Erro ao salvar produto.");
@@ -574,7 +584,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
           <div className="w-20 h-20 bg-amber-100 rounded-full flex items-center justify-center">
             <AlertCircle className="w-12 h-12 text-amber-600" />
           </div>
-          
+
           <div className="text-center space-y-3">
             <h2 className="text-2xl font-bold text-foreground">Limite de Produtos Atingido</h2>
             <p className="text-sm text-muted-foreground">
@@ -678,7 +688,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                   </>
                 )}
               </div>
-              <button 
+              <button
                 type="button"
                 onClick={enhancePhoto}
                 disabled={isCompressingImage || isEnhancing}
@@ -687,7 +697,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                 <Wand2 className="w-4 h-4" />
               </button>
             </div>
-            
+
             <div className="flex flex-col w-full gap-2 px-4">
               <div className="relative">
                 <input type="file" accept="image/*" onChange={handleFileChange} className="hidden" id="gallery-upload" />
@@ -716,16 +726,16 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-muted-foreground uppercase px-1">Código de Barras</label>
             <div className="flex gap-2">
-              <input 
-                type="text" 
-                placeholder="Escaneie ou digite..." 
+              <input
+                type="text"
+                placeholder="Escaneie ou digite..."
                 className="flex-1 bg-white border border-border rounded-2xl px-4 py-3 text-sm focus:outline-none"
                 value={formData.barcode}
                 onChange={e => setFormData({ ...formData, barcode: e.target.value })}
                 data-testid="input-barcode"
               />
-              <button 
-                type="button" 
+              <button
+                type="button"
                 onClick={() => setScanning(true)}
                 className="bg-secondary text-foreground p-3 rounded-2xl border border-border"
                 data-testid="button-scan-barcode"
@@ -738,10 +748,10 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
           {/* Nome */}
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-muted-foreground uppercase px-1">Nome do Produto</label>
-            <input 
+            <input
               required
-              type="text" 
-              placeholder="Ex: Essencial Exclusivo Feminino" 
+              type="text"
+              placeholder={nichoConfig.productNamePlaceholder}
               className="w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm focus:outline-none"
               value={formData.name}
               onChange={e => setFormData({ ...formData, name: e.target.value })}
@@ -779,7 +789,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
               {hasPredefinedBrands && brandMode === 'predefined' ? (
                 // Modo predefinido: select com lista de marcas do nicho
                 <div className="relative">
-                  <select 
+                  <select
                     className="w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm appearance-none focus:outline-none"
                     value={formData.brand}
                     onChange={e => setFormData({ ...formData, brand: e.target.value })}
@@ -813,7 +823,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                 </div>
               )}
             </div>
-            
+
             {/* CATEGORIA — dinâmica por nicho */}
 {/* Público */}
 <div className="space-y-1.5 mt-4">
@@ -844,7 +854,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                 {saveConfirmation && <span className="text-primary animate-pulse italic">✓</span>}
               </label>
               <div className="relative">
-                <select 
+                <select
                   className="w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all appearance-none"
                   value={formData.category}
                   onChange={e => {
@@ -883,7 +893,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
 
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-muted-foreground uppercase px-1">Descrição</label>
-            <textarea className="w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm h-32 focus:outline-none" placeholder="Detalhes do produto..." value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} data-testid="input-description" />
+            <textarea className="w-full bg-white border border-border rounded-2xl px-4 py-3 text-sm h-32 focus:outline-none" placeholder={nichoConfig.descriptionPlaceholder} value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} data-testid="input-description" />
           </div>
 
           {/* === CAMPOS EXTRAS — isolados por nicho === */}
@@ -897,7 +907,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
           {/* Destaques do Catálogo */}
           <div className="p-4 bg-pink-50/60 border border-pink-200/40 rounded-[2rem] space-y-4">
             <h3 className="text-[10px] font-black text-primary uppercase tracking-widest px-1">✨ Destaques do Catálogo</h3>
-            
+
             <div className="flex items-center justify-between gap-3 p-3 bg-white rounded-2xl border border-border/40">
               <label htmlFor="isFeatured" className="text-xs font-bold cursor-pointer flex-1">Produto Destaque</label>
               <input id="isFeatured" type="checkbox" checked={formData.isFeatured} onChange={e => setFormData({ ...formData, isFeatured: e.target.checked })} className="w-5 h-5 cursor-pointer rounded" data-testid="toggle-featured" />
@@ -920,7 +930,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
             <p className="text-xs text-destructive font-medium text-center px-2">{formError}</p>
           )}
 
-          <button 
+          <button
             type="submit"
             className="w-full bg-primary text-white font-bold rounded-2xl py-4 mt-4 shadow-lg shadow-primary/20 active:scale-95 transition-all"
             data-testid="button-save-product"
