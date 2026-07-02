@@ -125,7 +125,6 @@ export async function listImagesFromIndexedDB(): Promise<string[]> {
         
         getAllRequest.onsuccess = () => {
           const keys = getAllRequest.result as string[];
-          console.log("[migration-utils] Found", keys.length, "images in IndexedDB");
           resolve(keys);
         };
         

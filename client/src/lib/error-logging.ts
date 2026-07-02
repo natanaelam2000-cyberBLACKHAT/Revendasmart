@@ -39,7 +39,6 @@ export function initializeErrorLogging(app: FirebaseApp): void {
   try {
     database = getDatabase(app);
     isInitialized = true;
-    console.log("[ErrorLogging] Initialized successfully");
   } catch (error) {
     console.error("[ErrorLogging] Failed to initialize:", error);
   }
@@ -87,8 +86,6 @@ export async function logError(
     const errorsRef = ref(database, "error_logs");
     const newErrorRef = push(errorsRef);
     await set(newErrorRef, errorLog);
-
-    console.log(`[ErrorLogging] Logged: ${errorType}`);
   } catch (err) {
     console.error("[ErrorLogging] Failed to log error:", err);
   }

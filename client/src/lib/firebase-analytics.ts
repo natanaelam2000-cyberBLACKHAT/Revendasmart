@@ -126,7 +126,6 @@ export function initializeFirebaseAnalytics(app: FirebaseApp): void {
   try {
     analytics = getAnalytics(app);
     isInitialized = true;
-    console.log("[FirebaseAnalytics] Initialized successfully");
   } catch (error) {
     console.error("[FirebaseAnalytics] Failed to initialize:", error);
   }
@@ -151,7 +150,6 @@ export function trackAnalyticsEvent<K extends keyof FirebaseAnalyticsEvents>(
       params?: Record<string, unknown>
     ) => void;
     logTypedEvent(analytics, eventName, eventData);
-    console.log(`[FirebaseAnalytics] Tracked: ${eventName}`);
   } catch (err) {
     console.error("[FirebaseAnalytics] Failed to track event:", err);
   }

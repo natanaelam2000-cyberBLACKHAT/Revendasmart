@@ -13,16 +13,6 @@ import { APP_VERSION } from "./lib/mock-data";
 
 
 
-// Service Worker disabled temporarily in production
-// TODO: Re-enable after fixing cache assets and ensuring offline support stability
-// if ('serviceWorker' in navigator) {
-//   window.addEventListener('load', () => {
-//     navigator.serviceWorker.register('/sw.js').catch(err => {
-//       console.log('SW registration failed: ', err);
-//     });
-//   });
-// }
-
 class GlobalErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean}> {
   constructor(props: any) {
     super(props);

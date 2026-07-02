@@ -46,8 +46,6 @@ export function usePlanData() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
 
-      console.log("[usePlanData] loaded:", json);
-
       setData(json);
     } catch (e) {
       console.error("[usePlanData] error:", e);

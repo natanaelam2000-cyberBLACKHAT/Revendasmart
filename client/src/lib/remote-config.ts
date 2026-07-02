@@ -89,7 +89,6 @@ export function unsubscribeFromConfigUpdates(): void {
   if (unsubscribeConfigListener) {
     unsubscribeConfigListener();
     unsubscribeConfigListener = null;
-    console.log("[RemoteConfig] Listener unsubscribed");
   }
 }
 
@@ -111,8 +110,6 @@ export function initializeRemoteConfig(app: FirebaseApp): void {
     remoteConfig.settings.minimumFetchIntervalMillis = 3600000; // 1 hour
     remoteConfig.settings.cacheTTL = 3600000;
     remoteConfig.defaultConfig = DEFAULT_FLAGS;
-    
-    console.log("[RemoteConfig] Initialized with defaults");
     isInitialized = true;
   } catch (error) {
     console.error("[RemoteConfig] Failed to initialize:", error);
@@ -134,7 +131,6 @@ export function setupConfigUpdateListener(): void {
     // unsubscribeConfigListener: Firebase provides a function to unsubscribe
     unsubscribeConfigListener = onConfigUpdate(remoteConfig, {
       next: async () => {
-      console.log("[RemoteConfig] Real-time update received from Firebase, activating...");
       
       try {
         // Activate the updated config before reading values
@@ -150,8 +146,6 @@ export function setupConfigUpdateListener(): void {
           maintenance_mode_enabled: getBoolean(remoteConfig, "maintenance_mode_enabled"),
           maintenance_message: getString(remoteConfig, "maintenance_message"),
         };
-        
-        console.log("[RemoteConfig] Updated flags from listener:", flags);
         notifyFlagsUpdated();
       } catch (error) {
         console.warn("[RemoteConfig] Failed to activate updated config:", error);
@@ -161,11 +155,8 @@ export function setupConfigUpdateListener(): void {
         console.warn("[RemoteConfig] Real-time listener error:", error);
       },
       complete: () => {
-        console.log("[RemoteConfig] Real-time listener completed");
       },
     });
-    
-    console.log("[RemoteConfig] Real-time listener setup complete");
   } catch (error) {
     console.warn("[RemoteConfig] Failed to setup listener, will use fallback refetch:", error);
   }
@@ -198,8 +189,6 @@ export async function fetchRemoteConfig(): Promise<void> {
       maintenance_mode_enabled: getBoolean(remoteConfig, "maintenance_mode_enabled"),
       maintenance_message: getString(remoteConfig, "maintenance_message"),
     };
-    
-    console.log("[RemoteConfig] Fetched and activated:", flags);
     notifyFlagsUpdated();
   } catch (error) {
     console.warn("[RemoteConfig] Failed to fetch, using defaults:", error);
@@ -268,7 +257,6 @@ export function getMaintenanceInfo(): { enabled: boolean; message: string } {
 export function resetToDefaults(): void {
   flags = { ...DEFAULT_FLAGS };
   notifyFlagsUpdated();
-  console.log("[RemoteConfig] Reset to defaults");
 }
 
 /**
@@ -276,6 +264,5 @@ export function resetToDefaults(): void {
  * Respects Firebase cache TTL (1 hour)
  */
 export async function refreshRemoteConfig(): Promise<void> {
-  console.log("[RemoteConfig] Manual refresh requested");
   await fetchRemoteConfig();
 }

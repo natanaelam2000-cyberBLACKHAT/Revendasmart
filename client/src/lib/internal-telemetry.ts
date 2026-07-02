@@ -205,7 +205,6 @@ export function initializeInternalTelemetry(app: FirebaseApp): void {
   try {
     database = getDatabase(app);
     isInitialized = true;
-    console.log("[InternalTelemetry] Initialized successfully");
   } catch (error) {
     console.error("[InternalTelemetry] Failed to initialize:", error);
   }
@@ -237,8 +236,6 @@ export async function logTelemetryEvent<K extends keyof InternalTelemetryEvents>
     const eventsRef = ref(database, "analytics_events");
     const newEventRef = push(eventsRef);
     await set(newEventRef, eventLog);
-
-    console.log(`[InternalTelemetry] Logged: ${eventName}`);
   } catch (err) {
     console.error("[InternalTelemetry] Failed to log event:", err);
   }

@@ -104,7 +104,6 @@ export function useDashboardData(): DashboardData {
       }, 500);
 
       // Debug logging
-      console.log("[useDashboardData] UID:", uid);
 
     });
 

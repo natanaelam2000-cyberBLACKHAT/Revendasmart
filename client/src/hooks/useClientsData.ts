@@ -86,7 +86,6 @@ export function useClientsData(): ClientsData {
             ...clientData,
             id: clientId
           });
-          console.log("[useClientsData] Client created:", clientId);
           return clientId;
         } catch (err) {
           console.error("[useClientsData] Error creating client:", err);

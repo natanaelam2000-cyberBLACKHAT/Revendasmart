@@ -208,7 +208,6 @@ export default function Sell() {
           });
         } else {
           const chargeData = await chargeResponse.json();
-          console.log("[sell] Charge created:", chargeData.chargeId);
         }
       }
 

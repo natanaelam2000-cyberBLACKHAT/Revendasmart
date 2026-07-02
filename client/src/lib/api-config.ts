@@ -7,13 +7,11 @@ export function getApiBaseUrl(): string {
   const viteApiBase = import.meta.env.VITE_API_BASE_URL;
   
   if (viteApiBase) {
-    console.log("[API Config] Using VITE_API_BASE_URL:", viteApiBase);
     return viteApiBase;
   }
 
   // Fallback to current origin (works for local dev)
   const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5000';
-  console.log("[API Config] Using window.location.origin:", origin);
   return origin;
 }
 

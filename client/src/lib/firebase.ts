@@ -39,19 +39,6 @@ function initializeFirebase() {
       }
     }
 
-    // Diagnóstico completo do ambiente Firebase carregado no frontend
-    const apiKey = firebaseConfig.apiKey;
-    const maskedApiKey = apiKey
-      ? `${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)}`
-      : "UNDEFINED";
-
-    console.log("[FIREBASE DEBUG] apiKey loaded from VITE_FIREBASE_API_KEY:", maskedApiKey);
-    console.log("[FIREBASE DEBUG] projectId:", firebaseConfig.projectId);
-    console.log("[FIREBASE DEBUG] authDomain:", firebaseConfig.authDomain);
-    console.log("[FIREBASE DEBUG] appId:", firebaseConfig.appId);
-    console.log("[FIREBASE DEBUG] storageBucket:", firebaseConfig.storageBucket);
-    console.log("[FIREBASE DEBUG] messagingSenderId:", firebaseConfig.messagingSenderId);
-
    // 🔥 CORREÇÃO CRÍTICA
 app = getApps().length === 0
   ? initializeApp(firebaseConfig)
@@ -62,15 +49,10 @@ authInstance = getAuth(app);
 
 // força persistência corretamente
 setPersistence(authInstance, browserLocalPersistence)
-  .then(() => {
-    console.log("[Firebase] Persistence set to LOCAL");
-  })
+  .then(() => undefined)
   .catch((err) => {
     console.error("[Firebase] Persistence error:", err);
   });
-    console.log("[FIREBASE DEBUG] initialized app name:", app.name);
-    console.log("[FIREBASE DEBUG] initialized app projectId:", app.options?.projectId);
-    console.log("[FIREBASE DEBUG] initialized app authDomain:", app.options?.authDomain);
 
     // Initialize error logging after Firebase is initialized
     try {
@@ -154,25 +136,14 @@ export function isFirebaseConfigured(): boolean {
 export async function getFirebaseIdToken(): Promise<string | null> {
   try {
     const { auth } = initializeFirebase();
-    console.log("[getFirebaseIdToken] auth exists:", !!auth);
 
     const user = auth?.currentUser;
-    console.log(
-      "[getFirebaseIdToken] currentUser exists:",
-      !!user,
-      user?.uid ? `uid=${user.uid}` : "no uid"
-    );
 
     if (!user) {
-      console.log("[getFirebaseIdToken] No user, returning null");
       return null;
     }
 
     const token = await user.getIdToken();
-    console.log(
-      "[getFirebaseIdToken] Token obtained:",
-      token ? `token=${token.substring(0, 20)}...` : "null"
-    );
     return token;
   } catch (e) {
     console.warn("[getFirebaseIdToken] Failed to get ID token:", e);

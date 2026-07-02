@@ -69,8 +69,6 @@ export default function Login() {
       }
     } catch (err: any) {
       // Diagnóstico: log detalhado do erro do Firebase
-      console.log("[LOGIN DEBUG] Firebase Auth Error Code:", err.code);
-      console.log("[LOGIN DEBUG] Firebase Auth Error Message:", err.message);
       console.error("[login] Firebase auth error:", err);
       
       // User-friendly error messages

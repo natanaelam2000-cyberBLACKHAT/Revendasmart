@@ -130,7 +130,6 @@ export default function Onboarding() {
         }
 
         const responseData = await response.json();
-        console.log("[onboarding] Success:", { onboarding_completed: responseData.onboarding_completed });
 
         // CRITICAL: Patch settings in ALL hook instances BEFORE navigating.
         // App.tsx uses useUserSettings() independently — it will NOT refetch on its own.
@@ -193,8 +192,6 @@ export default function Onboarding() {
             }
           })();
         }
-
-        console.log("[onboarding] Settings patched optimistically — navigating to dashboard");
         setLocation("/?action=first_product");
       } finally {
         clearTimeout(timeoutId);

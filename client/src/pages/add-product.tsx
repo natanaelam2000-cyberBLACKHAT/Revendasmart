@@ -227,8 +227,6 @@ const [, setLocation] = useLocation();
     const newConfig = getNichoConfig(activeNicho);
     const newHasPredefined = !!newConfig.predefinedBrands;
     setLocalBrandSuggestions(loadLocalBrandSuggestions(activeNicho));
-    console.log("[add-product] Active nicho changed to:", activeNicho);
-
     setFormData(prev => {
       const newCategory = prev.category;
       // If current category doesn't belong to new nicho, reset to first category of new nicho
@@ -446,31 +444,14 @@ const productId = id || productRef.id;
         return;
       }
 
-      // DEBUG: Log final payload before save
-      console.log("[add-product] Final payload to save:", {
-        productId,
-        uid,
-        operation: id ? "UPDATE" : "CREATE",
-        name: productData.name,
-        category: productData.category,
-        productType: productData.productType,
-        salePrice: productData.salePrice,
-        brand: productData.brand,
-        extras: productData.extras,
-        extraFieldsCount: Object.keys(productData.extras).length,
-      });
-
-
 
       if (id) {
         try {
-          console.log("[add-product] Updating product:", id);
      await setDoc(
   doc(firestore, "users", uid, "products", id),
   { ...productData, id },
   { merge: true }
 );
-          console.log("[add-product] Product updated successfully:", id);
         } catch (writeErr) {
           const errorMsg = (writeErr as Error)?.message || "unknown error";
           console.error("[add-product] Update failed:", errorMsg);
@@ -480,8 +461,6 @@ const productId = id || productRef.id;
         }
       } else {
         // Validate plan limits for new products.
-        console.log("[DEBUG] activePlan:", activePlan);
-        console.log("[DEBUG] checkProductLimit exists:", checkProductLimit);
 if (!uid) {
   setFormError("Usuário não autenticado.");
   notifyError("Sessão expirada. Faça login novamente.");
@@ -495,8 +474,6 @@ const productDocs = await getDocs(
 const productCount = productDocs.size;
 
 const safePlan: PlanType = activePlan === "premium" ? "premium" : "free";
-console.log("[DEBUG] safePlan =", safePlan);
-console.log("[DEBUG] productCount =", productCount);
 const { allowed } = checkProductLimit(safePlan, productCount, true);
 
 if (!allowed) {
@@ -507,7 +484,6 @@ if (!allowed) {
 
         const newProduct: Product = { ...productData, id: productId };
         try {
-          console.log("[add-product] Creating product:", productId);
           await measureOperation("product_creation", async () => {
   await setDoc(
     doc(firestore, "users", uid, "products", productId),
@@ -523,7 +499,6 @@ if (!allowed) {
     throw new Error("Verification failed");
   }
 
-  console.log("[add-product] OK:", productId);
 });
         } catch (writeErr) {
           const errorMsg = (writeErr as Error)?.message || "unknown error";
@@ -596,13 +571,6 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         imageUrl: URL.createObjectURL(compressedFile),
       };
     });
-
-    // log opcional
-    const originalSizeMB = (file.size / (1024 * 1024)).toFixed(2);
-    const compressedSizeMB = (compressedBlob.size / (1024 * 1024)).toFixed(2);
-    console.log(
-      `[add-product] Image compressed: ${originalSizeMB}MB → ${compressedSizeMB}MB`
-    );
 
   } catch (err) {
     console.error("[add-product] Compression error:", err);

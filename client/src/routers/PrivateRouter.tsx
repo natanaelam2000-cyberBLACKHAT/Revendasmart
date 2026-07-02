@@ -78,9 +78,9 @@ function PrivateRoutes() {
               "Content-Type": "application/json",
               Authorization: `Bearer ${token}`,
             },
-          }).catch((error) => console.log("[App] Plan init fetch error (expected if already exists):", error.message));
-        } catch (error) {
-          console.log("[App] Plan initialization error:", error);
+          }).catch(() => undefined);
+        } catch {
+          // Plano inicial é revalidado pelo provider; falha aqui não bloqueia navegação.
         }
       }
     });

@@ -40,7 +40,6 @@ export function RemoteConfigProvider({ children }: RemoteConfigProviderProps) {
   // Register callback for flag updates
   useEffect(() => {
     setFlagsUpdatedCallback((updatedFlags) => {
-      console.log("[RemoteConfigProvider] Flags updated, rerendering...", updatedFlags);
       setFlags(updatedFlags);
     });
   }, []);
@@ -50,11 +49,9 @@ export function RemoteConfigProvider({ children }: RemoteConfigProviderProps) {
     (async () => {
       try {
         await fetchRemoteConfigFn();
-        console.log("[RemoteConfigProvider] Initial fetch completed");
         
         // Setup real-time listener for updates
         setupConfigUpdateListener();
-        console.log("[RemoteConfigProvider] Real-time listener initialized");
       } catch (err) {
         console.warn("[RemoteConfigProvider] Initial fetch failed:", err);
       } finally {
@@ -73,7 +70,6 @@ export function RemoteConfigProvider({ children }: RemoteConfigProviderProps) {
     // 1. Refetch when tab becomes visible (user returns to tab)
     const handleVisibilityChange = () => {
       if (!document.hidden) {
-        console.log("[RemoteConfigProvider] Tab became visible, refreshing config...");
         refreshRemoteConfig().catch((err) =>
           console.warn("[RemoteConfigProvider] Tab visibility refetch failed:", err)
         );
@@ -84,7 +80,6 @@ export function RemoteConfigProvider({ children }: RemoteConfigProviderProps) {
 
     // 2. Refetch when app resumes from background (PWA/mobile)
     const handlePageShow = () => {
-      console.log("[RemoteConfigProvider] App resumed from background, refreshing config...");
       refreshRemoteConfig().catch((err) =>
         console.warn("[RemoteConfigProvider] App resume refetch failed:", err)
       );

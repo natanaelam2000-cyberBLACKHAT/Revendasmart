@@ -23,7 +23,6 @@ export const logProductImageData = (
   };
 
   console.group(`🖼️ [${screenName}] Product Image Data`);
-  console.log(log);
   console.groupEnd();
 
   return log;

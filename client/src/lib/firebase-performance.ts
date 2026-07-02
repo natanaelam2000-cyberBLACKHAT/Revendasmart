@@ -34,12 +34,6 @@ export function initializeFirebasePerformance(app: FirebaseApp): void {
     
     // Enable automatic metrics collection
     if (performance) {
-      console.log("[FirebasePerformance] Initialized successfully");
-      console.log("[FirebasePerformance] Automatic metrics enabled:");
-      console.log("  - Page load time");
-      console.log("  - Network requests (XHR/Fetch)");
-      console.log("  - First Contentful Paint (FCP)");
-      console.log("  - Largest Contentful Paint (LCP)");
     }
   } catch (error) {
     console.error("[FirebasePerformance] Failed to initialize:", error);
@@ -63,12 +57,10 @@ export async function measureOperation<T>(
   
   try {
     customTrace.start();
-    console.log(`[FirebasePerformance] Trace started: ${operationName}`);
     
     const result = await operation();
     
     customTrace.stop();
-    console.log(`[FirebasePerformance] Trace completed: ${operationName}`);
     
     return result;
   } catch (error) {
@@ -125,11 +117,9 @@ export function createTrace(operationName: string) {
   return {
     start: () => {
       customTrace.start();
-      console.log(`[FirebasePerformance] Manual trace started: ${operationName}`);
     },
     stop: () => {
       customTrace.stop();
-      console.log(`[FirebasePerformance] Manual trace stopped: ${operationName}`);
     },
     setAttribute: (name: string, value: string) => {
       try {

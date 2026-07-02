@@ -19,7 +19,6 @@ const refetchListeners = new Set<() => void>();
  * Does NOT make a network request — just updates in-memory state.
  */
 export function patchUserSettingsOptimistic(patch: Partial<AppSettings>) {
-  console.log("[useUserSettings] patchUserSettingsOptimistic:", Object.keys(patch));
   patchListeners.forEach(fn => fn(patch));
 }
 
@@ -28,7 +27,6 @@ export function patchUserSettingsOptimistic(patch: Partial<AppSettings>) {
  * Use this when you need fresh data from Firestore.
  */
 export function invalidateUserSettings() {
-  console.log("[useUserSettings] invalidateUserSettings() — triggering refetch in all instances");
   refetchListeners.forEach(fn => fn());
 }
 
@@ -112,8 +110,6 @@ export function useUserSettings(): UseUserSettingsResult {
         const endpoint = `/api/user/settings/${currentUser.uid}?debug_auth=1&ts=${debugTs}`;
         const fetchUrl = getApiUrl(endpoint);
 
-        console.log("[useUserSettings] Fetching settings (refetchSignal=" + refetchSignal + ")");
-
         const response = await fetch(fetchUrl, {
           headers: {
             "Content-Type": "application/json",
@@ -124,9 +120,6 @@ export function useUserSettings(): UseUserSettingsResult {
         if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 
         const data = await response.json();
-        const onbCompleted = data.settings?.onboarding_completed;
-        console.log("[useUserSettings] Settings loaded — onboarding_completed=", onbCompleted);
-
         if (isMounted) {
           const mergedSettings = { ...defaultSettings, ...data.settings };
           setSettings(mergedSettings);
@@ -142,7 +135,6 @@ export function useUserSettings(): UseUserSettingsResult {
       } finally {
         if (isMounted) {
           setLoading(false);
-          console.log("[useUserSettings] Loading complete");
         }
       }
     })();

@@ -135,11 +135,7 @@ export default function Subscribe() {
       const token = await getFirebaseIdToken();
       if (!token) throw new Error("Sessão expirada. Faça login novamente.");
 
-      console.log("[subscribe/handleSubscribe] Token obtained, calling /api/app-subscription/create");
-
       const apiUrl = getApiUrl("/api/app-subscription/create");
-      console.log("[subscribe/handleSubscribe] API URL:", apiUrl);
-
       const res = await fetch(apiUrl, {
         method: "POST",
         headers: {
@@ -148,11 +144,7 @@ export default function Subscribe() {
         },
       });
 
-      console.log("[subscribe/handleSubscribe] Response status:", res.status);
-
       const data = await res.json();
-      console.log("[subscribe/handleSubscribe] Response data:", data);
-
       if (!res.ok) {
         console.error("[subscribe/handleSubscribe] Error response:", data);
         if (data.error === "ALREADY_SUBSCRIBED") {
@@ -168,7 +160,6 @@ export default function Subscribe() {
         // Priority order: message (string) > details.message > details.error > error field
         if (typeof data.message === 'string' && data.message.length > 0) {
           errorMsg = data.message;
-          console.log("[subscribe/handleSubscribe] Using string message:", errorMsg);
         } else if (typeof data.message === 'object' && data.message !== null) {
           // Message is object — try to extract string from it
           console.warn("[subscribe/handleSubscribe] Message is object, attempting to extract:", data.message);
@@ -190,7 +181,6 @@ export default function Subscribe() {
         
         // Try details field if message didn't work
         if (errorMsg === "Erro ao criar assinatura" && data.details) {
-          console.log("[subscribe/handleSubscribe] Checking details:", data.details);
           if (data.details.message && typeof data.details.message === 'string') {
             errorMsg = data.details.message;
           } else if (data.details.error && typeof data.details.error === 'string') {
@@ -205,7 +195,7 @@ export default function Subscribe() {
         
         // Final validation — never return [object Object]
         if (errorMsg === "[object Object]" || errorMsg.includes("[object Object]")) {
-          console.error("[subscribe/handleSubscribe] ⚠️ DETECTED [object Object]! Full data:", data);
+          console.error("[subscribe/handleSubscribe] Invalid error payload received.");
           errorMsg = "Erro ao criar assinatura. Verifique os logs.";
         }
         
@@ -215,7 +205,6 @@ export default function Subscribe() {
 
       if (!data.initPoint) throw new Error("Link de checkout não retornado pela API.");
 
-      console.log("[subscribe/handleSubscribe] Redirecting to checkout:", data.initPoint.substring(0, 50));
       setStatus("redirecting");
       // Redirect to Mercado Pago checkout
       window.location.href = data.initPoint;

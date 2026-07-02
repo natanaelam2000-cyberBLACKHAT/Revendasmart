@@ -44,7 +44,6 @@ export default function Signup() {
       // Handle referral attribution if captured from deep link
       const referralUid = localStorage.getItem("rs:referral_source");
       if (referralUid) {
-        console.log("[signup] Processing referral:", referralUid);
         
         // 1. Log client-side application attempt
         logTelemetryEvent("referral_applied_client", { referralUid, stage: "signup_local", result: "success" }, user.uid).catch(() => {});
@@ -77,7 +76,6 @@ export default function Signup() {
 
           if (apiResponse.ok) {
             const apiData = await apiResponse.json();
-            console.log("[signup] Referral persisted to backend:", apiData.referralValidation);
             logTelemetryEvent("referral_applied_backend", { 
               referralUid, 
               stage: "signup_api", 
