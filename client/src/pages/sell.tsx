@@ -1,22 +1,20 @@
-import { useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Product, getProductImage } from "@/lib/mock-data";
 import { Layout } from "@/components/layout";
 import { ProductImageCard } from "@/components/ProductImageCard";
-import { Search, ShoppingBag, Plus, Minus, CheckCircle2, AlertCircle } from "lucide-react";
+import { Search, Plus, Minus, CheckCircle2 } from "lucide-react";
 import { useLocation } from "wouter";
-import { useProductsData } from "@/hooks/useProductsData";
-import { useClientsLiteData } from "@/hooks/useClientsLiteData";
+import { useProductPickerData } from "@/hooks/useProductPickerData";
+import { useClientPickerData } from "@/hooks/useClientPickerData";
 import { getFirebaseAuth, logError, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";
 import { notifyError, notifySuccess, notifyWarning } from "@/lib/notify";
 import { getApiUrl } from "@/lib/api-config";
 
 export default function Sell() {
   const [, setLocation] = useLocation();
-  const { products, loading: productsLoading } = useProductsData();
-  const { clients, loading: clientsLoading } = useClientsLiteData();
-  
-  const [search, setSearch] = useState("");
+  const { products, loading: productsLoading, loadingMore: productsLoadingMore, error: productsError, hasMore: hasMoreProducts, search, setSearch, loadMore: loadMoreProducts } = useProductPickerData();
+  const { clients, loading: clientsLoading, loadingMore: clientsLoadingMore, error: clientsError, hasMore: hasMoreClients, search: clientSearch, setSearch: setClientSearch, loadMore: loadMoreClients } = useClientPickerData();
   const [selectedClient, setSelectedClient] = useState<string>("");
   const [cart, setCart] = useState<{product: Product, quantity: number}[]>([]);
   const [paymentType, setPaymentType] = useState<'cash' | 'installments'>('cash');
@@ -30,9 +28,15 @@ export default function Sell() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
 
-  const filteredProducts = products.filter(p => 
-    p.name.toLowerCase().includes(search.toLowerCase()) && p.stock > 0
-  );
+  const normalizedProductSearch = search.trim().toLowerCase();
+  const filteredProducts = useMemo(() => products.filter((product) =>
+    product.name.toLowerCase().includes(normalizedProductSearch) && product.stock > 0
+  ), [normalizedProductSearch, products]);
+
+  const normalizedClientSearch = clientSearch.trim().toLowerCase();
+  const filteredClients = useMemo(() => clients.filter((client) =>
+    client.name.toLowerCase().includes(normalizedClientSearch) || client.phone?.includes(normalizedClientSearch)
+  ), [clients, normalizedClientSearch]);
 
   const addToCart = (product: Product) => {
     setCart(prev => {
@@ -65,7 +69,7 @@ export default function Sell() {
       setSaveError("Adicione produtos ao carrinho");
       return;
     }
-    
+
     if (!selectedClient) {
       setSaveError("Selecione um cliente para prosseguir");
       return;
@@ -93,7 +97,7 @@ export default function Sell() {
 
     const auth = getFirebaseAuth();
     const uid = auth?.currentUser?.uid;
-    
+
     if (!uid) {
       setSaveError("Usuário não autenticado");
       return;
@@ -216,15 +220,15 @@ export default function Sell() {
       setSaveError("Erro ao registrar venda. Tente novamente.");
       notifyError("Erro ao registrar venda.");
       console.error("[sell] Checkout error:", err);
-      
+
       // Log to Crashlytics
       logError("sale_checkout_error", errorMsg, {
         error: err instanceof Error ? err : undefined,
-        context: { 
+        context: {
           clientId: selectedClient,
-          cartItems: cart.length, 
+          cartItems: cart.length,
           paymentType,
-          totalAmount: total 
+          totalAmount: total
         },
         userId: uid,
         severity: "error",
@@ -256,24 +260,42 @@ export default function Sell() {
     <Layout title="Registrar Venda">
       <div className="flex flex-col h-full">
         <div className="p-6 bg-white border-b border-border/50 space-y-4">
-          <div>
+          <div className="space-y-2">
             <label className="text-xs font-semibold text-muted-foreground mb-1 block">Cliente (Obrigatório)</label>
-            <select 
+            <div className="relative">
+              <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type="text"
+                placeholder="Pesquisar cliente..."
+                className="w-full bg-secondary/50 border-none rounded-full py-3 pl-11 pr-4 text-sm"
+                value={clientSearch}
+                onChange={(e) => setClientSearch(e.target.value)}
+              />
+            </div>
+            <select
               required
               className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none"
               value={selectedClient}
               onChange={e => setSelectedClient(e.target.value)}
             >
               <option value="">Selecione o cliente...</option>
-              {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {filteredClients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
+            {hasMoreClients && (
+              <button type="button" onClick={() => void loadMoreClients()} disabled={clientsLoadingMore} className="w-full rounded-xl bg-secondary/60 px-4 py-2 text-xs font-semibold text-muted-foreground disabled:opacity-60">
+                {clientsLoadingMore ? "Carregando..." : "Carregar mais"}
+              </button>
+            )}
+            {clientSearch && hasMoreClients && (
+              <p className="px-1 text-[11px] text-muted-foreground">Carregue mais clientes para ampliar a busca.</p>
+            )}
           </div>
-          
+
           <div className="relative">
             <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            <input 
-              type="text" 
-              placeholder="Buscar produto..." 
+            <input
+              type="text"
+              placeholder="Pesquisar produto..."
               className="w-full bg-secondary/50 border-none rounded-full py-3 pl-11 pr-4 text-sm"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -282,6 +304,9 @@ export default function Sell() {
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 pb-48 hide-scrollbar">
+          {(productsError || clientsError) && (
+            <p className="mb-3 rounded-xl bg-destructive/10 px-3 py-2 text-xs font-semibold text-destructive">Ocorreu um erro temporário ao carregar dados.</p>
+          )}
           <div className="grid grid-cols-2 gap-4">
             {filteredProducts.map(product => {
               const qty = cart.find(c => c.product.id === product.id)?.quantity || 0;
@@ -306,6 +331,14 @@ export default function Sell() {
               );
             })}
           </div>
+          {hasMoreProducts && (
+            <button type="button" onClick={() => void loadMoreProducts()} disabled={productsLoadingMore} className="mt-4 w-full rounded-2xl bg-white border border-border/50 px-4 py-3 text-xs font-semibold text-muted-foreground shadow-sm disabled:opacity-60">
+              {productsLoadingMore ? "Carregando..." : "Carregar mais"}
+            </button>
+          )}
+          {search && hasMoreProducts && (
+            <p className="mt-2 text-center text-[11px] text-muted-foreground">Carregue mais produtos para ampliar a busca.</p>
+          )}
         </div>
 
         {cart.length > 0 && (
@@ -326,23 +359,23 @@ export default function Sell() {
               </div>
               {/* Payment Type Toggle */}
               <div className="flex gap-3 mb-4">
-                <button 
+                <button
                   data-testid="button-payment-cash"
                   onClick={() => setPaymentType('cash')}
                   className={`flex-1 px-4 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                    paymentType === 'cash' 
-                      ? 'bg-primary text-white shadow-sm' 
+                    paymentType === 'cash'
+                      ? 'bg-primary text-white shadow-sm'
                       : 'bg-secondary/40 text-muted-foreground'
                   }`}
                 >
                   À Vista
                 </button>
-                <button 
+                <button
                   data-testid="button-payment-installments"
                   onClick={() => setPaymentType('installments')}
                   className={`flex-1 px-4 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                    paymentType === 'installments' 
-                      ? 'bg-primary text-white shadow-sm' 
+                    paymentType === 'installments'
+                      ? 'bg-primary text-white shadow-sm'
                       : 'bg-secondary/40 text-muted-foreground'
                   }`}
                 >
@@ -363,11 +396,11 @@ export default function Sell() {
                   {/* Entrada */}
                   <div>
                     <label className="text-[10px] font-semibold text-muted-foreground block mb-1">Entrada (Opcional)</label>
-                    <input 
+                    <input
                       data-testid="input-installment-down-payment"
-                      type="number" 
+                      type="number"
                       className="w-full bg-secondary/30 border-none rounded-lg p-2 text-sm font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                      value={downPayment} 
+                      value={downPayment}
                       onChange={e => setDownPayment(Math.max(0, Number(e.target.value)))}
                       min={0}
                       max={total}
@@ -385,11 +418,11 @@ export default function Sell() {
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="text-[10px] font-semibold text-muted-foreground block mb-1">Parcelas</label>
-                      <input 
+                      <input
                         data-testid="input-installment-count"
-                        type="number" 
+                        type="number"
                         className="w-full bg-secondary/30 border-none rounded-lg p-2 text-sm font-bold text-foreground text-center focus:outline-none focus:ring-1 focus:ring-primary"
-                        value={installments} 
+                        value={installments}
                         onChange={e => setInstallments(Math.max(1, Math.min(12, Number(e.target.value))))}
                         min={1}
                         max={12}
@@ -398,7 +431,7 @@ export default function Sell() {
                     <div>
                       <label className="text-[10px] font-semibold text-muted-foreground block mb-1">Valor/Parc</label>
                       <div className="bg-primary/5 border border-primary/10 rounded-lg p-2 text-xs font-bold text-primary text-center">
-                        {remainingBalance > 0 && installments > 0 
+                        {remainingBalance > 0 && installments > 0
                           ? `R$ ${(remainingBalance / installments).toFixed(2)}`
                           : '-'
                         }
@@ -420,7 +453,7 @@ export default function Sell() {
               )}
 
               {/* CTA Button - Primary Action */}
-              <button 
+              <button
                 data-testid="button-finalize-sale"
                 onClick={handleCheckout}
                 disabled={!selectedClient || cart.length === 0 || isSaving || (paymentType === 'installments' && installments < 1)}

@@ -1,11 +1,11 @@
 import { useEffect, useState, useMemo, useRef } from "react";
 import { Layout } from "@/components/layout";
 import { defaultSettings, getProductImage } from "@/lib/mock-data";
-import { useProductsData } from "@/hooks/useProductsData";
+import { useProductPickerData } from "@/hooks/useProductPickerData";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, logError } from "@/lib/firebase";
 import { useFeatureEnabled } from "@/lib/remote-config-context";
-import { MessageSquare, Sparkles, Copy, Smartphone, Wallet, Info, Image as ImageIcon, History, WandSparkles } from "lucide-react";
+import { Search, MessageSquare, Sparkles, Copy, Smartphone, Wallet, Info, Image as ImageIcon, History, WandSparkles } from "lucide-react";
 import { useMarketingHistory, type MarketingHistoryEntry, type MarketingAction } from "@/hooks/useMarketingHistory";
 import { MarketingHistoryPanel } from "@/components/MarketingHistoryPanel";
 import { MarketingStats } from "@/components/MarketingStats";
@@ -14,13 +14,13 @@ import { createMarketingCard, downloadMarketingCard } from "@/lib/marketing-card
 import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
 
 export default function Marketing() {
-  const { products, loading, error } = useProductsData();
+  const { products, loading, loadingMore, error, hasMore, search, setSearch, loadMore } = useProductPickerData();
   const { settings: firestoreSettings } = useUserSettings();
   const settings = firestoreSettings || defaultSettings;
   const v2TemplatesEnabled = useFeatureEnabled("marketing_templates_v2_enabled");
-  
+
   const [imageError, setImageError] = useState("");
-  
+
   // Ad Generator State
   const [selectedProductId, setSelectedProductId] = useState('');
   const [selectedKitId, setSelectedKitId] = useState('');
@@ -33,18 +33,24 @@ export default function Marketing() {
   const generatedKeys = useRef(new Set<string>());
   const { entries: historyEntries, loading: historyLoading, recordAction, removeEntry, clearHistory } = useMarketingHistory();
 
-  // Get products and filter Kit products from Firestore (unified source)
-  const kitProducts = useMemo(() => 
-    products.filter(p => p.category === 'Kit'),
-    [products]
+  const normalizedProductSearch = search.trim().toLowerCase();
+  const filteredProducts = useMemo(() =>
+    products.filter((product) => product.name.toLowerCase().includes(normalizedProductSearch)),
+    [normalizedProductSearch, products]
   );
 
-  const selectedProduct = useMemo(() => 
-    products.find(p => p.id === selectedProductId), 
+  // Get products and filter Kit products from Firestore (unified source)
+  const kitProducts = useMemo(() =>
+    filteredProducts.filter(p => p.category === 'Kit'),
+    [filteredProducts]
+  );
+
+  const selectedProduct = useMemo(() =>
+    products.find(p => p.id === selectedProductId),
     [products, selectedProductId]
   );
 
-  const selectedKit = useMemo(() => 
+  const selectedKit = useMemo(() =>
     kitProducts.find(k => k.id === selectedKitId),
     [kitProducts, selectedKitId]
   );
@@ -59,10 +65,10 @@ export default function Marketing() {
 
   const generatedText = useMemo(() => {
     if (!selectedProduct && !selectedKit) return '';
-    
+
     const t = templates[template as keyof typeof templates];
     const price = priceOverride || (selectedProduct ? selectedProduct.salePrice.toFixed(2) : selectedKit?.salePrice.toFixed(2));
-    
+
     let text = `${t.emoji} *${t.headline}*\n\n`;
     const item = selectedProduct || selectedKit;
     if (item) {
@@ -72,9 +78,9 @@ export default function Marketing() {
     }
     text += `💰 *Por apenas R$ ${price}*\n\n`;
     text += `✅ Pronta entrega\n`;
-    
+
     if (note) text += `📝 ${note}\n`;
-    
+
     if (selectedProduct?.extras) {
       Object.entries(selectedProduct.extras).forEach(([key, val]) => {
         if (val) {
@@ -87,14 +93,14 @@ export default function Marketing() {
         }
       });
     }
-    
+
     text += `\n💬 ${ctaText}\n`;
-    
+
     if (includePayment) {
       if (settings.pixKey) text += `\n🔑 PIX: ${settings.pixKey}`;
       if (settings.paymentLink) text += `\n💳 Link de Pagamento: ${settings.paymentLink}`;
     }
-    
+
     return text;
   }, [selectedProduct, selectedKit, template, priceOverride, note, ctaText, includePayment, settings]);
 
@@ -225,12 +231,25 @@ export default function Marketing() {
                   </div>
                 </div>
               )}
-              
+
               {/* Product/Kit Selection */}
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-muted-foreground px-1">Pesquisar produto</label>
+                <div className="relative">
+                  <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    type="text"
+                    placeholder="Pesquisar produto..."
+                    className="w-full bg-white border border-border rounded-2xl py-3 pl-11 pr-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                </div>
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <label className="text-xs font-semibold text-muted-foreground px-1">Produto Solo</label>
-                  <select 
+                  <select
                     className="w-full bg-white border border-border rounded-2xl p-4 text-xs focus:ring-2 focus:ring-primary/20 outline-none"
                     value={selectedProductId}
                     onChange={e => {
@@ -239,12 +258,12 @@ export default function Marketing() {
                     }}
                   >
                     <option value="">Escolher...</option>
-                    {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    {filteredProducts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs font-semibold text-muted-foreground px-1">Ou um Kit</label>
-                  <select 
+                  <select
                     className="w-full bg-white border border-border rounded-2xl p-4 text-xs focus:ring-2 focus:ring-primary/20 outline-none"
                     value={selectedKitId}
                     onChange={e => {
@@ -261,13 +280,21 @@ export default function Marketing() {
                   </select>
                 </div>
               </div>
+              {hasMore && (
+                <button type="button" onClick={() => void loadMore()} disabled={loadingMore} className="w-full rounded-2xl bg-white border border-border px-4 py-3 text-xs font-semibold text-muted-foreground shadow-sm disabled:opacity-60">
+                  {loadingMore ? "Carregando..." : "Carregar mais"}
+                </button>
+              )}
+              {search && hasMore && (
+                <p className="px-1 text-center text-[11px] text-muted-foreground">Carregue mais produtos para ampliar a busca.</p>
+              )}
 
               {/* Template Selection */}
               <div className="space-y-2">
                 <label className="text-xs font-semibold text-muted-foreground px-1">Escolha o Tema</label>
                 <div className="grid grid-cols-3 gap-2">
                   {Object.entries(templates).map(([key, t]) => (
-                    <button 
+                    <button
                       key={key}
                       onClick={() => setTemplate(key)}
                       className={`rs-card-interactive flex flex-col items-center gap-1 p-3 rounded-2xl border ${template === key ? 'bg-primary/5 border-primary text-primary shadow-sm' : 'bg-white border-border text-muted-foreground'}`}
@@ -283,8 +310,8 @@ export default function Marketing() {
               <div className="space-y-4 bg-white p-6 rounded-3xl border border-border/50 shadow-sm">
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-muted-foreground px-1">Preço Especial (Opcional)</label>
-                  <input 
-                    type="number" 
+                  <input
+                    type="number"
                     placeholder="Ex: 89.90"
                     className="w-full bg-secondary/30 border-none rounded-xl p-3 text-sm"
                     value={priceOverride}
@@ -302,8 +329,8 @@ export default function Marketing() {
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-muted-foreground px-1">Nota Curta</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     placeholder="Ex: Só hoje!, Frete Grátis"
                     className="w-full bg-secondary/30 border-none rounded-xl p-3 text-sm"
                     value={note}
@@ -312,22 +339,22 @@ export default function Marketing() {
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-muted-foreground px-1">Chamada (CTA)</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     className="w-full bg-secondary/30 border-none rounded-xl p-3 text-sm"
                     value={ctaText}
                     onChange={e => setCtaText(e.target.value)}
                   />
                 </div>
-                
+
                 {(settings.pixKey || settings.paymentLink) && (
                   <div className="flex items-center justify-between pt-2 border-t border-border/50 mt-2">
                     <div className="flex items-center gap-2">
                       <Wallet className="w-4 h-4 text-primary" />
                       <span className="text-xs font-semibold text-muted-foreground">Incluir Pagamento</span>
                     </div>
-                    <input 
-                      type="checkbox" 
+                    <input
+                      type="checkbox"
                       checked={includePayment}
                       onChange={e => setIncludePayment(e.target.checked)}
                       className="w-5 h-5 accent-primary"
@@ -362,9 +389,9 @@ export default function Marketing() {
                         </div>
                       </div>
                     </div>
-                    
+
                     {/* CTA Hierarchy: Primary > Secondary > Tertiary */}
-                    <button 
+                    <button
                       onClick={handleCopy}
                       className={`w-full font-semibold py-4 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all mb-3 border ${
                         copied
@@ -378,7 +405,7 @@ export default function Marketing() {
                       </>}
                     </button>
 
-                    <button 
+                    <button
                       onClick={handleShare}
                       className="rs-pressable w-full bg-[#25D366] text-white font-semibold py-3.5 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-md hover:shadow-lg mb-3"
                       data-testid="button-share-whatsapp-ad"
@@ -387,7 +414,7 @@ export default function Marketing() {
                     </button>
 
                     {imageError && <p className="mb-3 rounded-xl bg-red-50 p-3 text-center text-[10px] font-bold text-red-700">{imageError}</p>}
-                    <button 
+                    <button
                       onClick={handleDownloadImage}
                       className="rs-pressable w-full bg-white text-primary font-semibold py-3 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-sm hover:bg-primary/5 border border-primary/20"
                       data-testid="button-download-ad-image"
