@@ -34,6 +34,7 @@ process.on("unhandledRejection", (reason) => {
 // Removed for now to avoid startup issues — can be re-added if needed
 
 const app = express();
+app.disable("x-powered-by");
 const httpServer = createServer(app);
 
 declare module "http" {
@@ -41,6 +42,35 @@ declare module "http" {
     rawBody: unknown;
   }
 }
+
+app.use((req, res, next) => {
+  res.header("X-Content-Type-Options", "nosniff");
+  res.header("X-Frame-Options", "DENY");
+  res.header("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.header(
+    "Permissions-Policy",
+    [
+      "camera=(self)",
+      "microphone=()",
+      "geolocation=()",
+      "payment=(self)",
+      "usb=()",
+      "bluetooth=()",
+      "accelerometer=()",
+      "gyroscope=()",
+      "magnetometer=()",
+    ].join(", ")
+  );
+
+  if (req.path === "/health" || req.path.startsWith("/api/")) {
+    res.header(
+      "Content-Security-Policy",
+      "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+    );
+  }
+
+  next();
+});
 
 app.use(
   express.json({
