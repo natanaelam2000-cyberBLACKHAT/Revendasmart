@@ -34,3 +34,4 @@ firebase-service-account*.json
 !docs/
 !docs/**/*.md
 !setup-secrets-cloud-run.template.sh
+!scripts/security/migrate-cloud-run-secrets.sh
