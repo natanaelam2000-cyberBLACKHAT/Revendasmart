@@ -12,3 +12,25 @@ vite.config.ts.*
 .env.staging
 .env.staging.*
 !.env.staging.example
+
+# Secrets and local environment files
+.env
+.env.*
+*.env
+env.yaml
+env.yaml*
+*.zip
+*secret*
+*secrets*
+*credential*
+*private-key*
+service-account*.json
+firebase-service-account*.json
+
+# Safe templates and documentation
+!.env.example
+!.env.staging.example
+!*.example
+!docs/
+!docs/**/*.md
+!setup-secrets-cloud-run.template.sh
