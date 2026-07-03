@@ -4,6 +4,7 @@
  */
 
 import { getFirebaseAdmin } from "./firebase-admin-init";
+import { logError, logInfo } from "./logger";
 
 interface UploadResult {
   success: boolean;
@@ -43,7 +44,7 @@ export async function checkStorageReadiness(): Promise<MigrationPrepResult> {
     const options = app.options;
     storageBucket = (options as any).storageBucket || `${(options as any).projectId}.appspot.com`;
 
-    console.log("[firebase-storage] Storage bucket ready:", storageBucket);
+    logInfo("firebase_storage.ready", { storageBucket });
 
     return {
       ready,
@@ -52,7 +53,7 @@ export async function checkStorageReadiness(): Promise<MigrationPrepResult> {
       errors,
     };
   } catch (e) {
-    console.error("[firebase-storage] Error checking readiness:", e);
+    logError("firebase_storage.readiness_failed", e);
     errors.push(`Storage check failed: ${(e as any)?.message}`);
     return { ready: false, errors, samplePath: "" };
   }
@@ -94,7 +95,7 @@ export async function prepareImageUpload(
     // Prepare metadata (dry run - no actual upload)
     const storagePath = `users/${userId}/products/${productId}.jpg`;
 
-    console.log("[firebase-storage] Image prepared for upload:", {
+    logInfo("firebase_storage.image_prepared", {
       path: storagePath,
       size: `${sizeInMB.toFixed(2)}MB`,
       productId,
@@ -107,7 +108,7 @@ export async function prepareImageUpload(
       // downloadUrl would be generated during actual upload
     };
   } catch (e) {
-    console.error("[firebase-storage] Error preparing upload:", e);
+    logError("firebase_storage.prepare_failed", e, { userId, productId });
     return {
       success: false,
       imageId: productId,
@@ -169,7 +170,7 @@ export async function validateFirebaseStorageSetup(): Promise<{
       valid = false;
     }
 
-    console.log("[firebase-storage] Setup validation:", {
+    logInfo("firebase_storage.validation", {
       projectId,
       bucket,
       valid,
@@ -177,7 +178,7 @@ export async function validateFirebaseStorageSetup(): Promise<{
 
     return { valid, projectId, bucket, errors };
   } catch (e) {
-    console.error("[firebase-storage] Validation error:", e);
+    logError("firebase_storage.validation_failed", e);
     errors.push(`Setup validation failed: ${(e as any)?.message}`);
     return { valid: false, errors };
   }

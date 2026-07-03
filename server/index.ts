@@ -1,33 +1,41 @@
 import { config as loadDotenv } from "dotenv";
 import * as Sentry from "@sentry/node";
+import express, { type Request, Response, NextFunction } from "express";
+import { createServer } from "http";
+import { registerRoutes } from "./routes";
+import { serveStatic } from "./static";
+import { logError, logInfo, logWarn, requestIdMiddleware, sanitizeForLog } from "./logger";
 
 if (process.env.NODE_ENV !== "production") {
   loadDotenv();
 }
 
-Sentry.init({
-  dsn: "https://32752c8db032da58f02a989ae3e95805@o4511473504354304.ingest.us.sentry.io/4511474807144448",
-  environment: process.env.NODE_ENV || "development",
-  tracesSampleRate: 0.1,
-  sendDefaultPii: false,
-});
-import express, { type Request, Response, NextFunction } from "express";
-import { registerRoutes } from "./routes";
-import { serveStatic } from "./static";
-import { createServer } from "http"
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
+const SENTRY_DSN = process.env.SENTRY_DSN?.trim();
+
+if (SENTRY_DSN) {
+  Sentry.init({
+    dsn: SENTRY_DSN,
+    environment: process.env.NODE_ENV || "development",
+    tracesSampleRate: 0.1,
+    sendDefaultPii: false,
+    beforeSend(event) {
+      return sanitizeForLog(event) as typeof event;
+    },
+  });
+} else if (!IS_PRODUCTION) {
+  logWarn("sentry.disabled", { reason: "missing_dsn" });
+}
 
 // Global error handlers for uncaught exceptions
 process.on("uncaughtException", (err) => {
   Sentry.captureException(err);
-
-  console.error("[UNCAUGHT EXCEPTION] Stack:", err.stack);
-  console.error("[UNCAUGHT EXCEPTION] Message:", err.message);
+  logError("process.uncaught_exception", err, { fatal: true });
 });
 
 process.on("unhandledRejection", (reason) => {
   Sentry.captureException(reason);
-
-  console.error("[UNHANDLED REJECTION]", reason);
+  logError("process.unhandled_rejection", reason, { fatal: true });
 });
 
 // Optional: Event loop and memory monitoring can be enabled on demand
@@ -36,6 +44,8 @@ process.on("unhandledRejection", (reason) => {
 const app = express();
 app.disable("x-powered-by");
 const httpServer = createServer(app);
+
+app.use(requestIdMiddleware);
 
 declare module "http" {
   interface IncomingMessage {
@@ -120,7 +130,7 @@ app.use((req, res, next) => {
 
   res.header(
     "Access-Control-Allow-Headers",
-    "Origin, X-Requested-With, Content-Type, Accept, Authorization"
+    "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Request-Id"
   );
 
   res.header(
@@ -141,14 +151,7 @@ app.use((req, res, next) => {
 });
 
 export function log(message: string, source = "express") {
-  const formattedTime = new Date().toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
-
-  console.log(`${formattedTime} [${source}] ${message}`);
+  logInfo("legacy.log", { source, message });
 }
 
 app.use((req, res, next) => {
@@ -162,17 +165,33 @@ app.use((req, res, next) => {
     const responseBytes = typeof contentLength === "string" || typeof contentLength === "number"
       ? String(contentLength)
       : "unknown";
-    log(`${req.method} ${requestPath} ${res.statusCode} in ${duration}ms bytes=${responseBytes}`);
+    logInfo("http.request", {
+      requestId: req.requestId,
+      method: req.method,
+      route: requestPath,
+      status: res.statusCode,
+      durationMs: duration,
+      responseBytes,
+    });
   });
 
   next();
 });
 
 // Healthcheck endpoint
-app.get("/health", (_req, res) => {
-  res.status(200).json({
+app.get("/health", (req, res) => {
+  const baseHealth = {
     status: "ok",
     timestamp: new Date().toISOString(),
+    requestId: req.requestId,
+  };
+
+  if (IS_PRODUCTION) {
+    return res.status(200).json(baseHealth);
+  }
+
+  return res.status(200).json({
+    ...baseHealth,
     uptime: process.uptime(),
     memory: {
       heapUsed: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
@@ -183,15 +202,24 @@ app.get("/health", (_req, res) => {
 
 (async () => {
   try {
-    console.log("[STARTUP] Server initialization starting...");
-    console.log("[STARTUP] NODE_ENV:", process.env.NODE_ENV);
-    console.log("[STARTUP] PORT:", process.env.PORT);
+    logInfo("server.starting", {
+      nodeEnv: process.env.NODE_ENV ?? "development",
+      portConfigured: Boolean(process.env.PORT),
+      sentryEnabled: Boolean(SENTRY_DSN),
+    });
 
     await registerRoutes(httpServer, app);
-    console.log("[STARTUP] Routes registered successfully");
+    logInfo("server.routes_registered");
 
     app.use((err: any, req: Request, res: Response, next: NextFunction) => {
-      Sentry.captureException(err);
+      Sentry.withScope((scope) => {
+        scope.setTag("requestId", req.requestId ?? "unknown");
+        scope.setContext("request", {
+          method: req.method,
+          path: req.path,
+        });
+        Sentry.captureException(err);
+      });
 
       const rawStatus = Number(err?.status ?? err?.statusCode ?? 500);
       const status = Number.isInteger(rawStatus) && rawStatus >= 400 && rawStatus < 600
@@ -204,12 +232,12 @@ app.get("/health", (_req, res) => {
         ? "Ocorreu um erro temporário."
         : technicalMessage;
 
-      console.error("[ERROR]", {
+      logError("http.unhandled_error", err, {
+        requestId: req.requestId,
         method: req.method,
-        path: req.path,
+        route: req.path,
         status,
         message: technicalMessage,
-        stack: err instanceof Error ? err.stack : undefined,
       });
 
       if (res.headersSent) {
@@ -221,22 +249,22 @@ app.get("/health", (_req, res) => {
 
     if (process.env.NODE_ENV === "production") {
       serveStatic(app);
-      console.log("[STARTUP] Static files configured");
+      logInfo("server.static_configured");
     } else {
       const { setupVite } = await import("./vite");
       await setupVite(httpServer, app);
-      console.log("[STARTUP] Vite dev server configured");
+      logInfo("server.vite_configured");
     }
 
     // 🔥 ESSENCIAL PARA CLOUD RUN
     const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8080;
 
     httpServer.listen(PORT, "0.0.0.0", () => {
-      console.log(`🚀 Server rodando na porta ${PORT}`);
+      logInfo("server.listening", { port: PORT });
     });
 
   } catch (err) {
-    console.error("[FATAL] Falha ao iniciar servidor:", err);
+    logError("server.startup_failed", err, { fatal: true });
     process.exit(1);
   }
 })();

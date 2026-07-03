@@ -82,7 +82,7 @@ assert.match(paginatedClientsHook, /const loadMore = useCallback/);
 assert.match(routes, /status\(429\).*CATALOG_RATE_LIMITED/);
 assert.doesNotMatch(serverIndex, /capturedJsonResponse|JSON\.stringify\(capturedJsonResponse\)/);
 assert.match(serverIndex, /content-length/);
-assert.match(serverIndex, /bytes=/);
+assert.match(serverIndex, /responseBytes/);
 assert.match(publicCatalog, /catalogEnabled === false/);
 assert.match(images, /photoUrl/);
 assert.match(images, /onError/);

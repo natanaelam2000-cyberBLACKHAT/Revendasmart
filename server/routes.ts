@@ -8,6 +8,7 @@ import { registerConnectionRoutes } from "./mercadopago-connections";
 import { registerSubscriptionRoutes } from "./subscriptions";
 import { getGlobalConfig, setGlobalConfig } from "./subscriptions";
 import { validateFirebaseStorageSetup } from "./firebase-storage-migration";
+import { logError, logInfo, logWarn } from "./logger";
  import crypto from "crypto";
 
 function normalizeCatalogSlug(value: unknown): string {
@@ -21,6 +22,23 @@ function escapeHtml(value: unknown): string {
 function getRouteParam(req: Request, name: string): string {
   const value = req.params[name];
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function normalizeRouteDetails(details: unknown[]): unknown {
+  if (details.length === 0) return undefined;
+  return details.length === 1 ? details[0] : details;
+}
+
+function routeInfo(message: string, ...details: unknown[]): void {
+  logInfo("routes.log", { message, details: normalizeRouteDetails(details) });
+}
+
+function routeWarn(message: string, ...details: unknown[]): void {
+  logWarn("routes.log", { message, details: normalizeRouteDetails(details) });
+}
+
+function routeLogError(message: string, ...details: unknown[]): void {
+  logError("routes.log", undefined, { message, details: normalizeRouteDetails(details) });
 }
 
 const PUBLIC_CATALOG_DEFAULT_LIMIT = 24;
@@ -158,9 +176,11 @@ function errorResponse(
   context?: Record<string, any>
 ) {
   const timestamp = new Date().toISOString();
-  const errorId = Math.random().toString(36).substring(7);
-  
-  console.error(`[${timestamp}] ERROR-ID: ${errorId}`, {
+  const errorId = crypto.randomBytes(6).toString("hex");
+  const publicMessage = statusCode >= 500 ? "Ocorreu um erro temporário." : message;
+
+  logError("routes.error_response", undefined, {
+    errorId,
     status: statusCode,
     errorType,
     message,
@@ -169,10 +189,9 @@ function errorResponse(
 
   return res.status(statusCode).json({
     error: errorType,
-    message,
+    message: publicMessage,
     errorId,
     timestamp,
-    ...(context && { context }),
   });
 }
 
@@ -181,7 +200,7 @@ async function requireAuth(req: Request, res: Response, next: NextFunction) {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith("Bearer ")) {
-      console.warn("[auth] Missing Authorization header for:", req.path);
+      routeWarn("[auth] Missing Authorization header for:", req.path);
       return res.status(401).json({ error: "Unauthorized: missing token" });
     }
     const token = authHeader.slice(7);
@@ -190,7 +209,7 @@ async function requireAuth(req: Request, res: Response, next: NextFunction) {
     (req as any).firebaseUid = decoded.uid;
     next();
   } catch (e) {
-    console.warn("[auth] Token verification failed:", (e as any)?.message);
+    routeWarn("[auth] Token verification failed:", (e as any)?.message);
     return res.status(401).json({ error: "Unauthorized: invalid token" });
   }
 }
@@ -226,22 +245,22 @@ async function requireAdmin(req: Request, res: Response, next: NextFunction) {
     const isAdminClaim = userRecord.customClaims?.['admin'] === true;
     
     if (isAdminClaim) {
-      console.log("[requireAdmin] Access granted via custom claim");
+      routeInfo("[requireAdmin] Access granted via custom claim");
       next();
       return;
     }
     
     // FALLBACK: Legacy email check (deprecated, for transition period only)
     if (ADMIN_UIDS_LEGACY.has(userRecord.email || "")) {
-      console.warn("[requireAdmin] MIGRATION: Using legacy email check (deprecated) — set custom claim to remove fallback");
+      routeWarn("[requireAdmin] MIGRATION: Using legacy email check (deprecated) — set custom claim to remove fallback");
       next();
       return;
     }
     
-    console.warn("[requireAdmin] Access denied for non-admin user");
+    routeWarn("[requireAdmin] Access denied for non-admin user");
     return res.status(403).json({ error: "Forbidden: admin access required" });
   } catch (e) {
-    console.error("[requireAdmin] Error checking admin status:", e);
+    routeLogError("[requireAdmin] Error checking admin status:", e);
     return res.status(401).json({ error: "Unauthorized: could not verify admin status" });
   }
 }
@@ -616,7 +635,7 @@ export async function registerRoutes(
       res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
       return res.type("html").send(html);
     } catch (error) {
-      console.error("[catalog-meta] Failed:", error);
+      routeLogError("[catalog-meta] Failed:", error);
       return next();
     }
   });
@@ -657,8 +676,8 @@ export async function registerRoutes(
     const body = req.body;
     try {
 
-      console.log("[/api/user/settings POST] userId:", userId);
-      console.log("[/api/user/settings POST] body keys:", Object.keys(body));
+      routeInfo("[/api/user/settings POST] userId:", userId);
+      routeInfo("[/api/user/settings POST] body keys:", Object.keys(body));
 
       if (!userId) {
         return res.status(400).json({ error: "userId required" });
@@ -675,13 +694,13 @@ export async function registerRoutes(
       let referrerExists = false;
       if (body.referral_source) {
         const referralSourceUid = body.referral_source;
-        console.log("[/api/user/settings POST] Validating referral_source:", referralSourceUid);
+        routeInfo("[/api/user/settings POST] Validating referral_source:", referralSourceUid);
 
         // 0. Check if referral already exists (IMMUTABILITY - prevent overwrite)
         try {
           const existingSettings = await db.collection("user_settings").doc(userId).get();
           if (existingSettings.exists && existingSettings.data()?.referral_source) {
-            console.warn("[/api/user/settings POST] Referral already set, blocking reaplication:", {
+            routeWarn("[/api/user/settings POST] Referral already set, blocking reaplication:", {
               existing: existingSettings.data()?.referral_source,
               attempted: referralSourceUid
             });
@@ -694,14 +713,14 @@ export async function registerRoutes(
             });
           }
         } catch (e) {
-          console.warn("[/api/user/settings POST] Error checking existing referral:", (e as any)?.message);
+          routeWarn("[/api/user/settings POST] Error checking existing referral:", (e as any)?.message);
           // Don't block on check failure, continue
         }
 
         // 1. Check format (basic UUID-like validation)
         const isValidFormat = /^[a-zA-Z0-9_-]{10,}$/.test(referralSourceUid);
         if (!isValidFormat) {
-          console.warn("[/api/user/settings POST] Invalid referral format:", referralSourceUid);
+          routeWarn("[/api/user/settings POST] Invalid referral format:", referralSourceUid);
           return res.status(400).json({ 
             error: "Invalid referral_source format",
             referralValidation: { result: "invalid_format", referralSourceUid }
@@ -710,7 +729,7 @@ export async function registerRoutes(
 
         // 2. Check self-referral (prevent user from referring themselves)
         if (referralSourceUid === userId) {
-          console.warn("[/api/user/settings POST] Self-referral attempt blocked:", userId);
+          routeWarn("[/api/user/settings POST] Self-referral attempt blocked:", userId);
           return res.status(400).json({ 
             error: "Cannot refer yourself",
             referralValidation: { result: "self_referral", userId }
@@ -722,10 +741,10 @@ export async function registerRoutes(
         try {
           const referrerSettings = await db.collection("user_settings").doc(referralSourceUid).get();
           if (referrerSettings.exists) {
-            console.log("[/api/user/settings POST] Referrer validated: found in user_settings");
+            routeInfo("[/api/user/settings POST] Referrer validated: found in user_settings");
             referrerExists = true;
           } else {
-            console.warn("[/api/user/settings POST] Referrer not found:", referralSourceUid);
+            routeWarn("[/api/user/settings POST] Referrer not found:", referralSourceUid);
             // Reject if referrer doesn't exist (stricter validation)
             return res.status(400).json({ 
               error: "Referrer not found",
@@ -733,7 +752,7 @@ export async function registerRoutes(
             });
           }
         } catch (e) {
-          console.warn("[/api/user/settings POST] Referrer existence check failed:", (e as any)?.message);
+          routeWarn("[/api/user/settings POST] Referrer existence check failed:", (e as any)?.message);
           // On error, reject to be safe
           return res.status(500).json({ 
             error: "Failed to validate referrer",
@@ -746,18 +765,18 @@ export async function registerRoutes(
         body.referral_applied_at = body.referral_applied_at || new Date().toISOString();
         body.referral_applied_by = "backend";
         body.referral_immutable = true; // Mark as immutable
-        console.log("[/api/user/settings POST] Referral validated and marked for persistence as immutable");
+        routeInfo("[/api/user/settings POST] Referral validated and marked for persistence as immutable");
       }
       
-      console.log(`[/api/user/settings POST] Saving to Firestore: user_settings/${userId}`);
+      routeInfo(`[/api/user/settings POST] Saving to Firestore: user_settings/${userId}`);
       await db.collection("user_settings").doc(userId).set(body, { merge: true });
-      console.log("[/api/user/settings POST] Successfully saved to Firestore");
+      routeInfo("[/api/user/settings POST] Successfully saved to Firestore");
 
       // ============ REFERRAL CONVERSION ATTRIBUTION (if new referral was applied) ============
       // Uses Firestore transaction to ensure atomically consistent counting (no race conditions)
       if (body.referral_source && referrerExists) {
         const referralSourceUid = body.referral_source;
-        console.log("[/api/user/settings POST] Recording referral conversion for referrer:", referralSourceUid);
+        routeInfo("[/api/user/settings POST] Recording referral conversion for referrer:", referralSourceUid);
         
         try {
           // Use Firestore transaction for atomic read + check + write
@@ -771,7 +790,7 @@ export async function registerRoutes(
             
             // Check idempotency: is this user already counted?
             if (currentReferredUsers.includes(userId)) {
-              console.warn("[/api/user/settings POST] User already in referrer's list (transaction check), skipping:", userId);
+              routeWarn("[/api/user/settings POST] User already in referrer's list (transaction check), skipping:", userId);
               return { status: "duplicate", userId, referralSourceUid };
             }
             
@@ -793,7 +812,7 @@ export async function registerRoutes(
               reward_granted_count: referrerDoc.exists ? (referrerDoc.data()?.reward_granted_count || 0) : 0
             });
             
-            console.log("[/api/user/settings POST] Referral conversion + reward eligibility recorded for:", referralSourceUid, { conversions: newConversions, eligible: newRewardEligible });
+            routeInfo("[/api/user/settings POST] Referral conversion + reward eligibility recorded for:", referralSourceUid, { conversions: newConversions, eligible: newRewardEligible });
             return { 
               status: "counted", 
               userId, 
@@ -806,14 +825,14 @@ export async function registerRoutes(
           
           // Log result for telemetry (after transaction commits)
           if (conversionResult.status === "counted") {
-            console.log("[/api/user/settings POST] Telemetry: referral_conversion_counted");
+            routeInfo("[/api/user/settings POST] Telemetry: referral_conversion_counted");
             // Client will log: referral_conversion_counted event
           } else if (conversionResult.status === "duplicate") {
-            console.log("[/api/user/settings POST] Telemetry: referral_conversion_skipped_duplicate");
+            routeInfo("[/api/user/settings POST] Telemetry: referral_conversion_skipped_duplicate");
             // Client will log: referral_conversion_skipped_duplicate event
           }
         } catch (e) {
-          console.warn("[/api/user/settings POST] Failed to record referral conversion (transaction):", (e as any)?.message);
+          routeWarn("[/api/user/settings POST] Failed to record referral conversion (transaction):", (e as any)?.message);
           // Don't block the response - signup continues even if conversion counting fails
           // This is intentional: user data is safe, only growth metrics might be inconsistent
           // Telemetry: conversion failed (will be logged after response)
@@ -947,7 +966,7 @@ export async function registerRoutes(
         return errorResponse(res, 400, "INVALID_GRANT_REQUEST", "reason must be non-empty string");
       }
       
-      console.log("[/api/rewards/grant] Admin:", adminUid, "granting", count, "rewards to", targetUserId);
+      routeInfo("[/api/rewards/grant] Admin:", adminUid, "granting", count, "rewards to", targetUserId);
       
       const admin = getFirebaseAdmin();
       const db = admin.firestore();
@@ -985,7 +1004,7 @@ export async function registerRoutes(
           reward_last_granted_by: adminUid
         });
         
-        console.log("[/api/rewards/grant] Transaction completed:", {
+        routeInfo("[/api/rewards/grant] Transaction completed:", {
           targetUserId,
           grantedCount: count,
           newEligible,
@@ -1173,7 +1192,7 @@ if (!existingPlan.exists) {
       }
 
 
-      console.log("[plan/initialize] Plan initialized for user:", userId);
+      routeInfo("[plan/initialize] Plan initialized for user:", userId);
       return res.status(200).json({ referralCode });
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
@@ -1401,7 +1420,7 @@ if (!existingPlan.exists) {
 
       await setGlobalConfig(config);
 
-      console.log("[admin/global-config] Updated successfully:", {
+      routeInfo("[admin/global-config] Updated successfully:", {
         premiumOpenAccess: config.premiumOpenAccess,
         expiresAt: config.premiumOpenAccessUntil?.toISOString() ?? null,
       });

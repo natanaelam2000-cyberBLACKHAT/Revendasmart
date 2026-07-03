@@ -20,6 +20,7 @@ import {
   getMPAccessTokenForCharge,
   getValidMPAccessToken,
 } from "./mercadopago-connections";
+import { logError, logInfo, logWarn } from "./logger";
 import {
   type Charge,
   type CreatePaymentLinkInput,
@@ -30,20 +31,32 @@ import {
   detectEnvironment,
 } from "../shared/charges";
 
-// Helper: Structured error logging for payment operations
+function normalizeDetails(details: unknown[]): unknown {
+  if (details.length === 0) return undefined;
+  return details.length === 1 ? details[0] : details;
+}
+
+function paymentInfo(message: string, ...details: unknown[]): void {
+  logInfo("payments.log", { message, details: normalizeDetails(details) });
+}
+
+function paymentWarn(message: string, ...details: unknown[]): void {
+  logWarn("payments.log", { message, details: normalizeDetails(details) });
+}
+
+function paymentLogError(message: string, ...details: unknown[]): void {
+  logError("payments.log", undefined, { message, details: normalizeDetails(details) });
+}
+
 function logPaymentError(
   operationName: string,
-  _uid: string | null,
+  uid: string | null,
   errorMsg: string,
   context?: Record<string, any>
 ) {
-  const errorId = Math.random().toString(36).substring(7);
-  const timestamp = new Date().toISOString();
-  
-  console.error(`[${timestamp}] PAYMENT-ERROR-ID: ${errorId}`, {
-    operation: operationName,
-    errorType: errorMsg ? "operation_failed" : "unknown_error",
-    contextKeys: context ? Object.keys(context) : [],
+  logError(`payments.${operationName}`, errorMsg, {
+    uid,
+    ...(context ?? {}),
   });
 }
 
@@ -151,7 +164,7 @@ const paymentDeleteRateLimit = paymentRateLimit(
 );
 
 if (!CENTRAL_ACCESS_TOKEN) {
-  console.warn("[payments] Central payment credential is not configured");
+  paymentWarn("[payments] Central payment credential is not configured");
 }
 
 function createPaymentClient(accessToken: string): MPPayment {
@@ -216,7 +229,7 @@ function safeHexEqual(received: string, expected: string): boolean {
 
 function verifyWebhookSignature(req: Request, rawBody: Buffer): boolean {
   if (!WEBHOOK_SECRET) {
-    console.error("[payments/webhook] Webhook secret is not configured");
+    paymentLogError("[payments/webhook] Webhook secret is not configured");
     return false;
   }
 
@@ -225,7 +238,7 @@ function verifyWebhookSignature(req: Request, rawBody: Buffer): boolean {
     const xRequestId = getSingleHeader(req, "x-request-id");
 
     if (!xSignature || !xRequestId) {
-      console.warn("[payments/webhook] Missing webhook signature headers");
+      paymentWarn("[payments/webhook] Missing webhook signature headers");
       return false;
     }
 
@@ -241,13 +254,13 @@ function verifyWebhookSignature(req: Request, rawBody: Buffer): boolean {
     }
 
     if (!ts || !v1 || !/^\d{10,13}$/.test(ts)) {
-      console.warn("[payments/webhook] Invalid x-signature format");
+      paymentWarn("[payments/webhook] Invalid x-signature format");
       return false;
     }
 
     const timestampMs = ts.length === 10 ? Number(ts) * 1000 : Number(ts);
     if (!Number.isFinite(timestampMs) || Math.abs(Date.now() - timestampMs) > PAYMENT_WEBHOOK_MAX_AGE_MS) {
-      console.warn("[payments/webhook] Expired webhook signature timestamp");
+      paymentWarn("[payments/webhook] Expired webhook signature timestamp");
       return false;
     }
 
@@ -258,7 +271,7 @@ function verifyWebhookSignature(req: Request, rawBody: Buffer): boolean {
       : "";
 
     if (!dataId) {
-      console.warn("[payments/webhook] Missing data.id in signed payload");
+      paymentWarn("[payments/webhook] Missing data.id in signed payload");
       return false;
     }
 
@@ -271,7 +284,7 @@ function verifyWebhookSignature(req: Request, rawBody: Buffer): boolean {
 
     const isValid = safeHexEqual(v1, expectedHash);
     if (!isValid) {
-      console.warn("[payments/webhook] Signature mismatch");
+      paymentWarn("[payments/webhook] Signature mismatch");
     }
 
     return isValid;
@@ -298,7 +311,7 @@ async function syncPaymentFromMP(
   try {
     const charge = await fetchCharge(uid, chargeId);
     if (!charge) {
-      console.warn("[payments/sync] Charge not found");
+      paymentWarn("[payments/sync] Charge not found");
       return null;
     }
 
@@ -324,7 +337,7 @@ async function syncPaymentFromMP(
 
     // Idempotency: skip if this exact event was already processed
     if (webhookEventId && charge.webhookLastEventId === webhookEventId) {
-      console.info("[payments/sync] Event already processed — skipping");
+      paymentInfo("[payments/sync] Event already processed — skipping");
       return charge;
     }
 
@@ -350,7 +363,7 @@ async function syncPaymentFromMP(
     }
 
     await updateCharge(uid, chargeId, updates);
-    console.info(`[payments/sync] Charge status updated: ${charge.status} → ${newStatus}`);
+    paymentInfo(`[payments/sync] Charge status updated: ${charge.status} → ${newStatus}`);
 
     return { ...charge, ...updates } as Charge;
   } catch (err) {
@@ -372,11 +385,11 @@ async function handleCreateLink(req: Request, res: Response) {
   let stage = "start";
   
   try {
-    console.info("[payments/create-link] Request received");
-    console.info("[payments/create-link] stage=", stage);
+    paymentInfo("[payments/create-link] Request received");
+    paymentInfo("[payments/create-link] stage=", stage);
     
     stage = "validate_body";
-    console.error("[payments/create-link] stage=", stage);
+    paymentLogError("[payments/create-link] stage=", stage);
     
     body = req.body as CreatePaymentLinkInput;
     const authenticatedUid = (req as any).firebaseUid as string;
@@ -389,7 +402,7 @@ async function handleCreateLink(req: Request, res: Response) {
     if (body?.amount === undefined || body?.amount === null) missingFields.push("amount");
 
     if (missingFields.length > 0) {
-      console.error("[payments/create-link] Missing fields:", missingFields);
+      paymentLogError("[payments/create-link] Missing fields:", missingFields);
       return res.status(400).json({
         error: `Missing required fields: ${missingFields.join(", ")}`,
       });
@@ -405,7 +418,7 @@ async function handleCreateLink(req: Request, res: Response) {
 
     // Generate stable chargeId (Firestore auto-ID)
     stage = "firestore_ref_creation";
-    console.error("[payments/create-link] stage=", stage);
+    paymentLogError("[payments/create-link] stage=", stage);
     
     const admin = getFirebaseAdmin();
     const db = admin.firestore();
@@ -420,8 +433,8 @@ async function handleCreateLink(req: Request, res: Response) {
 
     // ── Caminho B: Resolve which MP account to use ──────────────────────────
     stage = "resolve_token";
-    console.error("[payments/create-link] stage=", stage);
-    console.error("[payments/create-link] Resolving payment credential");
+    paymentLogError("[payments/create-link] stage=", stage);
+    paymentLogError("[payments/create-link] Resolving payment credential");
     
     const {
       accessToken,
@@ -431,34 +444,34 @@ async function handleCreateLink(req: Request, res: Response) {
       body.uid,
       body.mpConnectionId ?? null
     );
-    console.info("[payments/create-link] Payment credential resolved");
+    paymentInfo("[payments/create-link] Payment credential resolved");
     if (!accessToken || accessToken.trim().length < 20) {
       throw new Error("Mercado Pago indisponível: access token não configurado");
     }
 
     // Build per-request Mercado Pago client with the resolved token
     stage = "create_mp_client";
-    console.error("[payments/create-link] stage=", stage);
-    console.error("[payments/create-link] DEBUG: Step 2 — Creating MercadoPagoConfig");
+    paymentLogError("[payments/create-link] stage=", stage);
+    paymentLogError("[payments/create-link] DEBUG: Step 2 — Creating MercadoPagoConfig");
     
     const mpClient = new MercadoPagoConfig({ accessToken, options: { timeout: 10000 } });
     const preferenceClient = new Preference(mpClient);
     const chargeEnvironment = detectEnvironment(accessToken);
-    console.error("[payments/create-link] DEBUG: Step 2 SUCCESS — MPClient created", {
+    paymentLogError("[payments/create-link] DEBUG: Step 2 SUCCESS — MPClient created", {
       environment: chargeEnvironment,
     });
 
     // Build Mercado Pago preference
     stage = "build_preference_payload";
-    console.error("[payments/create-link] stage=", stage);
-    console.error("[payments/create-link] Preparing payment preference");
+    paymentLogError("[payments/create-link] stage=", stage);
+    paymentLogError("[payments/create-link] Preparing payment preference");
     
     // Validate critical fields before building payload
     const FRONTEND_URL_VALID = FRONTEND_URL && FRONTEND_URL.startsWith("http");
     const APP_BASE_URL_VALID = APP_BASE_URL && APP_BASE_URL.startsWith("http");
     
     if (!FRONTEND_URL_VALID || !APP_BASE_URL_VALID) {
-      console.error("[payments/create-link] Invalid payment redirect configuration");
+      paymentLogError("[payments/create-link] Invalid payment redirect configuration");
       return res.status(500).json({
         error: "Configuration error: invalid URLs",
         details: "FRONTEND_URL ou APP_BASE_URL não configurados corretamente",
@@ -499,24 +512,24 @@ async function handleCreateLink(req: Request, res: Response) {
       },
     };
     
-    console.info("[payments/create-link] Payment preference prepared");
+    paymentInfo("[payments/create-link] Payment preference prepared");
     
     stage = "create_preference";
-    console.error("[payments/create-link] stage=", stage);
-    console.error("[payments/create-link] DEBUG: Step 4 — Calling preferenceClient.create()");
+    paymentLogError("[payments/create-link] stage=", stage);
+    paymentLogError("[payments/create-link] DEBUG: Step 4 — Calling preferenceClient.create()");
     
     let preference: any = null;
     try {
       preference = await preferenceClient.create({ body: preferencePayload });
       
-      console.info("[payments/create-link] Preference created");
+      paymentInfo("[payments/create-link] Preference created");
     } catch (mpError: any) {
       // Extract error details — ALWAYS provide fallbacks
       const mpErrorMessage = mpError?.message ?? "Unknown error";
       const mpErrorStatus = mpError?.status ?? null;
       const mpErrorCode = mpError?.code ?? null;
       
-      console.error("[payments/create-link] Mercado Pago request failed", {
+      paymentLogError("[payments/create-link] Mercado Pago request failed", {
         errorName: mpError?.name ?? "Unknown",
         status: mpErrorStatus,
         code: mpErrorCode,
@@ -547,7 +560,7 @@ async function handleCreateLink(req: Request, res: Response) {
       });
     }
     stage = "extract_preference_urls";
-    console.error("[payments/create-link] stage=", stage);
+    paymentLogError("[payments/create-link] stage=", stage);
     
     const safePreference = preference ?? {};
     const paymentUrl = safePreference?.init_point ?? "";
@@ -555,7 +568,7 @@ async function handleCreateLink(req: Request, res: Response) {
     const preferenceId = safePreference?.id ?? "";
 
     if (!paymentUrl && !sandboxUrl) {
-      console.error("[payments/create-link] No init_point received from MP");
+      paymentLogError("[payments/create-link] No init_point received from MP");
       return res.status(502).json({ error: "Failed to get payment URL from Mercado Pago" });
     }
 
@@ -565,8 +578,8 @@ async function handleCreateLink(req: Request, res: Response) {
 
     // Build charge document with ONLY non-undefined fields to prevent Firestore errors
     stage = "build_charge";
-    console.error("[payments/create-link] stage=", stage);
-    console.error("[payments/create-link] DEBUG: Step 5 — Building charge document for Firestore");
+    paymentLogError("[payments/create-link] stage=", stage);
+    paymentLogError("[payments/create-link] DEBUG: Step 5 — Building charge document for Firestore");
     
     const charge: any = {
       id: chargeId,
@@ -607,24 +620,24 @@ async function handleCreateLink(req: Request, res: Response) {
       }
     }
 
-    console.error("[payments/create-link] DEBUG: Step 5 SUCCESS — Charge document built");
+    paymentLogError("[payments/create-link] DEBUG: Step 5 SUCCESS — Charge document built");
     try {
-      console.error("[payments/create-link] Charge keys:", Object.keys(charge ?? {}));
+      paymentLogError("[payments/create-link] Charge keys:", Object.keys(charge ?? {}));
     } catch (keyErr) {
-      console.error("[payments/create-link] Cannot get charge keys:", String(keyErr));
+      paymentLogError("[payments/create-link] Cannot get charge keys:", String(keyErr));
     }
     
     // Persist to Firestore
     stage = "save_charge";
-    console.error("[payments/create-link] stage=", stage);
+    paymentLogError("[payments/create-link] stage=", stage);
     
     await chargeRef.set(charge);
-    console.error("[payments/create-link] DEBUG: Step 6 SUCCESS — Charge saved to Firestore");
+    paymentLogError("[payments/create-link] DEBUG: Step 6 SUCCESS — Charge saved to Firestore");
     
     stage = "send_response";
-    console.error("[payments/create-link] stage=", stage);
+    paymentLogError("[payments/create-link] stage=", stage);
 
-    console.info("[payments/create-link] Charge created successfully");
+    paymentInfo("[payments/create-link] Charge created successfully");
 
     return res.status(201).json({
       chargeId,
@@ -639,8 +652,8 @@ async function handleCreateLink(req: Request, res: Response) {
     const errorMsg = err instanceof Error ? err.message : String(err ?? "Unknown error");
     const errorName = err instanceof Error ? err.name : "UnknownError";
     
-    console.error("[payments/create-link] ❌ CAUGHT OUTER ERROR at stage:", stage);
-    console.error("[payments/create-link] Request failed", {
+    paymentLogError("[payments/create-link] ❌ CAUGHT OUTER ERROR at stage:", stage);
+    paymentLogError("[payments/create-link] Request failed", {
       stage,
       errorName,
     });
@@ -672,18 +685,18 @@ async function handleWebhook(req: Request, res: Response) {
   const rawBody = (req as any).rawBody as Buffer | undefined;
 
   if (!WEBHOOK_SECRET) {
-    console.error("[payments/webhook] Rejected: webhook secret is not configured");
+    paymentLogError("[payments/webhook] Rejected: webhook secret is not configured");
     return res.status(401).json({ error: "Invalid webhook signature" });
   }
   if (!rawBody || !verifyWebhookSignature(req, rawBody)) {
-    console.warn("[payments/webhook] Rejected: invalid signature");
+    paymentWarn("[payments/webhook] Rejected: invalid signature");
     return res.status(401).json({ error: "Invalid webhook signature" });
   }
 
   const payload = req.body as MPWebhookPayload;
   const eventId = getSingleHeader(req, "x-request-id");
 
-  console.info("[payments/webhook] Signed event received", {
+  paymentInfo("[payments/webhook] Signed event received", {
     action: payload.action,
     type: payload.type,
     liveMode: payload.live_mode === true,
@@ -877,7 +890,7 @@ async function handleDeleteCharge(req: Request, res: Response) {
     const db = admin.firestore();
     await db.collection("users").doc(uid).collection("charges").doc(chargeId).delete();
 
-    console.info("[payments] Charge deleted");
+    paymentInfo("[payments] Charge deleted");
     return res.json({ success: true, chargeId, message: "Charge deleted successfully" });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -916,5 +929,5 @@ export function registerPaymentRoutes(
     res.status(501).json({ message: "Subscription billing coming soon", prepared: true });
   });
 
-  console.log("[payments] Routes registered: /api/payments/{create-link,webhook,status,resync,delete}");
+  paymentInfo("[payments] Routes registered: /api/payments/{create-link,webhook,status,resync,delete}");
 }

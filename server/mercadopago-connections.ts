@@ -31,21 +31,34 @@ import {
   ACCESS_TOKEN_TTL_S,
   REFRESH_TOKEN_TTL_DAYS,
 } from "../shared/connections";
+import { logError, logInfo, logWarn } from "./logger";
 
-// Helper: Structured error logging for MP connections
+function normalizeDetails(details: unknown[]): unknown {
+  if (details.length === 0) return undefined;
+  return details.length === 1 ? details[0] : details;
+}
+
+function mpInfo(message: string, ...details: unknown[]): void {
+  logInfo("mp_connections.log", { message, details: normalizeDetails(details) });
+}
+
+function mpWarn(message: string, ...details: unknown[]): void {
+  logWarn("mp_connections.log", { message, details: normalizeDetails(details) });
+}
+
+function mpLogError(message: string, ...details: unknown[]): void {
+  logError("mp_connections.log", undefined, { message, details: normalizeDetails(details) });
+}
+
 function logMPConnectionError(
   operationName: string,
-  _uid: string | null,
+  uid: string | null,
   errorMsg: string,
   context?: Record<string, any>
 ) {
-  const errorId = Math.random().toString(36).substring(7);
-  const timestamp = new Date().toISOString();
-  
-  console.error(`[${timestamp}] MP-CONNECTION-ERROR-ID: ${errorId}`, {
-    operation: operationName,
-    errorType: errorMsg ? "operation_failed" : "unknown_error",
-    contextKeys: context ? Object.keys(context) : [],
+  logError(`mp_connections.${operationName}`, errorMsg, {
+    uid,
+    ...(context ?? {}),
   });
 }
 
@@ -195,7 +208,7 @@ async function createOAuthState(uid: string, ipAddress: string): Promise<string>
   };
 
   await db.collection("mercadopago_oauth_states").doc(nonce).set(state);
-  console.info("[mp-connections] OAuth state created");
+  mpInfo("[mp-connections] OAuth state created");
   return nonce;
 }
 
@@ -210,30 +223,30 @@ async function consumeOAuthState(
     const doc = await transaction.get(ref);
 
     if (!doc.exists) {
-      console.warn("[mp-connections] OAuth state not found");
+      mpWarn("[mp-connections] OAuth state not found");
       return null;
     }
 
     const state = doc.data() as MPOAuthState;
 
     if (new Date(state.expiresAt) < new Date()) {
-      console.warn("[mp-connections] OAuth state expired");
+      mpWarn("[mp-connections] OAuth state expired");
       transaction.delete(ref);
       return null;
     }
 
     if (state.used) {
-      console.warn("[mp-connections] OAuth state already used");
+      mpWarn("[mp-connections] OAuth state already used");
       return null;
     }
 
     if (state.uid !== expectedUid) {
-      console.warn("[mp-connections] OAuth state owner mismatch");
+      mpWarn("[mp-connections] OAuth state owner mismatch");
       return null;
     }
 
     transaction.update(ref, { used: true, usedAt: now() });
-    console.info("[mp-connections] OAuth state consumed");
+    mpInfo("[mp-connections] OAuth state consumed");
 
     return state;
   });
@@ -335,7 +348,7 @@ export async function getValidMPAccessToken(
   const centralToken = process.env.MERCADOPAGO_ACCESS_TOKEN ?? "";
   const centralFallback = (reason: string): { accessToken: string; tokenSource: "central"; connectionId: null } => {
     if (!centralToken) throw new Error(`Mercado Pago indisponível: credencial central ausente (${reason})`);
-    console.warn("[mp-connections] Using central payment credential fallback", { reason });
+    mpWarn("[mp-connections] Using central payment credential fallback", { reason });
     return { accessToken: centralToken, tokenSource: "central", connectionId: null };
   };
 
@@ -354,7 +367,7 @@ export async function getValidMPAccessToken(
 
   // Connection not found or revoked → fall back
   if (!connection || connection.status !== "active") {
-    console.warn(
+    mpWarn(
       `[mp-connections] Connection ${connectionId} not found/revoked — falling back to central token`
     );
     return centralFallback("connection_missing_or_revoked");
@@ -374,16 +387,16 @@ export async function getValidMPAccessToken(
       const plainToken = decryptToken(connection.accessToken);
       return { accessToken: plainToken, tokenSource: "revendedor", connectionId };
     } catch {
-      console.error("[mp-connections] Stored payment credential could not be decrypted");
+      mpLogError("[mp-connections] Stored payment credential could not be decrypted");
       return centralFallback("stored_token_authentication_failed");
     }
   }
 
   // Token expired or near expiry → refresh
-  console.info("[mp-connections] Payment credential near expiry — refreshing");
+  mpInfo("[mp-connections] Payment credential near expiry — refreshing");
 
   if (!connection.refreshToken) {
-    console.warn("[mp-connections] Refresh credential unavailable — using central fallback");
+    mpWarn("[mp-connections] Refresh credential unavailable — using central fallback");
     // Mark as expired for user awareness
     await (await getConnectionRef(uid, connectionId)).update({
       status: "expired",
@@ -412,7 +425,7 @@ export async function getValidMPAccessToken(
     }
 
     await (await getConnectionRef(uid, connectionId)).update(updates);
-    console.info("[mp-connections] Payment credential refreshed");
+    mpInfo("[mp-connections] Payment credential refreshed");
 
     return { accessToken: newTokens.access_token, tokenSource: "revendedor", connectionId };
   } catch (err) {
@@ -516,7 +529,7 @@ async function handleStartAuth(req: Request, res: Response) {
     authUrl.searchParams.set("redirect_uri", REDIRECT_URI);
     authUrl.searchParams.set("state", nonce);
 
-    console.info("[mp-connections] OAuth flow started");
+    mpInfo("[mp-connections] OAuth flow started");
 
     return res.json({ authUrl: authUrl.toString(), nonce });
   } catch (err) {
@@ -542,7 +555,7 @@ async function handleCallback(req: Request, res: Response) {
 
   // Handle MP OAuth error (user denied permission)
   if (oauthError) {
-    console.warn("[mp-connections/callback] MP returned OAuth error");
+    mpWarn("[mp-connections/callback] MP returned OAuth error");
     return res.redirect(`${FRONTEND_URL}/settings/mercadopago?status=denied`);
   }
 
@@ -560,7 +573,7 @@ async function handleCallback(req: Request, res: Response) {
     const stateDoc = await db.collection("mercadopago_oauth_states").doc(nonce).get();
 
     if (!stateDoc.exists) {
-      console.warn(`[mp-connections/callback] State not found: ${nonce}`);
+      mpWarn(`[mp-connections/callback] State not found: ${nonce}`);
       return res.redirect(`${FRONTEND_URL}/settings/mercadopago?status=error&reason=invalid_state`);
     }
 
@@ -640,7 +653,7 @@ async function handleCallback(req: Request, res: Response) {
 
     await connRef.set(connection);
 
-    console.info("[mp-connections/callback] Connection created", { environment });
+    mpInfo("[mp-connections/callback] Connection created", { environment });
 
     return res.redirect(
       `${FRONTEND_URL}/settings/mercadopago?status=success&connectionId=${connRef.id}`
@@ -699,9 +712,9 @@ async function handleRevoke(req: Request, res: Response) {
             client_secret: CLIENT_SECRET,
           }),
         });
-        console.info("[mp-connections/revoke] MP notified of revocation");
+        mpInfo("[mp-connections/revoke] MP notified of revocation");
       } catch (err) {
-        console.warn(`[mp-connections/revoke] MP revoke call failed (continuing):`, err);
+        mpWarn(`[mp-connections/revoke] MP revoke call failed (continuing):`, err);
       }
     }
 
@@ -719,7 +732,7 @@ async function handleRevoke(req: Request, res: Response) {
       // Preserve: id, uid, merchantId, accountEmail, accountName, connectedAt, lastUsedAt
     });
 
-    console.info("[mp-connections/revoke] Connection revoked");
+    mpInfo("[mp-connections/revoke] Connection revoked");
 
     return res.json({ connectionId, status: "revoked" });
   } catch (err) {
@@ -805,7 +818,7 @@ async function handleSetDefault(req: Request, res: Response) {
 
     await batch.commit();
 
-    console.info("[mp-connections/set-default] Default connection updated");
+    mpInfo("[mp-connections/set-default] Default connection updated");
 
     return res.json({ connectionId, isDefault: true });
   } catch (err) {
@@ -835,5 +848,5 @@ export function registerConnectionRoutes(
   app.get("/api/mercadopago/connections", requireAuth, mpConnectionListRateLimit, handleListConnections);
   app.post("/api/mercadopago/set-default/:connectionId", requireAuth, mpConnectionMutationRateLimit, handleSetDefault);
 
-  console.log("[mp-connections] Routes registered: /api/mercadopago/{start-auth,callback,revoke,connections,set-default}");
+  mpInfo("[mp-connections] Routes registered: /api/mercadopago/{start-auth,callback,revoke,connections,set-default}");
 }

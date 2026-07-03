@@ -32,6 +32,7 @@ import { MercadoPagoConfig, PreApproval } from "mercadopago";
 import { getFirebaseAdmin } from "./firebase-admin-init";
 import type { SubscriptionStatus, GlobalConfig } from "../shared/monetization";
 import { DEFAULT_GLOBAL_CONFIG } from "../shared/monetization";
+import { logError, logInfo, logWarn } from "./logger";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -46,27 +47,42 @@ const FRONTEND_URL = process.env.FRONTEND_URL ?? "https://revendasmart.vercel.ap
 const PREMIUM_PRICE_BRL = parseFloat(process.env.PREMIUM_PRICE_BRL ?? "19.90");
 const PREMIUM_PLAN_NAME = "RevendaSmart Premium";
 
-console.log("[subscriptions] Initializing module");
-console.info(`[subscriptions] Payment credential configured: ${Boolean(CENTRAL_ACCESS_TOKEN)}`);
-console.log(`[subscriptions] PREMIUM_PRICE_BRL: ${PREMIUM_PRICE_BRL}`);
+logInfo("subscriptions.initialized", {
+  credentialConfigured: Boolean(CENTRAL_ACCESS_TOKEN),
+  premiumPriceConfigured: Number.isFinite(PREMIUM_PRICE_BRL),
+});
 
 const mpClient = new MercadoPagoConfig({
 accessToken: CENTRAL_ACCESS_TOKEN,
 options: { timeout: 15000 },
 });
 
-console.log(`[subscriptions] MercadoPagoConfig created successfully`);
+function normalizeDetails(details: unknown[]): unknown {
+  if (details.length === 0) return undefined;
+  return details.length === 1 ? details[0] : details;
+}
+
+function subInfo(message: string, ...details: unknown[]): void {
+  logInfo("subscriptions.log", { message, details: normalizeDetails(details) });
+}
+
+function subWarn(message: string, ...details: unknown[]): void {
+  logWarn("subscriptions.log", { message, details: normalizeDetails(details) });
+}
+
+function subLogError(message: string, ...details: unknown[]): void {
+  logError("subscriptions.log", undefined, { message, details: normalizeDetails(details) });
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function logSubError(op: string, _uid: string | null, msg: string, ctx?: Record<string, any>) {
-const eid = Math.random().toString(36).substring(7);
-console.error(`[subscriptions] ERROR-${eid} op=${op}`, {
-  errorType: msg ? "operation_failed" : "unknown_error",
-  contextKeys: ctx ? Object.keys(ctx) : [],
-});
+function logSubError(op: string, uid: string | null, msg: string, ctx?: Record<string, any>) {
+  logError(`subscriptions.${op}`, msg, {
+    uid,
+    ...(ctx ?? {}),
+  });
 }
 
 const SUBSCRIPTION_RATE_LIMIT_WINDOW_MS = 60 * 1000;
@@ -164,7 +180,7 @@ function validateSubscriptionWebhookSignature(
   subscriptionId: string,
 ): WebhookSignatureResult {
   if (!WEBHOOK_SECRET) {
-    console.error("[subscriptions/webhook] Webhook secret is not configured");
+    subLogError("[subscriptions/webhook] Webhook secret is not configured");
     return { valid: false, status: 401, code: "WEBHOOK_SECRET_NOT_CONFIGURED" };
   }
 
@@ -349,7 +365,7 @@ const trialDays = 7;
 const trialEndsAt = new Date();
 trialEndsAt.setDate(trialEndsAt.getDate() + trialDays);
 
-console.info("[trial] Applying eligible trial");
+subInfo("[trial] Applying eligible trial");
 
 await planRef.set({
 trialActive: true,
@@ -399,10 +415,10 @@ const update: Record<string, any> = {
 if (premiumActive && !existingData?.premiumOverride && !existingData?.trialActive) {
   update.premiumSource = "subscription";
 }
-console.log(`[syncPlanDataFromSubscription] subscriptionStatus=${subscriptionStatus}`);
-console.log(`[syncPlanDataFromSubscription] paymentStatus=${paymentStatus ?? "null"}`);
-console.log(`[syncPlanDataFromSubscription] premiumActive=${premiumActive}`);
-console.log(`[syncPlanDataFromSubscription] reason=${premiumReconciliation.reason}`);
+subInfo(`[syncPlanDataFromSubscription] subscriptionStatus=${subscriptionStatus}`);
+subInfo(`[syncPlanDataFromSubscription] paymentStatus=${paymentStatus ?? "null"}`);
+subInfo(`[syncPlanDataFromSubscription] premiumActive=${premiumActive}`);
+subInfo(`[syncPlanDataFromSubscription] reason=${premiumReconciliation.reason}`);
 
 if (premiumActive) {
 update.premiumExpiresAt = null;
@@ -449,7 +465,7 @@ return {
 };
 
 } catch (error) {
-console.error("[getGlobalConfig] Error:", error);
+subLogError("[getGlobalConfig] Error:", error);
 return DEFAULT_GLOBAL_CONFIG;
 }
 }
@@ -504,7 +520,7 @@ export function registerSubscriptionRoutes(
   app.post("/api/app-subscription/create", requireAuth, subscriptionCreateRateLimit, async (req: Request, res: Response) => {
     const uid = (req as any).firebaseUid as string;
 
-console.info("[subscriptions/create] Request received");
+subInfo("[subscriptions/create] Request received");
 
     if (!CENTRAL_ACCESS_TOKEN) {
       return res.status(500).json({
@@ -673,7 +689,7 @@ currentPlan: premiumActive ? "premium" : "free",
 app.post("/api/app-subscription/webhook", subscriptionWebhookRateLimit, async (req: Request, res: Response) => {
   try {
     if (!WEBHOOK_SECRET) {
-      console.error("[subscriptions/webhook] Rejected: webhook secret is not configured");
+      subLogError("[subscriptions/webhook] Rejected: webhook secret is not configured");
       return res.status(401).json({ error: "INVALID_WEBHOOK_SIGNATURE" });
     }
 
@@ -690,7 +706,7 @@ app.post("/api/app-subscription/webhook", subscriptionWebhookRateLimit, async (r
 
     const signatureResult = validateSubscriptionWebhookSignature(req, subscriptionId);
     if (!signatureResult.valid) {
-      console.warn("[subscriptions/webhook] Rejected notification", {
+      subWarn("[subscriptions/webhook] Rejected notification", {
         code: signatureResult.code,
       });
       return res.status(signatureResult.status).json({ error: signatureResult.code });
