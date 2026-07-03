@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="RevendaSmart">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ec4899"/>
+      <stop offset="0.55" stop-color="#7c3aed"/>
+      <stop offset="1" stop-color="#2563eb"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="124" fill="url(#g)"/>
+  <path fill="#fff" d="M139 206h234v132c0 23-19 42-42 42H181c-23 0-42-19-42-42V206z" opacity=".92"/>
+  <path fill="#fff" d="M126 153h260c10 0 18 8 18 18v45H108v-45c0-10 8-18 18-18z"/>
+  <path fill="#ec4899" d="M143 171h42v55h-42zM249 171h42v55h-42z" opacity=".9"/>
+  <path fill="#7c3aed" d="M196 171h42v55h-42zM302 171h42v55h-42z" opacity=".88"/>
+  <path fill="#ec4899" d="M171 274h64v84h-64z" opacity=".86"/>
+  <rect x="267" y="273" width="78" height="50" rx="14" fill="#2563eb" opacity=".82"/>
+  <path d="M265 341l79-83 32 29" fill="none" stroke="#fff" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" opacity=".85"/>
+  <path d="M265 341l79-83 32 29" fill="none" stroke="#22c55e" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M385 244l15 73-72-19z" fill="#22c55e"/>
+</svg>
