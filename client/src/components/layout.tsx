@@ -33,7 +33,7 @@ export function Layout({ children, title, hideBottomNav = false }: LayoutProps) 
             <div className="flex items-center gap-3 px-2 mb-9 cursor-pointer">
               <div className="w-11 h-11 rounded-2xl bg-primary text-white flex items-center justify-center font-black shadow-lg shadow-primary/20">R</div>
               <div>
-                <p className="font-black text-lg leading-none">RevendaSmart</p>
+                <p className="font-black text-lg leading-none">Revenda Smart</p>
                 <p className="text-[10px] text-muted-foreground mt-1">Gestão para revendedoras</p>
               </div>
             </div>

@@ -39,14 +39,14 @@ export function ConfirmActionDialog({
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       {trigger ? <AlertDialogTrigger asChild>{trigger}</AlertDialogTrigger> : null}
-      <AlertDialogContent className="rs-dialog-enter w-[calc(100vw-2rem)] max-w-sm rounded-[2rem] border-0 bg-white p-6 shadow-2xl sm:rounded-[2rem] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+      <AlertDialogContent className="rs-dialog-enter w-[calc(100vw-1.5rem)] max-w-sm rounded-[2rem] border-0 bg-white p-5 shadow-2xl sm:rounded-[2rem] max-h-[calc(100dvh-1.5rem)] overflow-y-auto overscroll-contain pb-[max(1.5rem,calc(env(safe-area-inset-bottom)+1rem))]">
         <AlertDialogHeader className="text-left">
           <AlertDialogTitle className="text-xl font-black text-foreground">{title}</AlertDialogTitle>
           <AlertDialogDescription asChild>
             <div className="text-sm leading-relaxed text-muted-foreground">{description}</div>
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <AlertDialogFooter className="mt-2 flex-col-reverse gap-3 sm:flex-col-reverse sm:space-x-0">
+        <AlertDialogFooter className="sticky bottom-0 -mx-5 -mb-5 mt-3 flex-col-reverse gap-3 bg-white/95 px-5 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur sm:flex-col-reverse sm:space-x-0">
           <AlertDialogCancel className="rs-pressable mt-0 h-12 rounded-2xl border-border bg-secondary text-sm font-black text-foreground">
             {cancelLabel}
           </AlertDialogCancel>

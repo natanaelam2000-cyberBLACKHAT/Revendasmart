@@ -431,13 +431,13 @@ export default function PublicCatalog() {
       )}
 
       {showCart && (
-        <div className="fixed inset-0 z-[70] bg-white flex flex-col">
+        <div className="fixed inset-0 z-[70] bg-white flex flex-col overflow-hidden">
           <div className="px-5 pt-[max(1.25rem,env(safe-area-inset-top))] pb-4 flex items-center justify-between border-b border-slate-200">
             <button onClick={() => setShowCart(false)} className="min-h-11 min-w-11 rounded-full bg-slate-100 flex items-center justify-center active:scale-95 transition-transform" aria-label="Fechar pedido"><X className="w-5 h-5" /></button>
             <h3 className="font-black text-lg">Meu Pedido</h3>
             <div className="w-11" />
           </div>
-          <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 pt-4 pb-3 space-y-3">
             {cart.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center px-6 text-center">
                 <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-[2rem] bg-primary/10"><ShoppingCart className="h-9 w-9 text-primary/45" /></div>
@@ -446,14 +446,14 @@ export default function PublicCatalog() {
                 <button onClick={() => setShowCart(false)} className="mt-5 min-h-12 rounded-2xl bg-primary px-5 text-xs font-black text-white">Continuar comprando</button>
               </div>
             ) : cart.map(item => (
-              <div key={item.product.id} className="flex gap-4 rounded-[1.75rem] border border-slate-200 bg-slate-50 p-4">
-                <div className="w-16 h-16 shrink-0 bg-white rounded-2xl overflow-hidden border border-slate-200"><ProductImageCard product={item.product} size="md" objectFit="contain" /></div>
+              <div key={item.product.id} className="flex gap-3 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-3.5">
+                <div className="w-14 h-14 shrink-0 bg-white rounded-2xl overflow-hidden border border-slate-200"><ProductImageCard product={item.product} size="md" objectFit="contain" /></div>
                 <div className="min-w-0 flex-1">
                   <h4 className="text-sm font-black leading-tight line-clamp-2">{item.product.name}</h4>
                   <p className="mt-1 text-[10px] font-black uppercase tracking-[0.12em] text-primary">{item.product.brand || "Sem marca"}</p>
-                  <p className="mt-2 text-xs text-slate-500">Preço unitário: {formatCurrency(Number(item.product.salePrice || 0))}</p>
+                  <p className="mt-1.5 text-xs text-slate-500">Preço unitário: {formatCurrency(Number(item.product.salePrice || 0))}</p>
                   <p className="text-sm font-black text-primary">Subtotal: {formatCurrency(Number(item.product.salePrice || 0) * item.quantity)}</p>
-                  <div className="mt-3 flex items-center justify-between gap-2">
+                  <div className="mt-2.5 flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <button onClick={() => updateQuantity(item.product.id, item.quantity - 1)} className="min-h-8 min-w-8 rounded-full bg-white shadow-sm flex items-center justify-center" aria-label="Diminuir quantidade"><Minus className="w-3.5 h-3.5" /></button>
                       <span className="text-sm font-black">{item.quantity}</span>
@@ -466,10 +466,10 @@ export default function PublicCatalog() {
             ))}
           </div>
           {cart.length > 0 && (
-            <div className="border-t border-slate-200 bg-white px-5 pt-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] space-y-3">
-              <div className="rounded-3xl bg-slate-50 p-4 space-y-2">
+            <div className="shrink-0 border-t border-slate-200 bg-white px-5 pt-3 pb-[max(1.5rem,calc(env(safe-area-inset-bottom)+1rem))] space-y-2.5 shadow-[0_-10px_30px_rgba(15,23,42,0.06)]">
+              <div className="rounded-2xl bg-slate-50 p-3.5 space-y-2">
                 <div className="flex items-center justify-between"><span className="text-xs font-bold text-slate-500">Itens</span><span className="text-sm font-black">{cartCount}</span></div>
-                <div className="flex items-center justify-between border-t border-slate-200 pt-3"><span className="text-sm font-black text-slate-600">Total</span><span className="text-2xl font-black text-slate-950">{formatCurrency(cartTotal)}</span></div>
+                <div className="flex items-center justify-between border-t border-slate-200 pt-2.5"><span className="text-sm font-black text-slate-600">Total</span><span className="text-2xl font-black text-slate-950">{formatCurrency(cartTotal)}</span></div>
               </div>
               <button onClick={() => setShowCart(false)} className="min-h-11 w-full rounded-2xl text-xs font-black text-primary">Continuar comprando</button>
               <button onClick={handleSendOrderWhatsApp} className="min-h-14 w-full rounded-[1.5rem] bg-[#25D366] text-white font-black flex items-center justify-center gap-3 shadow-xl shadow-green-200 active:scale-[0.99] transition-transform"><Send className="w-5 h-5" /> Enviar pedido no WhatsApp</button>
@@ -478,7 +478,7 @@ export default function PublicCatalog() {
         </div>
       )}
 
-      <footer className="py-8 text-center text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground">Criado com RevendaSmart</footer>
+      <footer className="py-8 text-center text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground">Criado com Revenda Smart</footer>
     </div>
   );
 }

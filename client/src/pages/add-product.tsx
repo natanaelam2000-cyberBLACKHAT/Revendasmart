@@ -651,8 +651,8 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
 
   return (
     <Layout title={id ? "Editar Produto" : "Novo Produto"}>
-      <div className="px-4 sm:px-6 py-4 pb-[max(8rem,calc(env(safe-area-inset-bottom)+7rem))] max-w-4xl mx-auto">
-        <button onClick={() => setLocation("/products")} className="flex items-center gap-2 text-muted-foreground mb-6 font-medium">
+      <div className="px-4 sm:px-6 pt-6 sm:pt-8 pb-[max(8rem,calc(env(safe-area-inset-bottom)+7rem))] max-w-4xl mx-auto scroll-pt-24">
+        <button onClick={() => setLocation("/products")} className="flex min-h-11 items-center gap-2 text-muted-foreground mb-5 font-medium">
           <ChevronLeft className="w-4 h-4" /> Voltar
         </button>
 
@@ -689,7 +689,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
           )}
 
           {/* Photo area */}
-          <div className="flex flex-col items-center gap-4 mb-2">
+          <div className="flex flex-col items-center gap-4 mb-1 rounded-[2rem] bg-white/70 border border-border/40 px-3 py-4 shadow-sm">
             <div className="relative group cursor-pointer">
               <div className="w-40 h-40 bg-secondary rounded-[2.5rem] border-2 border-dashed border-border/60 flex flex-col items-center justify-center text-muted-foreground transition-all overflow-hidden relative">
                 {formData.imageUrl && !isEnhancing && !isCompressingImage ? (
@@ -788,7 +788,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
           </div>
 
           {/* === MARCA e CATEGORIA em grid === */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
 
             {/* MARCA — Lógica Híbrida */}
             <div className="space-y-1.5">
@@ -872,30 +872,28 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
               <p className="text-[9px] text-muted-foreground px-1">Marca e origem ficam separadas para organizar melhor o catálogo.</p>
             </div>
 
-            {/* CATEGORIA — dinâmica por nicho */}
-{/* Público */}
-<div className="space-y-1.5 mt-4">
-  <label className="text-[10px] font-bold text-muted-foreground uppercase px-1">
-    Público
-  </label>
+            {/* Público */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-muted-foreground uppercase px-1">Público</label>
+              <div className="grid grid-cols-3 gap-2">
+                {["masculino", "feminino", "unisex"].map(g => (
+                  <button
+                    key={g}
+                    type="button"
+                    onClick={() => setFormData({ ...formData, gender: g })}
+                    className={`min-h-11 px-2 rounded-2xl text-[11px] font-bold capitalize transition-all ${
+                      formData.gender === g
+                        ? "bg-primary text-white shadow-sm shadow-primary/20"
+                        : "bg-white border border-border text-muted-foreground"
+                    }`}
+                  >
+                    {g}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-  <div className="flex gap-2">
-    {["masculino", "feminino", "unisex"].map(g => (
-      <button
-        key={g}
-        type="button"
-        onClick={() => setFormData({ ...formData, gender: g })}
-        className={`px-4 py-2 rounded-full text-xs font-bold ${
-          formData.gender === g
-            ? "bg-primary text-white"
-            : "bg-white border text-muted-foreground"
-        }`}
-      >
-        {g}
-      </button>
-    ))}
-  </div>
-</div>
+            {/* CATEGORIA — dinâmica por nicho */}
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-muted-foreground uppercase px-1 flex justify-between">
                 Categoria
