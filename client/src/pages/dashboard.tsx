@@ -262,8 +262,21 @@ export default function Dashboard() {
   );
 
   // Compute derived values after all hooks
-  const todayBillings = billings.filter(b => isToday(parseISO(b.dueDate)) && b.status !== 'paid');
-  const todayPosts = posts.filter(p => isToday(parseISO(p.scheduledDate)) && p.status !== 'posted');
+  const todayBillings = useMemo(
+    () => billings.filter(b => isToday(parseISO(b.dueDate)) && b.status !== 'paid'),
+    [billings]
+  );
+  const todayPosts = useMemo(
+    () => posts.filter(p => isToday(parseISO(p.scheduledDate)) && p.status !== 'posted'),
+    [posts]
+  );
+  const overdueChargesCount = useMemo(
+    () => {
+      const now = new Date();
+      return billings.filter(b => parseISO(b.dueDate) < now && b.status !== 'paid').length;
+    },
+    [billings]
+  );
 
   // Top selling products in current month
   const topProducts = useMemo(
@@ -280,11 +293,11 @@ export default function Dashboard() {
   const attentionItems = useMemo(
     () => calculateAttentionItems({
       lowStockCount: stockExecutive.lowStockCount,
-      overdueChargesCount: billings.filter(b => parseISO(b.dueDate) < new Date() && b.status !== 'paid').length,
+      overdueChargesCount,
       inactiveClientCount,
       monthlyGoal,
     }),
-    [billings, inactiveClientCount, monthlyGoal, stockExecutive.lowStockCount]
+    [inactiveClientCount, monthlyGoal, overdueChargesCount, stockExecutive.lowStockCount]
   );
 
   const comparisonCards = [

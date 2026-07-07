@@ -59,10 +59,10 @@ export default function Sell() {
     });
   };
 
-  const subtotal = cart.reduce((acc, item) => acc + (item.product.salePrice * item.quantity), 0);
-  const discountAmount = Math.min(subtotal, discountType === 'percent' ? subtotal * Math.min(100, discountValue) / 100 : discountValue);
-  const total = Math.max(0, subtotal - discountAmount);
-  const remainingBalance = Math.max(0, total - downPayment);
+  const subtotal = useMemo(() => cart.reduce((acc, item) => acc + (item.product.salePrice * item.quantity), 0), [cart]);
+  const discountAmount = useMemo(() => Math.min(subtotal, discountType === 'percent' ? subtotal * Math.min(100, discountValue) / 100 : discountValue), [discountType, discountValue, subtotal]);
+  const total = useMemo(() => Math.max(0, subtotal - discountAmount), [discountAmount, subtotal]);
+  const remainingBalance = useMemo(() => Math.max(0, total - downPayment), [downPayment, total]);
 
   const handleCheckout = async () => {
     if (cart.length === 0) {

@@ -88,6 +88,7 @@ export default function ClientDetail() {
   const crm = useMemo(() => calculateClientCrmMetrics(clientSales, productById), [clientSales, productById]);
   const clientBillings = useMemo(() => billings.filter(b => b.clientId === id), [billings, id]);
   const totalDebt = useMemo(() => clientBillings.filter(b => b.status !== "paid").reduce((a, b) => a + (b.amount - b.paidAmount), 0), [clientBillings]);
+  const maxMonthlyEvolutionTotal = useMemo(() => Math.max(...crm.monthlyEvolution.map(month => month.total), 1), [crm.monthlyEvolution]);
 
   if (clientsLoading || productsLoading || salesLoading) return <Layout><PageSkeleton variant="list" count={3} /></Layout>;
   if (!client) return (
@@ -166,8 +167,7 @@ export default function ClientDetail() {
           {crm.monthlyEvolution.length === 0 ? <p className="text-xs text-muted-foreground">Ainda não há compras suficientes para montar a evolução.</p> : (
             <div className="space-y-3">
               {crm.monthlyEvolution.map(item => {
-                const maxTotal = Math.max(...crm.monthlyEvolution.map(month => month.total), 1);
-                const width = Math.max(8, Math.round((item.total / maxTotal) * 100));
+                const width = Math.max(8, Math.round((item.total / maxMonthlyEvolutionTotal) * 100));
                 return <div key={item.monthKey}><div className="mb-1 flex items-center justify-between text-xs"><span className="font-bold capitalize">{item.monthLabel}</span><span className="text-muted-foreground">{currency(item.total)} · {item.purchases} compra(s)</span></div><div className="h-2 rounded-full bg-secondary overflow-hidden"><div className="h-full rounded-full bg-primary" style={{ width: `${width}%` }} /></div></div>;
               })}
             </div>

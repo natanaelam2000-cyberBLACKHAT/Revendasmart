@@ -173,8 +173,12 @@ export default function PublicCatalog() {
   }, [products]);
 
   const newestProducts = useMemo(() => {
-    const withDates = [...products].filter(product => getCreatedAtTime(product) > 0);
-    const source = withDates.length > 0 ? withDates.sort((a, b) => getCreatedAtTime(b) - getCreatedAtTime(a)) : products;
+    const withDates = products
+      .map(product => ({ product, createdAtTime: getCreatedAtTime(product) }))
+      .filter(item => item.createdAtTime > 0);
+    const source = withDates.length > 0
+      ? withDates.sort((a, b) => b.createdAtTime - a.createdAtTime).map(item => item.product)
+      : products;
     return source.filter(product => product.stock > 0).slice(0, 6);
   }, [products]);
 
@@ -182,7 +186,7 @@ export default function PublicCatalog() {
     .filter(product => product.stock > 0 && (product.isOnSale || getPromotionalPrice(product) !== null))
     .slice(0, 6), [products]);
 
-  const addToCart = (product: Product) => {
+  const addToCart = useCallback((product: Product) => {
     if (product.stock <= 0) return;
     setCart(previous => {
       const existing = previous.find(item => item.product.id === product.id);
@@ -192,22 +196,25 @@ export default function PublicCatalog() {
       }
       return [...previous, { product, quantity: 1 }];
     });
-  };
+  }, []);
 
-  const removeFromCart = (productId: string) => {
+  const removeFromCart = useCallback((productId: string) => {
     setCart(previous => previous.filter(item => item.product.id !== productId));
-  };
+  }, []);
 
-  const updateQuantity = (productId: string, quantity: number) => {
+  const updateQuantity = useCallback((productId: string, quantity: number) => {
     if (quantity <= 0) {
       removeFromCart(productId);
       return;
     }
-    const item = cart.find(cartItem => cartItem.product.id === productId);
-    if (!item || quantity > item.product.stock) return;
-    setCart(previous => previous.map(cartItem => cartItem.product.id === productId ? { ...cartItem, quantity } : cartItem));
-  };
+    setCart(previous => {
+      const item = previous.find(cartItem => cartItem.product.id === productId);
+      if (!item || quantity > item.product.stock) return previous;
+      return previous.map(cartItem => cartItem.product.id === productId ? { ...cartItem, quantity } : cartItem);
+    });
+  }, [removeFromCart]);
 
+  const cartQuantities = useMemo(() => new Map(cart.map(item => [item.product.id, item.quantity])), [cart]);
   const cartTotal = useMemo(() => cart.reduce((sum, item) => sum + Number(item.product.salePrice || 0) * item.quantity, 0), [cart]);
   const cartCount = useMemo(() => cart.reduce((sum, item) => sum + item.quantity, 0), [cart]);
 
@@ -265,7 +272,7 @@ export default function PublicCatalog() {
   const renderProductCard = (product: Product) => {
     const price = Number(product.salePrice || 0);
     const promoPrice = getPromotionalPrice(product);
-    const cartQty = cart.find(item => item.product.id === product.id)?.quantity || 0;
+    const cartQty = cartQuantities.get(product.id) || 0;
     const isAvailable = product.stock > 0;
 
     return (

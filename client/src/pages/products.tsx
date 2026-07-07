@@ -48,12 +48,14 @@ export default function Products() {
     return ["Todas", ...Array.from(cats).sort()];
   }, [products]);
 
+  const normalizedSearch = useMemo(() => search.trim().toLowerCase(), [search]);
+
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
       const matchSearch =
-        !search ||
-        p.name?.toLowerCase().includes(search.toLowerCase()) ||
-        p.brand?.toLowerCase().includes(search.toLowerCase());
+        !normalizedSearch ||
+        p.name?.toLowerCase().includes(normalizedSearch) ||
+        p.brand?.toLowerCase().includes(normalizedSearch);
 
       const matchCategory = selectedCategory === "Todas" || p.category === selectedCategory;
 
@@ -66,7 +68,7 @@ export default function Products() {
 
       return matchSearch && matchCategory && matchesStockFilter;
     });
-  }, [products, selectedCategory, search, showOutOfStock, showLowStock]);
+  }, [products, selectedCategory, normalizedSearch, showOutOfStock, showLowStock]);
 
   const handleQuickShare = (product: Product) => {
     const catalogSlug = settings?.catalogSlug || settings?.catalog_slug || "seu-catalogo";

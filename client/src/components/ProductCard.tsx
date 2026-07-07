@@ -1,9 +1,10 @@
+import { memo } from "react";
 import { Product } from "@/lib/mock-data";
 import { ProductImageCard } from "./ProductImageCard";
 import { StockBadge } from "./StockBadge";
 
 interface ProductCardProps { product: Product; lowStockThreshold?: number; }
-export const ProductCard = ({ product, lowStockThreshold }: ProductCardProps) => {
+const ProductCardComponent = ({ product, lowStockThreshold }: ProductCardProps) => {
   const cost = Number(product.costPrice || 0);
   const sale = Number(product.salePrice || 0);
   const profit = sale - cost;
@@ -32,3 +33,5 @@ export const ProductCard = ({ product, lowStockThreshold }: ProductCardProps) =>
     </div>
   );
 };
+
+export const ProductCard = memo(ProductCardComponent);
