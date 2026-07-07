@@ -35,3 +35,8 @@ firebase-service-account*.json
 !docs/**/*.md
 !setup-secrets-cloud-run.template.sh
 !scripts/security/migrate-cloud-run-secrets.sh
+
+# Safe Secret Manager documentation/scripts (no secret values)
+!docs/SECRET_MANAGER_CLOUD_RUN.md
+!scripts/security/verify-cloud-run-secrets.sh
+!scripts/security/update-secret-version.sh
