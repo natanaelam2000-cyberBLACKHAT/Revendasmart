@@ -3,7 +3,7 @@ import { useLocation, Link } from "wouter";
 import { sendPasswordResetEmail, signInWithEmailAndPassword } from "firebase/auth";
 import { getFirebaseAuth, getFirebaseError, logTelemetryEvent, setTelemetryUserId, trackAnalyticsEvent, setFirebaseAnalyticsUserId } from "@/lib/firebase";
 import { getApiUrl } from "@/lib/api-config";
-import { LogIn, ShoppingBag, Sparkles } from "lucide-react";
+import { LogIn } from "lucide-react";
 
 export default function Login() {
   const [, setLocation] = useLocation();
@@ -134,16 +134,13 @@ export default function Login() {
       <div className="absolute top-0 right-0 w-64 h-64 bg-primary/10 rounded-full blur-3xl -mr-32 -mt-32" />
       <div className="absolute bottom-0 left-0 w-64 h-64 bg-primary/5 rounded-full blur-3xl -ml-32 -mb-32" />
       
-      <div className="w-20 h-20 bg-primary/10 rounded-[2.5rem] flex items-center justify-center mb-6 relative">
-        <ShoppingBag className="w-10 h-10 text-primary" />
-        <div className="absolute -top-1 -right-1">
-          <Sparkles className="w-6 h-6 text-primary animate-pulse" />
-        </div>
+      <div className="w-full max-w-[280px] mb-7 relative z-10 rounded-3xl overflow-hidden bg-white/90 px-4 py-3 shadow-sm shadow-primary/10">
+        <img src="/logo-revenda-smart.png" alt="Revenda Smart" className="w-full h-auto object-contain" />
       </div>
 
       <div className="text-center mb-10">
-        <h1 className="text-3xl font-black text-foreground mb-2">RevendaSmart</h1>
-        <p className="text-sm text-muted-foreground font-medium">Sua gestão de beleza simplificada</p>
+        <h1 className="sr-only">Revenda Smart</h1>
+        <p className="text-sm text-muted-foreground font-medium">Venda mais, controle melhor e cresça com inteligência</p>
       </div>
 
       <form onSubmit={handleLogin} className="w-full space-y-4 relative z-10">

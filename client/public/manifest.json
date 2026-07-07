@@ -1,47 +1,47 @@
 {
-  "name": "RevendaSmart",
+  "name": "Revenda Smart",
   "short_name": "RevendaSmart",
-  "description": "Gestão de estoque e catálogo para revendedoras",
+  "description": "Gestão inteligente para quem vende",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#6d50dc",
-  "theme_color": "#6d50dc",
+  "background_color": "#f8fafc",
+  "theme_color": "#4f46e5",
   "icons": [
     {
-      "src": "/icons/revendasmart-maskable-192-v7.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "maskable"
-    },
-    {
-      "src": "/icons/revendasmart-maskable-512-v7.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
-    },
-    {
-      "src": "/icons/revendasmart-icon-192-v7.png",
+      "src": "/icons/icon-192x192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icons/revendasmart-icon-256-v7.png",
+      "src": "/icons/icon-256x256.png",
       "sizes": "256x256",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icons/revendasmart-icon-512-v7.png",
+      "src": "/icons/icon-512x512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icons/revendasmart-icon-1024-v7.png",
+      "src": "/icons/icon-1024x1024.png",
       "sizes": "1024x1024",
       "type": "image/png",
       "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/icon-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }
