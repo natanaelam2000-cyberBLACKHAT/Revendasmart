@@ -83,11 +83,55 @@ function getPublicCatalogProductImage(product: Record<string, any> | null | unde
 
 const PUBLIC_CATALOG_RATE_LIMIT_WINDOW_MS = 60_000;
 const PUBLIC_CATALOG_RATE_LIMIT_MAX = 60;
+const PUBLIC_CATALOG_IP_RATE_LIMIT_MAX = 240;
 const PUBLIC_CATALOG_RATE_LIMIT_MAX_KEYS = 10_000;
 const publicCatalogRateLimitMap = new Map<string, { count: number; resetAt: number }>();
+const publicCatalogIpRateLimitMap = new Map<string, { count: number; resetAt: number }>();
 
 export function resetPublicCatalogRateLimitsForTests(): void {
   publicCatalogRateLimitMap.clear();
+  publicCatalogIpRateLimitMap.clear();
+}
+
+function checkPublicCatalogIpRateLimit(
+  clientKey: string,
+  now = Date.now(),
+): { allowed: boolean; remaining: number; retryAfterSeconds: number } {
+  const key = clientKey || "unknown";
+  const current = publicCatalogIpRateLimitMap.get(key);
+
+  if (!current || now >= current.resetAt) {
+    if (publicCatalogIpRateLimitMap.size >= PUBLIC_CATALOG_RATE_LIMIT_MAX_KEYS) {
+      publicCatalogIpRateLimitMap.forEach((entry, storedKey) => {
+        if (now >= entry.resetAt) publicCatalogIpRateLimitMap.delete(storedKey);
+      });
+      if (publicCatalogIpRateLimitMap.size >= PUBLIC_CATALOG_RATE_LIMIT_MAX_KEYS) {
+        const oldestKey = publicCatalogIpRateLimitMap.keys().next().value;
+        if (oldestKey) publicCatalogIpRateLimitMap.delete(oldestKey);
+      }
+    }
+    publicCatalogIpRateLimitMap.set(key, {
+      count: 1,
+      resetAt: now + PUBLIC_CATALOG_RATE_LIMIT_WINDOW_MS,
+    });
+    return {
+      allowed: true,
+      remaining: PUBLIC_CATALOG_IP_RATE_LIMIT_MAX - 1,
+      retryAfterSeconds: Math.ceil(PUBLIC_CATALOG_RATE_LIMIT_WINDOW_MS / 1000),
+    };
+  }
+
+  const retryAfterSeconds = Math.max(1, Math.ceil((current.resetAt - now) / 1000));
+  if (current.count >= PUBLIC_CATALOG_IP_RATE_LIMIT_MAX) {
+    return { allowed: false, remaining: 0, retryAfterSeconds };
+  }
+
+  current.count += 1;
+  return {
+    allowed: true,
+    remaining: PUBLIC_CATALOG_IP_RATE_LIMIT_MAX - current.count,
+    retryAfterSeconds,
+  };
 }
 
 export function checkPublicCatalogRateLimit(
@@ -141,14 +185,18 @@ function getPublicCatalogClientKey(req: Request): string {
 }
 
 export function publicCatalogRateLimit(req: Request, res: Response, next: NextFunction) {
+  const clientKey = getPublicCatalogClientKey(req);
+  const ipDecision = checkPublicCatalogIpRateLimit(clientKey);
   const decision = checkPublicCatalogRateLimit(
-    getPublicCatalogClientKey(req),
+    clientKey,
     getRouteParam(req, "storeSlug"),
   );
   res.setHeader("X-RateLimit-Limit", String(PUBLIC_CATALOG_RATE_LIMIT_MAX));
   res.setHeader("X-RateLimit-Remaining", String(decision.remaining));
-  if (!decision.allowed) {
-    res.setHeader("Retry-After", String(decision.retryAfterSeconds));
+  res.setHeader("X-RateLimit-IP-Limit", String(PUBLIC_CATALOG_IP_RATE_LIMIT_MAX));
+  res.setHeader("X-RateLimit-IP-Remaining", String(ipDecision.remaining));
+  if (!ipDecision.allowed || !decision.allowed) {
+    res.setHeader("Retry-After", String(Math.max(ipDecision.retryAfterSeconds, decision.retryAfterSeconds)));
     return res.status(429).json({ error: "CATALOG_RATE_LIMITED" });
   }
   return next();

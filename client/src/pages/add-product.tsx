@@ -14,7 +14,7 @@ import {
   doc,
   setDoc,
   getDoc,
-  getDocs,
+  getCountFromServer,
   collection
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
@@ -528,11 +528,11 @@ if (!uid) {
   return;
 }
 
-const productDocs = await getDocs(
+const productCountSnapshot = await getCountFromServer(
   collection(firestore, "users", uid, "products")
 );
 
-const productCount = productDocs.size;
+const productCount = productCountSnapshot.data().count;
 
 const safePlan: PlanType = activePlan === "premium" ? "premium" : "free";
 const { allowed } = checkProductLimit(safePlan, productCount, true);
