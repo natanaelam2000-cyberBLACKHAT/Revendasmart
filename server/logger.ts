@@ -16,7 +16,7 @@ const MAX_STRING_LENGTH = 600;
 const MAX_DEPTH = 5;
 const MAX_ARRAY_ITEMS = 20;
 
-const SENSITIVE_KEY_PATTERN = /token|secret|password|authorization|cookie|private[_-]?key|credential|rawbody|raw_body|payload|client_secret|access[_-]?token|refresh[_-]?token/i;
+const SENSITIVE_KEY_PATTERN = /token|secret|password|senha|authorization|cookie|private[_-]?key|credential|rawbody|raw_body|payload|client_secret|access[_-]?token|refresh[_-]?token|card|cvv|cpf|rg/i;
 const IDENTIFIER_KEYS = new Set([
   "uid",
   "userid",
@@ -25,6 +25,8 @@ const IDENTIFIER_KEYS = new Set([
   "sourceuid",
   "referreruid",
   "referreduid",
+  "referraluid",
+  "newuserid",
   "chargeid",
   "connectionid",
   "paymentid",
@@ -32,6 +34,7 @@ const IDENTIFIER_KEYS = new Set([
   "mercadopagopaymentid",
   "subscriptionid",
   "merchantid",
+  "installmentid",
   "clientid",
   "saleid",
   "productid",
@@ -62,11 +65,21 @@ export function maskEmail(value: unknown): string | null {
   return `${name.slice(0, 1)}***@${domain}`;
 }
 
+export function maskPhone(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const digits = String(value).replace(/\D/g, "");
+  if (digits.length < 4) return "***";
+  return `(**) *****-${digits.slice(-4)}`;
+}
+
 function sanitizeString(value: string): string {
   let sanitized = value
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
     .replace(/(TEST-|APP_USR-|APP-)[A-Za-z0-9._~+/=-]{16,}/g, "[redacted-token]")
-    .replace(/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/g, "[redacted-private-key]");
+    .replace(/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/g, "[redacted-private-key]")
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, (email) => maskEmail(email) || "[redacted-email]")
+    .replace(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, "***.***.***-**")
+    .replace(/(?:\+55\s*)?\(?\d{2}\)?[\s-]9?\d{4}[-\s]\d{4}/g, (phone) => maskPhone(phone) || "[redacted-phone]");
 
   if (sanitized.length > MAX_STRING_LENGTH) {
     sanitized = `${sanitized.slice(0, MAX_STRING_LENGTH)}…[truncated]`;
@@ -91,6 +104,7 @@ export function sanitizeForLog(value: unknown, depth = 0, keyHint = ""): unknown
   const normalizedKey = normalizeKey(keyHint);
   if (IDENTIFIER_KEYS.has(normalizedKey)) return maskId(value);
   if (normalizedKey.includes("email")) return maskEmail(value);
+  if (normalizedKey.includes("phone") || normalizedKey.includes("telefone") || normalizedKey.includes("whatsapp")) return maskPhone(value);
 
   if (value === null || value === undefined) return value;
   if (typeof value === "string") return sanitizeString(value);

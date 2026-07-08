@@ -1,4 +1,5 @@
 import admin from "firebase-admin";
+import { logError } from "./logger";
 
 let firebaseAdmin: typeof admin | null = null;
 let initialized = false;
@@ -30,7 +31,7 @@ export function initializeFirebaseAdmin() {
     initialized = true;
     return firebaseAdmin;
   } catch (error) {
-    console.error("[firebase-admin-init] Failed to initialize firebase-admin:", error);
+    logError("firebase_admin.initialize_failed", error, { module: "firebase-admin-init" });
     throw error;
   }
 }

@@ -12,6 +12,7 @@
  */
 
 import * as crypto from "crypto";
+import { logError, logWarn } from "./logger";
 import type { EncryptedToken } from "../shared/connections";
 
 // ---------------------------------------------------------------------------
@@ -21,9 +22,10 @@ import type { EncryptedToken } from "../shared/connections";
 const RAW_KEY = process.env.MERCADOPAGO_TOKEN_ENCRYPTION_KEY ?? "";
 
 if (!RAW_KEY) {
-  console.warn(
-    "[mp-crypto] MERCADOPAGO_TOKEN_ENCRYPTION_KEY is not set — token encryption DISABLED"
-  );
+  logWarn("mp_crypto.encryption_key_missing", {
+    module: "mercadopago-crypto",
+    encryptionEnabled: false,
+  });
 }
 
 /**
@@ -34,7 +36,7 @@ if (!RAW_KEY) {
 function buildKey(): Buffer {
   if (!RAW_KEY) {
     // Return a deterministic but useless key for dev mode (tokens won't decrypt on restart)
-    console.error("[mp-crypto] Encryption key missing — tokens encrypted with insecure fallback");
+    logError("mp_crypto.insecure_fallback_key", undefined, { module: "mercadopago-crypto" });
     return crypto.createHash("sha256").update("insecure-dev-fallback-do-not-use").digest();
   }
 

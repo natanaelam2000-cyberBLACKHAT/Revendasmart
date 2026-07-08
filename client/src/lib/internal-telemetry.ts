@@ -1,5 +1,6 @@
-import { getDatabase, ref, push, set } from "firebase/database";
+import { getDatabase, ref, push, set, Database } from "firebase/database";
 import { FirebaseApp } from "firebase/app";
+import { maskId, safeLogger, sanitizeLogPayload } from "@/lib/safe-logger";
 
 /**
  * INTERNAL TELEMETRY MODULE
@@ -18,7 +19,7 @@ import { FirebaseApp } from "firebase/app";
  * NOTE: This is internal telemetry. For product analytics, use firebase-analytics.ts
  */
 
-let database: any = null;
+let database: Database | null = null;
 let isInitialized = false;
 
 /**
@@ -196,6 +197,12 @@ user_logged_out: Record<string, never>;
   };
 }
 
+declare global {
+  interface Window {
+    __telemetryUser?: string;
+  }
+}
+
 /**
  * Initialize internal telemetry with Firebase Realtime Database
  */
@@ -206,7 +213,7 @@ export function initializeInternalTelemetry(app: FirebaseApp): void {
     database = getDatabase(app);
     isInitialized = true;
   } catch (error) {
-    console.error("[InternalTelemetry] Failed to initialize:", error);
+    safeLogger.error("internal_telemetry_initialize_failed", error, { module: "internal-telemetry" });
   }
 }
 
@@ -220,7 +227,7 @@ export async function logTelemetryEvent<K extends keyof InternalTelemetryEvents>
   userId?: string
 ): Promise<void> {
   if (!isInitialized || !database) {
-    console.warn("[InternalTelemetry] Not initialized, event not logged");
+    safeLogger.warn("internal_telemetry_not_initialized", { module: "internal-telemetry", eventName });
     return;
   }
 
@@ -228,8 +235,8 @@ export async function logTelemetryEvent<K extends keyof InternalTelemetryEvents>
     const eventLog = {
       timestamp: new Date().toISOString(),
       eventName,
-      data,
-      userId,
+      data: sanitizeLogPayload(data),
+      userId: maskId(userId) || undefined,
       url: typeof window !== "undefined" ? window.location.href : "unknown",
     };
 
@@ -237,7 +244,7 @@ export async function logTelemetryEvent<K extends keyof InternalTelemetryEvents>
     const newEventRef = push(eventsRef);
     await set(newEventRef, eventLog);
   } catch (err) {
-    console.error("[InternalTelemetry] Failed to log event:", err);
+    safeLogger.error("internal_telemetry_log_event_failed", err, { module: "internal-telemetry", eventName });
   }
 }
 
@@ -247,10 +254,10 @@ export async function logTelemetryEvent<K extends keyof InternalTelemetryEvents>
 export function setTelemetryUserId(userId: string): void {
   try {
     if (typeof window !== "undefined") {
-      (window as any).__telemetryUser = userId;
+      window.__telemetryUser = maskId(userId) || undefined;
     }
   } catch (err) {
-    console.error("[InternalTelemetry] Failed to set user ID:", err);
+    safeLogger.error("internal_telemetry_set_user_failed", err, { module: "internal-telemetry" });
   }
 }
 
@@ -260,9 +267,9 @@ export function setTelemetryUserId(userId: string): void {
 export function clearTelemetryUserId(): void {
   try {
     if (typeof window !== "undefined") {
-      delete (window as any).__telemetryUser;
+      delete window.__telemetryUser;
     }
   } catch (err) {
-    console.error("[InternalTelemetry] Failed to clear user ID:", err);
+    safeLogger.error("internal_telemetry_clear_user_failed", err, { module: "internal-telemetry" });
   }
 }

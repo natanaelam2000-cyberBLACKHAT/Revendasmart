@@ -104,7 +104,7 @@ if (isSafeMode) {
 );
     }
   } catch (e) {
-    console.error("Critical error on boot", e);
+    safeLogger.error("app_boot_failed", e, { module: "main" });
     createRoot(document.getElementById("root")!).render(
       <div className="min-h-screen bg-background flex flex-col items-center justify-center p-6 text-center font-sans">
         <h1 className="text-xl font-bold mb-4">Ocorreu um erro temporário.</h1>

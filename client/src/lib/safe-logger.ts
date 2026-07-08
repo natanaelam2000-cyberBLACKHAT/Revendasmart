@@ -11,10 +11,18 @@ const IDENTIFIER_KEYS = new Set([
   "uid",
   "userid",
   "firebaseuid",
+  "targetuserid",
+  "sourceuid",
+  "referreruid",
+  "referreduid",
+  "referraluid",
+  "newuserid",
   "chargeid",
   "connectionid",
   "paymentid",
   "subscriptionid",
+  "merchantid",
+  "installmentid",
   "saleid",
   "productid",
   "clientid",
@@ -51,7 +59,7 @@ const sanitizeString = (value: string): string => {
     .replace(/(TEST-|APP_USR-|APP-)[A-Za-z0-9._~+/=-]{12,}/g, "[REDACTED]")
     .replace(/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/g, "[REDACTED]")
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, (email) => maskEmail(email) || "[REDACTED]")
-    .replace(/\d{3}\.?\d{3}\.?\d{3}-?\d{2}/g, "***.***.***-**");
+    .replace(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, "***.***.***-**");
 
   if (sanitized.length > MAX_STRING_LENGTH) {
     sanitized = `${sanitized.slice(0, MAX_STRING_LENGTH)}…[truncated]`;
