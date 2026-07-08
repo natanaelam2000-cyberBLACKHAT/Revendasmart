@@ -389,7 +389,7 @@ async function handleCreateLink(req: Request, res: Response) {
     paymentInfo("[payments/create-link] stage=", stage);
     
     stage = "validate_body";
-    paymentLogError("[payments/create-link] stage=", stage);
+    paymentInfo("[payments/create-link] stage=", stage);
     
     body = req.body as CreatePaymentLinkInput;
     const authenticatedUid = (req as any).firebaseUid as string;
@@ -418,7 +418,7 @@ async function handleCreateLink(req: Request, res: Response) {
 
     // Generate stable chargeId (Firestore auto-ID)
     stage = "firestore_ref_creation";
-    paymentLogError("[payments/create-link] stage=", stage);
+    paymentInfo("[payments/create-link] stage=", stage);
     
     const admin = getFirebaseAdmin();
     const db = admin.firestore();
@@ -433,8 +433,8 @@ async function handleCreateLink(req: Request, res: Response) {
 
     // ── Caminho B: Resolve which MP account to use ──────────────────────────
     stage = "resolve_token";
-    paymentLogError("[payments/create-link] stage=", stage);
-    paymentLogError("[payments/create-link] Resolving payment credential");
+    paymentInfo("[payments/create-link] stage=", stage);
+    paymentInfo("[payments/create-link] Resolving payment credential");
     
     const {
       accessToken,
@@ -451,20 +451,20 @@ async function handleCreateLink(req: Request, res: Response) {
 
     // Build per-request Mercado Pago client with the resolved token
     stage = "create_mp_client";
-    paymentLogError("[payments/create-link] stage=", stage);
-    paymentLogError("[payments/create-link] DEBUG: Step 2 — Creating MercadoPagoConfig");
+    paymentInfo("[payments/create-link] stage=", stage);
+    paymentInfo("[payments/create-link] Creating Mercado Pago client");
     
     const mpClient = new MercadoPagoConfig({ accessToken, options: { timeout: 10000 } });
     const preferenceClient = new Preference(mpClient);
     const chargeEnvironment = detectEnvironment(accessToken);
-    paymentLogError("[payments/create-link] DEBUG: Step 2 SUCCESS — MPClient created", {
+    paymentInfo("[payments/create-link] Mercado Pago client created", {
       environment: chargeEnvironment,
     });
 
     // Build Mercado Pago preference
     stage = "build_preference_payload";
-    paymentLogError("[payments/create-link] stage=", stage);
-    paymentLogError("[payments/create-link] Preparing payment preference");
+    paymentInfo("[payments/create-link] stage=", stage);
+    paymentInfo("[payments/create-link] Preparing payment preference");
     
     // Validate critical fields before building payload
     const FRONTEND_URL_VALID = FRONTEND_URL && FRONTEND_URL.startsWith("http");
@@ -515,8 +515,8 @@ async function handleCreateLink(req: Request, res: Response) {
     paymentInfo("[payments/create-link] Payment preference prepared");
     
     stage = "create_preference";
-    paymentLogError("[payments/create-link] stage=", stage);
-    paymentLogError("[payments/create-link] DEBUG: Step 4 — Calling preferenceClient.create()");
+    paymentInfo("[payments/create-link] stage=", stage);
+    paymentInfo("[payments/create-link] Creating payment preference");
     
     let preference: any = null;
     try {
@@ -560,7 +560,7 @@ async function handleCreateLink(req: Request, res: Response) {
       });
     }
     stage = "extract_preference_urls";
-    paymentLogError("[payments/create-link] stage=", stage);
+    paymentInfo("[payments/create-link] stage=", stage);
     
     const safePreference = preference ?? {};
     const paymentUrl = safePreference?.init_point ?? "";
@@ -578,8 +578,8 @@ async function handleCreateLink(req: Request, res: Response) {
 
     // Build charge document with ONLY non-undefined fields to prevent Firestore errors
     stage = "build_charge";
-    paymentLogError("[payments/create-link] stage=", stage);
-    paymentLogError("[payments/create-link] DEBUG: Step 5 — Building charge document for Firestore");
+    paymentInfo("[payments/create-link] stage=", stage);
+    paymentInfo("[payments/create-link] Building charge document");
     
     const charge: any = {
       id: chargeId,
@@ -620,22 +620,22 @@ async function handleCreateLink(req: Request, res: Response) {
       }
     }
 
-    paymentLogError("[payments/create-link] DEBUG: Step 5 SUCCESS — Charge document built");
+    paymentInfo("[payments/create-link] Charge document built");
     try {
-      paymentLogError("[payments/create-link] Charge keys:", Object.keys(charge ?? {}));
+      paymentInfo("[payments/create-link] Charge keys", Object.keys(charge ?? {}));
     } catch (keyErr) {
-      paymentLogError("[payments/create-link] Cannot get charge keys:", String(keyErr));
+      paymentWarn("[payments/create-link] Cannot get charge keys", String(keyErr));
     }
     
     // Persist to Firestore
     stage = "save_charge";
-    paymentLogError("[payments/create-link] stage=", stage);
+    paymentInfo("[payments/create-link] stage=", stage);
     
     await chargeRef.set(charge);
-    paymentLogError("[payments/create-link] DEBUG: Step 6 SUCCESS — Charge saved to Firestore");
+    paymentInfo("[payments/create-link] Charge saved to Firestore");
     
     stage = "send_response";
-    paymentLogError("[payments/create-link] stage=", stage);
+    paymentInfo("[payments/create-link] stage=", stage);
 
     paymentInfo("[payments/create-link] Charge created successfully");
 
@@ -652,7 +652,7 @@ async function handleCreateLink(req: Request, res: Response) {
     const errorMsg = err instanceof Error ? err.message : String(err ?? "Unknown error");
     const errorName = err instanceof Error ? err.name : "UnknownError";
     
-    paymentLogError("[payments/create-link] ❌ CAUGHT OUTER ERROR at stage:", stage);
+    paymentLogError("[payments/create-link] Request failed at stage", stage);
     paymentLogError("[payments/create-link] Request failed", {
       stage,
       errorName,

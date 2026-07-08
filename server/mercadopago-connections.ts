@@ -291,8 +291,7 @@ async function exchangeCodeForTokens(code: string): Promise<MPTokenResponse> {
   });
 
   if (!resp.ok) {
-    const err = await resp.text();
-    throw new Error(`MP token exchange failed (${resp.status}): ${err}`);
+    throw new Error(`MP_TOKEN_EXCHANGE_FAILED_${resp.status}`);
   }
 
   return resp.json() as Promise<MPTokenResponse>;
@@ -311,8 +310,7 @@ async function refreshAccessTokens(refreshTokenPlain: string): Promise<MPTokenRe
   });
 
   if (!resp.ok) {
-    const err = await resp.text();
-    throw new Error(`MP token refresh failed (${resp.status}): ${err}`);
+    throw new Error(`MP_TOKEN_REFRESH_FAILED_${resp.status}`);
   }
 
   return resp.json() as Promise<MPTokenResponse>;
