@@ -35,6 +35,106 @@ export default defineConfig(({ mode }) => ({
     sourcemap: mode !== "production",
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          const moduleId = id.replace(/\\/g, "/");
+
+          if (!moduleId.includes("/node_modules/")) return undefined;
+
+          const hasPackage = (packageName: string) => moduleId.includes(`/node_modules/${packageName}/`);
+
+          if (hasPackage("react") || hasPackage("react-dom") || hasPackage("scheduler")) {
+            return "vendor-react-core";
+          }
+
+          if (hasPackage("@firebase/firestore") || moduleId.includes("/node_modules/firebase/firestore")) {
+            return "vendor-firebase-firestore";
+          }
+
+          if (hasPackage("@firebase/auth") || moduleId.includes("/node_modules/firebase/auth")) {
+            return "vendor-firebase-auth";
+          }
+
+          if (hasPackage("@firebase/storage") || moduleId.includes("/node_modules/firebase/storage")) {
+            return "vendor-firebase-storage";
+          }
+
+          if (
+            hasPackage("@firebase/analytics") ||
+            hasPackage("@firebase/performance") ||
+            hasPackage("@firebase/remote-config") ||
+            moduleId.includes("/node_modules/firebase/analytics") ||
+            moduleId.includes("/node_modules/firebase/performance") ||
+            moduleId.includes("/node_modules/firebase/remote-config")
+          ) {
+            return "vendor-firebase-observability";
+          }
+
+          if (moduleId.includes("/node_modules/@firebase/") || hasPackage("firebase")) {
+            return "vendor-firebase-core";
+          }
+
+          if (hasPackage("recharts") || hasPackage("victory-vendor") || moduleId.includes("/node_modules/d3-")) {
+            return "vendor-recharts";
+          }
+
+          if (hasPackage("@radix-ui")) {
+            return "vendor-radix";
+          }
+
+          if (hasPackage("lucide-react")) {
+            return "vendor-lucide";
+          }
+
+          if (hasPackage("date-fns")) {
+            return "vendor-date-fns";
+          }
+
+          if (hasPackage("qrcode.react")) {
+            return "vendor-qrcode";
+          }
+
+          if (hasPackage("framer-motion")) {
+            return "vendor-motion";
+          }
+
+          if (hasPackage("zod") || hasPackage("zod-validation-error")) {
+            return "vendor-validation";
+          }
+
+          if (hasPackage("react-hook-form") || hasPackage("@hookform/resolvers")) {
+            return "vendor-forms";
+          }
+
+          if (hasPackage("@tanstack/react-query") || hasPackage("wouter")) {
+            return "vendor-app-runtime";
+          }
+
+          if (hasPackage("@zxing/library")) {
+            return "vendor-scanner";
+          }
+
+          if (
+            hasPackage("class-variance-authority") ||
+            hasPackage("clsx") ||
+            hasPackage("tailwind-merge") ||
+            hasPackage("embla-carousel-react") ||
+            hasPackage("react-day-picker") ||
+            hasPackage("cmdk") ||
+            hasPackage("input-otp") ||
+            hasPackage("next-themes") ||
+            hasPackage("react-resizable-panels") ||
+            hasPackage("sonner") ||
+            hasPackage("vaul")
+          ) {
+            return "vendor-ui";
+          }
+
+          return "vendor-misc";
+        },
+      },
+    },
   },
 
   server: {
