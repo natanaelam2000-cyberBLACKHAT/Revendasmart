@@ -444,7 +444,7 @@ export default function PublicCatalog() {
             <h3 className="font-black text-lg">Meu Pedido</h3>
             <div className="w-11" />
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-5 pt-4 pb-3 space-y-3">
+          <div className={`${cart.length === 0 ? "min-h-0 flex-1" : "shrink-0 max-h-[52dvh]"} overflow-y-auto px-5 pt-4 pb-2 space-y-3`}>
             {cart.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center px-6 text-center">
                 <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-[2rem] bg-primary/10"><ShoppingCart className="h-9 w-9 text-primary/45" /></div>
@@ -473,7 +473,7 @@ export default function PublicCatalog() {
             ))}
           </div>
           {cart.length > 0 && (
-            <div className="shrink-0 border-t border-slate-200 bg-white px-5 pt-3 pb-[max(1.5rem,calc(env(safe-area-inset-bottom)+1rem))] space-y-2.5 shadow-[0_-10px_30px_rgba(15,23,42,0.06)]">
+            <div className="shrink-0 border-t border-slate-200 bg-white px-5 pt-3 pb-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.75rem))] space-y-2.5 shadow-[0_-10px_30px_rgba(15,23,42,0.06)]">
               <div className="rounded-2xl bg-slate-50 p-3.5 space-y-2">
                 <div className="flex items-center justify-between"><span className="text-xs font-bold text-slate-500">Itens</span><span className="text-sm font-black">{cartCount}</span></div>
                 <div className="flex items-center justify-between border-t border-slate-200 pt-2.5"><span className="text-sm font-black text-slate-600">Total</span><span className="text-2xl font-black text-slate-950">{formatCurrency(cartTotal)}</span></div>

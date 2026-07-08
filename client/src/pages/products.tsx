@@ -214,32 +214,36 @@ export default function Products() {
 
       {/* Delete Confirmation Modal */}
       {deleteConfirm.show && deleteConfirm.productId && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end justify-center z-50 p-4">
-          <div className="rs-sheet-enter w-full max-w-md bg-white rounded-t-[2rem] sm:rounded-[3rem] px-6 pt-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] space-y-6 max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain">
-            <div className="text-center">
+        <div className="fixed inset-0 z-[130] flex items-end justify-center bg-black/70 p-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,calc(env(safe-area-inset-bottom)+1rem))] backdrop-blur-sm">
+          <div className="rs-sheet-enter flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-t-[2rem] bg-white shadow-2xl sm:rounded-[2rem]">
+            <div className="shrink-0 px-6 pt-6 pb-4 text-center">
               <h2 className="text-xl font-semibold text-foreground">Excluir produto?</h2>
-              <p className="text-sm text-muted-foreground mt-1">Confira os dados antes de confirmar.</p>
+              <p className="mt-1 text-sm text-muted-foreground">Confira os dados antes de confirmar.</p>
             </div>
-            {productToDelete && <div className="flex gap-4 rounded-2xl border border-border/50 bg-slate-50 p-4">
-              <div className="h-24 w-24 shrink-0 overflow-hidden rounded-2xl bg-white"><ProductImageCard product={productToDelete} size="full" objectFit="contain" /></div>
-              <div className="min-w-0 flex-1"><p className="line-clamp-2 text-sm font-semibold">{productToDelete.name}</p><dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-[10px]"><div><dt className="text-muted-foreground">Marca</dt><dd className="truncate font-bold">{typeof productToDelete.brand === "string" && productToDelete.brand ? productToDelete.brand : "Sem marca"}</dd></div><div><dt className="text-muted-foreground">Preço</dt><dd className="font-bold text-primary">R$ {Number(productToDelete.salePrice).toFixed(2)}</dd></div><div className="col-span-2"><dt className="text-muted-foreground">Categoria</dt><dd className="font-bold">{typeof productToDelete.category === "string" && productToDelete.category ? productToDelete.category : "Sem categoria"}</dd></div></dl></div>
-            </div>}
-            <p className="rounded-xl bg-red-50 p-3 text-center text-xs font-bold text-red-700">Ação irreversível.</p>
-            {deleteError && <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-center text-xs font-bold text-red-700">{deleteError}</p>}
-            <div className="flex gap-3">
-              <button
-                onClick={() => setDeleteConfirm({ show: false })}
-                className="flex-1 bg-secondary text-foreground font-semibold py-3 rounded-2xl text-xs hover:bg-secondary/80 transition-colors"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={() => handleDeleteConfirm(deleteConfirm.productId!)}
-                disabled={deletingProductId === deleteConfirm.productId}
-                className="flex-1 bg-red-500 disabled:opacity-60 text-white font-semibold py-3 rounded-2xl text-xs hover:bg-red-600 transition-colors"
-              >
-                {deletingProductId === deleteConfirm.productId ? "Excluindo..." : "Excluir"}
-              </button>
+            <div className="min-h-0 overflow-y-auto overscroll-contain px-6 pb-4 space-y-4">
+              {productToDelete && <div className="flex gap-4 rounded-2xl border border-border/50 bg-slate-50 p-4">
+                <div className="h-24 w-24 shrink-0 overflow-hidden rounded-2xl bg-white"><ProductImageCard product={productToDelete} size="full" objectFit="contain" /></div>
+                <div className="min-w-0 flex-1"><p className="line-clamp-2 text-sm font-semibold">{productToDelete.name}</p><dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-[10px]"><div><dt className="text-muted-foreground">Marca</dt><dd className="truncate font-bold">{typeof productToDelete.brand === "string" && productToDelete.brand ? productToDelete.brand : "Sem marca"}</dd></div><div><dt className="text-muted-foreground">Preço</dt><dd className="font-bold text-primary">R$ {Number(productToDelete.salePrice).toFixed(2)}</dd></div><div className="col-span-2"><dt className="text-muted-foreground">Categoria</dt><dd className="font-bold">{typeof productToDelete.category === "string" && productToDelete.category ? productToDelete.category : "Sem categoria"}</dd></div></dl></div>
+              </div>}
+              <p className="rounded-xl bg-red-50 p-3 text-center text-xs font-bold text-red-700">Ação irreversível.</p>
+              {deleteError && <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-center text-xs font-bold text-red-700">{deleteError}</p>}
+            </div>
+            <div className="shrink-0 border-t border-border/60 bg-white/95 px-6 pt-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] backdrop-blur">
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setDeleteConfirm({ show: false })}
+                  className="min-h-12 flex-1 rounded-2xl bg-secondary text-xs font-semibold text-foreground transition-colors hover:bg-secondary/80"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={() => handleDeleteConfirm(deleteConfirm.productId!)}
+                  disabled={deletingProductId === deleteConfirm.productId}
+                  className="min-h-12 flex-1 rounded-2xl bg-red-500 text-xs font-semibold text-white transition-colors hover:bg-red-600 disabled:opacity-60"
+                >
+                  {deletingProductId === deleteConfirm.productId ? "Excluindo..." : "Excluir"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
