@@ -11,6 +11,8 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
+const REQUEST_BODY_LIMIT = "100kb";
+const URL_ENCODED_PARAMETER_LIMIT = 100;
 const SENTRY_DSN = process.env.SENTRY_DSN?.trim();
 
 if (SENTRY_DSN) {
@@ -84,13 +86,20 @@ app.use((req, res, next) => {
 
 app.use(
   express.json({
+    limit: REQUEST_BODY_LIMIT,
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
 
-app.use(express.urlencoded({ extended: false }));
+app.use(
+  express.urlencoded({
+    extended: false,
+    limit: REQUEST_BODY_LIMIT,
+    parameterLimit: URL_ENCODED_PARAMETER_LIMIT,
+  }),
+);
 
 function normalizeCorsOrigin(value: string | undefined): string | null {
   const trimmed = value?.trim();
