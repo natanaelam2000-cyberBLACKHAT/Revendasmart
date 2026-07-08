@@ -242,7 +242,10 @@ export default function Settings() {
       const blob = await compressLogo(file);
       if (!blob) throw new Error("Não foi possível processar a imagem.");
       const storageRef = ref(getStorage(), `users/${firebaseUid}/branding/store-logo.jpg`);
-      await uploadBytes(storageRef, blob, { contentType: "image/jpeg" });
+      await uploadBytes(storageRef, blob, {
+        cacheControl: "public,max-age=31536000,immutable",
+        contentType: "image/jpeg",
+      });
       const storeLogo = await getDownloadURL(storageRef);
       const nextSettings = { ...formSettings, storeLogo };
       const token = await getFirebaseIdToken();
@@ -326,11 +329,11 @@ export default function Settings() {
           <section className="bg-gradient-to-br from-primary to-primary/80 text-white rounded-[2rem] p-6 lg:p-8 shadow-xl shadow-primary/15 mb-6">
             <div className="flex items-center gap-4">
               <button type="button" onClick={() => logoInputRef.current?.click()} disabled={isUploadingLogo} className="relative w-14 h-14 rounded-2xl bg-white/15 border border-white/20 flex items-center justify-center font-black text-2xl overflow-hidden disabled:opacity-60" aria-label="Alterar logo da loja">
-                {formSettings?.storeLogo ? <img src={formSettings.storeLogo} alt="Logo da loja" className="w-full h-full object-cover" loading="lazy" decoding="async" /> : "R"}
+                {formSettings?.storeLogo ? <img src={formSettings.storeLogo} alt="Logo da loja" className="w-full h-full object-cover" loading="lazy" decoding="async" width={56} height={56} /> : "R"}
                 <span className="absolute inset-x-0 bottom-0 bg-black/45 text-[8px] font-bold py-0.5">{isUploadingLogo ? "Enviando" : "Alterar"}</span>
               </button>
               <input ref={logoInputRef} type="file" accept="image/*" className="hidden" onChange={handleLogoChange} />
-              <div><p className="text-sm font-medium text-white/75">RevendaSmart</p><h1 className="text-2xl lg:text-3xl font-semibold tracking-tight mt-1">Olá, {displayName}!</h1><p className="text-sm text-white/75 mt-1">Gerencie sua conta e sua loja.</p></div>
+              <div><p className="text-sm font-medium text-white/75">Revenda Smart</p><h1 className="text-2xl lg:text-3xl font-semibold tracking-tight mt-1">Olá, {displayName}!</h1><p className="text-sm text-white/75 mt-1">Gerencie sua conta e sua loja.</p></div>
             </div>
           </section>
           <div className="bg-white rounded-[2rem] border border-border/60 shadow-sm overflow-hidden divide-y divide-border/50">
@@ -697,13 +700,13 @@ export default function Settings() {
                     <button
                       onClick={() => {
                         const link = `https://revendasmart.vercel.app?referral=${firebaseUid || 'seu-id'}`;
-                        const text = `Confira o RevendaSmart! Gerenciador completo para revendedoras. ${link}`;
+                        const text = `Confira o Revenda Smart! Gestão inteligente para quem vende. ${link}`;
                         const canShare = typeof navigator.share === "function";
                         const method = canShare ? "native_share" : "direct_share";
                         logTelemetryEvent("referral_share_initiated", { method, origin: "settings_growth" }).catch(() => {});
 
                         if (canShare) {
-                          navigator.share({ title: "RevendaSmart", text })
+                          navigator.share({ title: "Revenda Smart", text })
                             .then(() => {
                               logTelemetryEvent("referral_share_success", { method: "native_share" }).catch(() => {});
                               setSaveMessage("Compartilhado.");
@@ -874,7 +877,7 @@ export default function Settings() {
               {/* Header Info */}
               <div className="bg-gradient-to-br from-primary/10 to-primary/5 p-6 rounded-3xl border border-primary/20 space-y-3">
                 <h2 className="text-lg font-semibold text-primary">Central de Ajuda</h2>
-                <p className="text-xs text-muted-foreground leading-relaxed">Encontre respostas rápidas e entenda melhor como usar RevendaSmart para vender mais.</p>
+                <p className="text-xs text-muted-foreground leading-relaxed">Encontre respostas rápidas e entenda melhor como usar o Revenda Smart para vender mais.</p>
               </div>
 
               {/* Help Items - Accordion */}
@@ -1035,7 +1038,7 @@ Dica: Descreva seu problema e se possível anexe uma screenshot do erro.`
                     <span className="text-3xl">📦</span>
                   </div>
                   <div className="flex-1">
-                    <h2 className="text-lg font-black text-primary mb-1">RevendaSmart</h2>
+                    <h2 className="text-lg font-black text-primary mb-1">Revenda Smart</h2>
                     <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Versão {APP_VERSION.replace('v', '')}</p>
                     <p className="text-xs text-muted-foreground leading-relaxed">Gerenciamento inteligente de estoque e catálogo digital para revendedores de cosméticos e perfumes.</p>
                   </div>
@@ -1044,10 +1047,10 @@ Dica: Descreva seu problema e se possível anexe uma screenshot do erro.`
 
               {/* Institutional Text */}
               <div className="bg-secondary/40 p-5 rounded-2xl space-y-3">
-                <h4 className="text-[10px] font-black text-muted-foreground uppercase tracking-widest">Sobre RevendaSmart</h4>
+                <h4 className="text-[10px] font-black text-muted-foreground uppercase tracking-widest">Sobre Revenda Smart</h4>
                 <div className="space-y-2 text-[11px] leading-relaxed text-muted-foreground/90">
                   <p>
-                    RevendaSmart é uma plataforma desenvolvida para simplificar a vida de revendedoras independentes de cosméticos e perfumes. Oferecemos ferramentas modernas para gerenciar estoque, catálogo digital, vendas e relacionamento com clientes.
+                    Revenda Smart é uma plataforma desenvolvida para simplificar a vida de quem vende. Oferecemos ferramentas modernas para gerenciar estoque, catálogo digital, vendas e relacionamento com clientes.
                   </p>
                   <p>
                     Nosso compromisso é com a segurança dos seus dados, privacidade e transparência em como usamos as informações. Todos os dados são protegidos por padrões de segurança da indústria.

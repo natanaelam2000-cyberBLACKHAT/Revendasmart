@@ -1,7 +1,6 @@
 import { RemoteConfigProvider } from "@/components/RemoteConfigProvider";
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { PlanProvider } from "@/providers/plan-provider";
 import App from "./App";
 // import * as Sentry from "@sentry/react";
 
@@ -95,9 +94,7 @@ if (isSafeMode) {
   <React.StrictMode>
     <GlobalErrorBoundary>
       <RemoteConfigProvider>
-        <PlanProvider>
-          <App />
-        </PlanProvider>
+        <App />
       </RemoteConfigProvider>
     </GlobalErrorBoundary>
   </React.StrictMode>
@@ -108,7 +105,7 @@ if (isSafeMode) {
     createRoot(document.getElementById("root")!).render(
       <div className="min-h-screen bg-background flex flex-col items-center justify-center p-6 text-center font-sans">
         <h1 className="text-xl font-bold mb-4">Ocorreu um erro temporário.</h1>
-        <p className="text-sm mb-8 text-muted-foreground">Não foi possível carregar o RevendaSmart.</p>
+        <p className="text-sm mb-8 text-muted-foreground">Não foi possível carregar o Revenda Smart.</p>
         <div className="flex flex-col gap-3 w-full max-w-xs"><button onClick={() => window.location.reload()} className="bg-primary text-white px-6 py-3 rounded-2xl font-bold">Tentar novamente</button><button onClick={() => window.location.href = '/'} className="bg-secondary px-6 py-3 rounded-2xl font-bold">Voltar ao início</button></div>
       </div>
     );
