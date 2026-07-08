@@ -34,9 +34,16 @@ export default function Products() {
   const { settings } = useUserSettings();
 
   const stats = useMemo(() => {
-    const totalProfit = products.reduce((acc, p) => acc + ((p.salePrice - p.costPrice) * p.stock), 0);
-    const lowStockCount = products.filter(p => p.stock > 0 && p.stock <= 3).length;
-    const outOfStockCount = products.filter(p => p.stock === 0).length;
+    let totalProfit = 0;
+    let lowStockCount = 0;
+    let outOfStockCount = 0;
+
+    for (const product of products) {
+      totalProfit += (product.salePrice - product.costPrice) * product.stock;
+      if (product.stock === 0) outOfStockCount += 1;
+      else if (product.stock <= 3) lowStockCount += 1;
+    }
+
     return { totalProfit, lowStockCount, outOfStockCount };
   }, [products]);
 

@@ -91,6 +91,7 @@ export default function Catalog() {
     );
   };
 
+  const cartQuantities = useMemo(() => new Map(cart.map(item => [item.product.id, item.quantity])), [cart]);
   const cartTotal = useMemo(() => cart.reduce((sum, item) => sum + (item.product.salePrice * item.quantity), 0), [cart]);
   const cartCount = useMemo(() => cart.reduce((sum, item) => sum + item.quantity, 0), [cart]);
   const catalogSlug = settings?.catalogSlug || settings?.catalog_slug || "seu-catalogo";
@@ -271,7 +272,7 @@ export default function Catalog() {
         ) : (
           <div className="p-4 grid grid-cols-2 gap-3">
             {filtered.map((product) => {
-              const cartQty = cart.find(i => i.product.id === product.id)?.quantity || 0;
+              const cartQty = cartQuantities.get(product.id) || 0;
 
               return (
                 <div

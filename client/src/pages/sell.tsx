@@ -59,6 +59,8 @@ export default function Sell() {
     });
   };
 
+  const cartQuantities = useMemo(() => new Map(cart.map(item => [item.product.id, item.quantity])), [cart]);
+  const productById = useMemo(() => new Map(products.map(product => [product.id, product])), [products]);
   const subtotal = useMemo(() => cart.reduce((acc, item) => acc + (item.product.salePrice * item.quantity), 0), [cart]);
   const discountAmount = useMemo(() => Math.min(subtotal, discountType === 'percent' ? subtotal * Math.min(100, discountValue) / 100 : discountValue), [discountType, discountValue, subtotal]);
   const total = useMemo(() => Math.max(0, subtotal - discountAmount), [discountAmount, subtotal]);
@@ -156,7 +158,7 @@ export default function Sell() {
       });
 
       for (const productId of saleResult.depletedProductIds ?? []) {
-        const product = products.find((item) => item.id === productId);
+        const product = productById.get(productId);
         if (product) {
           logTelemetryEvent("product_last_unit_sold", {
             productId,
@@ -308,7 +310,7 @@ export default function Sell() {
           )}
           <div className="grid grid-cols-2 gap-4">
             {filteredProducts.map(product => {
-              const qty = cart.find(c => c.product.id === product.id)?.quantity || 0;
+              const qty = cartQuantities.get(product.id) || 0;
               return (
                 <div key={product.id} className={`rs-card-interactive bg-white rounded-3xl p-3 border ${qty > 0 ? 'border-primary ring-4 ring-primary/5' : 'border-border/40'}`}>
                   <div className="aspect-square bg-secondary/30 rounded-2xl mb-2 flex items-center justify-center overflow-hidden relative">

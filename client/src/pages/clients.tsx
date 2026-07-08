@@ -34,6 +34,8 @@ export default function Clients() {
     );
   }, [clients, search]);
 
+  const clientById = useMemo(() => new Map(clients.map(client => [client.id, client])), [clients]);
+
   const toggleSelection = (id: string) => {
     setSelectedIds(prev =>
       prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
@@ -59,7 +61,7 @@ export default function Clients() {
 
     // Send to all selected clients
     selectedIds.forEach((clientId, index) => {
-      const client = clients.find(c => c.id === clientId);
+      const client = clientById.get(clientId);
       if (client?.phone) {
         // Small delay between opens to avoid browser blocking
         setTimeout(() => {
@@ -341,6 +343,10 @@ export default function Clients() {
               <input required autoFocus enterKeyHint="next" autoComplete="name" placeholder="Nome completo" disabled={isCreating} className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none disabled:opacity-50" value={newClient.name} onChange={e => setNewClient({...newClient, name: e.target.value})} />
               <input
                 required
+                type="tel"
+                inputMode="tel"
+                enterKeyHint="next"
+                autoComplete="tel"
                 placeholder="WhatsApp (apenas números)"
                 disabled={isCreating}
                 className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none disabled:opacity-50"
