@@ -45,41 +45,63 @@ async function compressImage(
   file: File,
   maxWidth = 1200,
   maxHeight = 1200,
-  quality = 0.85,
-  targetSize = 2 * 1024 * 1024
+  quality = 0.82,
+  targetSize = 2 * 1024 * 1024,
+  outputType = "image/webp"
 ): Promise<Blob | null> {
   return new Promise((resolve) => {
-    const reader = new FileReader();
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
 
-    reader.onload = (e) => {
-      const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      const scale = Math.min(maxWidth / img.width, maxHeight / img.height, 1);
+      const width = Math.max(1, Math.round(img.width * scale));
+      const height = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
 
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d");
+      if (!ctx) return resolve(null);
 
-        if (!ctx) return resolve(null);
+      canvas.width = width;
+      canvas.height = height;
+      ctx.drawImage(img, 0, 0, width, height);
 
-        canvas.width = img.width;
-        canvas.height = img.height;
-
-        ctx.drawImage(img, 0, 0);
-
+      const tryEncode = (type: string, nextQuality: number, fallback?: () => void) => {
         canvas.toBlob(
-          (blob) => resolve(blob || null),
-          "image/jpeg",
-          quality
+          (blob) => {
+            if (blob && blob.size <= targetSize) {
+              resolve(blob);
+              return;
+            }
+            fallback?.();
+          },
+          type,
+          nextQuality
         );
       };
 
-      img.onerror = () => resolve(null);
-      img.src = e.target?.result as string;
+      tryEncode(outputType, quality, () => {
+        tryEncode("image/jpeg", Math.min(quality, 0.78), () => {
+          tryEncode("image/jpeg", 0.62, () => resolve(null));
+        });
+      });
     };
 
-    reader.onerror = () => resolve(null);
-    reader.readAsDataURL(file);
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(null);
+    };
+    img.src = objectUrl;
   });
 }
+
+const imageExtensionForType = (type: string) => type === "image/webp" ? "webp" : "jpg";
+
+const optimizedImageName = (fileName: string, type: string, suffix = "") => {
+  const base = fileName.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "produto";
+  return `${base}${suffix}.${imageExtensionForType(type)}`;
+};
 
 
 const normalizeBrandInput = (value: string) => value
@@ -123,6 +145,8 @@ interface ProductFormData {
   description: string;
   imageUrl: string;
   storagePath: string;
+  thumbnailUrl: string;
+  thumbnailStoragePath: string;
   extras: Record<string, string>;
   isFeatured: boolean;
   isOnSale: boolean;
@@ -159,6 +183,7 @@ const [, setLocation] = useLocation();
     saveError: ""
   });
   const selectedFileRef = useRef<File | null>(null);
+  const selectedThumbnailRef = useRef<File | null>(null);
 
   // Active product nicho: if user has multiple types, user selects manually
   const [activeNicho, setActiveNicho] = useState<NichoId>(
@@ -187,6 +212,8 @@ const [, setLocation] = useLocation();
   description: "",
   imageUrl: "",
   storagePath: "",
+  thumbnailUrl: "",
+  thumbnailStoragePath: "",
   extras: {}, // ✅ CORRETO
   isFeatured: false,
   isOnSale: false,
@@ -279,6 +306,8 @@ const [, setLocation] = useLocation();
                 description: product.description || "",
                 imageUrl: product.imageUrl || "",
                 storagePath: product.storagePath || "",
+                thumbnailUrl: product.thumbnailUrl || "",
+                thumbnailStoragePath: product.thumbnailStoragePath || "",
                 extras: product.extras || {},
                 isFeatured: product.isFeatured || false,
                 isOnSale: product.isOnSale || false,
@@ -389,8 +418,12 @@ const [, setLocation] = useLocation();
       }
 
       setDebugStatus({ uid: uid, saveAttempted: true, saveError: "" });
-let imageUrl = formData.imageUrl || "";      let storagePath = formData.storagePath || "";
+      let imageUrl = formData.imageUrl || "";
+      let storagePath = formData.storagePath || "";
+      let thumbnailUrl = formData.thumbnailUrl || "";
+      let thumbnailStoragePath = formData.thumbnailStoragePath || "";
       const file = selectedFileRef.current;
+      const thumbnailFile = selectedThumbnailRef.current;
       const firestore = getFirestore();
 const productRef = doc(collection(firestore, "users", uid, "products"));
 const productId = id || productRef.id;
@@ -398,17 +431,42 @@ const productId = id || productRef.id;
 
       if (file) {
         try {
+          const storage = getStorage();
           const safeName = file.name.replace(/\s+/g, "_");
           storagePath = `users/${uid}/products/${productId}/${safeName}`;
-          const storage = getStorage();
           const storageRef = ref(storage, storagePath);
-        await uploadBytes(storageRef, file);
+          await uploadBytes(storageRef, file, {
+            cacheControl: "public,max-age=31536000,immutable",
+            contentType: file.type || "image/jpeg",
+          });
           imageUrl = await getDownloadURL(storageRef);
+
+          if (thumbnailFile) {
+            try {
+              const safeThumbName = thumbnailFile.name.replace(/\s+/g, "_");
+              thumbnailStoragePath = `users/${uid}/products/${productId}/${safeThumbName}`;
+              const thumbnailRef = ref(storage, thumbnailStoragePath);
+              await uploadBytes(thumbnailRef, thumbnailFile, {
+                cacheControl: "public,max-age=31536000,immutable",
+                contentType: thumbnailFile.type || "image/jpeg",
+              });
+              thumbnailUrl = await getDownloadURL(thumbnailRef);
+            } catch (thumbnailErr) {
+              console.warn("[add-product] thumbnail upload failed, using main image:", thumbnailErr);
+              thumbnailUrl = imageUrl;
+              thumbnailStoragePath = storagePath;
+            }
+          } else {
+            thumbnailUrl = imageUrl;
+            thumbnailStoragePath = storagePath;
+          }
         } catch (uploadErr) {
           console.warn("[add-product] image upload failed, saving without image:", uploadErr);
           setUploadError("Falha no upload da imagem. O produto será salvo sem foto.");
           imageUrl = "";
           storagePath = "";
+          thumbnailUrl = "";
+          thumbnailStoragePath = "";
         }
       }
 
@@ -423,6 +481,8 @@ const productId = id || productRef.id;
   gender: formData.gender || "unisex",
   imageUrl,
   storagePath,
+  thumbnailUrl,
+  thumbnailStoragePath,
   productType: activeNicho,
 };
 
@@ -550,7 +610,8 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
   setFormError("");
 
   try {
-    const compressedBlob = await compressImage(file);
+    const compressedBlob = await compressImage(file, 1200, 1200, 0.82, 2 * 1024 * 1024, "image/webp");
+    const thumbnailBlob = await compressImage(file, 360, 360, 0.74, 280 * 1024, "image/webp");
 
     if (!compressedBlob) {
       setFormError("Erro ao processar a imagem.");
@@ -558,12 +619,18 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
       return;
     }
 
-    const compressedFile = new File([compressedBlob], file.name, {
-      type: "image/jpeg",
+    const compressedFile = new File([compressedBlob], optimizedImageName(file.name, compressedBlob.type), {
+      type: compressedBlob.type || "image/jpeg",
       lastModified: Date.now(),
     });
 
     selectedFileRef.current = compressedFile;
+    selectedThumbnailRef.current = thumbnailBlob
+      ? new File([thumbnailBlob], optimizedImageName(file.name, thumbnailBlob.type, "_thumb"), {
+          type: thumbnailBlob.type || "image/jpeg",
+          lastModified: Date.now(),
+        })
+      : null;
 
     setFormData(prev => {
       if (prev.imageUrl) {
