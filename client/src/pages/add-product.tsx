@@ -22,6 +22,7 @@ import { getStorage } from "firebase/storage";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { usePlanData } from "@/hooks/usePlanData";
 import { notifyError, notifySuccess } from "@/lib/notify";
+import { safeLogger } from "@/lib/safe-logger";
 import { checkProductLimit } from "@/lib/plan-helpers";
 import {
   getNichoConfig,
@@ -128,7 +129,7 @@ function saveLocalBrandSuggestion(nicho: string, value: string, existing: string
   if (!normalized) return existing;
   const merged = [normalized, ...existing.filter((item) => item.toLocaleLowerCase("pt-BR") !== normalized.toLocaleLowerCase("pt-BR"))].slice(0, 20);
   if (typeof window !== "undefined") {
-    try { localStorage.setItem(brandSuggestionStorageKey(nicho), JSON.stringify(merged)); } catch {}
+    try { localStorage.setItem(brandSuggestionStorageKey(nicho), JSON.stringify(merged)); } catch (storageError) { safeLogger.debug("brand_suggestion_cache_failed", { module: "add-product", error: storageError }); }
   }
   return merged;
 }
@@ -317,7 +318,7 @@ const [, setLocation] = useLocation();
               });
             }
           })
-          .catch(err => console.error("Erro ao carregar produto:", err));
+          .catch(err => safeLogger.error("add_product_load_failed", err, { module: "add-product", productId: id }));
       }
     }
   }, [id]);
@@ -452,7 +453,7 @@ const productId = id || productRef.id;
               });
               thumbnailUrl = await getDownloadURL(thumbnailRef);
             } catch (thumbnailErr) {
-              console.warn("[add-product] thumbnail upload failed, using main image:", thumbnailErr);
+              safeLogger.warn("add_product_thumbnail_upload_failed", { module: "add-product", productId, error: thumbnailErr });
               thumbnailUrl = imageUrl;
               thumbnailStoragePath = storagePath;
             }
@@ -461,7 +462,7 @@ const productId = id || productRef.id;
             thumbnailStoragePath = storagePath;
           }
         } catch (uploadErr) {
-          console.warn("[add-product] image upload failed, saving without image:", uploadErr);
+          safeLogger.warn("add_product_image_upload_failed", { module: "add-product", productId, error: uploadErr });
           setUploadError("Falha no upload da imagem. O produto será salvo sem foto.");
           imageUrl = "";
           storagePath = "";
@@ -514,7 +515,7 @@ const productId = id || productRef.id;
 );
         } catch (writeErr) {
           const errorMsg = (writeErr as Error)?.message || "unknown error";
-          console.error("[add-product] Update failed:", errorMsg);
+          safeLogger.error("add_product_update_failed", errorMsg, { module: "add-product", productId });
           setDebugStatus({ uid: uid, saveAttempted: true, saveError: `EDIT failed: ${errorMsg}` });
           setFormError(`Erro ao atualizar: ${errorMsg}`);
           throw writeErr;
@@ -554,7 +555,7 @@ if (!allowed) {
   const docSnap = await getDoc(docRef);
 
   if (!docSnap.exists()) {
-    console.error("[add-product] Verification failed");
+    safeLogger.error("add_product_verification_failed", undefined, { module: "add-product", productId });
     setFormError("Erro ao salvar no servidor.");
     throw new Error("Verification failed");
   }
@@ -562,7 +563,7 @@ if (!allowed) {
 });
         } catch (writeErr) {
           const errorMsg = (writeErr as Error)?.message || "unknown error";
-          console.error("[add-product] Create failed:", errorMsg);
+          safeLogger.error("add_product_create_failed", errorMsg, { module: "add-product", productId });
           setDebugStatus({ uid: uid, saveAttempted: true, saveError: `CREATE failed: ${errorMsg}` });
           setFormError("Erro ao salvar produto.");
           notifyError("Erro ao salvar produto.");
@@ -591,7 +592,7 @@ if (!allowed) {
       setTimeout(() => setLocation("/products"), 1500);
     } catch (err) {
       notifyError("Erro ao salvar produto.");
-      console.error("[add-product] handleSubmit failed:", err);
+      safeLogger.error("add_product_submit_failed", err, { module: "add-product", productId: id || "new" });
     }
   };
 
@@ -643,7 +644,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     });
 
   } catch (err) {
-    console.error("[add-product] Compression error:", err);
+    safeLogger.error("add_product_image_compression_failed", err, { module: "add-product" });
     setFormError("Erro ao otimizar a imagem.");
   } finally {
     setIsCompressingImage(false);

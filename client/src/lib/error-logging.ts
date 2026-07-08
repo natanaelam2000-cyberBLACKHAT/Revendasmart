@@ -1,5 +1,6 @@
 import { initializeApp, FirebaseApp } from "firebase/app";
 import { getDatabase, ref, push, set, Database } from "firebase/database";
+import { maskEmail, maskId, safeLogger, sanitizeLogMessage, sanitizeLogPayload } from "@/lib/safe-logger";
 
 /**
  * ERROR LOGGING MODULE
@@ -24,7 +25,7 @@ interface ErrorLog {
   errorType: string;
   message: string;
   stack?: string;
-  context?: Record<string, any>;
+  context?: Record<string, unknown>;
   url: string;
   userAgent: string;
   severity: "error" | "warning" | "info";
@@ -40,7 +41,7 @@ export function initializeErrorLogging(app: FirebaseApp): void {
     database = getDatabase(app);
     isInitialized = true;
   } catch (error) {
-    console.error("[ErrorLogging] Failed to initialize:", error);
+    safeLogger.error("error_logging_initialize_failed", error, { module: "error-logging" });
   }
 }
 
@@ -52,13 +53,13 @@ export async function logError(
   message: string,
   options?: {
     error?: Error;
-    context?: Record<string, any>;
+    context?: Record<string, unknown>;
     userId?: string;
     severity?: "error" | "warning" | "info";
   }
 ): Promise<void> {
   if (!isInitialized || !database) {
-    console.warn("[ErrorLogging] Not initialized, error not logged");
+    safeLogger.warn("error_logging_not_initialized", { module: "error-logging", errorType });
     return;
   }
 
@@ -66,7 +67,7 @@ export async function logError(
     const errorLog: ErrorLog = {
       timestamp: new Date().toISOString(),
       errorType,
-      message,
+      message: sanitizeLogMessage(message),
       url: typeof window !== "undefined" ? window.location.href : "unknown",
       userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
       severity: options?.severity || "error",
@@ -74,20 +75,20 @@ export async function logError(
 
     // Only add optional fields if they have values (Firebase doesn't allow undefined)
     if (options?.error?.stack) {
-      errorLog.stack = options.error.stack;
+      errorLog.stack = sanitizeLogMessage(options.error.stack, "Stack indisponível.");
     }
     if (options?.context) {
-      errorLog.context = options.context;
+      errorLog.context = sanitizeLogPayload(options.context) as Record<string, unknown>;
     }
     if (options?.userId) {
-      errorLog.userId = options.userId;
+      errorLog.userId = maskId(options.userId) || undefined;
     }
 
     const errorsRef = ref(database, "error_logs");
     const newErrorRef = push(errorsRef);
     await set(newErrorRef, errorLog);
   } catch (err) {
-    console.error("[ErrorLogging] Failed to log error:", err);
+    safeLogger.error("error_logging_log_error_failed", err, { module: "error-logging" });
   }
 }
 
@@ -96,7 +97,7 @@ export async function logError(
  */
 export async function logEvent(
   eventName: string,
-  data?: Record<string, any>,
+  data?: Record<string, unknown>,
   userId?: string
 ): Promise<void> {
   if (!isInitialized || !database) return;
@@ -105,8 +106,8 @@ export async function logEvent(
     const eventLog = {
       timestamp: new Date().toISOString(),
       eventName,
-      data,
-      userId,
+      data: sanitizeLogPayload(data),
+      userId: maskId(userId) || undefined,
       url: typeof window !== "undefined" ? window.location.href : "unknown",
     };
 
@@ -114,7 +115,7 @@ export async function logEvent(
     const newEventRef = push(eventsRef);
     await set(newEventRef, eventLog);
   } catch (err) {
-    console.error("[ErrorLogging] Failed to log event:", err);
+    safeLogger.error("error_logging_log_event_failed", err, { module: "error-logging", eventName });
   }
 }
 
@@ -124,10 +125,10 @@ export async function logEvent(
 export function setUserContext(userId: string, email?: string): void {
   try {
     if (typeof window !== "undefined") {
-      (window as any).__errorLoggingUser = { userId, email };
+      (window as any).__errorLoggingUser = { userId: maskId(userId), email: maskEmail(email) };
     }
   } catch (err) {
-    console.error("[ErrorLogging] Failed to set user context:", err);
+    safeLogger.error("error_logging_set_user_context_failed", err, { module: "error-logging" });
   }
 }
 
@@ -140,6 +141,6 @@ export function clearUserContext(): void {
       delete (window as any).__errorLoggingUser;
     }
   } catch (err) {
-    console.error("[ErrorLogging] Failed to clear user context:", err);
+    safeLogger.error("error_logging_clear_user_context_failed", err, { module: "error-logging" });
   }
 }
