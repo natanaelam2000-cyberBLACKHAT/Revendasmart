@@ -190,7 +190,6 @@ async function getDefaultConnection(uid: string): Promise<MPConnection | null> {
     .collection("users")
     .doc(uid)
     .collection("mercadopago_connections")
-    .where("status", "==", "active")
     .where("isDefault", "==", true)
     .limit(1)
     .get();
@@ -342,9 +341,9 @@ async function fetchMPAccountInfo(accessToken: string): Promise<{
 // ---------------------------------------------------------------------------
 
 /**
- * Return a valid (non-expired) access token for the given connection.
- * If expired: refresh transparently, update Firestore, return new token.
- * If no connection provided: fall back to central platform token.
+ * Return a valid (non-expired) access token for payment creation.
+ * If the user has no active/default connection, central platform token is allowed.
+ * If an explicit/default connected account exists but its token fails, fail closed.
  */
 export async function getValidMPAccessToken(
   uid: string,
@@ -357,8 +356,12 @@ export async function getValidMPAccessToken(
   const centralToken = process.env.MERCADOPAGO_ACCESS_TOKEN ?? "";
   const centralFallback = (reason: string): { accessToken: string; tokenSource: "central"; connectionId: null } => {
     if (!centralToken) throw new Error(`Mercado Pago indisponível: credencial central ausente (${reason})`);
-    mpWarn("[mp-connections] Using central payment credential fallback", { reason });
+    mpInfo("[mp-connections] Using central payment credential", { reason });
     return { accessToken: centralToken, tokenSource: "central", connectionId: null };
+  };
+  const blockConnectedAccount = async (reason: string, connectionId: string): Promise<never> => {
+    mpWarn("mp_connected_token_unavailable", { reason, connectionId });
+    throw new Error("MP_CONNECTED_TOKEN_UNAVAILABLE");
   };
 
   // No connection specified → try to find default
@@ -368,23 +371,20 @@ export async function getValidMPAccessToken(
     connectionId = defaultConn?.id ?? null;
   }
 
-  // No active connection → fall back to central token
+  // No active/default connection → central token remains the explicit platform path.
   if (!connectionId) {
-    return centralFallback("no_active_connection");  }
+    return centralFallback("no_active_connection");
+  }
 
   const connection = await fetchConnection(uid, connectionId);
 
-  // Connection not found or revoked → fall back
+  // Connected/default account selected → never fall back silently to central.
   if (!connection || connection.status !== "active") {
-    mpWarn(
-      `[mp-connections] Connection ${connectionId} not found/revoked — falling back to central token`
-    );
-    return centralFallback("connection_missing_or_revoked");
+    return blockConnectedAccount("connection_missing_or_revoked", connectionId);
   }
 
-  // No access token stored → fall back
   if (!connection.accessToken) {
-    return centralFallback("connection_without_access_token");
+    return blockConnectedAccount("connection_without_access_token", connectionId);
   }
 
   // Check if token needs refresh (expires within margin)
@@ -397,7 +397,7 @@ export async function getValidMPAccessToken(
       return { accessToken: plainToken, tokenSource: "revendedor", connectionId };
     } catch {
       mpLogError("[mp-connections] Stored payment credential could not be decrypted");
-      return centralFallback("stored_token_authentication_failed");
+      return blockConnectedAccount("stored_token_authentication_failed", connectionId);
     }
   }
 
@@ -405,13 +405,13 @@ export async function getValidMPAccessToken(
   mpInfo("[mp-connections] Payment credential near expiry — refreshing");
 
   if (!connection.refreshToken) {
-    mpWarn("[mp-connections] Refresh credential unavailable — using central fallback");
+    mpWarn("[mp-connections] Refresh credential unavailable");
     // Mark as expired for user awareness
     await (await getConnectionRef(uid, connectionId)).update({
       status: "expired",
       updatedAt: now(),
     });
-    return centralFallback("refresh_token_missing");
+    return blockConnectedAccount("refresh_token_missing", connectionId);
   }
 
   try {
@@ -448,7 +448,7 @@ export async function getValidMPAccessToken(
       status: "expired",
       updatedAt: now(),
     });
-    return centralFallback("token_refresh_failed");
+    return blockConnectedAccount("token_refresh_failed", connectionId);
   }
 }
 

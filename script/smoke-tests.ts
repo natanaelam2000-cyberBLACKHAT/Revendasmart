@@ -207,6 +207,12 @@ assert.match(payments, /PAYMENT_SYNC_FAILED/);
 assert.match(payments, /PAYMENT_REFERENCE_MISMATCH/);
 assert.match(payments, /chargeId=\$\{encodeURIComponent\(chargeId\)\}/);
 assert.match(mpConnections, /Revendedor charges never fall back to the central account/);
+assert.match(mpConnections, /mp_connected_token_unavailable/);
+assert.match(mpConnections, /MP_CONNECTED_TOKEN_UNAVAILABLE/);
+assert.doesNotMatch(mpConnections, /falling back to central token/);
+assert.doesNotMatch(mpConnections, /Using central payment credential fallback/);
+assert.match(payments, /payment_create_blocked_connected_account/);
+assert.match(payments, /Reconecte sua conta Mercado Pago para gerar cobranças/);
 // Mercado Pago webhooks are fail-closed and logs do not expose credentials or identifiers.
 assert.doesNotMatch(payments, /skipping signature check|Permissive when no secret/);
 assert.match(payments, /if \(!WEBHOOK_SECRET\)[\s\S]*?status\(401\)/);

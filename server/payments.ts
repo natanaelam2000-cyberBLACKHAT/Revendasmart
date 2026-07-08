@@ -657,6 +657,14 @@ async function handleCreateLink(req: Request, res: Response) {
       stage,
       errorName,
     });
+
+    if (errorMsg === "MP_CONNECTED_TOKEN_UNAVAILABLE") {
+      paymentWarn("payment_create_blocked_connected_account", { uid: body?.uid ?? null });
+      return res.status(409).json({
+        error: "MP_CONNECTED_TOKEN_UNAVAILABLE",
+        userMessage: "Reconecte sua conta Mercado Pago para gerar cobranças.",
+      });
+    }
     
     // Log to structured error tracking
     logPaymentError("create_link", body?.uid ?? null, errorMsg, {
