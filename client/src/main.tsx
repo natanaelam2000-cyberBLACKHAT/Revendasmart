@@ -10,16 +10,19 @@ import App from "./App";
 
 import "./index.css";
 import { APP_VERSION } from "./lib/mock-data";
+import { safeLogger } from "./lib/safe-logger";
 
 
 
 class GlobalErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean}> {
-  constructor(props: any) {
+  constructor(props: {children: React.ReactNode}) {
     super(props);
     this.state = { hasError: false };
   }
   static getDerivedStateFromError() { return { hasError: true }; }
-  componentDidCatch(error: any, errorInfo: any) { console.error("Global Error:", error, errorInfo); }
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    safeLogger.error("global_error_boundary", error, { module: "main", componentStack: errorInfo.componentStack });
+  }
   
   handleRetry = () => window.location.reload();
 

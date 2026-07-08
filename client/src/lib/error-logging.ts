@@ -31,6 +31,15 @@ interface ErrorLog {
   severity: "error" | "warning" | "info";
 }
 
+declare global {
+  interface Window {
+    __errorLoggingUser?: {
+      userId?: string;
+      email?: string;
+    };
+  }
+}
+
 /**
  * Initialize error logging (uses existing Firebase app)
  */
@@ -125,7 +134,10 @@ export async function logEvent(
 export function setUserContext(userId: string, email?: string): void {
   try {
     if (typeof window !== "undefined") {
-      (window as any).__errorLoggingUser = { userId: maskId(userId), email: maskEmail(email) };
+      window.__errorLoggingUser = {
+        userId: maskId(userId) || undefined,
+        email: maskEmail(email) || undefined,
+      };
     }
   } catch (err) {
     safeLogger.error("error_logging_set_user_context_failed", err, { module: "error-logging" });
@@ -138,7 +150,7 @@ export function setUserContext(userId: string, email?: string): void {
 export function clearUserContext(): void {
   try {
     if (typeof window !== "undefined") {
-      delete (window as any).__errorLoggingUser;
+      delete window.__errorLoggingUser;
     }
   } catch (err) {
     safeLogger.error("error_logging_clear_user_context_failed", err, { module: "error-logging" });

@@ -2,7 +2,14 @@ import { memo, useEffect, useState } from "react";
 import { Product, getImage } from "@/lib/mock-data";
 import { ImageOff } from "lucide-react";
 
-interface Props { product: Product | any; size?: "sm"|"md"|"lg"|"full"|"vitrine"; objectFit?: "cover"|"contain"; showFallback?: boolean; className?: string; }
+type ProductImageLike = Partial<Product> & {
+  thumbnailUrl?: string;
+  photoUrl?: string;
+  image?: string;
+  photo?: string;
+};
+
+interface Props { product: ProductImageLike | null | undefined; size?: "sm"|"md"|"lg"|"full"|"vitrine"; objectFit?: "cover"|"contain"; showFallback?: boolean; className?: string; }
 
 const indexedImageCache = new Map<string, string | null>();
 
@@ -18,7 +25,7 @@ const uniqueUrls = (values: unknown[]) => {
     });
 };
 
-const resolveImages = async (product: any): Promise<string[]> => {
+const resolveImages = async (product: ProductImageLike | null | undefined): Promise<string[]> => {
   const urls = uniqueUrls([product?.thumbnailUrl, product?.imageUrl, product?.photoUrl, product?.image, product?.photo]);
   if (product?.imageId) {
     const cacheKey = String(product.imageId);
