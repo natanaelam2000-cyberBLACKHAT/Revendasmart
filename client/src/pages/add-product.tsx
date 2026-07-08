@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from "react";
 import { Layout } from "@/components/layout";
 import { Camera, CheckCircle2, ChevronDown, ScanLine, Wand2, Sparkles, ChevronLeft, ImagePlus, AlertCircle } from "lucide-react";
 import { useLocation, useParams } from "wouter";
@@ -535,9 +535,12 @@ if (!allowed) {
     }
   };
 
-  const handleBarcodeScan = (code: string) => {
+  const handleBarcodeScan = useCallback((code: string) => {
     setFormData(prev => ({ ...prev, barcode: code }));
-  };
+  }, []);
+
+  const openScanner = useCallback(() => setScanning(true), []);
+  const closeScanner = useCallback(() => setScanning(false), []);
 
 const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
   const file = e.target.files?.[0];
@@ -693,7 +696,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
             <div className="relative group cursor-pointer">
               <div className="w-40 h-40 bg-secondary rounded-[2.5rem] border-2 border-dashed border-border/60 flex flex-col items-center justify-center text-muted-foreground transition-all overflow-hidden relative">
                 {formData.imageUrl && !isEnhancing && !isCompressingImage ? (
-                   <img src={formData.imageUrl} alt="Prévia do produto" className="w-full h-full object-cover" loading="lazy" decoding="async" />
+                   <img src={formData.imageUrl} alt="Prévia do produto" className="w-full h-full object-cover" loading="lazy" decoding="async" width={160} height={160} />
                 ) : isCompressingImage ? (
                   <div className="absolute inset-0 bg-primary/20 flex flex-col items-center justify-center text-primary">
                     <Sparkles className="w-8 h-8 animate-spin" />
@@ -762,7 +765,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
               />
               <button
                 type="button"
-                onClick={() => setScanning(true)}
+                onClick={openScanner}
                 className="bg-secondary text-foreground p-3 rounded-2xl border border-border"
                 data-testid="button-scan-barcode"
               >
@@ -990,7 +993,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
   {scanning && (
     <BarcodeScanner
       onScan={handleBarcodeScan}
-      onClose={() => setScanning(false)}
+      onClose={closeScanner}
     />
   )}
 </Suspense>

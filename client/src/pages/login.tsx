@@ -135,7 +135,7 @@ export default function Login() {
       <div className="absolute bottom-0 left-0 w-64 h-64 bg-primary/5 rounded-full blur-3xl -ml-32 -mb-32" />
       
       <div className="w-full max-w-[292px] mb-7 relative z-10 rounded-[2rem] border border-white/70 bg-white/75 px-5 py-4 shadow-[0_18px_45px_rgba(79,70,229,0.12)] backdrop-blur-sm">
-        <img src="/logo-revenda-smart.png" alt="Revenda Smart" className="mx-auto w-full h-auto object-contain mix-blend-multiply" />
+        <img src="/logo-revenda-smart.png" alt="Revenda Smart" className="mx-auto w-full h-auto object-contain mix-blend-multiply" width={292} height={110} decoding="async" fetchPriority="high" />
       </div>
 
       <div className="text-center mb-10">

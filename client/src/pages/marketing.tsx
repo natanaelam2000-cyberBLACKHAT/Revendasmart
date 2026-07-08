@@ -379,7 +379,7 @@ export default function Marketing() {
                           const itemToUse = selectedProduct || (selectedKit && products.find(p => p.id === selectedKit.id));
                           const imgSrc = itemToUse ? getProductImage(itemToUse) : null;
                           return imgSrc ? (
-                            <img src={imgSrc} className="w-full h-full object-contain" alt={itemToUse?.name || "Produto"} loading="lazy" decoding="async" />
+                            <img src={imgSrc} className="w-full h-full object-contain" alt={itemToUse?.name || "Produto"} loading="lazy" decoding="async" width={80} height={80} />
                           ) : (
                             <div className="text-[8px] text-muted-foreground text-center">Sem imagem</div>
                           );

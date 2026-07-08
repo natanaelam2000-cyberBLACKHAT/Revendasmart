@@ -340,7 +340,7 @@ export default function PublicCatalog() {
       <header className="sticky top-0 z-30 border-b border-white/70 bg-white/85 backdrop-blur-xl">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-primary text-white flex shrink-0 items-center justify-center font-black text-xl overflow-hidden shadow-lg shadow-primary/15">{settings?.storeLogo && !logoFailed ? <img src={settings.storeLogo} alt={storeDisplayName} className="w-full h-full object-cover" loading="lazy" decoding="async" onError={() => setLogoFailed(true)} /> : storeDisplayName.charAt(0).toUpperCase()}</div>
+            <div className="w-12 h-12 rounded-2xl bg-primary text-white flex shrink-0 items-center justify-center font-black text-xl overflow-hidden shadow-lg shadow-primary/15">{settings?.storeLogo && !logoFailed ? <img src={settings.storeLogo} alt={storeDisplayName} className="w-full h-full object-cover" loading="eager" decoding="async" fetchPriority="high" width={48} height={48} onError={() => setLogoFailed(true)} /> : storeDisplayName.charAt(0).toUpperCase()}</div>
             <div className="min-w-0">
               <h1 className="text-base sm:text-xl font-black truncate">{storeDisplayName}</h1>
               <p className="text-[11px] font-semibold text-muted-foreground truncate">Catálogo digital · {products.length} produtos carregados</p>
@@ -356,7 +356,7 @@ export default function PublicCatalog() {
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-5 sm:py-8 space-y-7 pb-28">
         <section className="relative overflow-hidden rounded-[2rem] border border-white/70 bg-primary text-white shadow-xl shadow-primary/10">
           {settings.storeBannerUrl ? (
-            <img src={settings.storeBannerUrl} alt="Banner da loja" className="absolute inset-0 h-full w-full object-cover" loading="lazy" decoding="async" />
+            <img src={settings.storeBannerUrl} alt="Banner da loja" className="absolute inset-0 h-full w-full object-cover" loading="eager" decoding="async" fetchPriority="high" width={1200} height={480} />
           ) : (
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.35),transparent_32%),linear-gradient(135deg,#be5363,#e88b9b_52%,#f5c4cf)]" />
           )}

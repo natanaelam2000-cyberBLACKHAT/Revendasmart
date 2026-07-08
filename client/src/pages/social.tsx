@@ -71,7 +71,7 @@ export default function Social() {
               <div key={post.id} className="bg-white p-4 rounded-3xl border border-border/50 shadow-sm">
                 <div className="flex gap-4 mb-4">
                   <div className="w-16 h-16 bg-secondary rounded-2xl overflow-hidden">
-                    <img src={product?.imageUrl} className="w-full h-full object-cover mix-blend-multiply" />
+                    <img src={product?.imageUrl} alt={product?.name || "Produto"} className="w-full h-full object-cover mix-blend-multiply" loading="lazy" decoding="async" width={64} height={64} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-[9px] font-black text-primary uppercase mb-1">{format(parseISO(post.scheduledDate), 'dd/MM HH:mm')}</p>
@@ -123,7 +123,7 @@ export default function Social() {
                       {marketingTemplates[marketingType].label}
                    </div>
                    <div className="w-40 h-40 bg-secondary/30 rounded-3xl mx-auto mb-4 overflow-hidden p-4">
-                      <img src={selectedProduct.imageUrl} className="w-full h-full object-contain mix-blend-multiply" />
+                      <img src={selectedProduct.imageUrl} alt={selectedProduct.name || "Produto selecionado"} className="w-full h-full object-contain mix-blend-multiply" loading="lazy" decoding="async" width={160} height={160} />
                    </div>
                    <div className="text-center">
                       <h4 className="font-bold text-lg leading-tight mb-2">{selectedProduct.name}</h4>
