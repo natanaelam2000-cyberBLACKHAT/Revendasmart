@@ -70,7 +70,18 @@ const CLIENT_SECRET = process.env.MERCADOPAGO_CLIENT_SECRET ?? "";
 const REDIRECT_URI =
   process.env.MERCADOPAGO_REDIRECT_URI ??
   "https://revendasmart-backend-164193806378.us-central1.run.app/api/mercadopago/callback";
-const FRONTEND_URL = process.env.FRONTEND_URL ?? "https://revendasmart.vercel.app";
+function normalizeFrontendUrl(value: string | undefined): string {
+  try {
+    const parsed = new URL(value?.trim() || "https://revendasmart.vercel.app");
+    if (!["https:", "http:"].includes(parsed.protocol)) return "https://revendasmart.vercel.app";
+    return parsed.origin;
+  } catch {
+    return "https://revendasmart.vercel.app";
+  }
+}
+
+const FRONTEND_URL = normalizeFrontendUrl(process.env.FRONTEND_URL);
+const frontendRedirectUrl = (path: string): string => `${FRONTEND_URL}${path.startsWith("/") ? path : `/${path}`}`;
 
 const MP_AUTH_URL = "https://auth.mercadopago.com/authorization";
 const MP_TOKEN_URL = "https://api.mercadopago.com/oauth/token";
@@ -538,7 +549,7 @@ async function handleStartAuth(req: Request, res: Response) {
     logMPConnectionError("start_auth", uid, msg, {
       errorName: err instanceof Error ? err.name : "UnknownError",
     });
-    return res.status(500).json({ error: "Failed to start authorization", message: msg });
+    return res.status(500).json({ error: "MP_AUTH_START_FAILED", message: "Não foi possível iniciar a autorização do Mercado Pago." });
   }
 }
 
@@ -556,15 +567,15 @@ async function handleCallback(req: Request, res: Response) {
   // Handle MP OAuth error (user denied permission)
   if (oauthError) {
     mpWarn("[mp-connections/callback] MP returned OAuth error");
-    return res.redirect(`${FRONTEND_URL}/settings/mercadopago?status=denied`);
+    return res.redirect(frontendRedirectUrl("/settings/mercadopago?status=denied"));
   }
 
   if (!code || !nonce) {
-    return res.redirect(`${FRONTEND_URL}/settings/mercadopago?status=error&reason=missing_params`);
+    return res.redirect(frontendRedirectUrl("/settings/mercadopago?status=error&reason=missing_params"));
   }
 
   if (!/^[a-f0-9]{64}$/i.test(nonce) || code.length > 2048) {
-    return res.redirect(`${FRONTEND_URL}/settings/mercadopago?status=error&reason=invalid_state`);
+    return res.redirect(frontendRedirectUrl("/settings/mercadopago?status=error&reason=invalid_state"));
   }
 
   try {
@@ -573,8 +584,8 @@ async function handleCallback(req: Request, res: Response) {
     const stateDoc = await db.collection("mercadopago_oauth_states").doc(nonce).get();
 
     if (!stateDoc.exists) {
-      mpWarn(`[mp-connections/callback] State not found: ${nonce}`);
-      return res.redirect(`${FRONTEND_URL}/settings/mercadopago?status=error&reason=invalid_state`);
+      mpWarn("[mp-connections/callback] State not found", { stateNonce: nonce });
+      return res.redirect(frontendRedirectUrl("/settings/mercadopago?status=error&reason=invalid_state"));
     }
 
     const stateData = stateDoc.data() as MPOAuthState;
@@ -584,7 +595,7 @@ async function handleCallback(req: Request, res: Response) {
     const oauthState = await consumeOAuthState(nonce, uid);
     if (!oauthState) {
       return res.redirect(
-        `${FRONTEND_URL}/settings/mercadopago?status=error&reason=invalid_state`
+        frontendRedirectUrl("/settings/mercadopago?status=error&reason=invalid_state")
       );
     }
 
@@ -656,7 +667,7 @@ async function handleCallback(req: Request, res: Response) {
     mpInfo("[mp-connections/callback] Connection created", { environment });
 
     return res.redirect(
-      `${FRONTEND_URL}/settings/mercadopago?status=success&connectionId=${connRef.id}`
+      frontendRedirectUrl(`/settings/mercadopago?status=success&connectionId=${connRef.id}`)
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -664,7 +675,7 @@ async function handleCallback(req: Request, res: Response) {
       errorName: err instanceof Error ? err.name : "UnknownError",
     });
     return res.redirect(
-      `${FRONTEND_URL}/settings/mercadopago?status=error&reason=server_error`
+      frontendRedirectUrl("/settings/mercadopago?status=error&reason=server_error")
     );
   }
 }
