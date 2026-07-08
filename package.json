@@ -43,7 +43,7 @@
     "@radix-ui/react-toggle": "^1.1.10",
     "@radix-ui/react-toggle-group": "^1.1.11",
     "@radix-ui/react-tooltip": "^1.2.8",
-    "@sentry/node": "^10.55.0",
+    "@sentry/node": "^10.64.0",
     "@tanstack/react-query": "^5.60.5",
     "@zxing/library": "^0.21.3",
     "class-variance-authority": "^0.7.1",
