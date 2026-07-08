@@ -431,7 +431,7 @@ export default function PublicCatalog() {
       </main>
 
       {cartCount > 0 && !showCart && (
-        <button type="button" onClick={() => setShowCart(true)} className="fixed bottom-5 left-4 right-4 z-40 mx-auto flex min-h-14 max-w-md items-center justify-between rounded-[1.5rem] bg-slate-950 px-5 text-white shadow-2xl shadow-slate-950/25 active:scale-[0.99] transition-transform">
+        <button type="button" onClick={() => setShowCart(true)} className="fixed bottom-[max(1.25rem,calc(env(safe-area-inset-bottom)+0.75rem))] left-4 right-4 z-40 mx-auto flex min-h-14 max-w-md items-center justify-between rounded-[1.5rem] bg-slate-950 px-5 text-white shadow-2xl shadow-slate-950/25 active:scale-[0.99] transition-transform">
           <span className="flex items-center gap-2 text-sm font-black"><ShoppingCart className="h-5 w-5" /> Ver pedido · {cartCount} item{cartCount === 1 ? "" : "s"}</span>
           <span className="text-sm font-black">{formatCurrency(cartTotal)}</span>
         </button>

@@ -135,7 +135,7 @@ export default function Reports() {
   const charts = useMemo(() => calculateReportCharts(sales, products), [sales, products]);
   const indicators = useMemo(() => calculateIndicators(sales, products), [sales, products]);
   const exportPayload = useMemo(() => ({
-    storeName: "RevendaSmart",
+    storeName: "Revenda Smart",
     periodLabel: "Dados consolidados do sistema",
     generatedAt: new Date(),
     summary,
@@ -182,7 +182,7 @@ export default function Reports() {
               </span>
               <h1 className="mt-4 text-3xl sm:text-4xl font-black tracking-tight text-foreground">Relatórios Premium</h1>
               <p className="mt-2 max-w-2xl text-sm font-medium leading-relaxed text-muted-foreground">
-                Acompanhe faturamento, lucro, rankings, estoque e comparativos usando os dados já registrados no RevendaSmart.
+                Acompanhe faturamento, lucro, rankings, estoque e comparativos usando os dados já registrados no Revenda Smart.
               </p>
             </div>
             <div className="grid grid-cols-3 gap-2">

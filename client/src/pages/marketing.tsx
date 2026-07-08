@@ -115,7 +115,7 @@ export default function Marketing() {
     productBrand: String(selectedItem.brand || ""), imageUrl: selectedItem.imageUrl || currentImageUrl,
     photoUrl: (selectedItem as any).photoUrl, image: (selectedItem as any).image, imageId: selectedItem.imageId,
     generatedText, template, price: currentPrice, headline: currentTemplate.headline,
-    storeName: settings.storeName || "RevendaSmart", primaryColor: settings.primaryColor || "#ec4899",
+    storeName: settings.storeName || "Revenda Smart", primaryColor: settings.primaryColor || "#ec4899",
   } : null;
 
   const registerAction = async (action: MarketingAction) => {

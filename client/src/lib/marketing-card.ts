@@ -34,7 +34,7 @@ export async function createMarketingCard(payload:MarketingCardPayload):Promise<
   canvas.width=1080;canvas.height=1080;const color=payload.primaryColor||"#ec4899";
   const gradient=ctx.createLinearGradient(0,0,1080,1080);gradient.addColorStop(0,color);gradient.addColorStop(1,"#ffffff");ctx.fillStyle=gradient;ctx.fillRect(0,0,1080,1080);
   ctx.fillStyle="#ffffff";ctx.shadowColor="rgba(0,0,0,.12)";ctx.shadowBlur=50;ctx.beginPath();ctx.roundRect(100,100,880,880,80);ctx.fill();ctx.shadowBlur=0;
-  ctx.fillStyle=color;ctx.font="900 40px sans-serif";ctx.textAlign="center";ctx.fillText((payload.storeName||"RevendaSmart").toUpperCase().slice(0,35),540,190);
+  ctx.fillStyle=color;ctx.font="900 40px sans-serif";ctx.textAlign="center";ctx.fillText((payload.storeName||"Revenda Smart").toUpperCase().slice(0,35),540,190);
   const productImage=await resolveProductImage(payload);
   if(productImage){const ratio=Math.min(500/productImage.naturalWidth,400/productImage.naturalHeight);const width=productImage.naturalWidth*ratio,height=productImage.naturalHeight*ratio;ctx.drawImage(productImage,540-width/2,455-height/2,width,height);}else{drawImagePlaceholder(ctx,color);}
   ctx.fillStyle=color;ctx.beginPath();ctx.roundRect(260,710,560,82,41);ctx.fill();ctx.fillStyle="#ffffff";ctx.font="900 30px sans-serif";ctx.fillText(payload.headline.slice(0,34),540,762);

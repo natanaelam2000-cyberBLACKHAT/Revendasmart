@@ -149,6 +149,10 @@ export default function Login() {
           <input 
             required
             type="email"
+            inputMode="email"
+            autoComplete="username"
+            autoCapitalize="none"
+            enterKeyHint="next"
             className="w-full bg-white border border-border rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none transition-all shadow-sm"
             value={email}
             onChange={e => setEmail(e.target.value)}
@@ -162,6 +166,8 @@ export default function Login() {
           <input 
             required
             type="password"
+            autoComplete="current-password"
+            enterKeyHint="done"
             className="w-full bg-white border border-border rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none transition-all shadow-sm"
             value={password}
             onChange={e => setPassword(e.target.value)}

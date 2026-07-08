@@ -181,6 +181,8 @@ export default function Signup() {
           <label className="text-[10px] font-black text-muted-foreground uppercase px-1 tracking-widest">Nome da Loja</label>
           <input 
             required
+            autoComplete="organization"
+            enterKeyHint="next"
             className="w-full bg-white border border-border rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none transition-all shadow-sm"
             value={storeName}
             onChange={e => setStoreName(e.target.value)}
@@ -193,6 +195,10 @@ export default function Signup() {
           <input 
             required
             type="email"
+            inputMode="email"
+            autoComplete="email"
+            autoCapitalize="none"
+            enterKeyHint="next"
             className="w-full bg-white border border-border rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none transition-all shadow-sm"
             value={email}
             onChange={e => setEmail(e.target.value)}
@@ -206,6 +212,8 @@ export default function Signup() {
           <input 
             required
             type="password"
+            autoComplete="new-password"
+            enterKeyHint="done"
             className="w-full bg-white border border-border rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none transition-all shadow-sm"
             value={password}
             onChange={e => setPassword(e.target.value)}

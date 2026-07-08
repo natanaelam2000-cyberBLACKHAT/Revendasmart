@@ -35,7 +35,7 @@ export default function Onboarding() {
   
   const baseSteps = [
     {
-      title: "Bem-vindo ao RevendaSmart",
+      title: "Bem-vindo ao Revenda Smart",
       text: "Este aplicativo ajuda você a organizar produtos, clientes e vendas. Vamos começar em 3 passos simples.",
       icon: Sparkles,
       color: "bg-primary/10 text-primary"

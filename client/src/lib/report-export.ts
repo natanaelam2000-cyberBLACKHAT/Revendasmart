@@ -86,7 +86,7 @@ function buildPrintableHtml(payload: ReportExportPayload): string {
   <html lang="pt-BR">
     <head>
       <meta charset="utf-8" />
-      <title>Relatório RevendaSmart</title>
+      <title>Relatório Revenda Smart</title>
       <style>
         * { box-sizing: border-box; }
         body { font-family: Inter, Arial, sans-serif; color: #1f2937; margin: 32px; }
@@ -105,7 +105,7 @@ function buildPrintableHtml(payload: ReportExportPayload): string {
     <body>
       <header>
         <h1>${payload.storeName}</h1>
-        <p>Relatório executivo RevendaSmart</p>
+        <p>Relatório executivo Revenda Smart</p>
         <p>Período: ${payload.periodLabel} · Gerado em ${generatedAt}</p>
       </header>
       <section>
@@ -153,7 +153,7 @@ export function printReport(payload: ReportExportPayload): boolean {
 
 export function exportReportToExcel(payload: ReportExportPayload): void {
   const lines: string[] = [];
-  lines.push(["RevendaSmart - Relatório Executivo"].map(escapeCsv).join(";"));
+  lines.push(["Revenda Smart - Relatório Executivo"].map(escapeCsv).join(";"));
   lines.push(["Loja", payload.storeName].map(escapeCsv).join(";"));
   lines.push(["Período", payload.periodLabel].map(escapeCsv).join(";"));
   lines.push(["Gerado em", payload.generatedAt.toLocaleString("pt-BR")].map(escapeCsv).join(";"));
