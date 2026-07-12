@@ -136,13 +136,15 @@ export function PlanProvider({ children }: { children: ReactNode }) {
     return `${window.location.origin}/signup?ref=${planData.referralCode}`;
   }, [planData?.referralCode]);
 
+  const refresh = useCallback(() => loadPlan(), [loadPlan]);
+
   const value = useMemo<PlanProviderValue>(() => ({
     plan: planData,
     planData,
     activePlan,
     limits,
     loading,
-    refresh: () => loadPlan(),
+    refresh,
     hasPremiumAccess,
     isPremium: hasPremiumAccess,
     premiumActive: hasPremiumAccess,
@@ -151,7 +153,7 @@ export function PlanProvider({ children }: { children: ReactNode }) {
     referralCount: planData?.referralCount ?? 0,
     shareLink,
     error,
-  }), [activePlan, error, hasPremiumAccess, limits, loadPlan, loading, planData, shareLink]);
+  }), [activePlan, error, hasPremiumAccess, limits, loading, planData, refresh, shareLink]);
 
   return <PlanContext.Provider value={value}>{children}</PlanContext.Provider>;
 }

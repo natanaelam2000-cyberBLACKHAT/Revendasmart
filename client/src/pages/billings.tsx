@@ -12,7 +12,7 @@ import { getFirebaseAuth, logError, logEvent, logTelemetryEvent, trackAnalyticsE
 import { collection, query, onSnapshot, doc, updateDoc, orderBy, where, limit, startAfter, getDocs, getFirestore, type DocumentData, type QueryConstraint, type QueryDocumentSnapshot } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { useCharges, CHARGE_STATUS_LABELS, CHARGE_STATUS_COLORS, CHARGE_MODE_LABELS } from "@/hooks/useCharges";
-import { useUserSettings } from "@/hooks/useUserSettings";
+import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { PaymentLinkModal } from "@/components/PaymentLinkModal";
 import { PartialPaymentModal } from "@/components/PartialPaymentModal";
 import { getApiUrl } from "@/lib/api-config";

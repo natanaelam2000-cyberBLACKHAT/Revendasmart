@@ -3,7 +3,7 @@ import { PageSkeleton } from "@/components/PageSkeleton";
 import { Layout } from "@/components/layout";
 import { Share2, Search, X, Copy, Check, ShoppingCart, Plus, Minus, Trash2, Send, Loader2, Package } from "lucide-react";
 import { useProductsData } from "@/hooks/useProductsData";
-import { useUserSettings } from "@/hooks/useUserSettings";
+import { useUserSettings } from "@/providers/UserSettingsProvider";
 import type { Product } from "@/lib/mock-data";
 import { ProductImageCard } from "@/components/ProductImageCard";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";

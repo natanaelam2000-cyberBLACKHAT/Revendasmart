@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams } from "wouter";
 
 import {
@@ -79,7 +79,12 @@ export default function PublicCatalog() {
   const [logoFailed, setLogoFailed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showCart, setShowCart] = useState(false);
+  const copyResetTimeoutRef = useRef<number | null>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
+
+  useEffect(() => () => {
+    if (copyResetTimeoutRef.current !== null) window.clearTimeout(copyResetTimeoutRef.current);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -166,25 +171,26 @@ export default function PublicCatalog() {
     });
   }, [products, searchTerm, selectedCategory, selectedGender]);
 
+  const availableProducts = useMemo(() => products.filter(product => product.stock > 0), [products]);
+
   const featuredProducts = useMemo(() => {
-    const available = products.filter(product => product.stock > 0);
-    const featured = available.filter(product => product.isFeatured);
-    return (featured.length > 0 ? featured : available).slice(0, 6);
-  }, [products]);
+    const featured = availableProducts.filter(product => product.isFeatured);
+    return (featured.length > 0 ? featured : availableProducts).slice(0, 6);
+  }, [availableProducts]);
 
   const newestProducts = useMemo(() => {
-    const withDates = products
+    const withDates = availableProducts
       .map(product => ({ product, createdAtTime: getCreatedAtTime(product) }))
       .filter(item => item.createdAtTime > 0);
     const source = withDates.length > 0
       ? withDates.sort((a, b) => b.createdAtTime - a.createdAtTime).map(item => item.product)
-      : products;
-    return source.filter(product => product.stock > 0).slice(0, 6);
-  }, [products]);
+      : availableProducts;
+    return source.slice(0, 6);
+  }, [availableProducts]);
 
-  const promoProducts = useMemo(() => products
-    .filter(product => product.stock > 0 && (product.isOnSale || getPromotionalPrice(product) !== null))
-    .slice(0, 6), [products]);
+  const promoProducts = useMemo(() => availableProducts
+    .filter(product => product.isOnSale || getPromotionalPrice(product) !== null)
+    .slice(0, 6), [availableProducts]);
 
   const addToCart = useCallback((product: Product) => {
     if (product.stock <= 0) return;
@@ -222,7 +228,11 @@ export default function PublicCatalog() {
     try {
       await navigator.clipboard.writeText(catalogUrl);
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
+      if (copyResetTimeoutRef.current !== null) window.clearTimeout(copyResetTimeoutRef.current);
+      copyResetTimeoutRef.current = window.setTimeout(() => {
+        setCopied(false);
+        copyResetTimeoutRef.current = null;
+      }, 2000);
     } catch {
       setCopied(false);
     }

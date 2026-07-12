@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import { Layout } from "@/components/layout";
 import { defaultSettings, getProductImage } from "@/lib/mock-data";
 import { useProductPickerData } from "@/hooks/useProductPickerData";
-import { useUserSettings } from "@/hooks/useUserSettings";
+import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, logError } from "@/lib/firebase";
 import { useFeatureEnabled } from "@/lib/remote-config-context";
 import { Search, MessageSquare, Sparkles, Copy, Smartphone, Wallet, Info, Image as ImageIcon, History, WandSparkles } from "lucide-react";
