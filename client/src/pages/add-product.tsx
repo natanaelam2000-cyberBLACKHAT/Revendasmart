@@ -26,6 +26,7 @@ import { safeLogger } from "@/lib/safe-logger";
 import { checkProductLimit } from "@/lib/plan-helpers";
 import {
   getNichoConfig,
+  getProductCategoriesForNicho,
   inferNichoFromCategory,
   toBusinessTypesArray,
   type NichoId
@@ -192,9 +193,12 @@ const [, setLocation] = useLocation();
   );
   const nichoConfig = getNichoConfig(activeNicho);
 
-  // Categories: ALWAYS from the active nicho only (never mix nichos)
-  // Even with multiple business types, show only categories of the currently selected type
-  const baseCategorySuggestions = nichoConfig.categories;
+  // Categories: ALWAYS from the active nicho only (never mix nichos).
+  // If onboarding configured categories for this nicho, use that personalized list.
+  const baseCategorySuggestions = useMemo(
+    () => getProductCategoriesForNicho(settings, activeNicho),
+    [activeNicho, settings]
+  );
 
   // For brand: track if user is typing custom brand
   const [brandMode, setBrandMode] = useState<'predefined' | 'custom'>('predefined');
@@ -224,11 +228,11 @@ const [, setLocation] = useLocation();
 });
 
   const categorySuggestions = useMemo<string[]>(() => {
-    if (formData.category && !nichoConfig.categories.includes(formData.category)) {
-      return [...nichoConfig.categories, formData.category];
+    if (formData.category && !baseCategorySuggestions.includes(formData.category)) {
+      return [...baseCategorySuggestions, formData.category];
     }
-    return nichoConfig.categories;
-  }, [formData.category, nichoConfig.categories]);
+    return baseCategorySuggestions;
+  }, [baseCategorySuggestions, formData.category]);
   const brandSuggestions = useMemo(() => {
     const seen = new Set<string>();
     const merged: string[] = [];
@@ -258,8 +262,9 @@ const [, setLocation] = useLocation();
     setFormData(prev => {
       const newCategory = prev.category;
       // If current category doesn't belong to new nicho, reset to first category of new nicho
-      const categoryExists = newConfig.categories.includes(newCategory);
-      const validCategory = categoryExists ? newCategory : (newConfig.categories[0] || "");
+      const nextCategories = getProductCategoriesForNicho(settings, activeNicho);
+      const categoryExists = nextCategories.includes(newCategory);
+      const validCategory = categoryExists ? newCategory : (nextCategories[0] || "");
 
       return {
         ...prev,
@@ -272,7 +277,7 @@ const [, setLocation] = useLocation();
       };
     });
     setBrandMode(newHasPredefined ? 'predefined' : 'custom');
-  }, [activeNicho]);
+  }, [activeNicho, settings]);
 
   // Load existing product for edit
   useEffect(() => {

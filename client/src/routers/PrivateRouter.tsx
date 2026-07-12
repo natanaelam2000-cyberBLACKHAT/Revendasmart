@@ -6,7 +6,7 @@ import { UserFeedbackHost } from "@/components/UserFeedbackHost";
 import { getApiUrl } from "@/lib/api-config";
 import { getFirebaseAuth, logTelemetryEvent } from "@/lib/firebase";
 import { PlanProvider } from "@/providers/PlanProvider";
-import { useUserSettings, UserSettingsProvider } from "@/providers/UserSettingsProvider";
+import { UserSettingsProvider } from "@/providers/UserSettingsProvider";
 
 const Dashboard = lazy(() => import("@/pages/dashboard"));
 const AddProduct = lazy(() => import("@/pages/add-product"));
@@ -31,8 +31,6 @@ const NotFound = lazy(() => import("@/pages/not-found"));
 function PrivateRoutes() {
   const [location, setLocation] = useLocation();
   const [authState, setAuthState] = useState<{ uid: string | null; loading: boolean }>({ uid: null, loading: true });
-  const { settings, loading: settingsLoading } = useUserSettings();
-
   useEffect(() => {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
@@ -93,14 +91,8 @@ function PrivateRoutes() {
 
     if (!authState.uid) {
       setLocation("/login");
-      return;
     }
-
-    if (settingsLoading || location === "/onboarding") return;
-    if (settings?.onboarding_completed !== true) {
-      setLocation("/onboarding");
-    }
-  }, [authState, settings, location, setLocation, settingsLoading]);
+  }, [authState.loading, authState.uid, setLocation]);
 
   return (
     <>

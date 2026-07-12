@@ -59,14 +59,20 @@ export const NICHO_CONFIG: Record<NichoId, NichoConfig> = {
     desc: 'Natura, Boticário, Mary Kay...',
     iconName: 'Store',
     categories: [
-      'Perfume',
-      'Hidratante',
-      'Sabonete',
-      'Body Splash',
-      'Creme',
+      'Perfumes',
+      'Hidratantes',
       'Maquiagem',
-      'Protetor Solar',
-      'Kit',
+      'Batons',
+      'Base',
+      'Corretivo',
+      'Máscara',
+      'Cuidados com a Pele',
+      'Cuidados com o Cabelo',
+      'Shampoo',
+      'Condicionador',
+      'Sabonetes',
+      'Kits',
+      'Promoções',
       'Outros',
     ],
     predefinedBrands: [
@@ -142,20 +148,18 @@ export const NICHO_CONFIG: Record<NichoId, NichoConfig> = {
     desc: 'Moda feminina, masculina, infantil...',
     iconName: 'Shirt',
     categories: [
-      'Camiseta',
-      'Blusa',
-      'Calça',
+      'Camisetas',
+      'Calças',
+      'Vestidos',
       'Shorts',
-      'Short',
-      'Vestido',
-      'Saia',
-      'Jaqueta',
-      'Moda Íntima',
-      'Infantil',
+      'Saias',
+      'Jaquetas',
+      'Moda Infantil',
+      'Moda Masculina',
+      'Moda Feminina',
+      'Plus Size',
       'Calçados',
-      'Kit/Conjunto',
-      'Conjunto',
-      'Fitness',
+      'Kits',
       'Outros',
     ],
     predefinedBrands: [
@@ -192,18 +196,16 @@ export const NICHO_CONFIG: Record<NichoId, NichoConfig> = {
     desc: 'Joias, relógios, bolsas, óculos...',
     iconName: 'Watch',
     categories: [
-      'Bolsa',
-      'Relógio',
+      'Colares',
+      'Brincos',
+      'Pulseiras',
+      'Relógios',
       'Óculos',
-      'Joia',
-      'Semijoia',
-      'Bijuteria',
-      'Joia/Bijuteria',
-      'Cinto',
-      'Carteira',
-      'Boné',
-      'Presilha',
-      'Kit',
+      'Bolsas',
+      'Carteiras',
+      'Bonés',
+      'Bijuterias',
+      'Kits',
       'Outros',
     ],
     predefinedBrands: [
@@ -237,18 +239,17 @@ export const NICHO_CONFIG: Record<NichoId, NichoConfig> = {
     desc: 'Bolos, trufas, marmitas, bebidas...',
     iconName: 'Cookie',
     categories: [
-      'Bolo',
-      'Trufa',
-      'Brigadeiro',
-      'Marmita',
-      'Salgado',
-      'Doce',
-      'Bebida',
-      'Pão',
-      'Congelado',
-      'Kit/Festa',
-      'Kit Festa',
-      'Combo',
+      'Bolos',
+      'Doces',
+      'Trufas',
+      'Tortas',
+      'Salgados',
+      'Marmitas',
+      'Bebidas',
+      'Chocolates',
+      'Kits',
+      'Encomendas',
+      'Promoções',
       'Outros',
     ],
     predefinedBrands: [
@@ -280,28 +281,23 @@ export const NICHO_CONFIG: Record<NichoId, NichoConfig> = {
     iconName: 'Box',
     categories: [
       'Produto',
-      'Eletrônico',
       'Casa',
       'Decoração',
       'Papelaria',
-      'Presente',
-      'Brinquedo',
-      'Utilidade',
-      'Kit',
-      'Produto Geral',
+      'Eletrônicos',
+      'Utilidades',
+      'Presentes',
+      'Brinquedos',
       'Variados',
-      'Item Personalizado',
       'Outros',
     ],
     predefinedBrands: [
       'Sem marca',
-      'Importado',
-      'Nacional',
-      'Artesanal',
+      'Marca própria',
       'Outros',
     ],
-    brandLabel: 'Marca / Origem',
-    brandPlaceholder: 'Ex: Importado, Nacional, Sem marca...',
+    brandLabel: 'Marca',
+    brandPlaceholder: 'Ex: Sem marca, marca própria, outros...',
     originOptions: ['Nacional', 'Importado', 'Artesanal', 'Produção própria', 'Revenda', 'Sem marca', 'Outros'],
     originPlaceholder: 'Ex: Nacional, Importado, Artesanal...',
     productNamePlaceholder: 'Ex: Garrafa térmica inox',
@@ -353,7 +349,7 @@ export function inferNichoFromCategory(category: string): NichoId {
 
 /**
  * Retorna o nicho primário a partir de um array de tipos
- * Backward compat: se vazio, retorna 'Cosméticos & Perfumes'
+ * Backward compat: se vazio, retorna 'Geral'
  */
 export function getPrimaryNicho(businessTypes: string[]): NichoId {
   if (!businessTypes || businessTypes.length === 0) return 'Geral';
@@ -367,8 +363,9 @@ export function toBusinessTypesArray(
   businessType: string | undefined,
   businessTypes: string[] | undefined
 ): string[] {
-  if (businessTypes && businessTypes.length > 0) return businessTypes;
-  if (businessType) return [businessType];
+  const validBusinessTypes = (businessTypes || []).filter((type): type is NichoId => type in NICHO_CONFIG);
+  if (validBusinessTypes.length > 0) return validBusinessTypes;
+  if (businessType && businessType in NICHO_CONFIG) return [businessType];
   return ['Geral'];
 }
 
@@ -390,4 +387,43 @@ export function getStoreName(
   }
   // Senão, usa o nome principal padrão
   return settings.storeName || '';
+}
+
+
+export type NichoCategoryPreferences = Record<string, string[]>;
+
+type SettingsWithCategoryPreferences = {
+  customCategoriesByNicho?: NichoCategoryPreferences;
+  productCategoriesByNicho?: NichoCategoryPreferences;
+};
+
+function normalizeCategoryList(categories: unknown): string[] {
+  if (!Array.isArray(categories)) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of categories) {
+    const category = String(raw ?? '').trim().replace(/\s+/g, ' ');
+    const key = category.toLocaleLowerCase('pt-BR');
+    if (category.length >= 2 && !seen.has(key)) {
+      seen.add(key);
+      result.push(category);
+    }
+  }
+  return result;
+}
+
+/**
+ * Retorna categorias efetivas para cadastro/listagem.
+ * Se o usuário configurou categorias no onboarding, elas substituem a lista padrão daquele nicho.
+ * Mantém fallback por nicho para usuários antigos e evita misturar categorias genéricas fora de "Geral".
+ */
+export function getProductCategoriesForNicho(
+  settings: SettingsWithCategoryPreferences | undefined,
+  nichoId: string,
+): string[] {
+  const config = getNichoConfig(nichoId);
+  const configured = normalizeCategoryList(
+    settings?.customCategoriesByNicho?.[config.id] || settings?.productCategoriesByNicho?.[config.id]
+  );
+  return configured.length > 0 ? configured : config.categories;
 }

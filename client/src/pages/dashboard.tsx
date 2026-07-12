@@ -1,12 +1,13 @@
 import { useState, useEffect, useMemo } from "react";
 import { PageSkeleton } from "@/components/PageSkeleton";
+import { OnboardingChecklist, type OnboardingChecklistItem } from "@/components/OnboardingChecklist";
 import { useLocation } from "wouter";
 import { Layout } from "@/components/layout";
 import { ProductImageCard } from "@/components/ProductImageCard";
 import {
   TrendingUp, Package, AlertCircle, Zap, Share2,
   Sparkles, ArrowRight, TrendingDown, Users, Bell as BellIcon,
-  Plus, ShoppingCart, Receipt, Megaphone, BookOpen
+  Plus, ShoppingCart, Receipt, Megaphone, BookOpen, Palette, CreditCard
 } from "lucide-react";
 import { isToday, parseISO } from "date-fns";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
@@ -84,6 +85,31 @@ const premiumToneClasses = {
 
 const directionSymbol = { up: "↑", down: "↓", flat: "→" };
 
+type OnboardingChecklistUi = { collapsed: boolean; dismissed: boolean };
+
+const ONBOARDING_CHECKLIST_STORAGE_KEY = "rs:onboarding-checklist-ui";
+
+function readOnboardingChecklistUi(): OnboardingChecklistUi {
+  if (typeof window === "undefined") return { collapsed: false, dismissed: false };
+  try {
+    const stored = window.localStorage.getItem(ONBOARDING_CHECKLIST_STORAGE_KEY);
+    if (!stored) return { collapsed: false, dismissed: false };
+    const parsed = JSON.parse(stored) as Partial<OnboardingChecklistUi>;
+    return { collapsed: parsed.collapsed === true, dismissed: parsed.dismissed === true };
+  } catch {
+    return { collapsed: false, dismissed: false };
+  }
+}
+
+function writeOnboardingChecklistUi(next: OnboardingChecklistUi) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(ONBOARDING_CHECKLIST_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // localStorage indisponível não deve bloquear o uso do dashboard.
+  }
+}
+
 export default function Dashboard() {
   // Call all hooks before any conditional returns
   const [, setLocation] = useLocation();
@@ -103,14 +129,9 @@ export default function Dashboard() {
   const [showFirstProductCTA, setShowFirstProductCTA] = useState<boolean>(false);
   const [monthlyGoalInput, setMonthlyGoalInput] = useState("10000");
   const [isSavingGoal, setIsSavingGoal] = useState(false);
+  const [onboardingChecklistUi, setOnboardingChecklistUi] = useState<OnboardingChecklistUi>(() => readOnboardingChecklistUi());
 
   // Declare all effect hooks here
-  useEffect(() => {
-    if (!settingsLoading && !onboarding_completed) {
-      setLocation("/onboarding");
-    }
-  }, [settingsLoading, onboarding_completed, setLocation]);
-
   // Handle first product CTA from onboarding - consume the query param once
   useEffect(() => {
     if (typeof window !== 'undefined' && !showFirstProductCTA) {
@@ -327,14 +348,78 @@ export default function Dashboard() {
     { label: "Abrir catálogo", path: "/catalog", icon: BookOpen },
   ];
 
+  const onboardingChecklistItems = useMemo<OnboardingChecklistItem[]>(() => [
+    {
+      id: "theme",
+      label: "Escolher tema",
+      description: "Personalize a cor principal do app.",
+      done: settings.onboarding_theme_selected === true,
+      path: "/onboarding",
+      icon: Palette,
+    },
+    {
+      id: "categories",
+      label: "Configurar categorias",
+      description: "Ajuste categorias conforme seu nicho.",
+      done: Boolean(settings.onboarding_categories_configured || Object.keys(settings.customCategoriesByNicho || {}).length > 0),
+      path: "/onboarding",
+      icon: BookOpen,
+    },
+    {
+      id: "product",
+      label: "Cadastrar primeiro produto",
+      description: "Adicione produto com preço e estoque.",
+      done: products.length > 0,
+      path: "/add-product",
+      icon: Package,
+    },
+    {
+      id: "client",
+      label: "Cadastrar primeiro cliente",
+      description: "Organize contatos e histórico.",
+      done: clients.length > 0,
+      path: "/clients",
+      icon: Users,
+    },
+    {
+      id: "sale",
+      label: "Fazer primeira venda",
+      description: "Registre venda e baixa de estoque.",
+      done: sales.length > 0,
+      path: "/sale",
+      icon: ShoppingCart,
+    },
+    {
+      id: "catalog",
+      label: "Ativar catálogo",
+      description: "Prepare seu link para compartilhar.",
+      done: settings.enablePublicCatalog !== false && Boolean(settings.catalogSlug || settings.catalog_slug),
+      path: "/catalog",
+      icon: BookOpen,
+    },
+    {
+      id: "payments",
+      label: "Configurar cobrança",
+      description: "Pix, link de pagamento ou Mercado Pago.",
+      done: Boolean(settings.pixKey || settings.paymentLink),
+      path: "/settings/mercadopago",
+      icon: CreditCard,
+    },
+  ], [clients.length, products.length, sales.length, settings]);
+
+  const updateOnboardingChecklistUi = (patch: Partial<OnboardingChecklistUi>) => {
+    setOnboardingChecklistUi((currentValue) => {
+      const nextValue = { ...currentValue, ...patch };
+      writeOnboardingChecklistUi(nextValue);
+      return nextValue;
+    });
+  };
+
+  const showOnboardingChecklist = !onboarding_completed && !onboardingChecklistUi.dismissed;
+
   // Show loading while checking onboarding status
   if (settingsLoading || dataLoading) {
     return <Layout><PageSkeleton variant="dashboard" /></Layout>;
-  }
-
-  // If not completed onboarding, don't render anything (will redirect above)
-  if (!onboarding_completed) {
-    return null;
   }
 
   // Show error if data failed to load
@@ -393,6 +478,16 @@ export default function Dashboard() {
         </div>      </div>
 
       <div className="p-6 space-y-6">
+        {showOnboardingChecklist && (
+          <OnboardingChecklist
+            items={onboardingChecklistItems}
+            collapsed={onboardingChecklistUi.collapsed}
+            onToggleCollapsed={() => updateOnboardingChecklistUi({ collapsed: !onboardingChecklistUi.collapsed })}
+            onDismiss={() => updateOnboardingChecklistUi({ dismissed: true })}
+            onGoTo={setLocation}
+          />
+        )}
+
         <section className="rounded-[2rem] border border-primary/10 bg-gradient-to-br from-white via-primary/5 to-rose-50 p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>

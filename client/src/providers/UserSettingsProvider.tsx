@@ -1,5 +1,6 @@
-import { createContext, useCallback, useContext, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, type ReactNode } from "react";
 import { defaultSettings, type AppSettings } from "@/lib/mock-data";
+import { applyAppTheme } from "@/lib/app-themes";
 import {
   invalidateUserSettings,
   useUserSettings as useUserSettingsSource,
@@ -17,21 +18,26 @@ const UserSettingsContext = createContext<UserSettingsContextValue | null>(null)
 
 export function UserSettingsProvider({ children }: { children: ReactNode }) {
   const { settings, loading, error, onboarding_completed } = useUserSettingsSource();
+  const resolvedSettings = settings || defaultSettings;
+
+  useEffect(() => {
+    applyAppTheme(resolvedSettings);
+  }, [resolvedSettings]);
 
   const refresh = useCallback(() => {
     invalidateUserSettings();
   }, []);
 
+  const value = useMemo<UserSettingsContextValue>(() => ({
+    settings: resolvedSettings,
+    loading,
+    error,
+    onboarding_completed,
+    refresh,
+  }), [error, loading, onboarding_completed, refresh, resolvedSettings]);
+
   return (
-    <UserSettingsContext.Provider
-      value={{
-        settings: settings || defaultSettings,
-        loading,
-        error,
-        onboarding_completed,
-        refresh,
-      }}
-    >
+    <UserSettingsContext.Provider value={value}>
       {children}
     </UserSettingsContext.Provider>
   );

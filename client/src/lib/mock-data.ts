@@ -171,6 +171,23 @@ export interface AppSettings {
   templateThanks: string;
   lowStockThreshold: number;
   monthlyGoal?: number;
+  appTheme?: string;
+  appThemeCustomization?: {
+    primaryColor?: string;
+    buttonTone?: string;
+    cardTone?: string;
+    shadowIntensity?: string;
+    radius?: string;
+    motion?: string;
+  };
+  customCategoriesByNicho?: Record<string, string[]>;
+  onboarding_theme_selected?: boolean;
+  onboarding_categories_configured?: boolean;
+  onboarding_current_step?: number;
+  onboarding_skipped?: boolean;
+  onboarding_skipped_at?: string;
+  onboarding_completed_at?: string;
+  onboarding_continued_later_at?: string;
   enablePublicCatalog: boolean;
   showPrice: boolean;
   showStock: boolean;
@@ -453,6 +470,17 @@ export const defaultSettings: AppSettings = {
   templateThanks: 'Olá {client}! Obrigado pela compra! 💖',
   lowStockThreshold: 3,
   monthlyGoal: 10000,
+  appTheme: 'purple',
+  appThemeCustomization: {
+    primaryColor: '#6d5dfc',
+    buttonTone: 'solid',
+    cardTone: 'clean',
+    shadowIntensity: 'medium',
+    radius: 'rounded',
+    motion: 'normal'
+  },
+  customCategoriesByNicho: {},
+  onboarding_theme_selected: false,
   enablePublicCatalog: true,
   showPrice: true,
   showStock: true,
