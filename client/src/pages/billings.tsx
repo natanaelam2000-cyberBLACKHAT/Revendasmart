@@ -136,7 +136,9 @@ export default function Billings() {
     };
   }, []);
 
-  const getClient = (id: string) => clients.find((c) => c.id === id);
+  const clientById = useMemo(() => new Map(clients.map((client) => [client.id, client])), [clients]);
+  const billingById = useMemo(() => new Map(billings.map((billing) => [billing.id, billing])), [billings]);
+  const getClient = (id: string) => clientById.get(id);
 
   const loadMoreInstallments = async () => {
     const auth = getFirebaseAuth();
@@ -180,7 +182,7 @@ export default function Billings() {
   const handlePay = async (id: string, partial: boolean = false) => {
     if (!partial) {
       // Full payment
-      const billing = billings.find(b => b.id === id);
+      const billing = billingById.get(id);
       if (!billing) return;
       
       const auth = getFirebaseAuth();
@@ -211,7 +213,7 @@ export default function Billings() {
   const handlePartialPaymentSubmit = async (amount: number) => {
     if (!partialPaymentId) return;
 
-    const billing = billings.find(b => b.id === partialPaymentId);
+    const billing = billingById.get(partialPaymentId);
     if (!billing) return;
 
     const auth = getFirebaseAuth();
@@ -320,6 +322,8 @@ if (type === "reminder") {
     window.open(`https://wa.me/${client?.phone ?? ""}?text=${encodeURIComponent(msg)}`, "_blank");
     notifyInfo("Cobrança aberta no WhatsApp.");
   };
+
+  const partialPaymentBilling = partialPaymentId ? billingById.get(partialPaymentId) : undefined;
 
   const resyncCharge = async (charge: Charge) => {
     const auth = getFirebaseAuth();
@@ -735,11 +739,8 @@ if (type === "reminder") {
       {partialPaymentId && (
         <PartialPaymentModal
           billingId={partialPaymentId}
-          remainingAmount={
-            (billings.find(b => b.id === partialPaymentId)?.amount || 0) -
-            (billings.find(b => b.id === partialPaymentId)?.paidAmount || 0)
-          }
-          clientName={getClient(billings.find(b => b.id === partialPaymentId)?.clientId || "")?.name || "Cliente"}
+          remainingAmount={(partialPaymentBilling?.amount || 0) - (partialPaymentBilling?.paidAmount || 0)}
+          clientName={getClient(partialPaymentBilling?.clientId || "")?.name || "Cliente"}
           onSubmit={handlePartialPaymentSubmit}
           onClose={() => setPartialPaymentId(null)}
         />
