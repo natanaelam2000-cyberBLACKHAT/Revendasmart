@@ -1,5 +1,7 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import fs from "node:fs";
+import { APP_THEMES, DEFAULT_APP_THEME_ID, resolveAppThemeId } from "../client/src/lib/app-themes";
+import { NICHO_CONFIG, getNichoConfig, getProductCategoriesForNicho } from "../client/src/lib/nicho-config";
 
 const read = (path: string) => fs.readFileSync(path, "utf8");
 const routes = read("server/routes.ts");
@@ -178,6 +180,35 @@ assert.match(addProduct, /normalizeBrandInput/);
 assert.match(addProduct, /saveLocalBrandSuggestion/);
 assert.match(nichoConfig, /originOptions/);
 assert.match(addProduct, /formData\.category && !baseCategorySuggestions\.includes/);
+
+const forbiddenCategoriesByNicho: Record<string, string[]> = {
+  "Cosméticos & Perfumes": ["Eletrônicos", "Papelaria", "Casa", "Decoração", "Marmitas", "Salgados"],
+  Roupas: ["Eletrônicos", "Marmitas", "Bolos", "Perfumes"],
+  "Acessórios": ["Eletrônicos", "Marmitas", "Bolos", "Hidratantes"],
+  "Alimentos/Doces": ["Eletrônicos", "Papelaria", "Casa", "Decoração", "Perfumes"],
+};
+
+for (const [nicho, forbiddenCategories] of Object.entries(forbiddenCategoriesByNicho)) {
+  const categories = getProductCategoriesForNicho({}, nicho as keyof typeof NICHO_CONFIG);
+  for (const forbiddenCategory of forbiddenCategories) {
+    assert.ok(!categories.includes(forbiddenCategory), `${nicho} não deve conter ${forbiddenCategory}`);
+  }
+  assert.ok(categories.includes("Outros"), `${nicho} deve manter fallback Outros`);
+}
+
+const generalCategories = getProductCategoriesForNicho({}, "Geral");
+assert.ok(generalCategories.includes("Eletrônicos"));
+assert.ok(generalCategories.includes("Papelaria"));
+const customFashionCategories = getProductCategoriesForNicho(
+  { customCategoriesByNicho: { Roupas: ["Jeans Premium", "Vestidos", "Jeans Premium"] } },
+  "Roupas",
+);
+assert.equal(customFashionCategories[0], "Jeans Premium");
+assert.equal(customFashionCategories.filter((category) => category === "Jeans Premium").length, 1);
+assert.ok(!customFashionCategories.includes("Eletrônicos"));
+assert.equal(getNichoConfig("nicho-invalido").id, "Geral");
+assert.equal(resolveAppThemeId("tema-invalido"), DEFAULT_APP_THEME_ID);
+assert.equal(APP_THEMES.length, 6);
 assert.match(chargesHook, /const CHARGES_PAGE_SIZE = 30/);
 assert.match(chargesHook, /orderBy\("createdAt", "desc"\), limit\(CHARGES_PAGE_SIZE\)/);
 assert.match(chargesHook, /startAfter\(lastChargeDocRef\.current\)/);
@@ -374,9 +405,12 @@ for (let requestNumber = 1; requestNumber <= 61; requestNumber += 1) {
 assert.equal(nextCalls, 60);
 assert.equal(lastStatus, 429);
 
-const response = await fetch("https://revendasmart-backend-cc2743rkmq-uc.a.run.app/api/public/catalog/adriana-perfumes");
-assert.equal(response.status, 200);
-const catalog = await response.json() as any;
-assert.ok(catalog.settings?.storeName);
-assert.ok(Array.isArray(catalog.products));
+if (process.env.RUN_LIVE_PUBLIC_CATALOG_SMOKE === "1") {
+  const response = await fetch("https://revendasmart-backend-cc2743rkmq-uc.a.run.app/api/public/catalog/adriana-perfumes");
+  assert.equal(response.status, 200);
+  const catalog = await response.json() as any;
+  assert.ok(catalog.settings?.storeName);
+  assert.ok(Array.isArray(catalog.products));
+}
+
 console.log("Smoke tests passed: catalog, images, navigation, modules, subscription and ranking.");
