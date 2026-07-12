@@ -93,3 +93,13 @@ Pare imediatamente se a ação exigir produção, dados reais de terceiros, alte
 - Correções aplicadas, se houver.
 - Riscos restantes.
 - Próximos passos seguros.
+
+## Cross-reference de performance Revenda Smart
+
+Esta skill mantém seu foco principal em segurança, governança ou abuso. Para investigar fluidez, custo, latência ou regressão de experiência sem duplicar escopo, use em conjunto com:
+
+- `revendasmart-performance-observability`
+- `monitoring-real-user-performance`
+- `revendasmart-performance-budget-gate`
+
+Não executar carga, interceptação ou testes ativos contra produção. Use apenas `REVIEW_ONLY` por padrão e ambientes local, emulator ou staging explicitamente autorizado.

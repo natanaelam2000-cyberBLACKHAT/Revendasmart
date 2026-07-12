@@ -13,7 +13,9 @@
     "lint": "eslint client/src/components/ProductImageCard.tsx client/src/components/layout.tsx client/src/hooks/useClientsData.ts client/src/pages/client-detail.tsx client/src/pages/clients.tsx client/src/pages/dashboard.tsx client/src/pages/public-catalog.tsx client/src/pages/settings.tsx client/src/pages/subscribe.tsx server/routes.ts",
     "test": "tsx script/smoke-tests.ts",
     "skills:validate": "node scripts/security/validate-agent-skills.mjs",
-    "security:preflight": "npm run skills:validate && npm run check && npm run lint && npm run test"
+    "security:preflight": "npm run skills:validate && npm run check && npm run lint && npm run test",
+    "performance:bundle-check": "node scripts/performance/check-bundle-budgets.mjs",
+    "performance:preflight": "npm run skills:validate && npm run check && npm run build && npm run performance:bundle-check && npm run lint && npm run test"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

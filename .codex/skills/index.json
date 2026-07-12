@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.0.0",
-  "generatedAt": "2026-07-12T16:28:15Z",
+  "generatedAt": "2026-07-12T17:44:49Z",
   "project": "Revenda Smart",
   "externalRepository": "https://github.com/mukul975/Anthropic-Cybersecurity-Skills",
   "externalCommit": "673da1f3b0b7be34ffc9624ef3858fe45f1c3bed",
@@ -13,626 +13,1691 @@
     {
       "name": "analyzing-api-gateway-access-logs",
       "tier": "Tier S",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/analyzing-api-gateway-access-logs/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "cloud",
+        "revendasmart",
+        "security",
+        "tier-s"
+      ]
     },
     {
       "name": "analyzing-cloud-storage-access-patterns",
       "tier": "Tier S",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/analyzing-cloud-storage-access-patterns/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "firebase",
+        "revendasmart",
+        "security",
+        "tier-s"
+      ]
     },
     {
       "name": "analyzing-sbom-for-supply-chain-vulnerabilities",
       "tier": "Tier S",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/analyzing-sbom-for-supply-chain-vulnerabilities/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "security",
+        "tier-s"
+      ]
     },
     {
       "name": "analyzing-web-server-logs-for-intrusion",
       "tier": "Tier A",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/analyzing-web-server-logs-for-intrusion/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "cloud",
+        "revendasmart",
+        "security",
+        "tier-a"
+      ]
+    },
+    {
+      "name": "auditing-firebase-read-cost-and-listeners",
+      "path": ".codex/skills/auditing-firebase-read-cost-and-listeners/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Tier S",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "firebase",
+        "firestore",
+        "observability"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "auditing-firebase-security-rules",
       "tier": "Custom P0",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom security skill",
       "path": ".codex/skills/auditing-firebase-security-rules/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "custom-p0",
+        "firebase",
+        "revendasmart",
+        "security"
+      ]
+    },
+    {
+      "name": "auditing-firestore-query-performance",
+      "path": ".codex/skills/auditing-firestore-query-performance/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Tier S",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "firestore",
+        "firebase",
+        "network"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "auditing-gcp-iam-permissions",
       "tier": "Tier S",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/auditing-gcp-iam-permissions/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "firebase",
+        "revendasmart",
+        "security",
+        "tier-s"
+      ]
+    },
+    {
+      "name": "auditing-loading-skeleton-and-perceived-performance",
+      "path": ".codex/skills/auditing-loading-skeleton-and-perceived-performance/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Tier A",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "ux",
+        "web-vitals"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
+    },
+    {
+      "name": "auditing-react-render-performance",
+      "path": ".codex/skills/auditing-react-render-performance/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Tier S",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "react",
+        "memory",
+        "dashboard",
+        "crm"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
+    },
+    {
+      "name": "auditing-search-filter-and-debounce",
+      "path": ".codex/skills/auditing-search-filter-and-debounce/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Tier A",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "react",
+        "products",
+        "clients",
+        "catalog"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "building-incident-response-playbook",
       "tier": "Tier S",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/building-incident-response-playbook/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "security",
+        "tier-s",
+        "webhook"
+      ]
     },
     {
       "name": "conducting-api-security-testing",
       "tier": "Second sweep",
-      "source": "external-second-sweep",
+      "source": "Anthropic-Cybersecurity-Skills second sweep adapted for Revenda Smart",
       "path": ".codex/skills/conducting-api-security-testing/SKILL.md",
       "riskLevel": "medium",
       "defaultMode": "REVIEW_ONLY",
-      "score": 4
+      "score": 4,
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "second-sweep",
+        "security"
+      ]
     },
     {
       "name": "conducting-cloud-incident-response",
       "tier": "Tier A",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/conducting-cloud-incident-response/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "firebase",
+        "revendasmart",
+        "security",
+        "tier-a"
+      ]
     },
     {
       "name": "conducting-mobile-app-penetration-test",
       "tier": "Tier A",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/conducting-mobile-app-penetration-test/SKILL.md",
       "riskLevel": "high",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "mobile",
+        "revendasmart",
+        "security",
+        "tier-a"
+      ]
     },
     {
       "name": "configuring-oauth2-authorization-flow",
       "tier": "Tier A",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/configuring-oauth2-authorization-flow/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "firebase",
+        "revendasmart",
+        "security",
+        "tier-a"
+      ]
     },
     {
       "name": "detecting-broken-object-property-level-authorization",
       "tier": "Second sweep",
-      "source": "external-second-sweep",
+      "source": "Anthropic-Cybersecurity-Skills second sweep adapted for Revenda Smart",
       "path": ".codex/skills/detecting-broken-object-property-level-authorization/SKILL.md",
       "riskLevel": "medium",
       "defaultMode": "REVIEW_ONLY",
-      "score": 3
+      "score": 3,
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "second-sweep",
+        "security"
+      ]
+    },
+    {
+      "name": "detecting-duplicate-api-and-firestore-requests",
+      "path": ".codex/skills/detecting-duplicate-api-and-firestore-requests/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Tier A",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "firestore",
+        "network",
+        "react"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
+    },
+    {
+      "name": "detecting-memory-leaks-and-long-tasks",
+      "path": ".codex/skills/detecting-memory-leaks-and-long-tasks/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Tier S",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "memory",
+        "react",
+        "mobile"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "detecting-oauth-token-theft",
       "tier": "Tier A",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/detecting-oauth-token-theft/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "oauth",
+        "revendasmart",
+        "security",
+        "tier-a"
+      ]
     },
     {
       "name": "detecting-serverless-function-injection",
       "tier": "Tier A",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/detecting-serverless-function-injection/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "cloud",
+        "revendasmart",
+        "security",
+        "tier-a"
+      ]
     },
     {
       "name": "detecting-shadow-api-endpoints",
       "tier": "Second sweep",
-      "source": "external-second-sweep",
+      "source": "Anthropic-Cybersecurity-Skills second sweep adapted for Revenda Smart",
       "path": ".codex/skills/detecting-shadow-api-endpoints/SKILL.md",
       "riskLevel": "medium",
       "defaultMode": "REVIEW_ONLY",
-      "score": 2
+      "score": 2,
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "second-sweep",
+        "security"
+      ]
     },
     {
       "name": "detecting-typosquatting-packages-in-npm-pypi",
       "tier": "Tier S",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/detecting-typosquatting-packages-in-npm-pypi/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "security",
+        "tier-s"
+      ]
     },
     {
       "name": "exploiting-deeplink-vulnerabilities",
       "tier": "Tier A",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/exploiting-deeplink-vulnerabilities/SKILL.md",
       "riskLevel": "high",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "security",
+        "tier-a"
+      ]
     },
     {
       "name": "hardening-firebase-auth-and-app-check",
       "tier": "Custom P0",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom security skill",
       "path": ".codex/skills/hardening-firebase-auth-and-app-check/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "custom-p0",
+        "firebase",
+        "revendasmart",
+        "security"
+      ]
     },
     {
       "name": "implementing-api-gateway-security-controls",
       "tier": "Second sweep",
-      "source": "external-second-sweep",
+      "source": "Anthropic-Cybersecurity-Skills second sweep adapted for Revenda Smart",
       "path": ".codex/skills/implementing-api-gateway-security-controls/SKILL.md",
       "riskLevel": "medium",
       "defaultMode": "REVIEW_ONLY",
-      "score": 5
+      "score": 5,
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "second-sweep",
+        "security"
+      ]
     },
     {
       "name": "implementing-api-rate-limiting-and-throttling",
       "tier": "Second sweep",
-      "source": "external-second-sweep",
+      "source": "Anthropic-Cybersecurity-Skills second sweep adapted for Revenda Smart",
       "path": ".codex/skills/implementing-api-rate-limiting-and-throttling/SKILL.md",
-      "riskLevel": "medium",
+      "riskLevel": "high",
       "defaultMode": "REVIEW_ONLY",
-      "score": 1
+      "score": 1,
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "second-sweep",
+        "security"
+      ]
     },
     {
       "name": "implementing-api-security-testing-with-42crunch",
       "tier": "Tier A",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/implementing-api-security-testing-with-42crunch/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "security",
+        "tier-a"
+      ]
     },
     {
       "name": "implementing-attack-surface-management",
       "tier": "Tier A",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/implementing-attack-surface-management/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "firebase",
+        "revendasmart",
+        "security",
+        "tier-a"
+      ]
     },
     {
       "name": "implementing-cloud-waf-rules",
       "tier": "Second sweep",
-      "source": "external-second-sweep",
+      "source": "Anthropic-Cybersecurity-Skills second sweep adapted for Revenda Smart",
       "path": ".codex/skills/implementing-cloud-waf-rules/SKILL.md",
       "riskLevel": "medium",
       "defaultMode": "REVIEW_ONLY",
-      "score": 7
+      "score": 7,
+      "category": "security",
+      "tags": [
+        "cloud",
+        "revendasmart",
+        "second-sweep",
+        "security"
+      ]
     },
     {
       "name": "implementing-devsecops-security-scanning",
       "tier": "Tier S",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/implementing-devsecops-security-scanning/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "security",
+        "tier-s"
+      ]
     },
     {
       "name": "implementing-gdpr-data-subject-access-request",
       "tier": "Tier S",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/implementing-gdpr-data-subject-access-request/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "security",
+        "tier-s"
+      ]
     },
     {
       "name": "implementing-github-advanced-security-for-code-scanning",
       "tier": "Tier A",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/implementing-github-advanced-security-for-code-scanning/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "security",
+        "tier-a"
+      ]
+    },
+    {
+      "name": "implementing-performance-budgets-in-ci",
+      "path": ".codex/skills/implementing-performance-budgets-in-ci/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Tier S",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "ci",
+        "bundle",
+        "observability"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "implementing-secret-scanning-with-gitleaks",
       "tier": "Tier S",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/implementing-secret-scanning-with-gitleaks/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "firebase",
+        "revendasmart",
+        "security",
+        "tier-s"
+      ]
     },
     {
       "name": "implementing-sigstore-for-software-signing",
       "tier": "Tier A",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/implementing-sigstore-for-software-signing/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "security",
+        "tier-a"
+      ]
     },
     {
       "name": "intercepting-mobile-traffic-with-burpsuite",
       "tier": "Tier A",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/intercepting-mobile-traffic-with-burpsuite/SKILL.md",
       "riskLevel": "high",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "mobile",
+        "revendasmart",
+        "security",
+        "tier-a"
+      ]
+    },
+    {
+      "name": "load-testing-node-api-with-k6",
+      "path": ".codex/skills/load-testing-node-api-with-k6/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Tier S",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "node",
+        "cloud-run",
+        "network"
+      ],
+      "riskLevel": "high",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
+    },
+    {
+      "name": "monitoring-real-user-performance",
+      "path": ".codex/skills/monitoring-real-user-performance/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Tier A",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "observability",
+        "web-vitals",
+        "pwa"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
+    },
+    {
+      "name": "optimizing-images-assets-and-cache",
+      "path": ".codex/skills/optimizing-images-assets-and-cache/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Tier S",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "images",
+        "pwa",
+        "catalog"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
+    },
+    {
+      "name": "optimizing-offline-cache-and-sync",
+      "path": ".codex/skills/optimizing-offline-cache-and-sync/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Tier A",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "pwa",
+        "network",
+        "firebase"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
+    },
+    {
+      "name": "optimizing-pdf-and-report-generation",
+      "path": ".codex/skills/optimizing-pdf-and-report-generation/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Tier A",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "reports",
+        "react",
+        "memory"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
+    },
+    {
+      "name": "optimizing-react-list-rendering",
+      "path": ".codex/skills/optimizing-react-list-rendering/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Tier A",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "react",
+        "products",
+        "clients"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
+    },
+    {
+      "name": "optimizing-vite-bundle-and-code-splitting",
+      "path": ".codex/skills/optimizing-vite-bundle-and-code-splitting/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Tier S",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "vite",
+        "bundle",
+        "pwa",
+        "ci"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "performing-api-rate-limiting-bypass",
       "tier": "Tier A",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/performing-api-rate-limiting-bypass/SKILL.md",
       "riskLevel": "high",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "security",
+        "tier-a"
+      ]
     },
     {
       "name": "performing-privacy-impact-assessment",
       "tier": "Tier S",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/performing-privacy-impact-assessment/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "security",
+        "tier-s"
+      ]
     },
     {
       "name": "performing-sca-dependency-scanning-with-snyk",
       "tier": "Tier S",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/performing-sca-dependency-scanning-with-snyk/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "security",
+        "tier-s"
+      ]
     },
     {
       "name": "performing-web-application-penetration-test",
       "tier": "Tier A",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/performing-web-application-penetration-test/SKILL.md",
       "riskLevel": "high",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "security",
+        "tier-a"
+      ]
     },
     {
       "name": "play-store-mobile-release-security",
       "tier": "Custom P0",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom security skill",
       "path": ".codex/skills/play-store-mobile-release-security/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "custom-p0",
+        "mobile",
+        "revendasmart",
+        "security"
+      ]
+    },
+    {
+      "name": "profiling-capacitor-android-performance",
+      "path": ".codex/skills/profiling-capacitor-android-performance/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Tier S",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "mobile",
+        "android",
+        "pwa"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
+    },
+    {
+      "name": "profiling-navigation-and-screen-startup",
+      "path": ".codex/skills/profiling-navigation-and-screen-startup/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Tier A",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "pwa",
+        "mobile",
+        "web-vitals"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "revendasmart-account-deletion-review",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-account-deletion-review/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
     },
     {
       "name": "revendasmart-admin-security",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-admin-security/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
     },
     {
       "name": "revendasmart-auth-authorization-review",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-auth-authorization-review/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
     },
     {
       "name": "revendasmart-backend-safe-logging",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-backend-safe-logging/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "logging",
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
     },
     {
       "name": "revendasmart-backup-restore",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-backup-restore/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revenda-smart",
+        "revendasmart",
+        "security",
+        "storage"
+      ]
+    },
+    {
+      "name": "revendasmart-clients-list-performance",
+      "path": ".codex/skills/revendasmart-clients-list-performance/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Revenda Smart Performance",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "clients",
+        "react",
+        "network"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "revendasmart-cloud-armor-review",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-cloud-armor-review/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "cloud",
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
     },
     {
       "name": "revendasmart-cloud-run-hardening",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-cloud-run-hardening/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "cloud",
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
+    },
+    {
+      "name": "revendasmart-cloud-run-latency-review",
+      "path": ".codex/skills/revendasmart-cloud-run-latency-review/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Revenda Smart Performance",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "cloud-run",
+        "node",
+        "network"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
+    },
+    {
+      "name": "revendasmart-crm-performance",
+      "path": ".codex/skills/revendasmart-crm-performance/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Revenda Smart Performance",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "crm",
+        "react",
+        "memory"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
+    },
+    {
+      "name": "revendasmart-dashboard-performance",
+      "path": ".codex/skills/revendasmart-dashboard-performance/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Revenda Smart Performance",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "dashboard",
+        "react",
+        "firestore"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "revendasmart-dependency-security",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-dependency-security/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
     },
     {
       "name": "revendasmart-firebase-security",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-firebase-security/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "firebase",
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
     },
     {
       "name": "revendasmart-firestore-cost-regression",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-firestore-cost-regression/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "firestore",
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
     },
     {
       "name": "revendasmart-firestore-cost-review",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-firestore-cost-review/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "firestore",
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
+    },
+    {
+      "name": "revendasmart-firestore-listener-audit",
+      "path": ".codex/skills/revendasmart-firestore-listener-audit/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Revenda Smart Performance",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "firestore",
+        "firebase",
+        "observability"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "revendasmart-firestore-rules-review",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-firestore-rules-review/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "firestore",
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
     },
     {
       "name": "revendasmart-frontend-safe-logging",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-frontend-safe-logging/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "logging",
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
     },
     {
       "name": "revendasmart-iam-review",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-iam-review/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "iam",
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
+    },
+    {
+      "name": "revendasmart-image-pipeline-performance",
+      "path": ".codex/skills/revendasmart-image-pipeline-performance/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Revenda Smart Performance",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "images",
+        "firebase",
+        "storage"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "revendasmart-incident-response",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-incident-response/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
     },
     {
       "name": "revendasmart-lgpd-review",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-lgpd-review/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
+    },
+    {
+      "name": "revendasmart-mercadopago-latency-review",
+      "path": ".codex/skills/revendasmart-mercadopago-latency-review/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Revenda Smart Performance",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "network",
+        "node",
+        "observability"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "revendasmart-mercadopago-security",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-mercadopago-security/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "mercado",
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
+    },
+    {
+      "name": "revendasmart-mobile-jank-review",
+      "path": ".codex/skills/revendasmart-mobile-jank-review/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Revenda Smart Performance",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "mobile",
+        "android",
+        "ux"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "revendasmart-mobile-security",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-mobile-security/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "pwa",
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
+    },
+    {
+      "name": "revendasmart-navigation-startup",
+      "path": ".codex/skills/revendasmart-navigation-startup/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Revenda Smart Performance",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "pwa",
+        "mobile",
+        "bundle"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "revendasmart-oauth-webhook-review",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-oauth-webhook-review/SKILL.md",
+      "riskLevel": "high",
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "oauth",
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
+    },
+    {
+      "name": "revendasmart-offline-resilience-review",
+      "path": ".codex/skills/revendasmart-offline-resilience-review/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Revenda Smart Performance",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "pwa",
+        "network",
+        "ux"
+      ],
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "revendasmart-payment-integrity",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-payment-integrity/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "payment",
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
+    },
+    {
+      "name": "revendasmart-performance-budget-gate",
+      "path": ".codex/skills/revendasmart-performance-budget-gate/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Revenda Smart Performance",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "ci",
+        "bundle",
+        "observability"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
+    },
+    {
+      "name": "revendasmart-performance-observability",
+      "path": ".codex/skills/revendasmart-performance-observability/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Revenda Smart Performance",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "observability",
+        "cloud-run",
+        "web-vitals"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "revendasmart-performance-regression",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-performance-regression/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
     },
     {
       "name": "revendasmart-playstore-security",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-playstore-security/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
     },
     {
       "name": "revendasmart-production-readiness",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-production-readiness/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "production-readiness",
+      "tags": [
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
+    },
+    {
+      "name": "revendasmart-products-list-performance",
+      "path": ".codex/skills/revendasmart-products-list-performance/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Revenda Smart Performance",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "products",
+        "react",
+        "images"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "revendasmart-public-catalog-abuse-review",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-public-catalog-abuse-review/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "firestore",
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
+    },
+    {
+      "name": "revendasmart-public-catalog-performance",
+      "path": ".codex/skills/revendasmart-public-catalog-performance/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Revenda Smart Performance",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "catalog",
+        "images",
+        "firestore"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "revendasmart-pwa-security",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-pwa-security/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "pwa",
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
     },
     {
       "name": "revendasmart-release-security-gate",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-release-security-gate/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "production-readiness",
+      "tags": [
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
+    },
+    {
+      "name": "revendasmart-reports-performance",
+      "path": ".codex/skills/revendasmart-reports-performance/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Revenda Smart Performance",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "reports",
+        "react",
+        "bundle"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "revendasmart-secret-manager-review",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-secret-manager-review/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
     },
     {
       "name": "revendasmart-security-review",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-security-review/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
+    },
+    {
+      "name": "revendasmart-slow-network-review",
+      "path": ".codex/skills/revendasmart-slow-network-review/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Revenda Smart Performance",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "network",
+        "mobile",
+        "pwa"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "revendasmart-storage-rules-review",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-storage-rules-review/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revenda-smart",
+        "revendasmart",
+        "security",
+        "storage"
+      ]
     },
     {
       "name": "revendasmart-supply-chain-review",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-supply-chain-review/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
     },
     {
       "name": "revendasmart-threat-model",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-threat-model/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "architecture",
+      "tags": [
+        "revenda-smart",
+        "revendasmart",
+        "security",
+        "ux"
+      ]
     },
     {
       "name": "revendasmart-ux-regression",
       "tier": "Revenda Smart",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom operational skill",
       "path": ".codex/skills/revendasmart-ux-regression/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "ux",
+      "tags": [
+        "pwa",
+        "revenda-smart",
+        "revendasmart",
+        "security"
+      ]
     },
     {
       "name": "securing-mercado-pago-subscriptions-and-webhooks",
       "tier": "Custom P0",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom security skill",
       "path": ".codex/skills/securing-mercado-pago-subscriptions-and-webhooks/SKILL.md",
-      "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "riskLevel": "high",
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "custom-p0",
+        "mercado",
+        "revendasmart",
+        "security"
+      ]
     },
     {
       "name": "securing-serverless-functions",
       "tier": "Second sweep",
-      "source": "external-second-sweep",
+      "source": "Anthropic-Cybersecurity-Skills second sweep adapted for Revenda Smart",
       "path": ".codex/skills/securing-serverless-functions/SKILL.md",
       "riskLevel": "medium",
       "defaultMode": "REVIEW_ONLY",
-      "score": 8
+      "score": 8,
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "second-sweep",
+        "security"
+      ]
     },
     {
       "name": "testing-android-intents-for-vulnerabilities",
       "tier": "Tier A",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/testing-android-intents-for-vulnerabilities/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "security",
+        "tier-a"
+      ]
     },
     {
       "name": "testing-api-authentication-weaknesses",
       "tier": "Tier S",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/testing-api-authentication-weaknesses/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "security",
+        "tier-s"
+      ]
     },
     {
       "name": "testing-api-for-broken-object-level-authorization",
       "tier": "Tier S",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/testing-api-for-broken-object-level-authorization/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "security",
+        "tier-s"
+      ]
     },
     {
       "name": "testing-api-for-mass-assignment-vulnerability",
       "tier": "Tier S",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/testing-api-for-mass-assignment-vulnerability/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "revendasmart",
+        "security",
+        "tier-s"
+      ]
+    },
+    {
+      "name": "testing-core-web-vitals-and-lighthouse",
+      "path": ".codex/skills/testing-core-web-vitals-and-lighthouse/SKILL.md",
+      "category": "performance-engineering",
+      "tier": "Tier S",
+      "tags": [
+        "revendasmart",
+        "performance",
+        "web-vitals",
+        "pwa",
+        "ux"
+      ],
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "source": "Revenda Smart Performance Engineering Skills"
     },
     {
       "name": "testing-for-open-redirect-vulnerabilities",
       "tier": "Tier A",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/testing-for-open-redirect-vulnerabilities/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "mercado",
+        "revendasmart",
+        "security",
+        "tier-a"
+      ]
     },
     {
       "name": "testing-jwt-token-security",
       "tier": "Tier S",
-      "source": "external-adapted",
+      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
       "path": ".codex/skills/testing-jwt-token-security/SKILL.md",
       "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "firebase",
+        "revendasmart",
+        "security",
+        "tier-s"
+      ]
     },
     {
       "name": "testing-mobile-api-authentication",
       "tier": "Second sweep",
-      "source": "external-second-sweep",
+      "source": "Anthropic-Cybersecurity-Skills second sweep adapted for Revenda Smart",
       "path": ".codex/skills/testing-mobile-api-authentication/SKILL.md",
       "riskLevel": "medium",
       "defaultMode": "REVIEW_ONLY",
-      "score": 6
+      "score": 6,
+      "category": "security",
+      "tags": [
+        "mobile",
+        "revendasmart",
+        "second-sweep",
+        "security"
+      ]
     },
     {
       "name": "testing-multitenant-data-isolation",
       "tier": "Custom P0",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom security skill",
       "path": ".codex/skills/testing-multitenant-data-isolation/SKILL.md",
       "riskLevel": "high",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "custom-p0",
+        "revendasmart",
+        "security",
+        "storage"
+      ]
     },
     {
       "name": "testing-payment-webhook-race-conditions",
       "tier": "Custom P0",
-      "source": "revendasmart-custom",
+      "source": "Revenda Smart custom security skill",
       "path": ".codex/skills/testing-payment-webhook-race-conditions/SKILL.md",
       "riskLevel": "high",
-      "defaultMode": "REVIEW_ONLY"
+      "defaultMode": "REVIEW_ONLY",
+      "category": "security",
+      "tags": [
+        "custom-p0",
+        "payment",
+        "revendasmart",
+        "security"
+      ]
     }
+  ],
+  "filterFields": [
+    "category",
+    "tier",
+    "tags",
+    "riskLevel",
+    "defaultMode",
+    "source"
+  ],
+  "categories": [
+    "security",
+    "performance-engineering",
+    "ux",
+    "architecture",
+    "production-readiness"
   ]
 }

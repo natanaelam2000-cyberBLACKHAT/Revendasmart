@@ -87,3 +87,9 @@ Catálogo de Agent Skills curado para o Revenda Smart.
 |testing-mobile-api-authentication|Second sweep|external-second-sweep|REVIEW_ONLY|medium|
 |testing-multitenant-data-isolation|Custom P0|revendasmart-custom|REVIEW_ONLY|high|
 |testing-payment-webhook-race-conditions|Custom P0|revendasmart-custom|REVIEW_ONLY|high|
+
+## Catálogo de performance
+
+As skills de performance usam o mesmo diretório `.codex/skills/`, mas são separadas por `category: performance-engineering` e tags `performance`.
+
+Catálogo dedicado: `docs/performance/PERFORMANCE_SKILLS_CATALOG.md`.
