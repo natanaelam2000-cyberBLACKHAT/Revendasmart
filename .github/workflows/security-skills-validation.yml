@@ -1,0 +1,35 @@
+name: Security Skills Validation
+
+on:
+  pull_request:
+    paths:
+      - '.codex/skills/**'
+      - 'docs/security/SKILLS_*.md'
+      - 'docs/security/THIRD_PARTY_SKILLS_*.md'
+      - 'scripts/security/**'
+      - 'package.json'
+      - 'package-lock.json'
+  push:
+    branches:
+      - main
+    paths:
+      - '.codex/skills/**'
+      - 'docs/security/SKILLS_*.md'
+      - 'docs/security/THIRD_PARTY_SKILLS_*.md'
+      - 'scripts/security/**'
+      - 'package.json'
+      - 'package-lock.json'
+
+jobs:
+  validate-skills:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run skills:validate

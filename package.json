@@ -11,7 +11,9 @@
     "check": "tsc",
     "db:push": "drizzle-kit push",
     "lint": "eslint client/src/components/ProductImageCard.tsx client/src/components/layout.tsx client/src/hooks/useClientsData.ts client/src/pages/client-detail.tsx client/src/pages/clients.tsx client/src/pages/dashboard.tsx client/src/pages/public-catalog.tsx client/src/pages/settings.tsx client/src/pages/subscribe.tsx server/routes.ts",
-    "test": "tsx script/smoke-tests.ts"
+    "test": "tsx script/smoke-tests.ts",
+    "skills:validate": "node scripts/security/validate-agent-skills.mjs",
+    "security:preflight": "npm run skills:validate && npm run check && npm run lint && npm run test"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
