@@ -1,7 +1,6 @@
 import { useState, useMemo } from "react";
 import { useParams, useLocation } from "wouter";
 import { Installment } from "@/lib/mock-data";
-import { useProductsData } from "@/hooks/useProductsData";
 import { useClientDetailData } from "@/hooks/useClientDetailData";
 import { Layout } from "@/components/layout";
 import { PageSkeleton } from "@/components/PageSkeleton";
@@ -76,8 +75,7 @@ function BehaviorSummary({ items }: { items: Array<{ title: string; description:
 export default function ClientDetail() {
   const { id } = useParams();
   const [, setLocation] = useLocation();
-  const { client, sales, loading: clientDataLoading } = useClientDetailData(id);
-  const { products, loading: productsLoading } = useProductsData();
+  const { client, sales, products, loading: clientDataLoading } = useClientDetailData(id);
   const [billings] = useState<Installment[]>([]);
 
   const productById = useMemo(() => new Map(products.map(product => [product.id, product])), [products]);
@@ -87,7 +85,7 @@ export default function ClientDetail() {
   const totalDebt = useMemo(() => clientBillings.filter(b => b.status !== "paid").reduce((a, b) => a + (b.amount - b.paidAmount), 0), [clientBillings]);
   const maxMonthlyEvolutionTotal = useMemo(() => Math.max(...crm.monthlyEvolution.map(month => month.total), 1), [crm.monthlyEvolution]);
 
-  if (clientDataLoading || productsLoading) return <Layout><PageSkeleton variant="list" count={3} /></Layout>;
+  if (clientDataLoading) return <Layout><PageSkeleton variant="list" count={3} /></Layout>;
   if (!client) return (
     <Layout>
       <div className="px-4 sm:px-6 lg:px-8 py-6 pb-32 max-w-4xl mx-auto">
