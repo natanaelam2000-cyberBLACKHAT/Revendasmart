@@ -7,7 +7,7 @@ import { ProductImageCard } from "@/components/ProductImageCard";
 import {
   TrendingUp, Package, AlertCircle, Zap, Share2,
   Sparkles, ArrowRight, TrendingDown, Users, Bell as BellIcon,
-  Plus, ShoppingCart, Receipt, Megaphone, BookOpen, Palette, CreditCard
+  Plus, ShoppingCart, Receipt, Megaphone, BookOpen, Palette, CreditCard, Store
 } from "lucide-react";
 import { isToday, parseISO } from "date-fns";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
@@ -350,6 +350,14 @@ export default function Dashboard() {
 
   const onboardingChecklistItems = useMemo<OnboardingChecklistItem[]>(() => [
     {
+      id: "store",
+      label: "Configurar nome da loja",
+      description: "Deixe o app com a sua identidade.",
+      done: Boolean(settings.onboarding_store_configured || (settings.storeName && settings.storeName !== "Minha Revenda") || settings.storeLogo),
+      path: "/onboarding",
+      icon: Store,
+    },
+    {
       id: "theme",
       label: "Escolher tema",
       description: "Personalize a cor principal do app.",
@@ -405,7 +413,15 @@ export default function Dashboard() {
       path: "/settings/mercadopago",
       icon: CreditCard,
     },
-  ], [clients.length, products.length, sales.length, settings]);
+    {
+      id: "finish",
+      label: "Concluir configuração",
+      description: "Finalize ou continue depois sem bloquear o uso.",
+      done: onboarding_completed === true,
+      path: "/onboarding",
+      icon: Sparkles,
+    },
+  ], [clients.length, onboarding_completed, products.length, sales.length, settings]);
 
   const updateOnboardingChecklistUi = (patch: Partial<OnboardingChecklistUi>) => {
     setOnboardingChecklistUi((currentValue) => {

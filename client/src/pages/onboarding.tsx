@@ -15,6 +15,8 @@ import {
   Cookie,
   CreditCard,
   GripVertical,
+  Image as ImageIcon,
+  LayoutDashboard,
   Lightbulb,
   Package,
   Palette,
@@ -43,7 +45,7 @@ import {
 } from "@/lib/app-themes";
 import { getFirebaseAuth, logError } from "@/lib/firebase";
 import { useFeatureEnabled } from "@/lib/remote-config-context";
-import { NICHO_CONFIG, NICHO_IDS, getProductCategoriesForNicho, type NichoId } from "@/lib/nicho-config";
+import { NICHO_CONFIG, NICHO_IDS, ONBOARDING_NICHO_IDS, getProductCategoriesForNicho, type NichoId } from "@/lib/nicho-config";
 import { patchUserSettingsOptimistic, invalidateUserSettings } from "@/hooks/useUserSettings";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
 
@@ -55,7 +57,7 @@ const NICHO_ICONS: Record<string, ComponentType<{ className?: string }>> = {
   Box,
 };
 
-type OnboardingStepId = "welcome" | "business" | "appearance" | "categories" | "product" | "tour" | "finish";
+type OnboardingStepId = "welcome" | "business" | "appearance" | "store" | "categories" | "product" | "dashboardTour" | "productsTour" | "clientsTour" | "salesTour" | "catalogTour" | "finish";
 
 type OnboardingStep = {
   id: OnboardingStepId;
@@ -66,19 +68,25 @@ type OnboardingStep = {
   color: string;
 };
 
-const TOUR_ITEMS = [
-  { label: "Produtos", text: "Cadastre itens com foto, preço, categoria e estoque.", icon: Package },
-  { label: "Clientes", text: "Organize contatos e veja histórico de compras.", icon: Users },
-  { label: "Vendas", text: "Registre venda, desconto, entrada e baixa de estoque.", icon: ShoppingCart },
-  { label: "Catálogo", text: "Compartilhe sua loja pública e receba pedidos.", icon: BookOpen },
-  { label: "Cobranças", text: "Controle vencimentos, parciais e Mercado Pago.", icon: CreditCard },
-  { label: "Relatórios", text: "Acompanhe lucro, ticket médio e produtos campeões.", icon: BarChart3 },
-];
+const MODULE_TOUR: Partial<Record<OnboardingStepId, { label: string; path: string; icon: ComponentType<{ className?: string }>; bullets: string[] }>> = {
+  dashboardTour: { label: "Dashboard", path: "/", icon: LayoutDashboard, bullets: ["Resumo do mês, lucro e metas.", "Alertas de estoque, cobranças e ações do dia.", "Checklist acompanha sua configuração automaticamente."] },
+  productsTour: { label: "Produtos", path: "/products", icon: Package, bullets: ["Categorias respeitam o nicho escolhido.", "Foto, preço, estoque e destaque alimentam catálogo e relatórios.", "Produtos antigos continuam compatíveis."] },
+  clientsTour: { label: "Clientes", path: "/clients", icon: Users, bullets: ["Cadastre contatos e histórico de compras.", "CRM identifica cliente VIP, frequente ou inativo.", "Use WhatsApp sem perder organização."] },
+  salesTour: { label: "Vendas", path: "/sale", icon: ShoppingCart, bullets: ["Registre venda à vista ou a prazo.", "Descontos e baixa de estoque ficam centralizados.", "As vendas alimentam Dashboard, CRM e Relatórios."] },
+  catalogTour: { label: "Catálogo", path: "/catalog", icon: BookOpen, bullets: ["Compartilhe sua vitrine pública.", "Produtos, banner e carrinho usam dados já carregados.", "Pedidos chegam com experiência mais profissional."] },
+};
+
+function normalizeNichoId(type?: string): NichoId | null {
+  if (!type) return null;
+  if (type === "Alimentos/Doces") return "Doces";
+  return NICHO_IDS.includes(type as NichoId) ? type as NichoId : null;
+}
 
 function getSafeBusinessTypes(types: string[], fallback?: string): NichoId[] {
-  const validTypes = types.filter((type): type is NichoId => NICHO_IDS.includes(type as NichoId));
-  if (validTypes.length > 0) return validTypes;
-  if (fallback && NICHO_IDS.includes(fallback as NichoId)) return [fallback as NichoId];
+  const validTypes = types.map((type) => normalizeNichoId(type)).filter((type): type is NichoId => Boolean(type));
+  if (validTypes.length > 0) return Array.from(new Set(validTypes));
+  const normalizedFallback = normalizeNichoId(fallback);
+  if (normalizedFallback) return [normalizedFallback];
   return ["Geral"];
 }
 
@@ -116,6 +124,8 @@ export default function Onboarding() {
   const [selectedTheme, setSelectedTheme] = useState<AppThemeId>(resolveAppThemeId(settings.appTheme));
   const [themeCustomization, setThemeCustomization] = useState<Required<AppThemeCustomization>>(() => buildAppThemeCustomization(settings.appTheme, settings.appThemeCustomization as AppThemeCustomization | undefined));
   const [categoryDrafts, setCategoryDrafts] = useState<Record<string, string[]>>(() => createCategoryDrafts(settings));
+  const [storeNameDraft, setStoreNameDraft] = useState(settings.storeName || "");
+  const [storeLogoDraft, setStoreLogoDraft] = useState(settings.storeLogo || "");
   const [activeCategoryNicho, setActiveCategoryNicho] = useState<NichoId>("Geral");
   const [newCategory, setNewCategory] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -124,68 +134,23 @@ export default function Onboarding() {
 
   const steps = useMemo<OnboardingStep[]>(() => {
     const baseSteps: OnboardingStep[] = [
-      {
-        id: "welcome",
-        eyebrow: "Comece do jeito certo",
-        title: "Sua loja pronta para vender mais",
-        text: "Em poucos passos você define nicho, visual, categorias e aprende os fluxos principais sem travar o uso do app.",
-        icon: Sparkles,
-        color: "bg-primary/10 text-primary",
-      },
-      {
-        id: "business",
-        eyebrow: "Personalização real",
-        title: "Escolha o nicho da sua revenda",
-        text: "Essa escolha muda categorias, sugestões, campos e a sensação do app. Nada de lista genérica para todo mundo.",
-        icon: Store,
-        color: "bg-blue-100 text-blue-700",
-      },
-      {
-        id: "appearance",
-        eyebrow: "Sua marca no app",
-        title: "Defina a aparência do Revenda Smart",
-        text: "Escolha tema, cor principal, estilo dos cards, sombras, bordas e animações sem pesar a navegação.",
-        icon: Palette,
-        color: "bg-violet-100 text-violet-700",
-      },
-      {
-        id: "categories",
-        eyebrow: "Categorias inteligentes",
-        title: "Organize categorias por nicho",
-        text: "Mantenha o padrão, remova o que não usa, renomeie, reordene ou crie categorias próprias.",
-        icon: GripVertical,
-        color: "bg-emerald-100 text-emerald-700",
-      },
-      {
-        id: "product",
-        eyebrow: "Primeiro cadastro",
-        title: "Cadastre seu primeiro produto com segurança",
-        text: "O cadastro já abre com categorias e campos coerentes com o nicho escolhido.",
-        icon: Package,
-        color: "bg-orange-100 text-orange-700",
-      },
-      {
-        id: "tour",
-        eyebrow: "Tour rápido",
-        title: "Conheça os principais módulos",
-        text: "Produtos, clientes, vendas, catálogo, cobranças, marketing e relatórios em uma visão simples.",
-        icon: Lightbulb,
-        color: "bg-yellow-100 text-yellow-700",
-      },
-      {
-        id: "finish",
-        eyebrow: "Tudo pronto",
-        title: "Seu painel está configurado",
-        text: "Você pode continuar ajustando depois pelo checklist do Dashboard. Agora é hora de usar o app.",
-        icon: CheckCircle2,
-        color: "bg-green-100 text-green-700",
-      },
+      { id: "welcome", eyebrow: "Comece do jeito certo", title: "Sua loja pronta para vender mais", text: "Em poucos passos você define nicho, visual, loja, categorias e aprende os fluxos principais sem travar o uso do app.", icon: Sparkles, color: "bg-primary/10 text-primary" },
+      { id: "business", eyebrow: "Personalização real", title: "Escolha o nicho da sua revenda", text: "Essa escolha muda categorias, sugestões, campos e a sensação do app. Nada de lista genérica para todo mundo.", icon: Store, color: "bg-blue-100 text-blue-700" },
+      { id: "appearance", eyebrow: "Sua marca no app", title: "Defina a aparência do Revenda Smart", text: "Escolha tema, cor principal, estilo dos cards, sombras, bordas e animações sem pesar a navegação.", icon: Palette, color: "bg-violet-100 text-violet-700" },
+      { id: "store", eyebrow: "Identidade da loja", title: "Configure nome e logo da sua loja", text: "O app já mostra um preview em tempo real para você sentir que a experiência ficou com a sua cara.", icon: ImageIcon, color: "bg-cyan-100 text-cyan-700" },
+      { id: "categories", eyebrow: "Categorias inteligentes", title: "Organize categorias por nicho", text: "Mantenha o padrão, remova o que não usa, renomeie, reordene ou crie categorias próprias.", icon: GripVertical, color: "bg-emerald-100 text-emerald-700" },
+      { id: "product", eyebrow: "Primeiro cadastro", title: "Cadastre seu primeiro produto com segurança", text: "O cadastro já abre com categorias e campos coerentes com o nicho escolhido.", icon: Package, color: "bg-orange-100 text-orange-700" },
+      { id: "dashboardTour", eyebrow: "Conhecendo o app", title: "Dashboard: sua visão do negócio", text: "Entenda onde acompanhar vendas, lucro, metas, alertas e próximos passos.", icon: LayoutDashboard, color: "bg-indigo-100 text-indigo-700" },
+      { id: "productsTour", eyebrow: "Conhecendo o app", title: "Produtos: estoque organizado", text: "Veja como o cadastro conversa com catálogo, vendas e relatórios.", icon: Package, color: "bg-orange-100 text-orange-700" },
+      { id: "clientsTour", eyebrow: "Conhecendo o app", title: "Clientes: relacionamento e CRM", text: "Use dados de compra para entender frequência, preferências e clientes em risco.", icon: Users, color: "bg-pink-100 text-pink-700" },
+      { id: "salesTour", eyebrow: "Conhecendo o app", title: "Vendas: do pedido ao histórico", text: "Registre venda, desconto, pagamento e atualização de estoque com consistência.", icon: ShoppingCart, color: "bg-green-100 text-green-700" },
+      { id: "catalogTour", eyebrow: "Conhecendo o app", title: "Catálogo: sua vitrine pública", text: "Compartilhe produtos, receba pedidos e mantenha uma experiência premium para o cliente.", icon: BookOpen, color: "bg-sky-100 text-sky-700" },
+      { id: "finish", eyebrow: "Tudo pronto", title: "Seu painel está configurado", text: "Você pode continuar ajustando depois pelo checklist do Dashboard. Agora é hora de usar o app.", icon: CheckCircle2, color: "bg-green-100 text-green-700" },
     ];
 
     if (!enableOnboardingV2) return baseSteps;
     return baseSteps;
   }, [enableOnboardingV2]);
-
   const current = steps[step] || steps[0];
   const isLastStep = step >= steps.length - 1;
   const currentProgress = Math.round(((step + 1) / steps.length) * 100);
@@ -210,6 +175,8 @@ export default function Onboarding() {
     setSelectedTheme(resolveAppThemeId(settings.appTheme));
     setThemeCustomization(buildAppThemeCustomization(settings.appTheme, settings.appThemeCustomization as AppThemeCustomization | undefined));
     setCategoryDrafts(createCategoryDrafts(settings));
+    setStoreNameDraft(settings.storeName || "");
+    setStoreLogoDraft(settings.storeLogo || "");
     if (typeof settings.onboarding_current_step === "number" && settings.onboarding_completed !== true) {
       setStep(Math.min(Math.max(settings.onboarding_current_step, 0), steps.length - 1));
     }
@@ -219,6 +186,8 @@ export default function Onboarding() {
   useEffect(() => {
     applyAppTheme({ appTheme: selectedTheme, appThemeCustomization: themeCustomization });
   }, [selectedTheme, themeCustomization]);
+
+  const selectedStoreInitial = (storeNameDraft.trim() || settings.storeName || "R").charAt(0).toLocaleUpperCase("pt-BR");
 
   const toggleType = (id: NichoId) => {
     setSelectedTypes((prev) => {
@@ -322,7 +291,7 @@ export default function Onboarding() {
     }
   };
 
-  const saveProgress = async ({ completed, skipped = false }: { completed: boolean; skipped?: boolean }) => {
+  const saveProgress = async ({ completed, skipped = false, stepOverride = step }: { completed: boolean; skipped?: boolean; stepOverride?: number }) => {
     if (!uid) throw new Error("Not authenticated");
     const auth = getFirebaseAuth();
     if (!auth || !auth.currentUser) throw new Error("Not authenticated");
@@ -332,18 +301,23 @@ export default function Onboarding() {
 
     const types = getSafeBusinessTypes(selectedTypes, settings.businessType);
     const now = new Date().toISOString();
+    const cleanStoreName = storeNameDraft.trim() || settings.storeName || "Minha Revenda";
+    const cleanStoreLogo = storeLogoDraft.trim();
     const customCategoriesByNicho = Object.fromEntries(
       types.map((nichoId) => [nichoId, sanitizeCategories(categoryDrafts[nichoId] || NICHO_CONFIG[nichoId].categories)])
     );
     const nextCompleted = completed && !skipped;
     const payload = {
       onboarding_completed: nextCompleted,
-      onboarding_current_step: nextCompleted ? steps.length - 1 : step,
+      onboarding_current_step: nextCompleted ? steps.length - 1 : stepOverride,
       onboarding_theme_selected: true,
+      onboarding_store_configured: Boolean(cleanStoreName && cleanStoreName !== "Minha Revenda") || Boolean(cleanStoreLogo),
       onboarding_categories_configured: Object.keys(customCategoriesByNicho).length > 0,
       appTheme: selectedTheme,
       appThemeCustomization: themeCustomization,
       customCategoriesByNicho,
+      storeName: cleanStoreName,
+      storeLogo: cleanStoreLogo,
       businessType: types[0],
       businessTypes: types,
       ...(nextCompleted ? {
@@ -414,17 +388,31 @@ export default function Onboarding() {
     setLocation(destination);
   });
 
+  const persistStepProgress = (nextStepIndex: number) => {
+    if (!uid || settingsLoading) return;
+    void saveProgress({ completed: false, stepOverride: nextStepIndex }).catch((err) => {
+      const msg = err instanceof Error ? err.message : "Erro desconhecido";
+      logError("onboarding_step_autosave_failed", msg, { userId: uid });
+    });
+  };
+
   const nextStep = () => {
-    if (step < steps.length - 1) setStep(step + 1);
+    if (step >= steps.length - 1) return;
+    const nextStepIndex = step + 1;
+    setStep(nextStepIndex);
+    persistStepProgress(nextStepIndex);
   };
 
   const prevStep = () => {
-    if (step > 0) setStep(step - 1);
+    if (step <= 0) return;
+    const nextStepIndex = step - 1;
+    setStep(nextStepIndex);
+    persistStepProgress(nextStepIndex);
   };
 
   const renderBusinessStep = () => (
     <div className="w-full space-y-3">
-      {NICHO_IDS.map((nichoId) => {
+      {ONBOARDING_NICHO_IDS.map((nichoId) => {
         const nicho = NICHO_CONFIG[nichoId];
         const Icon = NICHO_ICONS[nicho.iconName] || Store;
         const isSelected = selectedTypes.includes(nichoId);
@@ -533,6 +521,35 @@ export default function Onboarding() {
     </div>
   );
 
+
+  const renderStoreStep = () => (
+    <div className="w-full space-y-4">
+      <div className="rounded-[2rem] border border-border/60 bg-white p-4 text-left shadow-sm">
+        <p className="text-[10px] font-black uppercase tracking-wide text-primary">Preview da sua loja</p>
+        <div className="mt-4 flex items-center gap-4 rounded-[1.8rem] bg-gradient-to-br from-primary/10 via-white to-primary/5 p-4">
+          <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-[1.5rem] bg-primary text-2xl font-black text-white shadow-sm">
+            {storeLogoDraft.trim() ? <img src={storeLogoDraft.trim()} alt="Logo da loja" className="h-full w-full object-cover" /> : selectedStoreInitial}
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-base font-black text-foreground">{storeNameDraft.trim() || "Minha Revenda"}</p>
+            <p className="mt-1 text-[11px] font-semibold text-muted-foreground">Esse nome aparece no Dashboard e no catálogo.</p>
+          </div>
+        </div>
+      </div>
+      <div className="space-y-3 text-left">
+        <label className="block space-y-2">
+          <span className="text-[10px] font-black uppercase tracking-wide text-muted-foreground">Nome da loja</span>
+          <input type="text" value={storeNameDraft} onChange={(event) => setStoreNameDraft(event.target.value)} placeholder="Ex: Adriana Perfumes" className="w-full rounded-2xl border border-border bg-white px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20" data-testid="input-onboarding-store-name" />
+        </label>
+        <label className="block space-y-2">
+          <span className="text-[10px] font-black uppercase tracking-wide text-muted-foreground">Logo por URL (opcional)</span>
+          <input type="url" value={storeLogoDraft} onChange={(event) => setStoreLogoDraft(event.target.value)} placeholder="Cole a URL da logo ou configure depois" className="w-full rounded-2xl border border-border bg-white px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20" data-testid="input-onboarding-store-logo" />
+        </label>
+        <p className="rounded-2xl bg-secondary/60 px-4 py-3 text-[11px] font-semibold leading-relaxed text-muted-foreground">Upload de arquivo continua disponível em Configurações. Aqui mantemos o onboarding leve, sem carregar dependências de Storage antes da hora.</p>
+      </div>
+    </div>
+  );
+
   const renderCategoriesStep = () => {
     const activeCategories = categoryDrafts[activeCategoryNicho] || NICHO_CONFIG[activeCategoryNicho].categories;
     return (
@@ -628,29 +645,39 @@ export default function Onboarding() {
     </div>
   );
 
-  const renderTourStep = () => (
-    <div className="w-full grid grid-cols-1 gap-2">
-      {TOUR_ITEMS.map((item) => {
-        const Icon = item.icon;
-        return (
-          <div key={item.label} className="flex items-center gap-3 rounded-2xl border border-border/60 bg-white p-3 text-left shadow-sm">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary"><Icon className="h-5 w-5" /></div>
-            <div className="min-w-0">
-              <p className="text-xs font-black text-foreground">{item.label}</p>
-              <p className="text-[10px] font-medium text-muted-foreground">{item.text}</p>
-            </div>
+  const renderModuleTourStep = () => {
+    const module = MODULE_TOUR[current.id];
+    if (!module) return null;
+    const Icon = module.icon;
+    return (
+      <div className="w-full space-y-4">
+        <div className="rounded-[2rem] border border-primary/10 bg-white p-5 text-left shadow-sm">
+          <div className="mb-4 flex items-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary"><Icon className="h-6 w-6" /></div>
+            <div><p className="text-[10px] font-black uppercase tracking-wide text-primary">Módulo</p><p className="text-sm font-black text-foreground">{module.label}</p></div>
           </div>
-        );
-      })}
-    </div>
-  );
+          <div className="space-y-3">
+            {module.bullets.map((item, index) => (
+              <div key={item} className="flex gap-3 rounded-2xl bg-secondary/40 p-3">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-[10px] font-black text-white">{index + 1}</span>
+                <p className="text-xs font-semibold leading-relaxed text-foreground">{item}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+        <button type="button" onClick={() => void handleContinueLater(module.path)} className="w-full rounded-[2rem] bg-white px-5 py-4 text-xs font-black text-primary shadow-sm ring-1 ring-primary/15 rs-pressable">Abrir {module.label} agora</button>
+      </div>
+    );
+  };
 
   const renderFinishStep = () => (
     <div className="w-full space-y-3">
       {[
         { label: "Nicho escolhido", done: selectedTypes.length > 0 },
         { label: "Tema configurado", done: true },
+        { label: "Loja identificada", done: Boolean(storeNameDraft.trim()) },
         { label: "Categorias configuradas", done: selectedTypes.every((type) => sanitizeCategories(categoryDrafts[type] || []).length > 0) },
+        { label: "Tour concluído", done: step >= steps.length - 1 },
         { label: "Primeiro produto", done: false, hint: "Você pode cadastrar agora ou depois." },
       ].map((item) => (
         <div key={item.label} className="flex items-center gap-3 rounded-2xl bg-white p-4 text-left shadow-sm">
@@ -670,9 +697,14 @@ export default function Onboarding() {
     switch (current.id) {
       case "business": return renderBusinessStep();
       case "appearance": return renderAppearanceStep();
+      case "store": return renderStoreStep();
       case "categories": return renderCategoriesStep();
       case "product": return renderProductStep();
-      case "tour": return renderTourStep();
+      case "dashboardTour":
+      case "productsTour":
+      case "clientsTour":
+      case "salesTour":
+      case "catalogTour": return renderModuleTourStep();
       case "finish": return renderFinishStep();
       default:
         return (

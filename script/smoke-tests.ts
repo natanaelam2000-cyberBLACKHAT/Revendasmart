@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { APP_THEMES, DEFAULT_APP_THEME_ID, resolveAppThemeId } from "../client/src/lib/app-themes";
-import { NICHO_CONFIG, getNichoConfig, getProductCategoriesForNicho } from "../client/src/lib/nicho-config";
+import { NICHO_CONFIG, ONBOARDING_NICHO_IDS, getNichoConfig, getProductCategoriesForNicho } from "../client/src/lib/nicho-config";
 
 const read = (path: string) => fs.readFileSync(path, "utf8");
 const routes = read("server/routes.ts");
@@ -176,9 +176,18 @@ assert.match(clientPickerHook, /const loadMore = useCallback/);
 assert.match(nichoConfig, /Camisetas/);
 assert.match(nichoConfig, /Moda Feminina/);
 assert.match(nichoConfig, /Bijuterias/);
+assert.match(nichoConfig, /Celulares/);
+assert.match(nichoConfig, /Cadernos/);
+assert.match(nichoConfig, /Casa e Decoração/);
+assert.match(nichoConfig, /Bombons/);
+assert.match(nichoConfig, /Congelados/);
 assert.match(nichoConfig, /Produção própria/);
 assert.match(nichoConfig, /Garrafa térmica inox/);
 assert.match(nichoConfig, /return \['Geral'\]/);
+assert.ok(ONBOARDING_NICHO_IDS.includes("Eletrônicos" as any));
+assert.ok(ONBOARDING_NICHO_IDS.includes("Doces" as any));
+assert.ok(ONBOARDING_NICHO_IDS.includes("Alimentos" as any));
+assert.ok(!ONBOARDING_NICHO_IDS.includes("Alimentos/Doces" as any));
 assert.match(mockData, /businessType: 'Geral'/);
 assert.match(addProduct, /nichoConfig\.productNamePlaceholder/);
 assert.match(addProduct, /nichoConfig\.descriptionPlaceholder/);
@@ -192,6 +201,12 @@ const forbiddenCategoriesByNicho: Record<string, string[]> = {
   "Cosméticos & Perfumes": ["Eletrônicos", "Papelaria", "Casa", "Decoração", "Marmitas", "Salgados"],
   Roupas: ["Eletrônicos", "Marmitas", "Bolos", "Perfumes"],
   "Acessórios": ["Eletrônicos", "Marmitas", "Bolos", "Hidratantes"],
+  "Eletrônicos": ["Perfumes", "Bolos", "Cadernos", "Vestidos"],
+  "Papelaria": ["Perfumes", "Celulares", "Marmitas", "Vestidos"],
+  "Casa e Decoração": ["Perfumes", "Celulares", "Cadernos", "Marmitas"],
+  "Utilidades": ["Perfumes", "Celulares", "Cadernos", "Bolos"],
+  "Doces": ["Eletrônicos", "Papelaria", "Casa", "Decoração", "Massas", "Congelados", "Perfumes"],
+  "Alimentos": ["Eletrônicos", "Papelaria", "Casa", "Decoração", "Trufas", "Brigadeiros", "Perfumes"],
   "Alimentos/Doces": ["Eletrônicos", "Papelaria", "Casa", "Decoração", "Perfumes"],
 };
 
@@ -206,6 +221,9 @@ for (const [nicho, forbiddenCategories] of Object.entries(forbiddenCategoriesByN
 const generalCategories = getProductCategoriesForNicho({}, "Geral");
 assert.ok(generalCategories.includes("Eletrônicos"));
 assert.ok(generalCategories.includes("Papelaria"));
+assert.ok(getProductCategoriesForNicho({}, "Eletrônicos").includes("Celulares"));
+assert.ok(getProductCategoriesForNicho({}, "Doces").includes("Trufas"));
+assert.ok(getProductCategoriesForNicho({}, "Alimentos").includes("Congelados"));
 const customFashionCategories = getProductCategoriesForNicho(
   { customCategoriesByNicho: { Roupas: ["Jeans Premium", "Vestidos", "Jeans Premium"] } },
   "Roupas",
@@ -285,8 +303,19 @@ assert.match(onboarding, /APP_THEMES/);
 assert.match(onboarding, /Continuar depois/);
 assert.match(onboarding, /onboarding_completed: nextCompleted/);
 assert.match(onboarding, /onboarding_theme_selected: true/);
+assert.match(onboarding, /onboarding_store_configured/);
+assert.match(onboarding, /storeName: cleanStoreName/);
+assert.match(onboarding, /storeLogo: cleanStoreLogo/);
+assert.match(onboarding, /stepOverride/);
 assert.match(onboarding, /customCategoriesByNicho/);
+assert.match(onboarding, /renderStoreStep/);
+assert.match(onboarding, /input-onboarding-store-name/);
 assert.match(onboarding, /renderCategoriesStep/);
+assert.match(onboarding, /dashboardTour/);
+assert.match(onboarding, /productsTour/);
+assert.match(onboarding, /clientsTour/);
+assert.match(onboarding, /salesTour/);
+assert.match(onboarding, /catalogTour/);
 assert.match(onboarding, /Criar categoria personalizada/);
 assert.match(onboarding, /BUTTON_TONES/);
 assert.match(onboarding, /CARD_TONES/);
@@ -299,6 +328,8 @@ assert.doesNotMatch(nichoConfig, /brandLabel: 'Marca \/ Origem'/);
 assert.match(addProduct, /getProductCategoriesForNicho/);
 assert.match(addProduct, /baseCategorySuggestions/);
 assert.match(dashboard, /OnboardingChecklist/);
+assert.match(dashboard, /Configurar nome da loja/);
+assert.match(dashboard, /Concluir configuração/);
 assert.match(dashboard, /products\.length > 0/);
 assert.match(onboardingChecklist, /local|Primeiros passos|Configure sua loja/);
 assert.match(planProvider, /api\/plan\/data/);

@@ -183,6 +183,7 @@ export interface AppSettings {
   customCategoriesByNicho?: Record<string, string[]>;
   onboarding_theme_selected?: boolean;
   onboarding_categories_configured?: boolean;
+  onboarding_store_configured?: boolean;
   onboarding_current_step?: number;
   onboarding_skipped?: boolean;
   onboarding_skipped_at?: string;
@@ -481,6 +482,8 @@ export const defaultSettings: AppSettings = {
   },
   customCategoriesByNicho: {},
   onboarding_theme_selected: false,
+  onboarding_categories_configured: false,
+  onboarding_store_configured: false,
   enablePublicCatalog: true,
   showPrice: true,
   showStock: true,
