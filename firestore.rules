@@ -23,7 +23,10 @@ service cloud.firestore {
         'costPrice', 'salePrice', 'stock', 'barcode', 'description',
         'imageUrl', 'storagePath', 'imageId', 'photoUrl', 'image', 'photo',
         'gender', 'lastSoldDate', 'extras', 'isFeatured', 'isOnSale',
-        'discountPercent', 'discount', 'promotionalPrice', 'createdAt', 'updatedAt'
+        'discountPercent', 'discount', 'promotionalPrice', 'createdAt', 'updatedAt',
+        'nameNormalized', 'brandNormalized', 'categoryNormalized',
+        'barcodeNormalized', 'productTypeNormalized', 'searchTokens',
+        'searchSchemaVersion'
       ];
     }
 
@@ -80,7 +83,22 @@ service cloud.firestore {
         && request.resource.data.get('discount', 0) is number
         && request.resource.data.get('discount', 0) >= 0
         && request.resource.data.get('promotionalPrice', 0) is number
-        && request.resource.data.get('promotionalPrice', 0) >= 0;
+        && request.resource.data.get('promotionalPrice', 0) >= 0
+        && request.resource.data.get('nameNormalized', '') is string
+        && request.resource.data.get('nameNormalized', '').size() <= 180
+        && request.resource.data.get('brandNormalized', '') is string
+        && request.resource.data.get('brandNormalized', '').size() <= 120
+        && request.resource.data.get('categoryNormalized', '') is string
+        && request.resource.data.get('categoryNormalized', '').size() <= 120
+        && request.resource.data.get('barcodeNormalized', '') is string
+        && request.resource.data.get('barcodeNormalized', '').size() <= 100
+        && request.resource.data.get('productTypeNormalized', '') is string
+        && request.resource.data.get('productTypeNormalized', '').size() <= 100
+        && request.resource.data.get('searchTokens', []) is list
+        && request.resource.data.get('searchTokens', []).size() <= 16
+        && request.resource.data.get('searchSchemaVersion', 0) is number
+        && request.resource.data.get('searchSchemaVersion', 0) >= 0
+        && request.resource.data.get('searchSchemaVersion', 0) <= 10;
     }
 
     function isValidProductUpdate(productId) {
@@ -110,7 +128,14 @@ service cloud.firestore {
         && (!changed.hasAny(['isOnSale']) || request.resource.data.isOnSale is bool)
         && (!changed.hasAny(['discountPercent']) || (request.resource.data.discountPercent is number && request.resource.data.discountPercent >= 0 && request.resource.data.discountPercent <= 100))
         && (!changed.hasAny(['discount']) || (request.resource.data.discount is number && request.resource.data.discount >= 0))
-        && (!changed.hasAny(['promotionalPrice']) || (request.resource.data.promotionalPrice is number && request.resource.data.promotionalPrice >= 0));
+        && (!changed.hasAny(['promotionalPrice']) || (request.resource.data.promotionalPrice is number && request.resource.data.promotionalPrice >= 0))
+        && (!changed.hasAny(['nameNormalized']) || (request.resource.data.nameNormalized is string && request.resource.data.nameNormalized.size() <= 180))
+        && (!changed.hasAny(['brandNormalized']) || (request.resource.data.brandNormalized is string && request.resource.data.brandNormalized.size() <= 120))
+        && (!changed.hasAny(['categoryNormalized']) || (request.resource.data.categoryNormalized is string && request.resource.data.categoryNormalized.size() <= 120))
+        && (!changed.hasAny(['barcodeNormalized']) || (request.resource.data.barcodeNormalized is string && request.resource.data.barcodeNormalized.size() <= 100))
+        && (!changed.hasAny(['productTypeNormalized']) || (request.resource.data.productTypeNormalized is string && request.resource.data.productTypeNormalized.size() <= 100))
+        && (!changed.hasAny(['searchTokens']) || (request.resource.data.searchTokens is list && request.resource.data.searchTokens.size() <= 16))
+        && (!changed.hasAny(['searchSchemaVersion']) || (request.resource.data.searchSchemaVersion is number && request.resource.data.searchSchemaVersion >= 0 && request.resource.data.searchSchemaVersion <= 10));
     }
 
     function clientAllowedFields() {

@@ -23,6 +23,7 @@ import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { usePlanData } from "@/hooks/usePlanData";
 import { notifyError, notifySuccess } from "@/lib/notify";
 import { safeLogger } from "@/lib/safe-logger";
+import { buildProductSearchFields } from "@/lib/product-search";
 import { checkProductLimit } from "@/lib/plan-helpers";
 import {
   getNichoConfig,
@@ -490,6 +491,13 @@ const productId = id || productRef.id;
   thumbnailUrl,
   thumbnailStoragePath,
   productType: activeNicho,
+  ...buildProductSearchFields({
+    name: formData.name,
+    brand: normalizedBrand,
+    category: formData.category,
+    barcode: formData.barcode,
+    productType: activeNicho,
+  }),
 };
 
       // VALIDATION: Ensure required fields exist and are valid

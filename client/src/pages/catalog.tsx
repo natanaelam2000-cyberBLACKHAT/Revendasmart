@@ -3,6 +3,7 @@ import { PageSkeleton } from "@/components/PageSkeleton";
 import { Layout } from "@/components/layout";
 import { Share2, Search, X, Copy, Check, ShoppingCart, Plus, Minus, Trash2, Send, Loader2, Package } from "lucide-react";
 import { useProductsData } from "@/hooks/useProductsData";
+import { normalizeProductSearchText } from "@/lib/product-search";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
 import type { Product } from "@/lib/mock-data";
 import { ProductImageCard } from "@/components/ProductImageCard";
@@ -36,7 +37,7 @@ export default function Catalog() {
   }, []);
 
   const productById = useMemo(() => new Map(products.map(product => [product.id, product])), [products]);
-  const normalizedSearch = useMemo(() => search.trim().toLowerCase(), [search]);
+  const normalizedSearch = useMemo(() => normalizeProductSearchText(search), [search]);
 
   const categories = useMemo(() => {
     const cats = Array.from(new Set(products.map(p => p.category || "Geral")));
@@ -45,9 +46,17 @@ export default function Catalog() {
 
   const filtered = useMemo(() => {
     return products.filter(p => {
-      const name = p.name?.toLowerCase() || "";
-      const brand = p.brand?.toLowerCase() || "";
-      const matchesSearch = !normalizedSearch || name.includes(normalizedSearch) || brand.includes(normalizedSearch);
+      const name = normalizeProductSearchText(p.name);
+      const brand = normalizeProductSearchText(p.brand);
+      const category = normalizeProductSearchText(p.category);
+      const barcode = normalizeProductSearchText((p as Product & { barcode?: string }).barcode);
+      const productType = normalizeProductSearchText(p.productType);
+      const matchesSearch = !normalizedSearch
+        || name.includes(normalizedSearch)
+        || brand.includes(normalizedSearch)
+        || category.includes(normalizedSearch)
+        || barcode.includes(normalizedSearch)
+        || productType.includes(normalizedSearch);
       const matchesCategory = categoryFilter === "todos" || p.category === categoryFilter;
       
       let gender = "unissex";

@@ -27,6 +27,14 @@ export interface Product {
   isFeatured?: boolean;
   isOnSale?: boolean;
   discountPercent?: number;
+  /** Campos derivados para busca paginada futura. Produtos antigos podem não possuir estes campos. */
+  nameNormalized?: string;
+  brandNormalized?: string;
+  categoryNormalized?: string;
+  barcodeNormalized?: string;
+  productTypeNormalized?: string;
+  searchTokens?: string[];
+  searchSchemaVersion?: number;
 }
 
 // IndexedDB for Images

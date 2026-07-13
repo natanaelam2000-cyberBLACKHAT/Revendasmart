@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { APP_THEMES, DEFAULT_APP_THEME_ID, resolveAppThemeId } from "../client/src/lib/app-themes";
 import { NICHO_CONFIG, ONBOARDING_NICHO_IDS, getNichoConfig, getProductCategoriesForNicho } from "../client/src/lib/nicho-config";
+import { CATALOG_SERVER_SEARCH_ENABLED, PRODUCT_SEARCH_SCHEMA_VERSION, buildProductSearchFields, canUseCatalogServerSearch, isProductSearchIndexed, normalizeProductSearchText } from "../client/src/lib/product-search";
 
 const read = (path: string) => fs.readFileSync(path, "utf8");
 const routes = read("server/routes.ts");
@@ -49,7 +50,51 @@ const onboarding = read("client/src/pages/onboarding.tsx");
 const nichoConfig = read("client/src/lib/nicho-config.ts");
 const addProduct = read("client/src/pages/add-product.tsx");
 const mockData = read("client/src/lib/mock-data.ts");
+const productSearch = read("client/src/lib/product-search.ts");
+const catalogProductsHook = read("client/src/hooks/useCatalogProductsData.ts");
+const firestoreRules = read("firestore.rules");
+const productSearchBackfill = read("docs/architecture/PRODUCT_SEARCH_INDEX_BACKFILL.md");
 const vercel = JSON.parse(read("vercel.json"));
+
+assert.equal(normalizeProductSearchText("  Café   Premium 123!! "), "cafe premium 123");
+assert.equal(normalizeProductSearchText("Água de Cheiro"), "agua de cheiro");
+const productSearchFields = buildProductSearchFields({
+  name: "Perfume Flor de Café",
+  brand: "Natura",
+  category: "Perfumes",
+  barcode: "7891234567890",
+  productType: "cosmeticos",
+});
+assert.equal(productSearchFields.nameNormalized, "perfume flor de cafe");
+assert.equal(productSearchFields.brandNormalized, "natura");
+assert.equal(productSearchFields.categoryNormalized, "perfumes");
+assert.equal(productSearchFields.barcodeNormalized, "7891234567890");
+assert.equal(productSearchFields.searchSchemaVersion, PRODUCT_SEARCH_SCHEMA_VERSION);
+for (const token of ["perfume", "flor", "cafe", "natura", "perfumes", "7891234567890"]) {
+  assert.ok(productSearchFields.searchTokens.includes(token), `missing product search token ${token}`);
+}
+assert.equal(CATALOG_SERVER_SEARCH_ENABLED, false);
+assert.equal(canUseCatalogServerSearch("a"), false);
+assert.equal(canUseCatalogServerSearch("ab"), true);
+assert.equal(isProductSearchIndexed({ searchSchemaVersion: PRODUCT_SEARCH_SCHEMA_VERSION, searchTokens: ["perfume"] }), true);
+assert.equal(isProductSearchIndexed({ searchSchemaVersion: PRODUCT_SEARCH_SCHEMA_VERSION + 1, searchTokens: ["perfume"] }), false);
+assert.match(productSearch, /CATALOG_SERVER_SEARCH_ENABLED = false/);
+assert.match(addProduct, /buildProductSearchFields/);
+assert.match(mockData, /nameNormalized\?: string/);
+assert.match(firestoreRules, /searchTokens/);
+assert.match(firestoreRules, /searchSchemaVersion/);
+assert.match(catalog, /useProductsData/);
+assert.match(catalog, /normalizeProductSearchText/);
+assert.match(catalog, /barcode\.includes\(normalizedSearch\)/);
+assert.match(catalog, /category\.includes\(normalizedSearch\)/);
+assert.doesNotMatch(catalog, /useCatalogProductsData/);
+assert.match(catalogProductsHook, /const CATALOG_PAGE_SIZE = 30/);
+assert.match(catalogProductsHook, /array-contains/);
+assert.match(catalogProductsHook, /searchFallbackRequired/);
+assert.match(catalogProductsHook, /getDocs/);
+assert.match(productSearchBackfill, /dry-run/);
+assert.match(productSearchBackfill, /CATALOG_SERVER_SEARCH_ENABLED=false/);
+assert.match(productSearchBackfill, /Não executar em produção/);
 
 assert.match(routes, /catalogSlug.*catalog_slug.*userSlug.*slug/);
 assert.match(routes, /catalogEnabled/);
