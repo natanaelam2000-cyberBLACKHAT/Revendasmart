@@ -87,6 +87,8 @@ export interface Charge {
 
   // ── Relationships ─────────────────────────────────────────────────────────
   clientId: string;                    // Ref → users/{uid}/clients/{clientId}
+  clientName?: string;                 // Optional snapshot for read performance/new documents
+  clientPhone?: string;                // Optional snapshot for read performance/new documents
   saleId?: string;                     // Ref → users/{uid}/sales/{saleId} (optional)
 
   // ── Content ───────────────────────────────────────────────────────────────

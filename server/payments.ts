@@ -188,6 +188,27 @@ async function getChargeRef(uid: string, chargeId: string) {
   return db.collection("users").doc(uid).collection("charges").doc(chargeId);
 }
 
+async function resolveChargeClientSnapshot(
+  db: FirebaseFirestore.Firestore,
+  uid: string,
+  clientId: string,
+): Promise<{ clientName?: string; clientPhone?: string }> {
+  try {
+    const snapshot = await db.collection("users").doc(uid).collection("clients").doc(clientId).get();
+    if (!snapshot.exists) return {};
+
+    const data = snapshot.data() ?? {};
+    const clientName = typeof data.name === "string" && data.name.trim() ? data.name.trim() : undefined;
+    const clientPhone = typeof data.phone === "string" && data.phone.trim() ? data.phone.trim() : undefined;
+    return { clientName, clientPhone };
+  } catch (err) {
+    paymentWarn("[payments/create-link] Could not resolve client snapshot", {
+      code: err && typeof err === "object" && "code" in err ? (err as { code?: unknown }).code : "unknown",
+    });
+    return {};
+  }
+}
+
 async function updateCharge(
   uid: string,
   chargeId: string,
@@ -430,6 +451,7 @@ async function handleCreateLink(req: Request, res: Response) {
 
     const chargeId = chargeRef.id;
     const externalReference = buildExternalReference(body.uid, chargeId, body.saleId);
+    const clientSnapshot = await resolveChargeClientSnapshot(db, body.uid, body.clientId);
 
     // ── Caminho B: Resolve which MP account to use ──────────────────────────
     stage = "resolve_token";
@@ -609,6 +631,12 @@ async function handleCreateLink(req: Request, res: Response) {
     }
     if (body && body.saleId && String(body.saleId).trim() !== "") {
       charge.saleId = body.saleId;
+    }
+    if (clientSnapshot.clientName) {
+      charge.clientName = clientSnapshot.clientName;
+    }
+    if (clientSnapshot.clientPhone) {
+      charge.clientPhone = clientSnapshot.clientPhone;
     }
     charge.mpConnectionId = resolvedConnectionId;
     

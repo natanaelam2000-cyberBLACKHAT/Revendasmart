@@ -109,6 +109,8 @@ export interface Installment {
   id: string;
   saleId: string;
   clientId: string;
+  clientName?: string;
+  clientPhone?: string;
   amount: number;
   dueDate: string;
   status: 'pending' | 'paid' | 'partial';

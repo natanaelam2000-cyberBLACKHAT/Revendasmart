@@ -9,7 +9,7 @@ import {
 import { Installment, defaultSettings } from "@/lib/mock-data";
 import { format, isToday, isBefore, addDays, parseISO, isSameDay, startOfDay } from "date-fns";
 import { getFirebaseAuth, logError, logEvent, logTelemetryEvent, trackAnalyticsEvent } from "@/lib/firebase";
-import { collection, query, onSnapshot, doc, updateDoc, orderBy, where, limit, startAfter, getDocs, getFirestore, type DocumentData, type QueryConstraint, type QueryDocumentSnapshot } from "firebase/firestore";
+import { collection, query, onSnapshot, doc, updateDoc, orderBy, where, limit, startAfter, getDocs, getFirestore, documentId, type DocumentData, type QueryConstraint, type QueryDocumentSnapshot } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { useCharges, CHARGE_STATUS_LABELS, CHARGE_STATUS_COLORS, CHARGE_MODE_LABELS } from "@/hooks/useCharges";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
@@ -22,12 +22,57 @@ import type { Charge } from "../../../shared/charges";
 type BillingTab = "installments" | "charges";
 type InstallmentFilter = "today" | "late" | "next" | "all";
 const INSTALLMENTS_PAGE_SIZE = 30;
+const CLIENT_LOOKUP_BATCH_SIZE = 10;
+
+interface BillingClient { id: string; name: string; phone?: string }
+type ClientSnapshotFields = { clientName?: string; clientPhone?: string };
+type InstallmentWithClientSnapshot = Installment & ClientSnapshotFields;
+type ChargeWithClientSnapshot = Charge & ClientSnapshotFields;
+
+function mapClientDoc(doc: QueryDocumentSnapshot<DocumentData>): BillingClient {
+  const data = doc.data() as { name?: string; phone?: string };
+  return { id: doc.id, name: data.name || "Cliente", phone: data.phone };
+}
+
+function shouldLookupClient(record: { clientId?: string; clientName?: string; clientPhone?: string }): boolean {
+  return Boolean(record.clientId && (!record.clientName || !record.clientPhone));
+}
+
+function collectClientIdsForLookup(installments: InstallmentWithClientSnapshot[], charges: ChargeWithClientSnapshot[]): string[] {
+  const ids = new Set<string>();
+  for (const installment of installments) {
+    if (shouldLookupClient(installment)) ids.add(installment.clientId);
+  }
+  for (const charge of charges) {
+    if (shouldLookupClient(charge)) ids.add(charge.clientId);
+  }
+  return Array.from(ids);
+}
+
+async function fetchClientsByIds(uid: string, clientIds: string[]): Promise<BillingClient[]> {
+  if (clientIds.length === 0) return [];
+
+  const db = getFirestore();
+  const clients: BillingClient[] = [];
+  for (let index = 0; index < clientIds.length; index += CLIENT_LOOKUP_BATCH_SIZE) {
+    const batch = clientIds.slice(index, index + CLIENT_LOOKUP_BATCH_SIZE);
+    const snapshot = await getDocs(
+      query(
+        collection(db, "users", uid, "clients"),
+        where(documentId(), "in", batch)
+      )
+    );
+    clients.push(...snapshot.docs.map(mapClientDoc));
+  }
+  return clients;
+}
 
 export default function Billings() {
   const { settings: firestoreSettings } = useUserSettings();
   const settings = firestoreSettings || defaultSettings;
   const [billings, setBillings] = useState<Installment[]>([]);
-  const [clients, setClients] = useState<any[]>([]);
+  const [clientLookup, setClientLookup] = useState<BillingClient[]>([]);
+  const [modalClients, setModalClients] = useState<BillingClient[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<BillingTab>("charges");
   const [filter, setFilter] = useState<InstallmentFilter>("all");
@@ -108,24 +153,59 @@ export default function Billings() {
     };
   }, [filter]);
 
-  // Load clients for name/phone resolution. Still full list for compatibility.
+  // Load only clients referenced by the current page of charges/installments.
+  // New documents may carry clientName/clientPhone; old documents fall back to this point lookup.
   useEffect(() => {
+    const auth = getFirebaseAuth();
+    const user = auth?.currentUser;
+    if (!user) {
+      setClientLookup([]);
+      return;
+    }
+
+    const ids = collectClientIdsForLookup(billings as InstallmentWithClientSnapshot[], charges as ChargeWithClientSnapshot[]);
+    if (ids.length === 0) {
+      setClientLookup([]);
+      return;
+    }
+
+    let cancelled = false;
+    fetchClientsByIds(user.uid, ids)
+      .then((clients) => {
+        if (!cancelled) setClientLookup(clients);
+      })
+      .catch((err) => {
+        console.error("[billings] Failed to resolve referenced clients:", err);
+        if (!cancelled) setClientLookup([]);
+      });
+
+    return () => { cancelled = true; };
+  }, [billings, charges]);
+
+  // Load the full clients list only while the payment-link modal needs it.
+  useEffect(() => {
+    if (!showPaymentModal) {
+      setModalClients([]);
+      return;
+    }
+
     const auth = getFirebaseAuth();
     if (!auth) return;
 
     let unsubClients: (() => void) | undefined;
     const unsubAuth = onAuthStateChanged(auth, (user) => {
       unsubClients?.();
-      if (!user) { setClients([]); return; }
+      if (!user) { setModalClients([]); return; }
 
       const db = getFirestore();
       unsubClients = onSnapshot(
-        query(collection(db, "users", user.uid, "clients")),
+        query(collection(db, "users", user.uid, "clients"), orderBy("name")),
         (snap) => {
-          setClients(snap.docs.map((d) => ({ ...d.data(), id: d.id })));
+          setModalClients(snap.docs.map(mapClientDoc));
         },
         (err) => {
-          console.error("[billings] Failed to load clients:", err);
+          console.error("[billings] Failed to load clients for payment modal:", err);
+          setModalClients([]);
         }
       );
     });
@@ -134,11 +214,19 @@ export default function Billings() {
       unsubClients?.();
       unsubAuth();
     };
-  }, []);
+  }, [showPaymentModal]);
 
-  const clientById = useMemo(() => new Map(clients.map((client) => [client.id, client])), [clients]);
+  const clientById = useMemo(() => new Map(clientLookup.map((client) => [client.id, client])), [clientLookup]);
   const billingById = useMemo(() => new Map(billings.map((billing) => [billing.id, billing])), [billings]);
-  const getClient = (id: string) => clientById.get(id);
+  const getRecordClient = (record?: { clientId?: string; clientName?: string; clientPhone?: string }): BillingClient | undefined => {
+    if (!record?.clientId) return undefined;
+    const fallback = clientById.get(record.clientId);
+    return {
+      id: record.clientId,
+      name: record.clientName || fallback?.name || "Cliente",
+      phone: record.clientPhone || fallback?.phone,
+    };
+  };
 
   const loadMoreInstallments = async () => {
     const auth = getFirebaseAuth();
@@ -249,8 +337,8 @@ export default function Billings() {
   };
 
   const sendWhatsApp = (billing: Installment, type: "reminder" | "received" | "thanks") => {
-    const client = getClient(billing.clientId);
-    if (!client) return;
+    const client = getRecordClient(billing as InstallmentWithClientSnapshot);
+    if (!client?.phone) return;
     const amount = (billing.amount - billing.paidAmount).toFixed(2);
     const date = format(parseISO(billing.dueDate), "dd/MM");
     let message: string;
@@ -267,7 +355,7 @@ if (type === "reminder") {
   const exportCSV = () => {
     const headers = "Data,Cliente,Valor,Status\n";
     const rows = billings
-      .map((b) => `${format(parseISO(b.dueDate), "dd/MM/yyyy")},${getClient(b.clientId)?.name || "N/A"},${b.amount},${b.status}`)
+      .map((b) => `${format(parseISO(b.dueDate), "dd/MM/yyyy")},${getRecordClient(b as InstallmentWithClientSnapshot)?.name || "N/A"},${b.amount},${b.status}`)
       .join("\n");
     const blob = new Blob([headers + rows], { type: "text/csv" });
     const url = window.URL.createObjectURL(blob);
@@ -316,7 +404,7 @@ if (type === "reminder") {
   };
 
   const shareChargeWhatsApp = (charge: Charge) => {
-    const client = getClient(charge.clientId);
+    const client = getRecordClient(charge as ChargeWithClientSnapshot);
     const name = client?.name ?? "cliente";
     const msg = `Olá ${name}! Segue o link para pagamento de R$ ${charge.amount.toFixed(2)}: ${charge.paymentUrl} 💳`;
     window.open(`https://wa.me/${client?.phone ?? ""}?text=${encodeURIComponent(msg)}`, "_blank");
@@ -465,7 +553,7 @@ if (type === "reminder") {
                 </div>
               ) : (
                 charges.map((charge) => {
-                  const client = getClient(charge.clientId);
+                  const client = getRecordClient(charge as ChargeWithClientSnapshot);
                   const statusLabel = CHARGE_STATUS_LABELS[charge.status] ?? charge.status;
                   const statusColor = CHARGE_STATUS_COLORS[charge.status] ?? "bg-gray-100 text-gray-600";
 
@@ -634,7 +722,7 @@ if (type === "reminder") {
 
             <div className="space-y-4">
               {filteredInstallments.map((b) => {
-                const client = getClient(b.clientId);
+                const client = getRecordClient(b as InstallmentWithClientSnapshot);
                 const isLate =
                   isBefore(parseISO(b.dueDate), new Date()) &&
                   b.status !== "paid" &&
@@ -740,7 +828,7 @@ if (type === "reminder") {
         <PartialPaymentModal
           billingId={partialPaymentId}
           remainingAmount={(partialPaymentBilling?.amount || 0) - (partialPaymentBilling?.paidAmount || 0)}
-          clientName={getClient(partialPaymentBilling?.clientId || "")?.name || "Cliente"}
+          clientName={getRecordClient(partialPaymentBilling as InstallmentWithClientSnapshot | undefined)?.name || "Cliente"}
           onSubmit={handlePartialPaymentSubmit}
           onClose={() => setPartialPaymentId(null)}
         />
@@ -749,7 +837,7 @@ if (type === "reminder") {
       {/* Payment link modal */}
       {showPaymentModal && (
         <PaymentLinkModal
-          clients={clients}
+          clients={modalClients.length > 0 ? modalClients : clientLookup}
           onClose={() => setShowPaymentModal(false)}
           onSuccess={() => setShowPaymentModal(false)}
         />

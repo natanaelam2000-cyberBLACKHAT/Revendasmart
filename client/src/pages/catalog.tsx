@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Layout } from "@/components/layout";
 import { Share2, Search, X, Copy, Check, ShoppingCart, Plus, Minus, Trash2, Send, Loader2, Package } from "lucide-react";
@@ -27,6 +27,16 @@ export default function Catalog() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState("");
+  const copyResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyResetTimeoutRef.current) clearTimeout(copyResetTimeoutRef.current);
+    };
+  }, []);
+
+  const productById = useMemo(() => new Map(products.map(product => [product.id, product])), [products]);
+  const normalizedSearch = useMemo(() => search.trim().toLowerCase(), [search]);
 
   const categories = useMemo(() => {
     const cats = Array.from(new Set(products.map(p => p.category || "Geral")));
@@ -35,8 +45,9 @@ export default function Catalog() {
 
   const filtered = useMemo(() => {
     return products.filter(p => {
-      const matchesSearch = p.name.toLowerCase().includes(search.toLowerCase()) ||
-                           p.brand?.toLowerCase().includes(search.toLowerCase());
+      const name = p.name?.toLowerCase() || "";
+      const brand = p.brand?.toLowerCase() || "";
+      const matchesSearch = !normalizedSearch || name.includes(normalizedSearch) || brand.includes(normalizedSearch);
       const matchesCategory = categoryFilter === "todos" || p.category === categoryFilter;
       
       let gender = "unissex";
@@ -56,7 +67,7 @@ export default function Catalog() {
       
       return matchesSearch && matchesCategory && matchesGender && inStock;
     });
-  }, [products, search, categoryFilter, genderFilter]);
+  }, [products, normalizedSearch, categoryFilter, genderFilter]);
 
   const addToCart = (product: Product) => {
     setCart(prev => {
@@ -82,7 +93,7 @@ export default function Catalog() {
       removeFromCart(productId);
       return;
     }
-    const product = products.find(p => p.id === productId);
+    const product = productById.get(productId);
     if (!product || newQuantity > product.stock) return;
     setCart(prev =>
       prev.map(item =>
@@ -100,7 +111,8 @@ export default function Catalog() {
   const handleCopyLink = () => {
     navigator.clipboard.writeText(catalogUrl);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (copyResetTimeoutRef.current) clearTimeout(copyResetTimeoutRef.current);
+    copyResetTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
     const user = getFirebaseAuth()?.currentUser;
     logTelemetryEvent("catalog_link_shared", { catalogSlug }, user?.uid);
     trackAnalyticsEvent("catalog_shared", { method: "copy" });
