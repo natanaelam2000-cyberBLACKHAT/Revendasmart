@@ -29,6 +29,9 @@
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
+  --color-success: hsl(var(--success));
+  --color-warning: hsl(var(--warning));
+  --color-info: hsl(var(--info));
 }
 
 :root {
@@ -60,8 +63,48 @@
   --border: 354 20% 90%;
   --input: 354 20% 90%;
   --ring: 355 48% 65%;
+  --success: 145 63% 42%;
+  --warning: 38 92% 50%;
+  --info: 199 89% 48%;
   
   --radius: 1rem;
+
+  --rs-color-primary: hsl(var(--primary));
+  --rs-color-secondary: hsl(var(--secondary));
+  --rs-color-accent: hsl(var(--accent));
+  --rs-color-success: hsl(var(--success));
+  --rs-color-warning: hsl(var(--warning));
+  --rs-color-danger: hsl(var(--destructive));
+  --rs-color-info: hsl(var(--info));
+  --rs-background: hsl(var(--background));
+  --rs-surface: hsl(var(--card));
+  --rs-surface-elevated: hsl(var(--popover));
+  --rs-surface-secondary: hsl(var(--secondary) / 0.62);
+  --rs-card: hsl(var(--card));
+  --rs-border: hsl(var(--border));
+  --rs-border-subtle: hsl(var(--border) / 0.62);
+  --rs-muted: hsl(var(--muted));
+  --rs-text-primary: hsl(var(--foreground));
+  --rs-text-secondary: hsl(var(--muted-foreground));
+  --rs-input-bg: hsl(var(--background) / 0.64);
+  --rs-input-border: hsl(var(--input));
+  --rs-focus-ring: hsl(var(--primary) / 0.20);
+  --rs-link: hsl(var(--primary));
+  --rs-badge-bg: hsl(var(--primary) / 0.10);
+  --rs-badge-text: hsl(var(--primary));
+  --rs-progress-bg: hsl(var(--primary) / 0.16);
+  --rs-progress-fill: hsl(var(--primary));
+  --rs-bottom-nav-bg: hsl(var(--card) / 0.92);
+  --rs-fab-bg: hsl(var(--primary));
+  --rs-skeleton-bg: hsl(var(--primary) / 0.10);
+  --rs-chart-1: hsl(var(--primary));
+  --rs-chart-2: hsl(var(--accent-foreground) / 0.74);
+  --rs-chart-3: hsl(var(--muted-foreground) / 0.62);
+  --rs-radius-base: var(--radius);
+  --rs-spacing-base: 1rem;
+  --rs-transition-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --rs-duration-fast: 150ms;
+  --rs-duration-normal: 220ms;
 }
 
 @layer base {
@@ -126,7 +169,47 @@
   }
 
   .rs-image-reveal {
-    animation: rs-image-reveal 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    animation: rs-image-reveal 180ms var(--rs-transition-standard) both;
+  }
+
+  .rs-card {
+    background-color: var(--rs-surface);
+    border-color: var(--rs-border-subtle);
+  }
+
+  .rs-button {
+    outline-color: var(--rs-focus-ring);
+  }
+
+  .rs-input {
+    background-color: var(--rs-input-bg);
+    border-color: var(--rs-input-border);
+  }
+
+  .rs-input:focus-visible {
+    box-shadow: 0 0 0 3px var(--rs-focus-ring);
+  }
+
+  .rs-badge {
+    border-color: var(--rs-border-subtle);
+  }
+
+  .rs-dialog-surface {
+    background-color: var(--rs-surface-elevated);
+    color: var(--rs-text-primary);
+  }
+
+  .rs-tabs-list {
+    background-color: var(--rs-surface-secondary);
+  }
+
+  .rs-tabs-trigger[data-state="active"] {
+    background-color: var(--rs-surface);
+    color: var(--rs-text-primary);
+  }
+
+  .rs-skeleton {
+    background-color: var(--rs-skeleton-bg);
   }
 
   @media (hover: hover) and (pointer: fine) {

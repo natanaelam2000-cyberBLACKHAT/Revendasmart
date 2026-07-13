@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { APP_THEMES, DEFAULT_APP_THEME_ID, resolveAppThemeId } from "../client/src/lib/app-themes";
+import { APP_THEME_IDS, APP_THEMES, DEFAULT_APP_THEME_ID, DESIGN_TOKEN_NAMES, buildDesignSystemVariables, resolveAppThemeId } from "../client/src/lib/app-themes";
 import { NICHO_CONFIG, ONBOARDING_NICHO_IDS, getNichoConfig, getProductCategoriesForNicho } from "../client/src/lib/nicho-config";
 import { CATALOG_SERVER_SEARCH_ENABLED, PRODUCT_SEARCH_SCHEMA_VERSION, buildProductSearchFields, canUseCatalogServerSearch, isProductSearchIndexed, normalizeProductSearchText } from "../client/src/lib/product-search";
 
@@ -284,7 +284,19 @@ assert.equal(customFashionCategories.filter((category) => category === "Jeans Pr
 assert.ok(!customFashionCategories.includes("Eletrônicos"));
 assert.equal(getNichoConfig("nicho-invalido").id, "Geral");
 assert.equal(resolveAppThemeId("tema-invalido"), DEFAULT_APP_THEME_ID);
-assert.equal(APP_THEMES.length, 6);
+assert.ok(APP_THEMES.length >= 10);
+for (const themeId of ["red", "oled", "turquoise", "gold"]) {
+  assert.ok(APP_THEME_IDS.includes(themeId as any), `missing design-system theme ${themeId}`);
+}
+for (const tokenName of ["primary", "surface", "success", "warning", "info", "duration"]) {
+  assert.ok(DESIGN_TOKEN_NAMES.includes(tokenName as any), `missing design token ${tokenName}`);
+}
+const designVariables = buildDesignSystemVariables("turquoise");
+for (const cssVar of ["--rs-color-primary", "--rs-surface", "--rs-focus-ring", "--rs-chart-1"]) {
+  assert.ok(designVariables[cssVar], `missing design system variable ${cssVar}`);
+}
+assert.match(mockData, /storeIdentity\?:/);
+assert.match(mockData, /slogan\?: string/);
 assert.match(chargesHook, /const CHARGES_PAGE_SIZE = 30/);
 assert.match(chargesHook, /orderBy\("createdAt", "desc"\), limit\(CHARGES_PAGE_SIZE\)/);
 assert.match(chargesHook, /startAfter\(lastChargeDocRef\.current\)/);

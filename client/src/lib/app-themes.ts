@@ -1,4 +1,4 @@
-export const APP_THEME_IDS = ["purple", "blue", "green", "rose", "orange", "black"] as const;
+export const APP_THEME_IDS = ["purple", "blue", "green", "rose", "red", "orange", "black", "oled", "turquoise", "gold"] as const;
 
 export type AppThemeId = typeof APP_THEME_IDS[number];
 export type ButtonTone = "solid" | "soft" | "gradient";
@@ -15,6 +15,46 @@ export type AppThemeCustomization = {
   radius?: RadiusScale;
   motion?: MotionPreference;
 };
+
+export type StoreIdentitySettings = {
+  name?: string;
+  logoUrl?: string;
+  primaryColor?: string;
+  secondaryColor?: string;
+  accentColor?: string;
+  icon?: string;
+  slogan?: string;
+  heroImageUrl?: string;
+};
+
+export type DesignTokenName =
+  | "primary"
+  | "secondary"
+  | "accent"
+  | "surface"
+  | "surfaceSecondary"
+  | "background"
+  | "card"
+  | "success"
+  | "warning"
+  | "danger"
+  | "info"
+  | "border"
+  | "muted"
+  | "textPrimary"
+  | "textSecondary"
+  | "shadow"
+  | "radius"
+  | "spacing"
+  | "transition"
+  | "duration";
+
+export const DESIGN_TOKEN_NAMES: DesignTokenName[] = [
+  "primary", "secondary", "accent", "surface", "surfaceSecondary",
+  "background", "card", "success", "warning", "danger", "info",
+  "border", "muted", "textPrimary", "textSecondary", "shadow",
+  "radius", "spacing", "transition", "duration",
+];
 
 type AppTheme = {
   id: AppThemeId;
@@ -159,6 +199,31 @@ export const APP_THEMES: AppTheme[] = [
     },
   },
   {
+    id: "red",
+    label: "Vermelho Comercial",
+    description: "Energia de venda, destaque e urgência controlada.",
+    primaryColor: "#dc2626",
+    swatch: "from-red-500 to-rose-700",
+    cssVariables: {
+      "--background": "0 35% 98%",
+      "--foreground": "0 28% 18%",
+      "--card": "0 0% 100%",
+      "--card-foreground": "0 28% 18%",
+      "--popover": "0 0% 100%",
+      "--popover-foreground": "0 28% 18%",
+      "--primary": "0 72% 51%",
+      "--secondary": "0 30% 94%",
+      "--secondary-foreground": "0 28% 18%",
+      "--muted": "0 24% 92%",
+      "--muted-foreground": "0 14% 42%",
+      "--accent": "0 46% 90%",
+      "--accent-foreground": "0 28% 18%",
+      "--border": "0 24% 88%",
+      "--input": "0 24% 88%",
+      "--ring": "0 72% 51%",
+    },
+  },
+  {
     id: "orange",
     label: "Tema Laranja",
     description: "Energia comercial sem perder elegância.",
@@ -185,10 +250,10 @@ export const APP_THEMES: AppTheme[] = [
   },
   {
     id: "black",
-    label: "Tema Escuro Premium",
-    description: "Visual sóbrio com contraste e presença.",
+    label: "Grafite Executivo",
+    description: "Visual sóbrio para operação, relatórios e gestão.",
     primaryColor: "#111827",
-    swatch: "from-slate-950 to-zinc-700",
+    swatch: "from-slate-700 to-zinc-950",
     cssVariables: {
       "--background": "220 18% 97%",
       "--foreground": "224 28% 18%",
@@ -206,6 +271,81 @@ export const APP_THEMES: AppTheme[] = [
       "--border": "220 14% 86%",
       "--input": "220 14% 86%",
       "--ring": "224 28% 18%",
+    },
+  },
+  {
+    id: "oled",
+    label: "Preto OLED",
+    description: "Modo escuro real para uso noturno e telas OLED.",
+    primaryColor: "#8b5cf6",
+    swatch: "from-black via-zinc-950 to-violet-800",
+    cssVariables: {
+      "--background": "222 47% 4%",
+      "--foreground": "210 40% 96%",
+      "--card": "222 36% 7%",
+      "--card-foreground": "210 40% 96%",
+      "--popover": "222 36% 7%",
+      "--popover-foreground": "210 40% 96%",
+      "--primary": "258 90% 66%",
+      "--secondary": "222 24% 13%",
+      "--secondary-foreground": "210 40% 96%",
+      "--muted": "222 22% 16%",
+      "--muted-foreground": "217 16% 72%",
+      "--accent": "258 36% 20%",
+      "--accent-foreground": "210 40% 96%",
+      "--border": "222 18% 18%",
+      "--input": "222 18% 18%",
+      "--ring": "258 90% 66%",
+    },
+  },
+  {
+    id: "turquoise",
+    label: "Turquesa",
+    description: "Leve, moderno e limpo para catálogos visuais.",
+    primaryColor: "#0891b2",
+    swatch: "from-cyan-400 to-teal-700",
+    cssVariables: {
+      "--background": "185 42% 97%",
+      "--foreground": "190 34% 18%",
+      "--card": "0 0% 100%",
+      "--card-foreground": "190 34% 18%",
+      "--popover": "0 0% 100%",
+      "--popover-foreground": "190 34% 18%",
+      "--primary": "192 91% 36%",
+      "--secondary": "184 34% 93%",
+      "--secondary-foreground": "190 34% 18%",
+      "--muted": "184 28% 91%",
+      "--muted-foreground": "190 14% 42%",
+      "--accent": "184 44% 88%",
+      "--accent-foreground": "190 34% 18%",
+      "--border": "184 26% 86%",
+      "--input": "184 26% 86%",
+      "--ring": "192 91% 36%",
+    },
+  },
+  {
+    id: "gold",
+    label: "Dourado Premium",
+    description: "Aparência premium para consultoras e lojas boutique.",
+    primaryColor: "#b45309",
+    swatch: "from-amber-300 to-yellow-700",
+    cssVariables: {
+      "--background": "42 46% 97%",
+      "--foreground": "32 32% 18%",
+      "--card": "0 0% 100%",
+      "--card-foreground": "32 32% 18%",
+      "--popover": "0 0% 100%",
+      "--popover-foreground": "32 32% 18%",
+      "--primary": "32 95% 39%",
+      "--secondary": "42 34% 92%",
+      "--secondary-foreground": "32 32% 18%",
+      "--muted": "42 28% 90%",
+      "--muted-foreground": "32 14% 42%",
+      "--accent": "42 50% 86%",
+      "--accent-foreground": "32 32% 18%",
+      "--border": "42 26% 84%",
+      "--input": "42 26% 84%",
+      "--ring": "32 95% 39%",
     },
   },
 ];
@@ -254,6 +394,52 @@ function hexToHsl(hex: string): string | null {
   return `${Math.round(h * 360)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%`;
 }
 
+export function buildDesignSystemVariables(themeId: unknown, customizationPatch?: AppThemeCustomization): Record<string, string> {
+  const theme = getAppTheme(themeId);
+  const customization = resolveCustomization(customizationPatch, theme);
+  const primaryHsl = hexToHsl(customization.primaryColor);
+  const primaryColor = primaryHsl ? `hsl(${primaryHsl})` : "hsl(var(--primary))";
+
+  return {
+    "--rs-color-primary": primaryColor,
+    "--rs-color-secondary": "hsl(var(--secondary))",
+    "--rs-color-accent": "hsl(var(--accent))",
+    "--rs-color-success": "hsl(var(--success))",
+    "--rs-color-warning": "hsl(var(--warning))",
+    "--rs-color-danger": "hsl(var(--destructive))",
+    "--rs-color-info": "hsl(var(--info))",
+    "--rs-background": "hsl(var(--background))",
+    "--rs-surface": "hsl(var(--card))",
+    "--rs-surface-elevated": "hsl(var(--popover))",
+    "--rs-surface-secondary": "hsl(var(--secondary) / 0.62)",
+    "--rs-card": "hsl(var(--card))",
+    "--rs-border": "hsl(var(--border))",
+    "--rs-border-subtle": "hsl(var(--border) / 0.62)",
+    "--rs-muted": "hsl(var(--muted))",
+    "--rs-text-primary": "hsl(var(--foreground))",
+    "--rs-text-secondary": "hsl(var(--muted-foreground))",
+    "--rs-input-bg": "hsl(var(--background) / 0.64)",
+    "--rs-input-border": "hsl(var(--input))",
+    "--rs-focus-ring": `${primaryColor}33`,
+    "--rs-link": primaryColor,
+    "--rs-badge-bg": "hsl(var(--primary) / 0.10)",
+    "--rs-badge-text": primaryColor,
+    "--rs-progress-bg": "hsl(var(--primary) / 0.16)",
+    "--rs-progress-fill": primaryColor,
+    "--rs-bottom-nav-bg": "hsl(var(--card) / 0.92)",
+    "--rs-fab-bg": primaryColor,
+    "--rs-skeleton-bg": "hsl(var(--primary) / 0.10)",
+    "--rs-chart-1": primaryColor,
+    "--rs-chart-2": "hsl(var(--accent-foreground) / 0.74)",
+    "--rs-chart-3": "hsl(var(--muted-foreground) / 0.62)",
+    "--rs-radius-base": "var(--radius)",
+    "--rs-spacing-base": "1rem",
+    "--rs-transition-standard": "cubic-bezier(0.2, 0.8, 0.2, 1)",
+    "--rs-duration-fast": "150ms",
+    "--rs-duration-normal": "220ms",
+  };
+}
+
 function resolveCustomization(value: unknown, theme: AppTheme): Required<AppThemeCustomization> {
   const customization = (value && typeof value === "object") ? value as AppThemeCustomization : {};
   return {
@@ -293,5 +479,8 @@ export function applyAppTheme(settingsOrTheme: unknown, maybeCustomization?: App
     root.style.setProperty("--primary", primaryHsl);
     root.style.setProperty("--ring", primaryHsl);
   }
+  Object.entries(buildDesignSystemVariables(theme.id, customization)).forEach(([name, value]) => {
+    root.style.setProperty(name, value);
+  });
   root.style.setProperty("--rs-primary-hex", customization.primaryColor);
 }

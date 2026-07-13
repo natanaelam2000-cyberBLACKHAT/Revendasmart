@@ -171,6 +171,16 @@ export interface AppSettings {
   address: string;
   storeLogo: string;
   primaryColor: string;
+  storeIdentity?: {
+    name?: string;
+    logoUrl?: string;
+    primaryColor?: string;
+    secondaryColor?: string;
+    accentColor?: string;
+    icon?: string;
+    slogan?: string;
+    heroImageUrl?: string;
+  };
   watermarkText: string;
   pixKey: string;
   bankName: string;
@@ -471,6 +481,16 @@ export const defaultSettings: AppSettings = {
   address: '',
   storeLogo: '',
   primaryColor: '#ec4899',
+  storeIdentity: {
+    name: '',
+    logoUrl: '',
+    primaryColor: '',
+    secondaryColor: '',
+    accentColor: '',
+    icon: '',
+    slogan: '',
+    heroImageUrl: ''
+  },
   watermarkText: 'Minha Loja',
   pixKey: '',
   bankName: '',
