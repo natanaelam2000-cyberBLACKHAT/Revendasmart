@@ -19,9 +19,7 @@ import { useProductsData } from "@/hooks/useProductsData";
 import { useSalesData } from "@/hooks/useSalesData";
 import { useFeatureEnabled } from "@/lib/remote-config-context";
 import {
-  calculateAttentionItems,
   calculateDashboardInsights,
-  calculateDashboardPremiumIndicators,
   calculateExecutiveSummary,
   calculateInactiveClientCount,
   calculateLowStockProducts,
@@ -71,19 +69,17 @@ const percentLabel = (value?: number) => {
   return `${safeValue > 0 ? "+" : ""}${safeValue}%`;
 };
 
-const formatPremiumIndicatorValue = (value: number, kind: "currency" | "number" | "percent") => {
-  if (kind === "currency") return money(value);
-  if (kind === "percent") return `${value.toFixed(0)}%`;
-  return value.toLocaleString("pt-BR", { maximumFractionDigits: 0 });
+const compactNumber = (value: number) =>
+  value.toLocaleString("pt-BR", { maximumFractionDigits: 0 });
+
+const getSafeDate = (value?: string | null): Date | null => {
+  if (!value) return null;
+  const parsed = parseISO(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
 
-const premiumToneClasses = {
-  positive: "border-emerald-100 bg-emerald-50/70 text-emerald-700",
-  negative: "border-rose-100 bg-rose-50/70 text-rose-700",
-  neutral: "border-border/60 bg-white text-muted-foreground",
-};
-
-const directionSymbol = { up: "↑", down: "↓", flat: "→" };
+const isSameMonthDate = (date: Date, referenceDate: Date) =>
+  date.getMonth() === referenceDate.getMonth() && date.getFullYear() === referenceDate.getFullYear();
 
 type OnboardingChecklistUi = { collapsed: boolean; dismissed: boolean };
 
@@ -248,11 +244,6 @@ export default function Dashboard() {
     [products, settings.lowStockThreshold]
   );
 
-  const premiumIndicators = useMemo(
-    () => calculateDashboardPremiumIndicators(executiveSummary, monthlyGoal, stockExecutive),
-    [executiveSummary, monthlyGoal, stockExecutive]
-  );
-
   const inactiveClientCount = useMemo(
     () => calculateInactiveClientCount(clients, sales),
     [clients, sales]
@@ -291,14 +282,6 @@ export default function Dashboard() {
     () => posts.filter(p => isToday(parseISO(p.scheduledDate)) && p.status !== 'posted'),
     [posts]
   );
-  const overdueChargesCount = useMemo(
-    () => {
-      const now = new Date();
-      return billings.filter(b => parseISO(b.dueDate) < now && b.status !== 'paid').length;
-    },
-    [billings]
-  );
-
   // Top selling products in current month
   const topProducts = useMemo(
     () => calculateTopProducts(monthlyDashboardData.productQuantities, productById),
@@ -311,24 +294,14 @@ export default function Dashboard() {
     [products, settings.lowStockThreshold]
   );
 
-  const attentionItems = useMemo(
-    () => calculateAttentionItems({
-      lowStockCount: stockExecutive.lowStockCount,
-      overdueChargesCount,
-      inactiveClientCount,
-      monthlyGoal,
-    }),
-    [inactiveClientCount, monthlyGoal, overdueChargesCount, stockExecutive.lowStockCount]
-  );
-
-  const comparisonCards = [
+  const comparisonCards = useMemo(() => [
     { label: "Receita", value: money(monthlyComparison.revenue.current), previous: money(monthlyComparison.revenue.previous), change: monthlyComparison.revenue.changePercent, direction: monthlyComparison.revenue.direction },
     { label: "Lucro", value: money(monthlyComparison.profit.current), previous: money(monthlyComparison.profit.previous), change: monthlyComparison.profit.changePercent, direction: monthlyComparison.profit.direction },
     { label: "Produtos", value: String(monthlyComparison.productsSold.current), previous: String(monthlyComparison.productsSold.previous), change: monthlyComparison.productsSold.changePercent, direction: monthlyComparison.productsSold.direction },
     { label: "Clientes", value: String(monthlyComparison.activeClients.current), previous: String(monthlyComparison.activeClients.previous), change: monthlyComparison.activeClients.changePercent, direction: monthlyComparison.activeClients.direction },
-  ];
+  ], [monthlyComparison]);
 
-  const commercialInsightCards = [
+  const commercialInsightCards = useMemo(() => [
     { label: "Categoria mais lucrativa", value: businessInsights.mostProfitableCategory?.label || "Sem dados", detail: businessInsights.mostProfitableCategory ? money(businessInsights.mostProfitableCategory.profit) : "" },
     { label: "Marca mais lucrativa", value: businessInsights.mostProfitableBrand?.label || "Sem dados", detail: businessInsights.mostProfitableBrand ? money(businessInsights.mostProfitableBrand.profit) : "" },
     { label: "Maior faturamento", value: businessInsights.topRevenueCategory?.label || "Sem dados", detail: businessInsights.topRevenueCategory ? money(businessInsights.topRevenueCategory.revenue) : "" },
@@ -338,15 +311,126 @@ export default function Dashboard() {
     { label: "Mais caiu", value: businessInsights.productMostDropped?.product.name || "Sem dados", detail: businessInsights.productMostDropped?.changePercent !== undefined ? percentLabel(businessInsights.productMostDropped.changePercent) : "" },
     { label: "Maior giro", value: businessInsights.highestTurnoverProduct?.product.name || "Sem dados", detail: businessInsights.highestTurnoverProduct ? `${businessInsights.highestTurnoverProduct.quantity} un` : "" },
     { label: "Menor giro", value: businessInsights.lowestTurnoverProduct?.product.name || "Sem dados", detail: businessInsights.lowestTurnoverProduct ? `${businessInsights.lowestTurnoverProduct.quantity} un` : "" },
-  ];
+  ], [businessInsights]);
 
-  const quickActions = [
-    { label: "Cadastrar produto", path: "/add-product", icon: Plus },
-    { label: "Registrar venda", path: "/sale", icon: ShoppingCart },
+  const commandCenter = useMemo(() => {
+    const now = new Date();
+    let todayRevenue = 0;
+    let todayProductsSold = 0;
+    const soldProductIds = new Set<string>();
+    const monthlyCategoryRevenue = new Map<string, number>();
+    const monthlyBrandRevenue = new Map<string, number>();
+    const clientSaleCounts = new Map<string, number>();
+    const lastSaleByClientId = new Map<string, Date>();
+
+    for (const sale of sales) {
+      const saleDate = getSafeDate(sale.date);
+      const saleTotal = Number(sale.totalPrice ?? sale.total ?? 0);
+
+      if (sale.clientId) {
+        clientSaleCounts.set(sale.clientId, (clientSaleCounts.get(sale.clientId) || 0) + 1);
+        if (saleDate) {
+          const currentLastSale = lastSaleByClientId.get(sale.clientId);
+          if (!currentLastSale || saleDate > currentLastSale) lastSaleByClientId.set(sale.clientId, saleDate);
+        }
+      }
+
+      if (saleDate && isToday(saleDate)) todayRevenue += Number.isFinite(saleTotal) ? saleTotal : 0;
+
+      for (const soldProduct of sale.products || []) {
+        soldProductIds.add(soldProduct.productId);
+        const quantity = Number(soldProduct.quantity || 0);
+        if (saleDate && isToday(saleDate)) todayProductsSold += quantity;
+        if (!saleDate || !isSameMonthDate(saleDate, now)) continue;
+        const product = productById.get(soldProduct.productId);
+        if (!product) continue;
+        const revenue = quantity * Number(soldProduct.price || 0);
+        monthlyCategoryRevenue.set(product.category || "Sem categoria", (monthlyCategoryRevenue.get(product.category || "Sem categoria") || 0) + revenue);
+        monthlyBrandRevenue.set(product.brand || "Sem marca", (monthlyBrandRevenue.get(product.brand || "Sem marca") || 0) + revenue);
+      }
+    }
+
+    const pickTopLabel = (map: Map<string, number>): { label: string; value: number } | null => {
+      let best: { label: string; value: number } | null = null;
+      map.forEach((value, label) => {
+        if (!best || value > best.value) best = { label, value };
+      });
+      return best;
+    };
+
+    const activeClientCount = clients.filter((client) => {
+      const lastSale = lastSaleByClientId.get(client.id);
+      if (!lastSale) return false;
+      return Math.floor((now.getTime() - lastSale.getTime()) / 86400000) <= 30;
+    }).length;
+
+    const recurringClientCount = Array.from(clientSaleCounts.values()).filter((count) => count >= 2).length;
+    const unsoldProductsCount = products.filter((product) => !soldProductIds.has(product.id) && !product.lastSoldDate).length;
+    const catalogReady = settings.enablePublicCatalog !== false && Boolean(settings.catalogSlug || settings.catalog_slug);
+    const setupComplete = onboarding_completed === true;
+    const criticalAlertCount = Number(stockExecutive.outOfStockCount > 0) + Number(stockExecutive.lowStockCount > 0) + Number(inactiveClientCount > 0) + Number(!catalogReady) + Number(!setupComplete);
+
+    return {
+      todayRevenue,
+      todayProductsSold,
+      activeClientCount,
+      recurringClientCount,
+      unsoldProductsCount,
+      bestCategory: pickTopLabel(monthlyCategoryRevenue),
+      bestBrand: pickTopLabel(monthlyBrandRevenue),
+      catalogReady,
+      setupComplete,
+      criticalAlertCount,
+    };
+  }, [clients, inactiveClientCount, onboarding_completed, productById, products, sales, settings, stockExecutive.lowStockCount, stockExecutive.outOfStockCount]);
+
+  const commandHealth = commandCenter.criticalAlertCount === 0 ? "Operação saudável" : commandCenter.criticalAlertCount <= 2 ? "Atenção moderada" : "Prioridade alta";
+
+  const commandKpis = useMemo(() => [
+    { label: "Hoje", value: money(commandCenter.todayRevenue), detail: `${compactNumber(commandCenter.todayProductsSold)} itens vendidos`, tone: "from-sky-50 to-blue-50 border-blue-100 text-blue-700" },
+    { label: "Mês", value: money(executiveSummary.revenue), detail: `${monthlyGoal.percent}% da meta`, tone: "from-primary/5 to-violet-50 border-primary/15 text-primary" },
+    { label: "Lucro", value: money(executiveSummary.profit), detail: `${executiveSummary.averageMargin.toFixed(0)}% margem média`, tone: "from-emerald-50 to-green-50 border-emerald-100 text-emerald-700" },
+    { label: "Ticket", value: money(executiveSummary.averageTicket), detail: `${compactNumber(executiveSummary.productsSold)} produtos no mês`, tone: "from-amber-50 to-orange-50 border-amber-100 text-amber-700" },
+  ], [commandCenter.todayProductsSold, commandCenter.todayRevenue, executiveSummary.averageMargin, executiveSummary.averageTicket, executiveSummary.productsSold, executiveSummary.profit, executiveSummary.revenue, monthlyGoal.percent]);
+
+  const executiveMetricCards = useMemo(() => [
+    ["Receita", money(executiveSummary.revenue)],
+    ["Lucro", money(executiveSummary.profit)],
+    ["Produtos vendidos", String(executiveSummary.productsSold)],
+    ["Ticket médio", money(executiveSummary.averageTicket)],
+    ["Clientes ativos", String(executiveSummary.activeClients)],
+    ["Margem média", `${executiveSummary.averageMargin.toFixed(0)}%`],
+  ], [executiveSummary]);
+
+  const executiveWidgets = useMemo(() => [
+    { title: "Financeiro", value: money(executiveSummary.revenue), detail: `Lucro estimado ${money(executiveSummary.profit)}`, path: "/monthly-sales", icon: TrendingUp, tone: "bg-primary/5 text-primary" },
+    { title: "Clientes", value: `${compactNumber(commandCenter.activeClientCount)} ativos`, detail: `${compactNumber(commandCenter.recurringClientCount)} recorrentes · ${compactNumber(inactiveClientCount)} inativos`, path: "/clients", icon: Users, tone: "bg-blue-50 text-blue-700" },
+    { title: "Produtos", value: `${compactNumber(products.length)} cadastrados`, detail: `${compactNumber(stockExecutive.lowStockCount + stockExecutive.outOfStockCount)} precisam atenção`, path: "/products", icon: Package, tone: "bg-orange-50 text-orange-700" },
+    { title: "Cobranças", value: "Tela dedicada", detail: "Sem listener extra no Dashboard", path: "/billings", icon: Receipt, tone: "bg-emerald-50 text-emerald-700" },
+    { title: "Marketing", value: worstProduct?.product.name || "Sem produto parado", detail: worstProduct ? `Parado: ${worstProduct.statusLabel}` : "Pronto para campanhas", path: "/marketing", icon: Megaphone, tone: "bg-rose-50 text-rose-700" },
+    { title: "Catálogo", value: commandCenter.catalogReady ? "Ativo" : "Configurar", detail: commandCenter.bestCategory ? `Destaque: ${commandCenter.bestCategory.label}` : "Compartilhe seus produtos", path: "/catalog", icon: BookOpen, tone: "bg-violet-50 text-violet-700" },
+    { title: "Vendas", value: topProducts[0]?.product.name || "Sem vendas", detail: topProducts[0] ? `${topProducts[0].quantity} un · ${money(topProducts[0].revenue)}` : "Registre sua primeira venda", path: "/sale", icon: ShoppingCart, tone: "bg-amber-50 text-amber-700" },
+  ], [commandCenter.activeClientCount, commandCenter.bestCategory, commandCenter.catalogReady, commandCenter.recurringClientCount, executiveSummary.profit, executiveSummary.revenue, inactiveClientCount, products.length, stockExecutive.lowStockCount, stockExecutive.outOfStockCount, topProducts, worstProduct]);
+
+  const smartAlerts = useMemo(() => {
+    const alerts = [] as Array<{ title: string; detail: string; path: string; tone: "success" | "warning" | "danger" }>;
+    if (stockExecutive.outOfStockCount > 0 || stockExecutive.lowStockCount > 0) alerts.push({ title: "Estoque pede ação", detail: `${stockExecutive.outOfStockCount} sem estoque · ${stockExecutive.lowStockCount} acabando`, path: "/products", tone: "danger" });
+    if (worstProduct) alerts.push({ title: "Produto parado", detail: `${worstProduct.product.name} · ${worstProduct.statusLabel}`, path: "/marketing", tone: "warning" });
+    if (inactiveClientCount > 0) alerts.push({ title: "Clientes esfriando", detail: `${inactiveClientCount} sem comprar há mais de 60 dias`, path: "/clients", tone: "warning" });
+    if (!commandCenter.catalogReady) alerts.push({ title: "Catálogo incompleto", detail: "Configure o link público antes de divulgar", path: "/catalog", tone: "warning" });
+    if (!commandCenter.setupComplete) alerts.push({ title: "Configuração inicial pendente", detail: "Finalize ou dispense o onboarding quando estiver pronta", path: "/onboarding", tone: "warning" });
+    if (alerts.length === 0) alerts.push({ title: "Tudo sob controle", detail: "Nenhuma prioridade crítica usando os dados já carregados", path: "/dashboard", tone: "success" });
+    return alerts.slice(0, 4);
+  }, [commandCenter.catalogReady, commandCenter.setupComplete, inactiveClientCount, stockExecutive.lowStockCount, stockExecutive.outOfStockCount, worstProduct]);
+
+  const quickActions = useMemo(() => [
+    { label: "Novo produto", path: "/add-product", icon: Plus },
+    { label: "Nova venda", path: "/sale", icon: ShoppingCart },
+    { label: "Novo cliente", path: "/clients", icon: Users },
     { label: "Nova cobrança", path: "/billings", icon: Receipt },
-    { label: "Gerar anúncio", path: "/marketing", icon: Megaphone },
-    { label: "Abrir catálogo", path: "/catalog", icon: BookOpen },
-  ];
+    { label: "Compartilhar catálogo", path: "/catalog", icon: Share2 },
+    { label: "Criar campanha", path: "/marketing", icon: Megaphone },
+  ], []);
 
   const onboardingChecklistItems = useMemo<OnboardingChecklistItem[]>(() => [
     {
@@ -505,39 +589,57 @@ export default function Dashboard() {
         )}
 
         <section className="rounded-[2rem] border border-primary/10 bg-gradient-to-br from-white via-primary/5 to-rose-50 p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between gap-3">
+          <div className="mb-4 flex items-start justify-between gap-3">
             <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-primary">Mini resumo executivo</p>
-              <h2 className="mt-1 text-lg font-black tracking-tight text-foreground">Saúde comercial do mês</h2>
+              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-primary">Centro de comando</p>
+              <h2 className="mt-1 text-lg font-black tracking-tight text-foreground">O que precisa da sua atenção agora</h2>
+              <p className="mt-1 text-[11px] text-muted-foreground">Resumo executivo em até 5 segundos, usando apenas dados já carregados.</p>
             </div>
-            <span className="rounded-full bg-white px-3 py-1 text-[10px] font-bold text-muted-foreground shadow-sm">Premium 2.0</span>
+            <span className={`rounded-full px-3 py-1 text-[10px] font-bold shadow-sm ${commandCenter.criticalAlertCount === 0 ? "bg-emerald-100 text-emerald-700" : commandCenter.criticalAlertCount <= 2 ? "bg-amber-100 text-amber-700" : "bg-rose-100 text-rose-700"}`}>{commandHealth}</span>
           </div>
+
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            {premiumIndicators.map((item) => (
-              <div key={item.label} className={`rounded-2xl border p-4 shadow-sm ${premiumToneClasses[item.tone]}`}>
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-[10px] font-black uppercase tracking-wide opacity-80">{item.label}</p>
-                  <span className="text-sm font-black">{directionSymbol[item.direction]}</span>
-                </div>
-                <p className="mt-2 text-lg font-black text-foreground">{formatPremiumIndicatorValue(item.value, item.kind)}</p>
+            {commandKpis.map((item) => (
+              <div key={item.label} className={`rounded-2xl border bg-gradient-to-br p-4 shadow-sm ${item.tone}`}>
+                <p className="text-[10px] font-black uppercase tracking-wide opacity-80">{item.label}</p>
+                <p className="mt-2 text-lg font-black text-foreground">{item.value}</p>
                 <p className="mt-1 text-[11px] font-semibold opacity-80">{item.detail}</p>
               </div>
             ))}
           </div>
-        </section>
 
-        <section className="bg-white rounded-[2rem] border border-border/50 p-5 shadow-sm">
-          <div className="flex items-center justify-between gap-3 mb-3">
-            <h2 className="text-xs font-semibold text-primary flex items-center gap-2"><AlertCircle className="w-4 h-4" /> Atenção hoje</h2>
-            <span className="text-[10px] text-muted-foreground font-semibold">Prioridades</span>
-          </div>
-          <div className="space-y-2">
-            {attentionItems.map((item) => (
-              <div key={item.label} className={`flex items-center gap-2 rounded-2xl px-3 py-2 text-xs font-semibold ${item.tone === "success" ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>
-                <span>{item.tone === "success" ? "✅" : "⚠"}</span>
-                <span>{item.label}</span>
+          <div className="mt-4 grid grid-cols-1 lg:grid-cols-[1fr_0.86fr] gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
+              {executiveWidgets.map((widget) => {
+                const Icon = widget.icon;
+                return (
+                  <button key={widget.title} onClick={() => setLocation(widget.path)} className="rs-card-interactive bg-white rounded-2xl border border-border/50 p-4 text-left shadow-sm min-h-[112px]">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${widget.tone}`}><Icon className="w-5 h-5" /></div>
+                      <ArrowRight className="w-4 h-4 text-muted-foreground" />
+                    </div>
+                    <p className="mt-3 text-[10px] font-black uppercase tracking-wide text-muted-foreground">{widget.title}</p>
+                    <p className="mt-1 text-sm font-black text-foreground truncate">{widget.value}</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground line-clamp-2">{widget.detail}</p>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="rounded-2xl border border-border/50 bg-white p-4 shadow-sm">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <h3 className="text-xs font-semibold text-primary flex items-center gap-2"><AlertCircle className="w-4 h-4" /> Alertas inteligentes</h3>
+                <span className="text-[10px] text-muted-foreground font-semibold">Ações</span>
               </div>
-            ))}
+              <div className="space-y-2">
+                {smartAlerts.map((alert) => (
+                  <button key={`${alert.title}-${alert.detail}`} onClick={() => setLocation(alert.path)} className={`w-full flex items-start gap-2 rounded-2xl px-3 py-2 text-left text-xs font-semibold transition-transform active:scale-[0.99] ${alert.tone === "success" ? "bg-green-50 text-green-700" : alert.tone === "danger" ? "bg-rose-50 text-rose-700" : "bg-amber-50 text-amber-700"}`}>
+                    <span>{alert.tone === "success" ? "✅" : "⚠"}</span>
+                    <span className="min-w-0"><span className="block font-bold">{alert.title}</span><span className="block text-[11px] opacity-80 truncate">{alert.detail}</span></span>
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </section>
 
@@ -575,14 +677,7 @@ export default function Dashboard() {
           </div>
 
           <div className="grid grid-cols-2 gap-2">
-            {[
-              ["Receita", `R$ ${executiveSummary.revenue.toFixed(2)}`],
-              ["Lucro", `R$ ${executiveSummary.profit.toFixed(2)}`],
-              ["Produtos vendidos", String(executiveSummary.productsSold)],
-              ["Ticket médio", `R$ ${executiveSummary.averageTicket.toFixed(2)}`],
-              ["Clientes ativos", String(executiveSummary.activeClients)],
-              ["Margem média", `${executiveSummary.averageMargin.toFixed(0)}%`],
-            ].map(([label, value]) => (
+            {executiveMetricCards.map(([label, value]) => (
               <div key={label} className="bg-white rounded-2xl border border-border/50 p-3 shadow-sm">
                 <p className="text-[10px] text-muted-foreground font-medium">{label}</p>
                 <p className="text-sm font-semibold mt-1">{value}</p>
