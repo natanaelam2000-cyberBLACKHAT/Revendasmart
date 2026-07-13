@@ -89,7 +89,7 @@
     transition-property: transform, box-shadow, background-color, border-color, color, opacity;
     transition-duration: 180ms;
     transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
-    will-change: transform;
+    backface-visibility: hidden;
   }
 
   .rs-pressable:active {
@@ -100,7 +100,7 @@
     transition-property: transform, background-color, box-shadow, color, opacity;
     transition-duration: 160ms;
     transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
-    will-change: transform;
+    backface-visibility: hidden;
   }
 
   .rs-icon-press:active {
@@ -111,12 +111,33 @@
     transition-property: transform, box-shadow, border-color, background-color;
     transition-duration: 190ms;
     transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
-    will-change: transform;
+    backface-visibility: hidden;
   }
 
-  .rs-card-interactive:hover {
-    border-color: hsl(var(--primary) / 0.28);
-    box-shadow: 0 12px 28px hsl(var(--foreground) / 0.07);
+  .rs-button-interactive {
+    transition-property: transform, box-shadow, background-color, border-color, color, opacity;
+    transition-duration: 160ms;
+    transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+    backface-visibility: hidden;
+  }
+
+  .rs-button-interactive:active:not(:disabled) {
+    transform: translateY(1px) scale(0.985);
+  }
+
+  .rs-image-reveal {
+    animation: rs-image-reveal 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .rs-card-interactive:hover {
+      border-color: hsl(var(--primary) / 0.28);
+      box-shadow: 0 12px 28px hsl(var(--foreground) / 0.07);
+    }
+
+    .rs-button-interactive:hover:not(:disabled) {
+      transform: translateY(-1px);
+    }
   }
 
   .rs-card-interactive:active {
@@ -151,12 +172,17 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes rs-image-reveal {
+  from { opacity: 0; transform: scale(1.015); }
+  to { opacity: 1; transform: scale(1); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .rs-pressable,
   .rs-icon-press,
-  .rs-card-interactive {
+  .rs-card-interactive,
+  .rs-button-interactive {
     transition-duration: 1ms;
-    will-change: auto;
   }
 
   .rs-pressable:active,
@@ -167,7 +193,8 @@
 
   .rs-sheet-enter,
   .rs-dialog-enter,
-  .rs-toast-enter {
+  .rs-toast-enter,
+  .rs-image-reveal {
     animation: none;
   }
 }
