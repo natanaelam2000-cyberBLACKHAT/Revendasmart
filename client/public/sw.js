@@ -1,5 +1,5 @@
-const CACHE_NAME = 'revenda-smart-static-v2';
-const ASSETS = [
+const CACHE_NAME = 'revenda-smart-static-v3';
+const PRECACHE_ASSETS = [
   '/',
   '/index.html',
   '/manifest.json',
@@ -14,9 +14,38 @@ const ASSETS = [
   '/icons/icon-maskable-512x512.png'
 ];
 
+const STATIC_CACHEABLE_DESTINATIONS = new Set(['script', 'style', 'font', 'image', 'manifest']);
+
+const isSameOrigin = (url) => url.origin === self.location.origin;
+
+function isStaticAssetRequest(request, url) {
+  return isSameOrigin(url) && (
+    STATIC_CACHEABLE_DESTINATIONS.has(request.destination)
+    || url.pathname.startsWith('/assets/')
+    || url.pathname.startsWith('/icons/')
+    || url.pathname === '/favicon.png'
+    || url.pathname === '/apple-touch-icon.png'
+    || url.pathname === '/logo-revenda-smart.png'
+    || url.pathname === '/logo-revenda-smart-symbol.png'
+    || url.pathname === '/opengraph.jpg'
+  );
+}
+
+async function cacheFirstStaticAsset(request) {
+  const cached = await caches.match(request);
+  if (cached) return cached;
+
+  const response = await fetch(request);
+  if (response && response.ok && response.type === 'basic') {
+    const cache = await caches.open(CACHE_NAME);
+    cache.put(request, response.clone());
+  }
+  return response;
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_ASSETS))
   );
   self.skipWaiting();
 });
@@ -36,7 +65,7 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return;
 
   const requestUrl = new URL(request.url);
-  if (requestUrl.origin !== self.location.origin) return;
+  if (!isSameOrigin(requestUrl)) return;
 
   if (request.mode === 'navigate') {
     event.respondWith(
@@ -45,7 +74,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  event.respondWith(
-    caches.match(request).then((response) => response || fetch(request))
-  );
+  if (isStaticAssetRequest(request, requestUrl)) {
+    event.respondWith(cacheFirstStaticAsset(request));
+  }
 });

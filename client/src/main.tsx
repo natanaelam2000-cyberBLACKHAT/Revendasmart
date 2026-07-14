@@ -11,6 +11,23 @@ import "./index.css";
 import { APP_VERSION } from "./lib/mock-data";
 import { safeLogger } from "./lib/safe-logger";
 
+function registerPwaServiceWorker() {
+  if (!("serviceWorker" in navigator) || !import.meta.env.PROD) return;
+
+  const register = () => {
+    window.setTimeout(() => {
+      navigator.serviceWorker
+        .register("/sw.js")
+        .catch((error) => safeLogger.warn("service_worker_registration_failed", { module: "pwa", error }));
+    }, 0);
+  };
+
+  if (document.readyState === "complete") {
+    register();
+  } else {
+    window.addEventListener("load", register, { once: true });
+  }
+}
 
 
 class GlobalErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean}> {
@@ -99,6 +116,7 @@ if (isSafeMode) {
     </GlobalErrorBoundary>
   </React.StrictMode>
 );
+registerPwaServiceWorker();
     }
   } catch (e) {
     safeLogger.error("app_boot_failed", e, { module: "main" });
