@@ -3,6 +3,8 @@ import fs from "node:fs";
 import { APP_THEME_IDS, APP_THEMES, DEFAULT_APP_THEME_ID, DESIGN_TOKEN_NAMES, buildDesignSystemVariables, resolveAppThemeId } from "../client/src/lib/app-themes";
 import { NICHO_CONFIG, ONBOARDING_NICHO_IDS, getNichoConfig, getProductCategoriesForNicho } from "../client/src/lib/nicho-config";
 import { CATALOG_SERVER_SEARCH_ENABLED, PRODUCT_SEARCH_SCHEMA_VERSION, buildProductSearchFields, canUseCatalogServerSearch, isProductSearchIndexed, normalizeProductSearchText } from "../client/src/lib/product-search";
+import { buildStoreIntelligence } from "../client/src/lib/store-health";
+import { defaultSettings } from "../client/src/lib/mock-data";
 
 const read = (path: string) => fs.readFileSync(path, "utf8");
 const routes = read("server/routes.ts");
@@ -21,6 +23,7 @@ const settings = read("client/src/pages/settings.tsx");
 const images = read("client/src/components/ProductImageCard.tsx");
 const subscribe = read("client/src/pages/subscribe.tsx");
 const dashboard = read("client/src/pages/dashboard.tsx");
+const storeIntelligencePanel = read("client/src/components/StoreIntelligencePanel.tsx");
 const clientDetail = read("client/src/pages/client-detail.tsx");
 const clientDetailHook = read("client/src/hooks/useClientDetailData.ts");
 const clientMetrics = read("client/src/lib/client-metrics.ts");
@@ -55,6 +58,7 @@ const nichoConfig = read("client/src/lib/nicho-config.ts");
 const addProduct = read("client/src/pages/add-product.tsx");
 const mockData = read("client/src/lib/mock-data.ts");
 const productSearch = read("client/src/lib/product-search.ts");
+const storeHealth = read("client/src/lib/store-health.ts");
 const catalogProductsHook = read("client/src/hooks/useCatalogProductsData.ts");
 const firestoreRules = read("firestore.rules");
 const productSearchBackfill = read("docs/architecture/PRODUCT_SEARCH_INDEX_BACKFILL.md");
@@ -101,6 +105,38 @@ assert.match(catalogProductsHook, /getDocs/);
 assert.match(productSearchBackfill, /dry-run/);
 assert.match(productSearchBackfill, /CATALOG_SERVER_SEARCH_ENABLED=false/);
 assert.match(productSearchBackfill, /Não executar em produção/);
+
+const storeIntelligenceFixture = buildStoreIntelligence({
+  referenceDate: new Date("2026-07-14T12:00:00Z"),
+  lowStockThreshold: 3,
+  settings: { ...defaultSettings, storeName: "Loja Teste", appTheme: "blue-professional", onboarding_theme_selected: true, onboarding_completed: true, catalogSlug: "loja-teste", enablePublicCatalog: true, pixKey: "chave-pix-teste" },
+  products: [
+    { id: "p1", name: "Perfume Floral", brand: "Marca A", category: "Perfumes", costPrice: 40, salePrice: 100, stock: 4, imageUrl: "https://example.com/p1.webp", description: "Perfume feminino" },
+    { id: "p2", name: "Batom Nude", brand: "Marca B", category: "Maquiagem", costPrice: 10, salePrice: 30, stock: 1 },
+  ],
+  clients: [{ id: "c1", name: "Cliente VIP", phone: "11999999999" }, { id: "c2", name: "Cliente Inativa", phone: "11888888888" }],
+  sales: [
+    { id: "s1", clientId: "c1", products: [{ productId: "p1", quantity: 2, price: 100 }], totalPrice: 200, paymentType: "cash", date: "2026-07-14T09:00:00Z" },
+    { id: "s2", clientId: "c1", products: [{ productId: "p2", quantity: 1, price: 30 }], totalPrice: 30, paymentType: "cash", date: "2026-07-03T09:00:00Z" },
+    { id: "s3", clientId: "c2", products: [{ productId: "p1", quantity: 1, price: 100 }], totalPrice: 100, paymentType: "cash", date: "2026-04-01T09:00:00Z" },
+  ],
+});
+assert.ok(storeIntelligenceFixture.health.score >= 80);
+assert.equal(storeIntelligenceFixture.products.topSoldProduct?.product.name, "Perfume Floral");
+assert.equal(storeIntelligenceFixture.products.lowStockProducts.length, 1);
+assert.equal(storeIntelligenceFixture.customers.vipClient?.client.name, "Cliente VIP");
+assert.equal(storeIntelligenceFixture.financial.todayRevenue, 200);
+assert.equal(storeIntelligenceFixture.catalog.active, true);
+assert.ok(storeIntelligenceFixture.recommendations.some((item) => item.title.includes("Adicione fotos")));
+assert.ok(storeIntelligenceFixture.dataLimitations.some((item) => item.includes("Cobrancas")));
+assert.match(storeHealth, /buildStoreIntelligence/);
+assert.match(storeHealth, /evitando novas leituras Firestore/);
+assert.match(dashboard, /StoreIntelligencePanel/);
+assert.match(storeIntelligencePanel, /buildStoreIntelligence/);
+assert.match(storeIntelligencePanel, /Saude da loja/);
+assert.match(storeIntelligencePanel, /BI automatico/);
+assert.match(storeIntelligencePanel, /Sem IA - regras deterministicas/);
+assert.match(storeIntelligencePanel, /Cobrancas nao entram neste score/);
 
 assert.match(routes, /catalogSlug.*catalog_slug.*userSlug.*slug/);
 assert.match(routes, /catalogEnabled/);

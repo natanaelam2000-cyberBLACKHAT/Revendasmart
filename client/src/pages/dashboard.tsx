@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { lazy, Suspense, useState, useEffect, useMemo } from "react";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { OnboardingChecklist, type OnboardingChecklistItem } from "@/components/OnboardingChecklist";
 import { useLocation } from "wouter";
@@ -37,6 +37,8 @@ import {
   calculateMonthlyProjection,
   calculateStockMetrics,
 } from "@/lib/business-insights";
+
+const StoreIntelligencePanel = lazy(() => import("@/components/StoreIntelligencePanel"));
 
 // Helper: Get stock badge for low stock products
 const getStockBadge = (stock: number) => {
@@ -642,6 +644,10 @@ export default function Dashboard() {
             </div>
           </div>
         </section>
+
+        <Suspense fallback={<section className="rounded-[2rem] border bg-white p-5 shadow-sm"><p className="text-xs font-semibold text-muted-foreground">Carregando inteligencia da loja...</p></section>}>
+          <StoreIntelligencePanel products={products} clients={clients} sales={sales} settings={settings} lowStockThreshold={settings.lowStockThreshold} formatMoney={money} onNavigate={setLocation} />
+        </Suspense>
 
         <section className="grid grid-cols-1 lg:grid-cols-[1.1fr_1fr] gap-4">
           <div className="bg-white rounded-[2rem] border border-border/50 p-5 shadow-sm">
