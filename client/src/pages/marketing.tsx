@@ -5,13 +5,43 @@ import { useProductPickerData } from "@/hooks/useProductPickerData";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, logError } from "@/lib/firebase";
 import { useFeatureEnabled } from "@/lib/remote-config-context";
-import { Search, MessageSquare, Sparkles, Copy, Smartphone, Wallet, Info, Image as ImageIcon, History, WandSparkles } from "lucide-react";
+import { Search, MessageSquare, Sparkles, Copy, Smartphone, Wallet, Info, Image as ImageIcon, History, WandSparkles, QrCode, ExternalLink, Store, PackageCheck, Megaphone, Link as LinkIcon } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { useMarketingHistory, type MarketingHistoryEntry, type MarketingAction } from "@/hooks/useMarketingHistory";
 import { MarketingHistoryPanel } from "@/components/MarketingHistoryPanel";
 import { MarketingStats } from "@/components/MarketingStats";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { createMarketingCard, downloadMarketingCard } from "@/lib/marketing-card";
 import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
+
+const MARKETING_TEMPLATES = {
+  spotlight: { label: 'Produto em destaque', emoji: '⭐', headline: 'DESTAQUE DA LOJA!' },
+  promo: { label: 'Oferta especial', emoji: '🏷️', headline: 'OFERTA IMPERDÍVEL!' },
+  last: { label: 'Últimas unidades', emoji: '🚨', headline: 'CORRE QUE ESTÁ ACABANDO!' },
+  new: { label: 'Lançamento', emoji: '✨', headline: 'NOVIDADE CHEGANDO!' },
+  bestseller: { label: 'Mais vendido', emoji: '🏆', headline: 'O QUERIDINHO DAS CLIENTES!' },
+  kit: { label: 'Kit promocional', emoji: '🎁', headline: 'MONTE SEU KIT ESPECIAL!' },
+  catalog: { label: 'Compre pelo catálogo', emoji: '🛒', headline: 'PEÇA PELO CATÁLOGO ONLINE!' },
+  whatsapp: { label: 'Chame no WhatsApp', emoji: '💬', headline: 'ME CHAMA NO WHATSAPP!' },
+  delivery: { label: 'Frete/entrega', emoji: '🚚', headline: 'ENTREGA COMBINADA!' },
+  preorder: { label: 'Encomendas abertas', emoji: '📦', headline: 'ENCOMENDAS ABERTAS!' },
+} as const;
+
+async function copyTextWithFallback(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
+}
 
 export default function Marketing() {
   const { products, loading, loadingMore, error, hasMore, search, setSearch, loadMore } = useProductPickerData();
@@ -30,7 +60,10 @@ export default function Marketing() {
   const [ctaText, setCtaText] = useState('Me chama no WhatsApp!');
   const [includePayment, setIncludePayment] = useState(false);
   const [activeTab, setActiveTab] = useState<"generator" | "history">("generator");
+  const [catalogCopied, setCatalogCopied] = useState(false);
   const generatedKeys = useRef(new Set<string>());
+  const copyResetTimeoutRef = useRef<number | null>(null);
+  const catalogCopyResetTimeoutRef = useRef<number | null>(null);
   const { entries: historyEntries, loading: historyLoading, recordAction, removeEntry, clearHistory } = useMarketingHistory();
 
   const normalizedProductSearch = search.trim().toLowerCase();
@@ -55,13 +88,7 @@ export default function Marketing() {
     [kitProducts, selectedKitId]
   );
 
-  const templates = {
-    promo: { label: 'Promoção', emoji: '🏷️', headline: 'OFERTA IMPERDÍVEL!' },
-    last: { label: 'Últimas Unidades', emoji: '🚨', headline: 'CORRE QUE ESTÁ ACABANDO!' },
-    kit: { label: 'Kit/Combo', emoji: '🎁', headline: 'MONTE SEU KIT ESPECIAL!' },
-    new: { label: 'Lançamento', emoji: '✨', headline: 'NOVIDADE CHEGANDO!' },
-    tip: { label: 'Dica de Beleza', emoji: '💡', headline: 'DICA DE BELEZA DO DIA!' }
-  };
+  const templates = MARKETING_TEMPLATES;
 
   const generatedText = useMemo(() => {
     if (!selectedProduct && !selectedKit) return '';
@@ -106,6 +133,14 @@ export default function Marketing() {
 
   const [copied, setCopied] = useState(false);
   const selectedItem = selectedProduct || selectedKit;
+  const catalogSlug = String((settings as typeof settings & { catalogSlug?: string; catalog_slug?: string }).catalogSlug || (settings as typeof settings & { catalogSlug?: string; catalog_slug?: string }).catalog_slug || "").trim();
+  const catalogUrl = useMemo(() => {
+    if (!catalogSlug) return "";
+    const origin = typeof window !== "undefined" && window.location?.origin ? window.location.origin : "";
+    return origin ? `${origin}/u/${catalogSlug}` : `/u/${catalogSlug}`;
+  }, [catalogSlug]);
+  const featuredMarketingProducts = useMemo(() => filteredProducts.slice(0, 4), [filteredProducts]);
+  const recentMaterialsCount = historyEntries.length;
   const currentPrice = priceOverride || selectedItem?.salePrice?.toFixed(2) || "0,00";
   const currentTemplate = templates[template as keyof typeof templates];
   const currentImageUrl = selectedItem ? getProductImage(selectedItem) || undefined : undefined;
@@ -123,6 +158,11 @@ export default function Marketing() {
     if (payload) await recordAction(payload).catch(error => console.error("[marketing] action not recorded", error));
   };
 
+  useEffect(() => () => {
+    if (copyResetTimeoutRef.current !== null) window.clearTimeout(copyResetTimeoutRef.current);
+    if (catalogCopyResetTimeoutRef.current !== null) window.clearTimeout(catalogCopyResetTimeoutRef.current);
+  }, []);
+
   useEffect(() => {
     if (!selectedItem || !generatedText) return;
     const key = `${selectedItem.id}:${template}`;
@@ -132,8 +172,10 @@ export default function Marketing() {
   }, [selectedItem?.id, template]);
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(generatedText);
-    setCopied(true); window.setTimeout(() => setCopied(false), 2000);
+    await copyTextWithFallback(generatedText);
+    setCopied(true);
+    if (copyResetTimeoutRef.current !== null) window.clearTimeout(copyResetTimeoutRef.current);
+    copyResetTimeoutRef.current = window.setTimeout(() => setCopied(false), 2000);
     await registerAction("copied");
     notifySuccess("Anúncio copiado.");
     const productId = selectedProductId || selectedKitId;
@@ -145,11 +187,38 @@ export default function Marketing() {
   const handleShare = async () => {
     await registerAction("shared");
     notifyInfo("Compartilhamento aberto no WhatsApp.");
-    window.open(`https://wa.me/?text=${encodeURIComponent(generatedText)}`, "_blank");
+    window.open(`https://wa.me/?text=${encodeURIComponent(generatedText)}`, "_blank", "noopener,noreferrer");
     const productId = selectedProductId || selectedKitId;
     const user = getFirebaseAuth()?.currentUser;
     logTelemetryEvent("ad_shared", { productId, channel: "whatsapp" }, user?.uid);
     trackAnalyticsEvent("share", { method: "whatsapp", content_type: "product", item_id: productId });
+  };
+
+  const requireCatalogUrl = () => {
+    if (catalogUrl) return true;
+    notifyError("Configure o link do catálogo nas configurações da loja.");
+    return false;
+  };
+
+  const handleCopyCatalog = async () => {
+    if (!requireCatalogUrl()) return;
+    await copyTextWithFallback(catalogUrl);
+    setCatalogCopied(true);
+    if (catalogCopyResetTimeoutRef.current !== null) window.clearTimeout(catalogCopyResetTimeoutRef.current);
+    catalogCopyResetTimeoutRef.current = window.setTimeout(() => setCatalogCopied(false), 2200);
+    notifySuccess("Link do catálogo copiado.");
+  };
+
+  const handleShareCatalog = () => {
+    if (!requireCatalogUrl()) return;
+    const message = `Conheça meu catálogo online: ${catalogUrl}`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
+    notifyInfo("Compartilhamento do catálogo aberto no WhatsApp.");
+  };
+
+  const handleOpenCatalog = () => {
+    if (!requireCatalogUrl()) return;
+    window.open(catalogUrl, "_blank", "noopener,noreferrer");
   };
 
   const downloadEntryCard = async (entry: MarketingHistoryEntry) => {
@@ -185,7 +254,7 @@ export default function Marketing() {
   };
   const repeatShare = async (entry: MarketingHistoryEntry) => {
     await recordAction(repeatPayload(entry, "shared"));
-    window.open(`https://wa.me/?text=${encodeURIComponent(entry.generatedText)}`, "_blank");
+    window.open(`https://wa.me/?text=${encodeURIComponent(entry.generatedText)}`, "_blank", "noopener,noreferrer");
     notifyInfo("Compartilhamento aberto no WhatsApp.");
   };
   const repeatDownload = async (entry: MarketingHistoryEntry) => {
@@ -214,6 +283,47 @@ export default function Marketing() {
     <Layout title="Marketing">
       <div className="flex flex-col h-full bg-background">
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 pb-32 space-y-5">
+          <section className="relative overflow-hidden rounded-[2rem] border border-primary/10 bg-gradient-to-br from-white via-primary/5 to-rose-50 p-5 shadow-sm">
+            <div className="absolute -right-10 -top-10 h-32 w-32 rounded-full bg-primary/10 blur-2xl" />
+            <div className="relative grid gap-5 lg:grid-cols-[1.15fr_0.85fr] lg:items-center">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">Central de divulgação</p>
+                <h1 className="mt-2 text-2xl font-black tracking-tight text-foreground">Divulgue sua loja com materiais prontos para vender</h1>
+                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">Crie artes, copie mensagens, gere QR Code e compartilhe seu catálogo sem sair do Revenda Smart.</p>
+                <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <div className="rounded-2xl bg-white/80 p-3 shadow-sm"><p className="text-lg font-black text-primary">{products.length}</p><p className="text-[10px] font-bold text-muted-foreground">produtos</p></div>
+                  <div className="rounded-2xl bg-white/80 p-3 shadow-sm"><p className="text-lg font-black text-primary">{recentMaterialsCount}</p><p className="text-[10px] font-bold text-muted-foreground">materiais</p></div>
+                  <div className="rounded-2xl bg-white/80 p-3 shadow-sm"><p className="text-lg font-black text-primary">10</p><p className="text-[10px] font-bold text-muted-foreground">templates</p></div>
+                  <div className="rounded-2xl bg-white/80 p-3 shadow-sm"><p className="text-lg font-black text-primary">QR</p><p className="text-[10px] font-bold text-muted-foreground">catálogo</p></div>
+                </div>
+              </div>
+              <div className="rounded-[1.75rem] border border-border/50 bg-white p-4 shadow-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Catálogo público</p>
+                    <p className="mt-1 text-sm font-black text-foreground truncate">{catalogUrl || "Link ainda não configurado"}</p>
+                  </div>
+                  <div className="rounded-2xl bg-white p-2 shadow-sm ring-1 ring-slate-200">
+                    {catalogUrl ? <QRCodeSVG value={catalogUrl} size={72} bgColor="#ffffff" fgColor="#0f172a" level="M" includeMargin /> : <QrCode className="h-[72px] w-[72px] text-muted-foreground/35" />}
+                  </div>
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  <button type="button" onClick={handleCopyCatalog} className="rs-pressable min-h-11 rounded-2xl bg-primary text-xs font-black text-white flex items-center justify-center gap-2"><Copy className="w-4 h-4" /> {catalogCopied ? "Copiado" : "Copiar link"}</button>
+                  <button type="button" onClick={handleShareCatalog} className="rs-pressable min-h-11 rounded-2xl bg-[#25D366] text-xs font-black text-white flex items-center justify-center gap-2"><MessageSquare className="w-4 h-4" /> WhatsApp</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <button type="button" onClick={() => setActiveTab("generator")} className="rs-card-interactive rounded-2xl border border-border bg-white p-4 text-left shadow-sm"><WandSparkles className="mb-3 h-5 w-5 text-primary" /><p className="text-xs font-black">Criar arte</p><p className="mt-1 text-[10px] text-muted-foreground">Produto ou promoção</p></button>
+            <button type="button" onClick={() => { setActiveTab("generator"); setTemplate("promo"); }} className="rs-card-interactive rounded-2xl border border-border bg-white p-4 text-left shadow-sm"><Megaphone className="mb-3 h-5 w-5 text-primary" /><p className="text-xs font-black">Criar promoção</p><p className="mt-1 text-[10px] text-muted-foreground">Oferta pronta</p></button>
+            <button type="button" onClick={handleShareCatalog} className="rs-card-interactive rounded-2xl border border-border bg-white p-4 text-left shadow-sm"><Store className="mb-3 h-5 w-5 text-primary" /><p className="text-xs font-black">Compartilhar catálogo</p><p className="mt-1 text-[10px] text-muted-foreground">Link da loja</p></button>
+            <button type="button" onClick={handleCopyCatalog} className="rs-card-interactive rounded-2xl border border-border bg-white p-4 text-left shadow-sm"><QrCode className="mb-3 h-5 w-5 text-primary" /><p className="text-xs font-black">Gerar QR Code</p><p className="mt-1 text-[10px] text-muted-foreground">Copie o link rápido</p></button>
+            <button type="button" onClick={() => { setActiveTab("generator"); setTemplate("whatsapp"); }} className="rs-card-interactive rounded-2xl border border-border bg-white p-4 text-left shadow-sm"><MessageSquare className="mb-3 h-5 w-5 text-primary" /><p className="text-xs font-black">Mensagem WhatsApp</p><p className="mt-1 text-[10px] text-muted-foreground">Texto pronto</p></button>
+            <button type="button" onClick={() => setActiveTab("history")} className="rs-card-interactive rounded-2xl border border-border bg-white p-4 text-left shadow-sm"><History className="mb-3 h-5 w-5 text-primary" /><p className="text-xs font-black">Histórico</p><p className="mt-1 text-[10px] text-muted-foreground">Materiais recentes</p></button>
+          </section>
+
           <MarketingStats entries={historyEntries} />
           <div className="grid grid-cols-2 gap-2 rounded-2xl bg-secondary/50 p-1.5">
             <button onClick={() => setActiveTab("generator")} className={`flex items-center justify-center gap-2 rounded-xl py-3 text-xs font-semibold transition-all ${activeTab === "generator" ? "bg-white text-primary shadow-sm" : "text-muted-foreground"}`}><WandSparkles className="h-4 w-4"/>Gerador</button>
@@ -230,6 +340,27 @@ export default function Marketing() {
                     <p className="text-xs text-blue-700 mt-1">Você agora tem acesso a templates v2 com mais opções de personalização.</p>
                   </div>
                 </div>
+              )}
+
+              {featuredMarketingProducts.length > 0 && (
+                <section className="space-y-3 rounded-[2rem] border border-border/50 bg-white p-4 shadow-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-widest text-primary">Produtos em destaque</p>
+                      <p className="text-xs text-muted-foreground">Toque para começar uma arte rapidamente.</p>
+                    </div>
+                    <PackageCheck className="h-5 w-5 text-primary" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {featuredMarketingProducts.map((product) => (
+                      <button key={product.id} type="button" onClick={() => { setSelectedProductId(product.id); setSelectedKitId(''); }} className={`rounded-2xl border p-3 text-left transition-all active:scale-[0.98] ${selectedProductId === product.id ? "border-primary bg-primary/5 text-primary" : "border-border bg-secondary/20 text-foreground"}`}>
+                        <p className="text-[10px] font-black uppercase tracking-wide text-muted-foreground truncate">{product.brand || "Produto"}</p>
+                        <p className="mt-1 text-xs font-black line-clamp-2">{product.name}</p>
+                        <p className="mt-2 text-[11px] font-bold text-primary">R$ {Number(product.salePrice || 0).toFixed(2)}</p>
+                      </button>
+                    ))}
+                  </div>
+                </section>
               )}
 
               {/* Product/Kit Selection */}
@@ -294,8 +425,8 @@ export default function Marketing() {
 
               {/* Template Selection */}
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-muted-foreground px-1">Escolha o Tema</label>
-                <div className="grid grid-cols-3 gap-2">
+                <label className="text-xs font-semibold text-muted-foreground px-1">Templates rápidos</label>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                   {Object.entries(templates).map(([key, t]) => (
                     <button
                       key={key}
@@ -367,6 +498,16 @@ export default function Marketing() {
               </div>
 
               {/* Preview Area */}
+              <section className="grid gap-3 sm:grid-cols-3">
+                {[
+                  "Use foto limpa e preço visível.",
+                  "Comece pelo produto campeão da semana.",
+                  "Compartilhe o catálogo depois da arte.",
+                ].map((tip) => (
+                  <div key={tip} className="rounded-2xl border border-primary/10 bg-primary/5 p-3 text-[11px] font-semibold text-primary"><Sparkles className="mb-2 h-4 w-4" />{tip}</div>
+                ))}
+              </section>
+
               {selectedProduct || selectedKit ? (
                 <div className="space-y-4">
                   <div className="bg-[#E7FCE3] p-6 rounded-[2.5rem] border border-green-200 shadow-sm relative">

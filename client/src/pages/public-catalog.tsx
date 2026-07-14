@@ -223,6 +223,7 @@ export default function PublicCatalog() {
   const cartQuantities = useMemo(() => new Map(cart.map(item => [item.product.id, item.quantity])), [cart]);
   const cartTotal = useMemo(() => cart.reduce((sum, item) => sum + Number(item.product.salePrice || 0) * item.quantity, 0), [cart]);
   const cartCount = useMemo(() => cart.reduce((sum, item) => sum + item.quantity, 0), [cart]);
+  const activeFilterCount = useMemo(() => Number(searchTerm.trim().length > 0) + Number(selectedCategory !== "todos") + Number(selectedGender !== "todos"), [searchTerm, selectedCategory, selectedGender]);
 
   const handleCopyCatalog = async () => {
     try {
@@ -379,6 +380,11 @@ export default function PublicCatalog() {
               <button type="button" onClick={handleShareCatalog} className="min-h-12 rounded-2xl bg-[#25D366] px-4 text-sm font-black text-white shadow-lg shadow-black/10 active:scale-[0.98] transition-transform flex items-center justify-center gap-2"><Share2 className="w-4 h-4" /> WhatsApp</button>
               <button type="button" onClick={handleCopyCatalog} className="min-h-12 rounded-2xl bg-white px-4 text-sm font-black text-primary shadow-lg shadow-black/10 active:scale-[0.98] transition-transform flex items-center justify-center gap-2">{copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />} {copied ? "Copiado" : "Copiar link"}</button>
             </div>
+            <div className="mt-5 grid grid-cols-3 gap-2 text-[10px] font-black uppercase tracking-wide text-white/90">
+              <span className="rounded-2xl bg-white/15 px-3 py-2 text-center backdrop-blur">WhatsApp</span>
+              <span className="rounded-2xl bg-white/15 px-3 py-2 text-center backdrop-blur">Pedido fácil</span>
+              <span className="rounded-2xl bg-white/15 px-3 py-2 text-center backdrop-blur">Loja segura</span>
+            </div>
           </div>
         </section>
 
@@ -392,7 +398,10 @@ export default function PublicCatalog() {
               <h2 className="text-xl font-black tracking-tight text-slate-950">Todos os produtos</h2>
               <p className="text-xs font-medium text-slate-500">Use busca e filtros para encontrar mais rápido.</p>
             </div>
-            {hasMore && <p className="rounded-full bg-amber-50 px-3 py-1.5 text-[11px] font-bold text-amber-700">Carregue mais produtos para ampliar a busca.</p>}
+            <div className="flex flex-wrap items-center gap-2">
+              {activeFilterCount > 0 && <button type="button" onClick={clearFilters} className="rounded-full bg-slate-950 px-3 py-1.5 text-[11px] font-bold text-white">Limpar {activeFilterCount} filtro{activeFilterCount === 1 ? "" : "s"}</button>}
+              {hasMore && <p className="rounded-full bg-amber-50 px-3 py-1.5 text-[11px] font-bold text-amber-700">Carregue mais produtos para ampliar a busca.</p>}
+            </div>
           </div>
           <div className="relative">
             <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
