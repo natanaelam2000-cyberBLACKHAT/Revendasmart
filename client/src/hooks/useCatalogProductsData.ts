@@ -2,12 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
+  endAt,
   getDocs,
   getFirestore,
   limit,
   orderBy,
   query,
   startAfter,
+  startAt,
   where,
   type DocumentData,
   type QueryConstraint,
@@ -17,8 +19,10 @@ import { getFirebaseAuth } from "@/lib/firebase";
 import type { Product } from "@/lib/mock-data";
 import {
   CATALOG_SERVER_SEARCH_ENABLED,
-  canUseCatalogServerSearch,
-  getPrimaryProductSearchToken,
+  type ProductServerSearchPlan,
+  buildProductServerSearchPlan,
+  buildProductServerSearchQuerySpec,
+  getProductSearchIndexField,
   normalizeProductSearchText,
 } from "@/lib/product-search";
 
@@ -28,6 +32,7 @@ interface UseCatalogProductsOptions {
   searchTerm?: string;
   categoryFilter?: string;
   serverSearchEnabled?: boolean;
+  enabled?: boolean;
 }
 
 interface CatalogProductsData {
@@ -46,33 +51,50 @@ function mapProductDoc(doc: QueryDocumentSnapshot<DocumentData>): Product {
   return { ...doc.data(), id: doc.id } as Product;
 }
 
+function getProductSortKey(product: Product): string {
+  return getProductSearchIndexField(product as Product & { nameNormalized?: string }, "nameNormalized", product.name);
+}
+
+function sortProductsByName(products: Product[]): Product[] {
+  return [...products].sort((a, b) => getProductSortKey(a).localeCompare(getProductSortKey(b)) || String(a.id || "").localeCompare(String(b.id || "")));
+}
+
 function mergeProducts(current: Product[], incoming: Product[]): Product[] {
   const byId = new Map<string, Product>();
   for (const product of current) byId.set(product.id, product);
   for (const product of incoming) {
     if (product?.id) byId.set(product.id, product);
   }
-  return Array.from(byId.values()).sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+  return sortProductsByName(Array.from(byId.values()));
 }
 
 function buildCatalogQuery(
   uid: string,
-  options: { searchToken: string; categoryFilter: string; serverSearchActive: boolean },
+  options: { plan: ProductServerSearchPlan; querySpec: ReturnType<typeof buildProductServerSearchQuerySpec> },
   cursor?: QueryDocumentSnapshot<DocumentData> | null
 ) {
   const constraints: QueryConstraint[] = [];
+  const { plan, querySpec } = options;
 
-  if (options.serverSearchActive && options.searchToken) {
-    constraints.push(where("searchTokens", "array-contains", options.searchToken));
+  if (querySpec.hasCategoryFilter) {
+    constraints.push(where("categoryNormalized", "==", querySpec.normalizedCategoryFilter));
   }
 
-  if (options.categoryFilter && options.categoryFilter !== "todos") {
-    constraints.push(where("category", "==", options.categoryFilter));
+  if (plan.kind === "barcode_exact") {
+    constraints.push(where("barcodeNormalized", "==", plan.normalizedTerm));
+  } else if (plan.kind === "token") {
+    constraints.push(where("searchTokens", "array-contains", plan.searchToken));
   }
 
-  constraints.push(orderBy("name"));
+  constraints.push(orderBy(querySpec.orderByField));
+
+  if (plan.kind === "name_prefix") {
+    constraints.push(startAt(plan.normalizedTerm));
+    constraints.push(endAt(`${plan.normalizedTerm}\uf8ff`));
+  }
+
   if (cursor) constraints.push(startAfter(cursor));
-  constraints.push(limit(CATALOG_PAGE_SIZE));
+  constraints.push(limit(Math.min(plan.pageSize, CATALOG_PAGE_SIZE)));
 
   return query(collection(getFirestore(), "users", uid, "products"), ...constraints);
 }
@@ -82,12 +104,17 @@ export function useCatalogProductsData(options: UseCatalogProductsOptions = {}):
     searchTerm = "",
     categoryFilter = "todos",
     serverSearchEnabled = CATALOG_SERVER_SEARCH_ENABLED,
+    enabled = true,
   } = options;
 
   const normalizedSearch = useMemo(() => normalizeProductSearchText(searchTerm), [searchTerm]);
-  const searchToken = useMemo(() => getPrimaryProductSearchToken(searchTerm), [searchTerm]);
-  const serverSearchActive = serverSearchEnabled && canUseCatalogServerSearch(searchTerm);
-  const searchFallbackRequired = normalizedSearch.length > 0 && !serverSearchActive;
+  const plan = useMemo(
+    () => buildProductServerSearchPlan({ term: searchTerm, pageSize: CATALOG_PAGE_SIZE, serverSearchEnabled }),
+    [searchTerm, serverSearchEnabled]
+  );
+  const querySpec = useMemo(() => buildProductServerSearchQuerySpec({ plan, categoryFilter }), [categoryFilter, plan]);
+  const serverSearchActive = enabled && plan.source === "server" && plan.kind !== "empty";
+  const searchFallbackRequired = enabled && normalizedSearch.length > 0 && plan.source === "local_fallback";
 
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
@@ -95,10 +122,21 @@ export function useCatalogProductsData(options: UseCatalogProductsOptions = {}):
   const [error, setError] = useState("");
   const [hasMore, setHasMore] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const requestIdRef = useRef(0);
   const uidRef = useRef<string | null>(null);
   const lastVisibleRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
 
   useEffect(() => {
+    if (!enabled) {
+      lastVisibleRef.current = null;
+      uidRef.current = null;
+      setProducts([]);
+      setHasMore(false);
+      setLoading(false);
+      setError("");
+      return;
+    }
+
     const auth = getFirebaseAuth();
     if (!auth) {
       setLoading(false);
@@ -107,6 +145,8 @@ export function useCatalogProductsData(options: UseCatalogProductsOptions = {}):
     }
 
     let cancelled = false;
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       lastVisibleRef.current = null;
@@ -128,26 +168,26 @@ export function useCatalogProductsData(options: UseCatalogProductsOptions = {}):
         setProducts([]);
         setHasMore(false);
         setLoading(false);
-        setError("Busca server-side ainda não ativada para produtos legados. Use o catálogo atual com fallback local.");
+        setError("Busca server-side desligada ou termo curto. Use o fallback local já carregado pela tela atual.");
         return;
       }
 
       try {
-        const snapshot = await getDocs(buildCatalogQuery(user.uid, { searchToken, categoryFilter, serverSearchActive }));
-        if (cancelled) return;
-        const pageProducts = snapshot.docs.map(mapProductDoc).filter((product) => product?.id);
+        const snapshot = await getDocs(buildCatalogQuery(user.uid, { plan, querySpec }));
+        if (cancelled || requestId !== requestIdRef.current) return;
+        const pageProducts = sortProductsByName(snapshot.docs.map(mapProductDoc).filter((product) => product?.id));
         lastVisibleRef.current = snapshot.docs[snapshot.docs.length - 1] ?? null;
         setProducts(pageProducts);
-        setHasMore(snapshot.docs.length === CATALOG_PAGE_SIZE);
+        setHasMore(snapshot.docs.length === Math.min(plan.pageSize, CATALOG_PAGE_SIZE));
         setError("");
       } catch (err) {
-        if (cancelled) return;
+        if (cancelled || requestId !== requestIdRef.current) return;
         console.error("[useCatalogProductsData] Products error:", err);
         setProducts([]);
         setHasMore(false);
         setError("Erro ao carregar catálogo");
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && requestId === requestIdRef.current) setLoading(false);
       }
     });
 
@@ -155,28 +195,30 @@ export function useCatalogProductsData(options: UseCatalogProductsOptions = {}):
       cancelled = true;
       unsubscribeAuth();
     };
-  }, [categoryFilter, refreshKey, searchFallbackRequired, searchToken, serverSearchActive]);
+  }, [enabled, querySpec, refreshKey, searchFallbackRequired, plan]);
 
   const loadMore = useCallback(async () => {
-    if (loadingMore || !hasMore || !uidRef.current || !lastVisibleRef.current || searchFallbackRequired) return;
+    if (!enabled || loadingMore || !hasMore || !uidRef.current || !lastVisibleRef.current || searchFallbackRequired) return;
     setLoadingMore(true);
     setError("");
+    const requestId = requestIdRef.current;
 
     try {
       const snapshot = await getDocs(
-        buildCatalogQuery(uidRef.current, { searchToken, categoryFilter, serverSearchActive }, lastVisibleRef.current)
+        buildCatalogQuery(uidRef.current, { plan, querySpec }, lastVisibleRef.current)
       );
+      if (requestId !== requestIdRef.current) return;
       const nextProducts = snapshot.docs.map(mapProductDoc).filter((product) => product?.id);
       lastVisibleRef.current = snapshot.docs[snapshot.docs.length - 1] ?? lastVisibleRef.current;
       setProducts((current) => mergeProducts(current, nextProducts));
-      setHasMore(snapshot.docs.length === CATALOG_PAGE_SIZE);
+      setHasMore(snapshot.docs.length === Math.min(plan.pageSize, CATALOG_PAGE_SIZE));
     } catch (err) {
       console.error("[useCatalogProductsData] Load more error:", err);
       setError("Erro ao carregar mais produtos");
     } finally {
       setLoadingMore(false);
     }
-  }, [categoryFilter, hasMore, loadingMore, searchFallbackRequired, searchToken, serverSearchActive]);
+  }, [enabled, hasMore, loadingMore, querySpec, searchFallbackRequired, plan]);
 
   const refresh = useCallback(() => {
     setRefreshKey((current) => current + 1);

@@ -15,7 +15,8 @@
     "skills:validate": "node scripts/security/validate-agent-skills.mjs",
     "security:preflight": "npm run skills:validate && npm run check && npm run lint && npm run test",
     "performance:bundle-check": "node scripts/performance/check-bundle-budgets.mjs",
-    "performance:preflight": "npm run skills:validate && npm run check && npm run build && npm run performance:bundle-check && npm run lint && npm run test"
+    "performance:preflight": "npm run skills:validate && npm run check && npm run build && npm run performance:bundle-check && npm run lint && npm run test",
+    "search:backfill:dry-run": "tsx scripts/search/backfill-search-fields.ts --fixture --uid synthetic-user --project demo-revendasmart --environment emulator --dry-run"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

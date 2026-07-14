@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { APP_THEME_IDS, APP_THEMES, DEFAULT_APP_THEME_ID, DESIGN_TOKEN_NAMES, buildDesignSystemVariables, resolveAppThemeId } from "../client/src/lib/app-themes";
 import { NICHO_CONFIG, ONBOARDING_NICHO_IDS, getNichoConfig, getProductCategoriesForNicho } from "../client/src/lib/nicho-config";
-import { CATALOG_SERVER_SEARCH_ENABLED, PRODUCT_SEARCH_SCHEMA_VERSION, buildProductSearchFields, canUseCatalogServerSearch, isProductSearchIndexed, normalizeProductSearchText } from "../client/src/lib/product-search";
+import { CATALOG_SERVER_SEARCH_ENABLED, PRODUCT_SEARCH_SCHEMA_VERSION, SERVER_SIDE_CLIENT_SEARCH_ENABLED, SERVER_SIDE_PRODUCT_SEARCH_ENABLED, buildProductSearchBackfillPatch, buildProductSearchFields, buildProductServerSearchPlan, buildProductServerSearchQuerySpec, canUseCatalogServerSearch, getProductSearchIndexStatus, isLikelyBarcodeSearchTerm, isProductSearchIndexed, normalizeProductBarcode, normalizeProductSearchText, productMatchesLocalSearch, sanitizeProductSearchPageSize } from "../client/src/lib/product-search";
 import { buildStoreIntelligence } from "../client/src/lib/store-health";
 import { defaultSettings } from "../client/src/lib/mock-data";
 
@@ -39,6 +39,7 @@ const chargesHook = read("client/src/hooks/useCharges.ts");
 const billingsPage = read("client/src/pages/billings.tsx");
 const sharedCharges = read("shared/charges.ts");
 const firestoreIndexes = read("firestore.indexes.json");
+const firestoreIndexConfig = JSON.parse(firestoreIndexes);
 const subscriptions = read("server/subscriptions.ts");
 const payments = read("server/payments.ts");
 const mpConnections = read("server/mercadopago-connections.ts");
@@ -62,10 +63,60 @@ const storeHealth = read("client/src/lib/store-health.ts");
 const catalogProductsHook = read("client/src/hooks/useCatalogProductsData.ts");
 const firestoreRules = read("firestore.rules");
 const productSearchBackfill = read("docs/architecture/PRODUCT_SEARCH_INDEX_BACKFILL.md");
+const serverSideSearchDoc = read("docs/architecture/SERVER_SIDE_SEARCH.md");
+const searchDataModelDoc = read("docs/architecture/SEARCH_DATA_MODEL.md");
+const searchBackfillDoc = read("docs/operations/SEARCH_BACKFILL.md");
+const searchBackfillScript = read("scripts/search/backfill-search-fields.ts");
 const vercel = JSON.parse(read("vercel.json"));
+
+function productIndexSignature(fields: Array<Record<string, string>>) {
+  return fields.map((field) => `${field.fieldPath}:${field.arrayConfig || field.order}`).join("|");
+}
+
+const productIndexSignatures = new Set(
+  firestoreIndexConfig.indexes
+    .filter((index: { collectionGroup?: string }) => index.collectionGroup === "products")
+    .map((index: { fields: Array<Record<string, string>> }) => productIndexSignature(index.fields))
+);
+
+function assertProductIndex(fields: Array<Record<string, string>>) {
+  const signature = productIndexSignature(fields);
+  assert.ok(productIndexSignatures.has(signature), `missing Firestore product index ${signature}`);
+}
+
+function assertNoProductIndex(fields: Array<Record<string, string>>) {
+  const signature = productIndexSignature(fields);
+  assert.equal(productIndexSignatures.has(signature), false, `unexpected Firestore product index ${signature}`);
+}
+
+function asc(fieldPath: string) {
+  return { fieldPath, order: "ASCENDING" };
+}
+
+function contains(fieldPath: string) {
+  return { fieldPath, arrayConfig: "CONTAINS" };
+}
+
+function serverPlan(term: string) {
+  return buildProductServerSearchPlan({ term, serverSearchEnabled: true });
+}
+
+function querySpec(term: string, categoryFilter?: string) {
+  return buildProductServerSearchQuerySpec({ plan: serverPlan(term), categoryFilter });
+}
 
 assert.equal(normalizeProductSearchText("  Café   Premium 123!! "), "cafe premium 123");
 assert.equal(normalizeProductSearchText("Água de Cheiro"), "agua de cheiro");
+assert.equal(normalizeProductSearchText("Perfume Águas de Verão"), "perfume aguas de verao");
+assert.equal(normalizeProductSearchText("  perfume   aguas  de verao "), "perfume aguas de verao");
+assert.equal(normalizeProductSearchText("JOÃO"), "joao");
+assert.equal(normalizeProductSearchText("Kit 2-em-1"), "kit 2 em 1");
+assert.equal(normalizeProductSearchText("  Cuidados   com PÉLE  "), "cuidados com pele");
+assert.equal(normalizeProductSearchText("PERFUMES"), "perfumes");
+assert.equal(normalizeProductBarcode("0012345678905"), "0012345678905");
+assert.equal(isLikelyBarcodeSearchTerm("0012345678905"), true);
+assert.equal(sanitizeProductSearchPageSize(999), 50);
+assert.equal(sanitizeProductSearchPageSize("bad"), 20);
 const productSearchFields = buildProductSearchFields({
   name: "Perfume Flor de Café",
   brand: "Natura",
@@ -82,11 +133,68 @@ for (const token of ["perfume", "flor", "cafe", "natura", "perfumes", "789123456
   assert.ok(productSearchFields.searchTokens.includes(token), `missing product search token ${token}`);
 }
 assert.equal(CATALOG_SERVER_SEARCH_ENABLED, false);
+assert.equal(SERVER_SIDE_PRODUCT_SEARCH_ENABLED, false);
+assert.equal(SERVER_SIDE_CLIENT_SEARCH_ENABLED, false);
 assert.equal(canUseCatalogServerSearch("a"), false);
 assert.equal(canUseCatalogServerSearch("ab"), true);
-assert.equal(isProductSearchIndexed({ searchSchemaVersion: PRODUCT_SEARCH_SCHEMA_VERSION, searchTokens: ["perfume"] }), true);
+assert.equal(isProductSearchIndexed({ searchSchemaVersion: PRODUCT_SEARCH_SCHEMA_VERSION, searchTokens: ["perfume"] }), false);
 assert.equal(isProductSearchIndexed({ searchSchemaVersion: PRODUCT_SEARCH_SCHEMA_VERSION + 1, searchTokens: ["perfume"] }), false);
-assert.match(productSearch, /CATALOG_SERVER_SEARCH_ENABLED = false/);
+assert.equal(getProductSearchIndexStatus({}), "missing");
+assert.equal(getProductSearchIndexStatus({ searchSchemaVersion: PRODUCT_SEARCH_SCHEMA_VERSION + 1, searchTokens: ["perfume"] }), "future_schema");
+assert.equal(getProductSearchIndexStatus({ searchSchemaVersion: PRODUCT_SEARCH_SCHEMA_VERSION, searchTokens: ["perfume"] }), "partial");
+const indexedProductSearchRecord = {
+  name: "Perfume Flor de Café",
+  brand: "Natura",
+  category: "Perfumes",
+  barcode: "7891234567890",
+  productType: "cosmeticos",
+  ...productSearchFields,
+};
+assert.equal(isProductSearchIndexed(indexedProductSearchRecord), true);
+assert.equal(getProductSearchIndexStatus(indexedProductSearchRecord), "indexed");
+assert.equal(buildProductServerSearchPlan({ term: "perfume", serverSearchEnabled: false }).kind, "disabled");
+assert.equal(buildProductServerSearchPlan({ term: "p", serverSearchEnabled: true }).kind, "term_too_short");
+assert.equal(buildProductServerSearchPlan({ term: "0012345678905", serverSearchEnabled: true }).kind, "barcode_exact");
+assert.equal(buildProductServerSearchPlan({ term: "perfume aguas", serverSearchEnabled: true }).kind, "token");
+assert.equal(buildProductServerSearchPlan({ term: "perf", serverSearchEnabled: true }).kind, "name_prefix");
+
+const defaultListSpec = buildProductServerSearchQuerySpec({ plan: buildProductServerSearchPlan({ term: "", serverSearchEnabled: true }), categoryFilter: "todos" });
+assert.equal(defaultListSpec.indexKey, "single:nameNormalized");
+assert.equal(defaultListSpec.orderByField, "nameNormalized");
+assert.equal(defaultListSpec.hasCategoryFilter, false);
+assert.deepEqual(defaultListSpec.filters, []);
+const defaultListWithCategorySpec = buildProductServerSearchQuerySpec({ plan: buildProductServerSearchPlan({ term: "", serverSearchEnabled: true }), categoryFilter: "  PERFUMES  " });
+assert.equal(defaultListWithCategorySpec.indexKey, "categoryNormalized_nameNormalized");
+assert.equal(defaultListWithCategorySpec.normalizedCategoryFilter, "perfumes");
+assert.deepEqual(defaultListWithCategorySpec.filters.map((filter) => `${filter.fieldPath}:${filter.op}`), ["categoryNormalized:=="]);
+const prefixSpec = querySpec("perf", "todos");
+assert.equal(prefixSpec.indexKey, "single:nameNormalized");
+assert.deepEqual(prefixSpec.filters.map((filter) => `${filter.fieldPath}:${filter.op}`), ["nameNormalized:prefix"]);
+const prefixWithCategorySpec = querySpec("perf", "  Cuidados   com PÉLE  ");
+assert.equal(prefixWithCategorySpec.indexKey, "categoryNormalized_nameNormalized");
+assert.equal(prefixWithCategorySpec.normalizedCategoryFilter, "cuidados com pele");
+assert.deepEqual(prefixWithCategorySpec.filters.map((filter) => `${filter.fieldPath}:${filter.op}`), ["categoryNormalized:==", "nameNormalized:prefix"]);
+const tokenSpec = querySpec("perfume aguas", "todos");
+assert.equal(tokenSpec.indexKey, "searchTokens_nameNormalized");
+assert.deepEqual(tokenSpec.filters.map((filter) => `${filter.fieldPath}:${filter.op}`), ["searchTokens:array-contains"]);
+const tokenWithCategorySpec = querySpec("perfume aguas", "  PERFUMES  ");
+assert.equal(tokenWithCategorySpec.indexKey, "categoryNormalized_searchTokens_nameNormalized");
+assert.deepEqual(tokenWithCategorySpec.filters.map((filter) => `${filter.fieldPath}:${filter.op}`), ["categoryNormalized:==", "searchTokens:array-contains"]);
+const barcodeSpec = querySpec("0012345678905", "todos");
+assert.equal(barcodeSpec.indexKey, "barcodeNormalized_nameNormalized");
+assert.deepEqual(barcodeSpec.filters.map((filter) => `${filter.fieldPath}:${filter.op}`), ["barcodeNormalized:=="]);
+const barcodeWithCategorySpec = querySpec("0012345678905", "  Cuidados   com PÉLE  ");
+assert.equal(barcodeWithCategorySpec.indexKey, "categoryNormalized_barcodeNormalized_nameNormalized");
+assert.deepEqual(barcodeWithCategorySpec.filters.map((filter) => `${filter.fieldPath}:${filter.op}`), ["categoryNormalized:==", "barcodeNormalized:=="]);
+assert.equal(querySpec("perf", "   ").hasCategoryFilter, false);
+assert.equal(querySpec("perf", "todos").hasCategoryFilter, false);
+assert.equal(productMatchesLocalSearch({ name: "Perfume Águas", brand: "", category: "", productType: "", barcode: "0012345678905" }, "aguas"), true);
+assert.equal(productMatchesLocalSearch({ name: "Perfume Águas", brand: "", category: "", productType: "", barcode: "0012345678905" }, "0012345678905"), true);
+assert.ok(buildProductSearchFields({ name: Array.from({ length: 40 }, (_, index) => `token${index}`).join(" ") }).searchTokens.length <= 16);
+assert.equal(buildProductSearchBackfillPatch({ ...indexedProductSearchRecord }), null);
+assert.ok(buildProductSearchBackfillPatch({ name: "Perfume Novo", brand: "Marca", category: "Perfumes", barcode: "0012345678905", productType: "Cosmeticos" }));
+assert.match(productSearch, /SERVER_SIDE_PRODUCT_SEARCH_ENABLED = false/);
+assert.match(productSearch, /CATALOG_SERVER_SEARCH_ENABLED = SERVER_SIDE_PRODUCT_SEARCH_ENABLED/);
 assert.match(addProduct, /buildProductSearchFields/);
 assert.match(mockData, /nameNormalized\?: string/);
 assert.match(firestoreRules, /searchTokens/);
@@ -99,12 +207,36 @@ assert.match(catalog, /barcode\.includes\(normalizedSearch\)/);
 assert.match(catalog, /category\.includes\(normalizedSearch\)/);
 assert.doesNotMatch(catalog, /useCatalogProductsData/);
 assert.match(catalogProductsHook, /const CATALOG_PAGE_SIZE = 30/);
+assert.match(catalogProductsHook, /buildProductServerSearchPlan/);
+assert.match(catalogProductsHook, /requestIdRef/);
+assert.match(catalogProductsHook, /barcodeNormalized/);
+assert.match(catalogProductsHook, /categoryNormalized/);
+assert.match(catalogProductsHook, /orderBy\(querySpec\.orderByField\)/);
+assert.doesNotMatch(catalogProductsHook, /orderBy\("name"\)/);
+assert.doesNotMatch(catalogProductsHook, /where\("category",\s*"=="/);
+assert.match(catalogProductsHook, /name_prefix/);
 assert.match(catalogProductsHook, /array-contains/);
 assert.match(catalogProductsHook, /searchFallbackRequired/);
 assert.match(catalogProductsHook, /getDocs/);
 assert.match(productSearchBackfill, /dry-run/);
 assert.match(productSearchBackfill, /CATALOG_SERVER_SEARCH_ENABLED=false/);
 assert.match(productSearchBackfill, /Não executar em produção/);
+assert.match(serverSideSearchDoc, /SERVER_SIDE_PRODUCT_SEARCH_ENABLED=false/);
+assert.match(searchDataModelDoc, /PRODUCT_SEARCH_SCHEMA_VERSION = 1/);
+assert.match(searchBackfillDoc, /revenda-smart/);
+assert.match(searchBackfillScript, /FIRESTORE_EMULATOR_HOST/);
+assert.match(searchBackfillScript, /revendasmart-prod/);
+assertProductIndex([contains("searchTokens"), asc("nameNormalized")]);
+assertProductIndex([asc("barcodeNormalized"), asc("nameNormalized")]);
+assertProductIndex([asc("categoryNormalized"), asc("nameNormalized")]);
+assertProductIndex([asc("categoryNormalized"), contains("searchTokens"), asc("nameNormalized")]);
+assertProductIndex([asc("categoryNormalized"), asc("barcodeNormalized"), asc("nameNormalized")]);
+assertNoProductIndex([contains("searchTokens"), asc("name")]);
+assertNoProductIndex([asc("barcodeNormalized"), asc("name")]);
+assertNoProductIndex([asc("category"), asc("name")]);
+assert.match(firestoreIndexes, /searchTokens/);
+assert.match(firestoreIndexes, /barcodeNormalized/);
+assert.match(firestoreIndexes, /categoryNormalized/);
 
 const storeIntelligenceFixture = buildStoreIntelligence({
   referenceDate: new Date("2026-07-14T12:00:00Z"),
