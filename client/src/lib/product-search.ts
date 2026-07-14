@@ -25,6 +25,15 @@ export interface ProductSearchFields {
   searchSchemaVersion: number;
 }
 
+export type ProductSearchIndexField =
+  | "nameNormalized"
+  | "brandNormalized"
+  | "categoryNormalized"
+  | "barcodeNormalized"
+  | "productTypeNormalized";
+
+type ProductSearchIndexedRecord = Partial<Record<ProductSearchIndexField, unknown>>;
+
 export function normalizeProductSearchText(value: unknown): string {
   if (value === null || value === undefined) return "";
 
@@ -54,6 +63,19 @@ function compactUniqueTokens(tokens: string[]): string[] {
     if (unique.size >= MAX_PRODUCT_SEARCH_TOKENS) break;
   }
   return Array.from(unique);
+}
+
+export function getProductSearchIndexField(
+  product: ProductSearchIndexedRecord,
+  field: ProductSearchIndexField,
+  fallback: unknown
+): string {
+  const indexedValue = product[field];
+  if (typeof indexedValue === "string" && indexedValue.trim()) {
+    return indexedValue.slice(0, MAX_NORMALIZED_PRODUCT_SEARCH_LENGTH);
+  }
+
+  return normalizeProductSearchText(fallback);
 }
 
 export function buildProductSearchFields(input: ProductSearchInput): ProductSearchFields {

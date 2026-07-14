@@ -3,7 +3,7 @@ import { PageSkeleton } from "@/components/PageSkeleton";
 import { Layout } from "@/components/layout";
 import { Share2, Search, X, Copy, Check, ShoppingCart, Plus, Minus, Trash2, Send, Loader2, Package } from "lucide-react";
 import { useProductsData } from "@/hooks/useProductsData";
-import { normalizeProductSearchText } from "@/lib/product-search";
+import { getProductSearchIndexField, normalizeProductSearchText } from "@/lib/product-search";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
 import type { Product } from "@/lib/mock-data";
 import { ProductImageCard } from "@/components/ProductImageCard";
@@ -46,11 +46,12 @@ export default function Catalog() {
 
   const filtered = useMemo(() => {
     return products.filter(p => {
-      const name = normalizeProductSearchText(p.name);
-      const brand = normalizeProductSearchText(p.brand);
-      const category = normalizeProductSearchText(p.category);
-      const barcode = normalizeProductSearchText((p as Product & { barcode?: string }).barcode);
-      const productType = normalizeProductSearchText(p.productType);
+      const indexedProduct = p as Product & { barcode?: string };
+      const name = getProductSearchIndexField(indexedProduct, "nameNormalized", p.name);
+      const brand = getProductSearchIndexField(indexedProduct, "brandNormalized", p.brand);
+      const category = getProductSearchIndexField(indexedProduct, "categoryNormalized", p.category);
+      const barcode = getProductSearchIndexField(indexedProduct, "barcodeNormalized", indexedProduct.barcode);
+      const productType = getProductSearchIndexField(indexedProduct, "productTypeNormalized", p.productType);
       const matchesSearch = !normalizedSearch
         || name.includes(normalizedSearch)
         || brand.includes(normalizedSearch)

@@ -85,6 +85,8 @@ assert.match(firestoreRules, /searchTokens/);
 assert.match(firestoreRules, /searchSchemaVersion/);
 assert.match(catalog, /useProductsData/);
 assert.match(catalog, /normalizeProductSearchText/);
+assert.match(catalog, /getProductSearchIndexField/);
+assert.match(productSearch, /getProductSearchIndexField/);
 assert.match(catalog, /barcode\.includes\(normalizedSearch\)/);
 assert.match(catalog, /category\.includes\(normalizedSearch\)/);
 assert.doesNotMatch(catalog, /useCatalogProductsData/);
