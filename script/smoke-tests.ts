@@ -5,6 +5,7 @@ import { NICHO_CONFIG, ONBOARDING_NICHO_IDS, getNichoConfig, getProductCategorie
 import { CATALOG_SERVER_SEARCH_ENABLED, PRODUCT_SEARCH_SCHEMA_VERSION, SERVER_SIDE_CLIENT_SEARCH_ENABLED, SERVER_SIDE_PRODUCT_SEARCH_ENABLED, buildProductSearchBackfillPatch, buildProductSearchFields, buildProductServerSearchPlan, buildProductServerSearchQuerySpec, canUseCatalogServerSearch, getProductSearchIndexStatus, isLikelyBarcodeSearchTerm, isProductSearchIndexed, normalizeProductBarcode, normalizeProductSearchText, productMatchesLocalSearch, sanitizeProductSearchPageSize } from "../client/src/lib/product-search";
 import { buildStoreIntelligence } from "../client/src/lib/store-health";
 import { defaultSettings } from "../client/src/lib/mock-data";
+import { MARKETING_AD_THEME_IDS, buildMarketingAdConfig, buildMarketingAdMessage, formatMarketingPrice, normalizeMarketingAdConfig, sanitizeMarketingHistoryPayload } from "../client/src/lib/marketing-ad";
 
 const read = (path: string) => fs.readFileSync(path, "utf8");
 const routes = read("server/routes.ts");
@@ -18,6 +19,11 @@ const paginatedProductsHook = read("client/src/hooks/usePaginatedProductsData.ts
 const productPickerHook = read("client/src/hooks/useProductPickerData.ts");
 const clientPickerHook = read("client/src/hooks/useClientPickerData.ts");
 const marketing = read("client/src/pages/marketing.tsx");
+const marketingAd = read("client/src/lib/marketing-ad.ts");
+const marketingCard = read("client/src/lib/marketing-card.ts");
+const marketingCanvas = read("client/src/components/MarketingAdCanvas.tsx");
+const marketingHistoryHook = read("client/src/hooks/useMarketingHistory.ts");
+const marketingHistoryPanel = read("client/src/components/MarketingHistoryPanel.tsx");
 const layout = read("client/src/components/layout.tsx");
 const settings = read("client/src/pages/settings.tsx");
 const images = read("client/src/components/ProductImageCard.tsx");
@@ -261,6 +267,57 @@ assert.equal(storeIntelligenceFixture.financial.todayRevenue, 200);
 assert.equal(storeIntelligenceFixture.catalog.active, true);
 assert.ok(storeIntelligenceFixture.recommendations.some((item) => item.title.includes("Adicione fotos")));
 assert.ok(storeIntelligenceFixture.dataLimitations.some((item) => item.includes("Cobrancas")));
+
+assert.equal(formatMarketingPrice(230), "R$ 230,00");
+assert.equal(formatMarketingPrice("230.00"), "R$ 230,00");
+assert.equal(formatMarketingPrice("1.230,50"), "R$ 1.230,50");
+const marketingAdFixture = buildMarketingAdConfig({
+  productId: "p1",
+  productName: "Perfume Floral com Nome Bem Grande Para Validar Corte Seguro",
+  productBrand: "Marca A",
+  productVolume: "Volume: 100ml",
+  productStock: 3,
+  price: "230.00",
+  headline: "OFERTA IMPERDÍVEL!",
+  note: "Só hoje",
+  ctaText: "Peça pelo WhatsApp",
+  storeName: "Loja Teste",
+  primaryColor: "#ec4899",
+  templateId: "promo",
+  themeId: "roseGlow",
+  showBrand: true,
+  showVolume: true,
+  showStockStatus: true,
+  showWhatsAppCta: true,
+});
+assert.equal(marketingAdFixture.priceText, "R$ 230,00");
+assert.equal(marketingAdFixture.stockStatus, "Pronta entrega");
+assert.match(buildMarketingAdMessage(marketingAdFixture), /Por apenas R$ 230,00/);
+assert.match(buildMarketingAdMessage(marketingAdFixture), /Marca: Marca A/);
+assert.match(buildMarketingAdMessage(marketingAdFixture), /Volume: 100ml/);
+assert.equal(normalizeMarketingAdConfig({ ...marketingAdFixture, template: "legacy-missing", themeId: "missing" }).templateId, "promo");
+assert.equal(normalizeMarketingAdConfig({ ...marketingAdFixture, themeId: "missing" }).themeId, "brand");
+const sanitizedMarketing = sanitizeMarketingHistoryPayload({ productId: "p1", imageUrl: "data:image/png;base64,AAA", storeLogoUrl: "data:image/png;base64,BBB", photoUrl: "https://cdn.example/photo.webp", generatedText: "ok" });
+assert.equal(sanitizedMarketing.imageUrl, undefined);
+assert.equal(sanitizedMarketing.storeLogoUrl, undefined);
+assert.equal(sanitizedMarketing.photoUrl, "https://cdn.example/photo.webp");
+assert.ok(MARKETING_AD_THEME_IDS.includes("black"));
+assert.match(marketingAd, /MARKETING_AD_THEMES/);
+assert.match(marketing, /MarketingAdCanvas/);
+assert.match(marketing, /handleSaveEditedEntry/);
+assert.match(marketing, /handleDuplicateEntry/);
+assert.match(marketing, /formatMarketingPrice/);
+assert.doesNotMatch(marketing, /salePrice.toFixed(2)/);
+assert.match(marketingCard, /normalizeMarketingAdConfig/);
+assert.match(marketingCard, /config.priceText/);
+assert.match(marketingCanvas, /data-testid="marketing-ad-canvas"/);
+assert.match(marketingCanvas, /config.priceText/);
+assert.match(marketingHistoryHook, /sanitizeMarketingHistoryPayload/);
+assert.match(marketingHistoryHook, /updateEntry/);
+assert.match(marketingHistoryPanel, /Editar anúncio/);
+assert.match(marketingHistoryPanel, /Trocar tema/);
+assert.match(marketingHistoryPanel, /Duplicar/);
+assert.doesNotMatch(marketingHistoryHook, /base64/);
 assert.match(storeHealth, /buildStoreIntelligence/);
 assert.match(storeHealth, /evitando novas leituras Firestore/);
 assert.match(dashboard, /StoreIntelligencePanel/);
@@ -393,8 +450,8 @@ assert.match(marketing, /Pesquisar produto/);
 assert.match(marketing, /Carregar mais/);
 assert.match(marketing, /Central de divulgação/);
 assert.match(marketing, /MARKETING_TEMPLATES/);
-assert.match(marketing, /Produto em destaque/);
-assert.match(marketing, /Encomendas abertas/);
+assert.match(marketingAd, /Produto em destaque/);
+assert.match(marketingAd, /Encomendas abertas/);
 assert.match(marketing, /QRCodeSVG/);
 assert.match(marketing, /copyTextWithFallback/);
 assert.match(marketing, /catalogCopyResetTimeoutRef/);
