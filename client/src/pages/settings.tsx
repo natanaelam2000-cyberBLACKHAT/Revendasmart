@@ -428,16 +428,16 @@ export default function Settings() {
               <InputField label="WhatsApp" value={formSettings?.whatsapp} onChange={(v: string) => setFormSettings({...formSettings, whatsapp: v})} />
 
               <div className="rs-store-card">
-                <label className="rs-store-label">Trocar tema</label>
-                <select value={selectedTheme[0]} onChange={(event) => updateStoreTheme(event.target.value)} className="rs-store-control">
+                <p className="rs-store-help">Tema atual: {selectedTheme[1]} · Nicho principal: {selectedPrimaryNicho}</p>
+                <label htmlFor="store-theme-select" className="rs-store-action">Trocar tema</label>
+                <select id="store-theme-select" aria-label="Trocar tema" value={selectedTheme[0]} onChange={(event) => updateStoreTheme(event.target.value)} className="rs-store-control">
                   {STORE_THEME_OPTIONS.map((theme) => <option key={theme[0]} value={theme[0]}>{theme[1]}</option>)}
                 </select>
-                <p className="rs-store-preview"><span style={{ backgroundColor: selectedTheme[2] }} />Salve para aplicar.</p>
-                <label className="rs-store-label mt-3 block">Alterar nicho principal</label>
-                <select value={selectedPrimaryNicho} onChange={(event) => updatePrimaryNicho(event.target.value)} className="rs-store-control">
+                <p className="rs-store-preview"><span style={{ backgroundColor: selectedTheme[2] }} /></p>
+                <label htmlFor="store-nicho-select" className="rs-store-action">Alterar nicho</label>
+                <select id="store-nicho-select" aria-label="Alterar nicho" value={selectedPrimaryNicho} onChange={(event) => updatePrimaryNicho(event.target.value)} className="rs-store-control">
                   {ONBOARDING_NICHO_IDS.map((nicho) => <option key={nicho} value={nicho}>{nicho}</option>)}
                 </select>
-                <p className="rs-store-help">Dados preservados.</p>
               </div>
             </div>
           )}

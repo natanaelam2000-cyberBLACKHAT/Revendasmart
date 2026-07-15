@@ -216,8 +216,10 @@ export default function Marketing() {
     notifyInfo("Compartilhamento do catálogo aberto no WhatsApp.");
   };
 
+  const imageFallbackNotice = () => notifyInfo("Imagem omitida; arte gerada sem ela.");
+
   const downloadEntryCard = async (entry: MarketingHistoryEntry) => {
-    const blob = await createMarketingCard(entry);
+    const blob = await createMarketingCard(entry, imageFallbackNotice);
     downloadMarketingCard(blob, entry.productName);
   };
 
@@ -225,7 +227,7 @@ export default function Marketing() {
     const payload = entryPayload("downloaded");
     if (!payload) return;
     try {
-      const blob = await createMarketingCard(payload);
+      const blob = await createMarketingCard(payload, imageFallbackNotice);
       downloadMarketingCard(blob, payload.productName);
       await recordAction(payload);
       notifySuccess("Card salvo.");

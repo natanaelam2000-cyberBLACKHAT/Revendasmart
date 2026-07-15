@@ -22,7 +22,7 @@ import { getStorage } from "firebase/storage";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { usePlanData } from "@/hooks/usePlanData";
 import { notifyError, notifySuccess } from "@/lib/notify";
-import { buildProductSearchFields } from "@/lib/product-search";
+import { buildProductCreatePayload } from "@/lib/product-payload";
 import { checkProductLimit } from "@/lib/plan-helpers";
 import {
   getNichoConfig,
@@ -135,26 +135,31 @@ function saveLocalBrandSuggestion(nicho: string, value: string, existing: string
   return merged;
 }
 
-type ProductSaveStage = "auth" | "limit" | "upload" | "firestore" | "unknown";
+const FIREBASE_PROJECT_ID = import.meta.env.VITE_FIREBASE_PROJECT_ID || "unknown";
+
+type ProductSaveStage = "auth_check" | "plan_limit_read" | "storage_upload" | "firestore_create" | "firestore_update" | "storage_cleanup" | "unknown";
 
 function getErrorCode(error: unknown): string {
   return typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code || "") : "";
 }
 
+const productPayloadKeys = (payload?: Record<string, unknown>) => Object.keys(payload || {}).sort();
+
 function getProductSaveErrorMessage(error: unknown, stage: ProductSaveStage): string {
   const code = getErrorCode(error);
   if (typeof navigator !== "undefined" && navigator.onLine === false) return "Sem conexão. Tente novamente.";
-  if (code.includes("auth") || (code === "permission-denied" && stage === "auth")) return "Sessão expirada. Faça login novamente.";
-  if (stage === "limit") return "Limite de produtos atingido.";
-  if (stage === "upload" || code.startsWith("storage/")) return "Falha ao enviar imagem.";
-  if (code === "permission-denied") return "Permissão negada. Faça login novamente.";
+  if (code.includes("auth") || stage === "auth_check") return "Sua sessão expirou. Entre novamente para salvar o produto.";
+  if (stage === "plan_limit_read") return code === "permission-denied" ? "Não foi possível validar seu plano. Entre novamente." : "Limite de produtos atingido.";
+  if (stage === "storage_upload" || code.startsWith("storage/")) return "Falha ao enviar imagem.";
+  if (code === "permission-denied") return "Permissão negada ao salvar. Entre novamente e tente de novo.";
   if (code === "unavailable" || code === "deadline-exceeded") return "Serviço indisponível. Tente em instantes.";
-  if (stage === "firestore") return "Falha ao salvar no estoque.";
+  if (stage === "firestore_create" || stage === "firestore_update") return "Falha ao salvar no estoque.";
   return "Não foi possível salvar o produto.";
 }
 
-function sanitizeProductExtras(extras: Record<string, string>) {
-  return Object.fromEntries(Object.entries(extras).filter(([, value]) => value !== undefined && value !== null).map(([key, value]) => [key, String(value).trim()]));
+function logProductSaveDiagnostic(event: string, context: Record<string, unknown>) {
+  console.warn(event, { module: "add-product", ...context });
+  logTelemetryEvent(event as any, context as any).catch(() => {});
 }
 
 async function cleanupUploadedProductImages(paths: string[]) {
@@ -430,21 +435,25 @@ const [, setLocation] = useLocation();
 
     let saveStage: ProductSaveStage = "unknown";
     let uploadedPaths: string[] = [];
+    let attemptedPayload: Record<string, unknown> | undefined;
+    let productPathUid = "";
     setIsSaving(true);
 
     try {
       setUploadError("");
       setFormError("");
       const auth = getFirebaseAuth();
-      const uid = auth?.currentUser?.uid;
-
-      saveStage = "auth";
-      if (!uid) {
-        const message = "Sessão expirada. Faça login novamente.";
+      const currentUser = auth?.currentUser;
+      const uid = currentUser?.uid;
+      saveStage = "auth_check";
+      if (!uid || !currentUser) {
+        const message = "Sua sessão expirou. Entre novamente para salvar o produto.";
         setFormError(message);
         notifyError(message);
         return;
       }
+      await currentUser.getIdToken(false);
+      productPathUid = uid;
 
       const firestore = getFirestore();
       const productRef = id ? doc(firestore, "users", uid, "products", id) : doc(collection(firestore, "users", uid, "products"));
@@ -464,7 +473,7 @@ const [, setLocation] = useLocation();
       if (!category) { setFormError("Categoria é obrigatória."); return; }
 
       if (!id) {
-        saveStage = "limit";
+        saveStage = "plan_limit_read";
         const productCountSnapshot = await getCountFromServer(collection(firestore, "users", uid, "products"));
         const safePlan: PlanType = activePlan === "premium" ? "premium" : "free";
         const { allowed } = checkProductLimit(safePlan, productCountSnapshot.data().count, true);
@@ -480,7 +489,7 @@ const [, setLocation] = useLocation();
       const file = selectedFileRef.current;
 
       if (file) {
-        saveStage = "upload";
+        saveStage = "storage_upload";
         try {
           const storage = getStorage();
           const safeName = file.name.replace(/[^a-z0-9._-]+/gi, "_");
@@ -491,7 +500,7 @@ const [, setLocation] = useLocation();
           imageUrl = await getDownloadURL(storageRef);
         } catch (uploadErr) {
           logTelemetryEvent("add_product_image_upload_failed" as any, { stage: "upload", errorCode: getErrorCode(uploadErr), hasImage: true, productType: activeNicho }).catch(() => {});
-          setUploadError(getProductSaveErrorMessage(uploadErr, "upload"));
+          setUploadError(getProductSaveErrorMessage(uploadErr, "storage_upload"));
           imageUrl = "";
           storagePath = "";
         }
@@ -501,27 +510,22 @@ const [, setLocation] = useLocation();
         setLocalBrandSuggestions((current) => saveLocalBrandSuggestion(activeNicho, normalizedBrand, current));
       }
 
-      const productData = {
-        ...formData,
-        name: productName, brand: normalizedBrand, category, costPrice, salePrice, stock, imageUrl, storagePath,
-        barcode: formData.barcode.trim(),
-        description: formData.description.trim(),
-        extras: sanitizeProductExtras(formData.extras),
-        discountPercent: Number.isFinite(Number(formData.discountPercent)) ? Number(formData.discountPercent) : 0,
-        productType: activeNicho,
-        gender: formData.gender || "unisex",
-        ...buildProductSearchFields({ name: productName, brand: normalizedBrand, category, barcode: formData.barcode, productType: activeNicho }),
-      };
+      const productData = buildProductCreatePayload({ formData, productName, normalizedBrand, category, costPrice, salePrice, stock, imageUrl, storagePath, activeNicho });
+      attemptedPayload = { ...productData, id: id || productId };
 
-      saveStage = "firestore";
+      saveStage = id ? "firestore_update" : "firestore_create";
       try {
         if (id) {
-          await setDoc(productRef, { ...productData, id }, { merge: true });
+          await setDoc(productRef, attemptedPayload, { merge: true });
         } else {
-          await setDoc(productRef, { ...productData, id: productId });
+          await setDoc(productRef, attemptedPayload);
         }
       } catch (writeErr) {
-        if (uploadedPaths.length) await cleanupUploadedProductImages(uploadedPaths);
+        if (uploadedPaths.length) {
+          saveStage = "storage_cleanup";
+          await cleanupUploadedProductImages(uploadedPaths);
+          saveStage = id ? "firestore_update" : "firestore_create";
+        }
         throw writeErr;
       }
 
@@ -531,9 +535,21 @@ const [, setLocation] = useLocation();
       setTimeout(() => setLocation("/products"), 1500);
     } catch (err) {
       const message = getProductSaveErrorMessage(err, saveStage);
+      const payloadKeys = productPayloadKeys(attemptedPayload);
       setFormError(message);
       notifyError(message);
-      logTelemetryEvent("add_product_submit_failed" as any, { stage: saveStage, errorCode: getErrorCode(err), hasImage: Boolean(selectedFileRef.current), productType: activeNicho, isEdit: Boolean(id) }).catch(() => {});
+      logProductSaveDiagnostic("add_product_submit_failed", {
+        stage: saveStage,
+        errorCode: getErrorCode(err),
+        authenticated: Boolean(getFirebaseAuth()?.currentUser),
+        uidMatchesPath: Boolean(getFirebaseAuth()?.currentUser?.uid && productPathUid && getFirebaseAuth()?.currentUser?.uid === productPathUid),
+        payloadKeyCount: payloadKeys.length,
+        payloadKeys,
+        firebaseProjectId: FIREBASE_PROJECT_ID,
+        hasImage: Boolean(selectedFileRef.current),
+        productType: activeNicho,
+        isEdit: Boolean(id),
+      });
     } finally {
       setIsSaving(false);
     }

@@ -5,6 +5,7 @@ import { NICHO_CONFIG, ONBOARDING_NICHO_IDS, getNichoConfig, getProductCategorie
 import { CATALOG_SERVER_SEARCH_ENABLED, PRODUCT_SEARCH_SCHEMA_VERSION, SERVER_SIDE_CLIENT_SEARCH_ENABLED, SERVER_SIDE_PRODUCT_SEARCH_ENABLED, buildProductSearchBackfillPatch, buildProductSearchFields, buildProductServerSearchPlan, buildProductServerSearchQuerySpec, canUseCatalogServerSearch, getProductSearchIndexStatus, isLikelyBarcodeSearchTerm, isProductSearchIndexed, normalizeProductBarcode, normalizeProductSearchText, productMatchesLocalSearch, sanitizeProductSearchPageSize } from "../client/src/lib/product-search";
 import { buildStoreIntelligence } from "../client/src/lib/store-health";
 import { defaultSettings } from "../client/src/lib/mock-data";
+import { buildProductCreatePayload } from "../client/src/lib/product-payload";
 import { MARKETING_AD_THEME_IDS, buildMarketingAdConfig, buildMarketingAdMessage, formatMarketingPrice, normalizeMarketingAdConfig, sanitizeMarketingHistoryPayload } from "../client/src/lib/marketing-ad";
 
 const read = (path: string) => fs.readFileSync(path, "utf8");
@@ -65,6 +66,8 @@ const nichoConfig = read("client/src/lib/nicho-config.ts");
 const addProduct = read("client/src/pages/add-product.tsx");
 const mockData = read("client/src/lib/mock-data.ts");
 const productSearch = read("client/src/lib/product-search.ts");
+const productPayload = read("client/src/lib/product-payload.ts");
+const internalTelemetry = read("client/src/lib/internal-telemetry.ts");
 const storeHealth = read("client/src/lib/store-health.ts");
 const catalogProductsHook = read("client/src/hooks/useCatalogProductsData.ts");
 const firestoreRules = read("firestore.rules");
@@ -201,7 +204,52 @@ assert.equal(buildProductSearchBackfillPatch({ ...indexedProductSearchRecord }),
 assert.ok(buildProductSearchBackfillPatch({ name: "Perfume Novo", brand: "Marca", category: "Perfumes", barcode: "0012345678905", productType: "Cosmeticos" }));
 assert.match(productSearch, /SERVER_SIDE_PRODUCT_SEARCH_ENABLED = false/);
 assert.match(productSearch, /CATALOG_SERVER_SEARCH_ENABLED = SERVER_SIDE_PRODUCT_SEARCH_ENABLED/);
-assert.match(addProduct, /buildProductSearchFields/);
+assert.match(productPayload, /buildProductSearchFields/);
+assert.match(addProduct, /buildProductCreatePayload/);
+assert.match(addProduct, /cleanupUploadedProductImages/);
+assert.match(addProduct, /deleteObject/);
+assert.match(addProduct, /isSaving/);
+assert.match(addProduct, /getProductSaveErrorMessage/);
+assert.match(addProduct, /auth_check|plan_limit_read|storage_upload|firestore_create|storage_cleanup/);
+assert.match(addProduct, /Sem conexão|Sua sessão expirou|Limite de produtos atingido|Permissão negada/);
+const productDataBlock = addProduct.slice(addProduct.indexOf("const productData = buildProductCreatePayload"), addProduct.indexOf("saveStage = id ?"));
+assert.doesNotMatch(productDataBlock, /thumbnailUrl|thumbnailStoragePath/);
+assert.doesNotMatch(productDataBlock, /undefined/);
+const createPayloadFixture = buildProductCreatePayload({
+  formData: {
+    name: "  Perfume Teste  ", brand: " natura ", origin: "Brasil", category: "Perfumes", costPrice: 10, salePrice: 30, stock: 2,
+    barcode: "001234", description: "  desc  ", imageUrl: "", storagePath: "", extras: { volume: " 100ml ", empty: "" }, isFeatured: false, isOnSale: false,
+    discountPercent: Number.NaN, productType: "Cosméticos & Perfumes", gender: "unisex",
+  },
+  productName: "Perfume Teste", normalizedBrand: "Natura", category: "Perfumes", costPrice: 10, salePrice: 30, stock: 2,
+  imageUrl: "https://example.invalid/p.webp", storagePath: "users/test/products/p1/p.webp", activeNicho: "Cosméticos & Perfumes" as any,
+});
+assert.deepEqual(Object.keys(createPayloadFixture).sort(), ["barcode", "barcodeNormalized", "brand", "brandNormalized", "category", "categoryNormalized", "costPrice", "description", "discountPercent", "extras", "gender", "imageUrl", "isFeatured", "isOnSale", "name", "nameNormalized", "origin", "productType", "productTypeNormalized", "salePrice", "searchSchemaVersion", "searchTokens", "stock", "storagePath"].sort());
+assert.equal(createPayloadFixture.name, "Perfume Teste");
+assert.equal(createPayloadFixture.brand, "Natura");
+assert.equal(createPayloadFixture.imageUrl, "https://example.invalid/p.webp");
+assert.equal(createPayloadFixture.storagePath, "users/test/products/p1/p.webp");
+assert.equal(createPayloadFixture.discountPercent, 0);
+assert.equal(createPayloadFixture.nameNormalized, "perfume teste");
+assert.equal(createPayloadFixture.brandNormalized, "natura");
+assert.equal(createPayloadFixture.categoryNormalized, "perfumes");
+assert.equal(createPayloadFixture.barcodeNormalized, "001234");
+assert.equal(createPayloadFixture.searchSchemaVersion, PRODUCT_SEARCH_SCHEMA_VERSION);
+assert.equal(JSON.stringify(createPayloadFixture).includes("undefined"), false);
+assert.equal(Object.prototype.hasOwnProperty.call(createPayloadFixture, "thumbnailUrl"), false);
+assert.equal(Object.prototype.hasOwnProperty.call(createPayloadFixture, "thumbnailStoragePath"), false);
+const productAllowedFieldsMatch = firestoreRules.match(/function productAllowedFields\(\) \{\s*return \[([\s\S]*?)\];/);
+assert.ok(productAllowedFieldsMatch);
+const productAllowedFields = new Set([...productAllowedFieldsMatch[1].matchAll(/'([^']+)'/g)].map((match) => match[1]));
+for (const key of ["id", "name", "brand", "origin", "category", "productType", "costPrice", "salePrice", "stock", "barcode", "description", "imageUrl", "storagePath", "gender", "extras", "isFeatured", "isOnSale", "discountPercent", "discount", "promotionalPrice", "createdAt", "updatedAt", "nameNormalized", "brandNormalized", "categoryNormalized", "barcodeNormalized", "productTypeNormalized", "searchTokens", "searchSchemaVersion"]) {
+  assert.ok(productAllowedFields.has(key), `product key not allowed by rules: ${key}`);
+}
+for (const key of ["thumbnailUrl", "thumbnailStoragePath"]) assert.equal(productAllowedFields.has(key), false, `${key} unexpectedly allowed`);
+assert.match(addProduct, /Number\.isFinite\(costPrice\)/);
+assert.match(addProduct, /Number\.isFinite\(salePrice\)/);
+assert.match(addProduct, /Number\.isFinite\(stock\)/);
+assert.match(addProduct, /cleanupUploadedProductImages\(uploadedPaths\)/);
+assert.match(addProduct, /if \(isSaving\) return/);
 assert.match(mockData, /nameNormalized\?: string/);
 assert.match(firestoreRules, /searchTokens/);
 assert.match(firestoreRules, /searchSchemaVersion/);
@@ -292,7 +340,7 @@ const marketingAdFixture = buildMarketingAdConfig({
 });
 assert.equal(marketingAdFixture.priceText, "R$ 230,00");
 assert.equal(marketingAdFixture.stockStatus, "Pronta entrega");
-assert.match(buildMarketingAdMessage(marketingAdFixture), /Por apenas R$ 230,00/);
+assert.match(buildMarketingAdMessage(marketingAdFixture), /Por apenas R\$ 230,00/);
 assert.match(buildMarketingAdMessage(marketingAdFixture), /Marca: Marca A/);
 assert.match(buildMarketingAdMessage(marketingAdFixture), /Volume: 100ml/);
 assert.equal(normalizeMarketingAdConfig({ ...marketingAdFixture, template: "legacy-missing", themeId: "missing" }).templateId, "promo");
@@ -307,9 +355,20 @@ assert.match(marketing, /MarketingAdCanvas/);
 assert.match(marketing, /handleSaveEditedEntry/);
 assert.match(marketing, /handleDuplicateEntry/);
 assert.match(marketing, /formatMarketingPrice/);
-assert.doesNotMatch(marketing, /salePrice.toFixed(2)/);
-assert.match(marketingCard, /normalizeMarketingAdConfig/);
-assert.match(marketingCard, /config.priceText/);
+assert.doesNotMatch(marketing, /salePrice\.toFixed\(2\)/);
+assert.match(marketingCard, /buildMarketingAdVisualModel/);
+assert.match(marketingCard, /fetch\(src, \{ mode: "cors", credentials: "omit" \}\)/);
+assert.match(marketingCard, /URL\.createObjectURL/);
+assert.match(marketingCard, /URL\.revokeObjectURL/);
+assert.match(marketingCard, /crossOrigin = "anonymous"/);
+assert.match(marketingCard, /onImageFallback/);
+assert.match(marketingCard, /try \{ canvas\.toBlob/);
+assert.match(marketingCard, /config\.priceText/);
+assert.match(marketingCard, /ctaText/);
+assert.match(marketingCard, /wrap\(ctx, config\.productName/);
+assert.match(marketing, /Imagem omitida; arte gerada sem ela/);
+assert.match(marketing, /createMarketingCard\(entry, imageFallbackNotice\)/);
+assert.match(marketing, /createMarketingCard\(payload, imageFallbackNotice\)/);
 assert.match(marketingCanvas, /data-testid="marketing-ad-canvas"/);
 assert.match(marketingCanvas, /config.priceText/);
 assert.match(marketingHistoryHook, /sanitizeMarketingHistoryPayload/);
@@ -318,6 +377,31 @@ assert.match(marketingHistoryPanel, /Editar anúncio/);
 assert.match(marketingHistoryPanel, /Trocar tema/);
 assert.match(marketingHistoryPanel, /Duplicar/);
 assert.doesNotMatch(marketingHistoryHook, /base64/);
+assert.match(settings, /path: "\/settings\?tab=store"/);
+assert.match(settings, /activeTab === 'store'/);
+assert.match(settings, /Tema atual:/);
+assert.match(settings, /Trocar tema/);
+assert.match(settings, /store-theme-select/);
+assert.match(settings, /Nicho principal:/);
+assert.match(settings, /Alterar nicho/);
+assert.match(settings, /store-nicho-select/);
+assert.match(settings, /htmlFor="store-theme-select"/);
+assert.match(settings, /htmlFor="store-nicho-select"/);
+assert.match(settings, /updateStoreTheme/);
+assert.match(settings, /updatePrimaryNicho/);
+assert.match(settings, /setFormSettings/);
+assert.doesNotMatch(internalTelemetry, /firebase\/database/);
+assert.match(internalTelemetry, /permission_denied on Android\/PWA/);
+assert.match(internalTelemetry, /initializeInternalTelemetry\(_app: FirebaseApp\)/);
+assert.match(internalTelemetry, /if \(!isInitialized\) return/);
+const marketingCss = read("client/src/styles/marketing.css");
+assert.match(marketingCss, /@media \(max-width:430px\)/);
+assert.match(marketingCss, /\.mk65\{overflow-x:hidden\}/);
+assert.match(marketingCss, /\.mk58\{grid-template-columns:1fr\}/);
+assert.match(marketingCss, /overflow-wrap:anywhere/);
+assert.match(marketingCss, /word-break:break-word/);
+assert.match(marketingCss, /\.mk52\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)\}/);
+assert.doesNotMatch(marketingCss, /min-width:\s*4\d\dpx|(?:^|[;{])width:\s*4\d\dpx/);
 assert.match(storeHealth, /buildStoreIntelligence/);
 assert.match(storeHealth, /evitando novas leituras Firestore/);
 assert.match(dashboard, /StoreIntelligencePanel/);

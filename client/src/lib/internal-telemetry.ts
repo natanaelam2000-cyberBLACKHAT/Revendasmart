@@ -1,25 +1,17 @@
-import { getDatabase, ref, push, set, Database } from "firebase/database";
 import { FirebaseApp } from "firebase/app";
-import { maskId, safeLogger, sanitizeLogPayload } from "@/lib/safe-logger";
+import { maskId, safeLogger } from "@/lib/safe-logger";
 
 /**
  * INTERNAL TELEMETRY MODULE
  * 
- * Customized event logging for RevendaSmart.
- * 
- * This module provides:
- * - Detailed internal logging to Firebase Realtime Database: /analytics_events/
- * - Complementary to Firebase Analytics official
- * - Useful for:
- *   - Raw audit trails
- *   - Debug context capture
- *   - Contextual data that doesn't fit official events
- *   - Fine-grained tracking for internal use
- * 
- * NOTE: This is internal telemetry. For product analytics, use firebase-analytics.ts
+ * Typed internal telemetry API for RevendaSmart.
+ *
+ * The frontend no longer writes to Realtime Database /analytics_events by default.
+ * That path failed with permission_denied on Android/PWA and must remain fail-open
+ * until a least-privilege telemetry model exists. Product analytics stays in
+ * firebase-analytics.ts.
  */
 
-let database: Database | null = null;
 let isInitialized = false;
 
 /**
@@ -204,48 +196,21 @@ declare global {
 }
 
 /**
- * Initialize internal telemetry with Firebase Realtime Database
+ * Initialize internal telemetry in fail-open mode.
  */
-export function initializeInternalTelemetry(app: FirebaseApp): void {
-  if (isInitialized) return;
-
-  try {
-    database = getDatabase(app);
-    isInitialized = true;
-  } catch (error) {
-    safeLogger.error("internal_telemetry_initialize_failed", error, { module: "internal-telemetry" });
-  }
+export function initializeInternalTelemetry(_app: FirebaseApp): void {
+  isInitialized = true;
 }
 
 /**
- * Log an internal telemetry event
- * Complementary to Firebase Analytics - captures richer context
+ * Preserve the public telemetry API without blocking user flows.
  */
 export async function logTelemetryEvent<K extends keyof InternalTelemetryEvents>(
-  eventName: K,
-  data: InternalTelemetryEvents[K],
-  userId?: string
+  _eventName: K,
+  _data: InternalTelemetryEvents[K],
+  _userId?: string
 ): Promise<void> {
-  if (!isInitialized || !database) {
-    safeLogger.warn("internal_telemetry_not_initialized", { module: "internal-telemetry", eventName });
-    return;
-  }
-
-  try {
-    const eventLog = {
-      timestamp: new Date().toISOString(),
-      eventName,
-      data: sanitizeLogPayload(data),
-      userId: maskId(userId) || undefined,
-      url: typeof window !== "undefined" ? window.location.href : "unknown",
-    };
-
-    const eventsRef = ref(database, "analytics_events");
-    const newEventRef = push(eventsRef);
-    await set(newEventRef, eventLog);
-  } catch (err) {
-    safeLogger.error("internal_telemetry_log_event_failed", err, { module: "internal-telemetry", eventName });
-  }
+  if (!isInitialized) return;
 }
 
 /**
