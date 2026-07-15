@@ -1,5 +1,5 @@
 import { getImage } from "@/lib/mock-data";
-import { getMarketingAdImageCandidates, normalizeMarketingAdConfig, resolveMarketingAdTheme, resolveMarketingTemplate, type MarketingAdConfig, type MarketingAdInput } from "@/lib/marketing-ad";
+import { buildMarketingAdVisualModel, getMarketingAdImageCandidates, type MarketingAdConfig, type MarketingAdInput } from "@/lib/marketing-ad";
 
 export type MarketingCardPayload = MarketingAdInput;
 const S = 1080, FONT = "Arial";
@@ -38,7 +38,7 @@ function tag(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, 
   rect(ctx, x, y, w, 46, 23, fill); ctx.fillStyle = color; ctx.textAlign = "center"; ctx.textBaseline = "middle"; font(ctx, 20); ctx.fillText(text, x + w / 2, y + 24); return w + 12;
 }
 export async function createMarketingCard(payload: MarketingCardPayload): Promise<Blob> {
-  const config = normalizeMarketingAdConfig(payload), theme = resolveMarketingAdTheme(config.themeId, config.primaryColor), template = resolveMarketingTemplate(config.templateId);
+  const model = buildMarketingAdVisualModel(payload), { config, theme, template, chips, ctaText } = model;
   const canvas = document.createElement("canvas"), ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Não foi possível preparar a imagem");
   canvas.width = canvas.height = S;
@@ -55,16 +55,13 @@ export async function createMarketingCard(payload: MarketingCardPayload): Promis
   ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"; ctx.fillStyle = theme.foreground; font(ctx, 38); wrap(ctx, config.storeName, 236, 157, 560, 42, 1);
   ctx.fillStyle = theme.muted; font(ctx, 18, 800); ctx.fillText("REVENDA SMART", 238, 190); font(ctx, 20); tag(ctx, `${template.emoji} Oferta`, 805, 140, theme.accent);
   rect(ctx, 142, 232, 796, 70, 35, theme.dark); ctx.fillStyle = "#fff"; font(ctx, 28); ctx.textAlign = "center"; ctx.textBaseline = "middle"; wrap(ctx, config.headline, 540, 276, 720, 32, 1);
-  const product = await resolveImage(config); rect(ctx, 146, 330, 788, 330, 46, "#fff", theme.ring);
-  if (product) fit(ctx, product, 185, 350, 710, 290); else { ctx.fillStyle = theme.accent; ctx.globalAlpha = .14; ctx.beginPath(); ctx.arc(540, 455, 86, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1; ctx.fillStyle = "#64748b"; font(ctx, 28); ctx.textAlign = "center"; ctx.fillText("Produto sem imagem", 540, 505); }
-  let x = 146; font(ctx, 20);
-  if (config.showStockStatus && config.stockStatus) x += tag(ctx, config.stockStatus, x, 700, theme.cta);
-  if (config.showBrand && config.productBrand) x += tag(ctx, config.productBrand, x, 700, theme.soft, theme.dark);
-  if (config.showVolume && config.productVolume) tag(ctx, config.productVolume, x, 700, theme.soft, theme.dark);
-  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"; ctx.fillStyle = theme.foreground; font(ctx, 54); wrap(ctx, config.productName, 146, 810, 788, 58, 2);
-  if (config.note) { ctx.fillStyle = theme.muted; font(ctx, 24, 800); wrap(ctx, config.note, 146, 902, 480, 28, 1); }
-  ctx.fillStyle = theme.muted; font(ctx, 20); ctx.fillText("POR APENAS", 146, 940); ctx.fillStyle = theme.accent; font(ctx, 68); ctx.fillText(config.priceText, 146, 1000);
-  if (config.showWhatsAppCta && config.ctaText) { rect(ctx, 650, 924, 286, 74, 30, theme.cta); ctx.fillStyle = "#fff"; font(ctx, 22); ctx.textAlign = "center"; ctx.textBaseline = "middle"; wrap(ctx, config.ctaText, 793, 966, 240, 24, 2); }
+  const product = await resolveImage(config); rect(ctx, 132, 320, 816, 405, 50, "#fff", theme.ring);
+  if (product) fit(ctx, product, 158, 340, 764, 365); else { ctx.fillStyle = theme.accent; ctx.globalAlpha = .14; ctx.beginPath(); ctx.arc(540, 505, 96, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1; ctx.fillStyle = "#64748b"; font(ctx, 28); ctx.textAlign = "center"; ctx.fillText("Produto sem imagem", 540, 555); }
+  let x = 146; font(ctx, 20); for (const chip of chips) x += tag(ctx, chip[0], x, 748, chip[1] ? theme.cta : theme.soft, chip[1] ? "#fff" : theme.dark);
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"; ctx.fillStyle = theme.foreground; font(ctx, config.productName.length > 44 ? 46 : 54); wrap(ctx, config.productName, 146, 840, 788, 54, 2);
+  if (config.note) { ctx.fillStyle = theme.muted; font(ctx, 22, 800); wrap(ctx, config.note, 146, 918, 460, 26, 1); }
+  ctx.fillStyle = theme.muted; font(ctx, 20); ctx.fillText("POR APENAS", 146, 948); ctx.fillStyle = theme.accent; font(ctx, 66); ctx.fillText(config.priceText, 146, 1004);
+  if (ctaText) { rect(ctx, 640, 925, 306, 82, 30, theme.cta); ctx.fillStyle = "#fff"; font(ctx, 22); ctx.textAlign = "center"; ctx.textBaseline = "middle"; wrap(ctx, ctaText, 793, 970, 260, 25, 2); }
   return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("Não foi possível gerar o PNG")), "image/png", .95));
 }
 export function downloadMarketingCard(blob: Blob, productName: string) {

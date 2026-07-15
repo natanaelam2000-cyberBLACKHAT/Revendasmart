@@ -1,12 +1,9 @@
-import { getMarketingAdImageCandidates, resolveMarketingAdTheme, resolveMarketingTemplate, type MarketingAdConfig } from "@/lib/marketing-ad";
+import { buildMarketingAdVisualModel, type MarketingAdConfig } from "@/lib/marketing-ad";
 
 export function MarketingAdCanvas({ config, compact = false }: { config: MarketingAdConfig; compact?: boolean }) {
-  const theme = resolveMarketingAdTheme(config.themeId, config.primaryColor);
-  const template = resolveMarketingTemplate(config.templateId);
-  const imageSrc = getMarketingAdImageCandidates(config)[0];
+  const model = buildMarketingAdVisualModel(config);
+  const { theme, template, imageSrc, logoSrc, storeInitial, chips, ctaText } = model;
   const isDark = config.backgroundStyle === "dark-premium" || theme.darkMode;
-  const logoSrc = config.storeLogoUrl || "";
-  const storeInitial = (config.storeName || "R").trim().slice(0, 1).toUpperCase();
 
   return (
     <article
@@ -46,9 +43,7 @@ export function MarketingAdCanvas({ config, compact = false }: { config: Marketi
           </div>
           <div className="ma11">
             <div className="ma16">
-              {config.showStockStatus && config.stockStatus && <span style={{ backgroundColor: theme.cta, color: "white" }}>{config.stockStatus}</span>}
-              {config.showBrand && config.productBrand && <span style={{ backgroundColor: theme.soft, color: theme.dark }}>{config.productBrand}</span>}
-              {config.showVolume && config.productVolume && <span style={{ backgroundColor: theme.soft, color: theme.dark }}>{config.productVolume}</span>}
+              {chips.map(chip => <span key={chip[0]} style={{ backgroundColor: chip[1] ? theme.cta : theme.soft, color: chip[1] ? "white" : theme.dark }}>{chip[0]}</span>)}
             </div>
             <h3 className="ma9" style={{ color: theme.foreground }}>{config.productName}</h3>
             {config.note && <p className="ma19" style={{ color: theme.muted }}>{config.note}</p>}
@@ -57,7 +52,7 @@ export function MarketingAdCanvas({ config, compact = false }: { config: Marketi
                 <p className="ma1" style={{ color: theme.muted }}>Por apenas</p>
                 <p className="ma15" style={{ color: theme.accent }}>{config.priceText}</p>
               </div>
-              {config.showWhatsAppCta && config.ctaText && <div className="ma23" style={{ backgroundColor: theme.cta }}>{config.ctaText}</div>}
+              {ctaText && <div className="ma23" style={{ backgroundColor: theme.cta }}>{ctaText}</div>}
             </div>
           </div>
         </div>

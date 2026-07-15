@@ -13,6 +13,7 @@ import { getApiUrl } from "@/lib/api-config";
 import { QRCodeSVG } from "qrcode.react";
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
+import { ONBOARDING_NICHO_IDS } from "@/lib/nicho-config";
 import {
   Store, CreditCard,
   Download, Save, ChevronRight, Bell, Upload, RefreshCw, Users, Share2, ExternalLink, FileSpreadsheet, QrCode, Copy, Mail, Scale, HelpCircle, ChevronDown, User, KeyRound, LogOut, ArrowLeft, Receipt
@@ -43,6 +44,12 @@ const VALID_SETTINGS_TABS = new Set([
 ]);
 const normalizeSettingsTab = (value: string | null) =>
   value && VALID_SETTINGS_TABS.has(value) ? value : "menu";
+
+const STORE_THEME_OPTIONS = [
+  ["purple", "Roxo", "#6d5dfc"], ["blue", "Azul", "#2563eb"], ["green", "Verde", "#059669"],
+  ["rose", "Rosa", "#db2777"], ["orange", "Laranja", "#f97316"], ["black", "Preto Premium", "#111827"],
+] as const;
+const DEFAULT_STORE_THEME_ID = "purple";
 
 async function compressLogo(file: File, maxSize = 512, quality = 0.82): Promise<Blob | null> {
   return new Promise((resolve) => {
@@ -77,6 +84,22 @@ export default function Settings() {
   // Track if we've already initialized formSettings from Firestore
   // This ensures we only sync ONCE on mount, not on every Firestore update
   const hasInitialized = useRef(false);
+
+  const selectedThemeId = formSettings?.appTheme || DEFAULT_STORE_THEME_ID;
+  const selectedTheme = useMemo(
+    () => STORE_THEME_OPTIONS.find((theme) => theme[0] === selectedThemeId) || STORE_THEME_OPTIONS[0],
+    [selectedThemeId]
+  );
+  const selectedPrimaryNicho = formSettings?.businessType || "Geral";
+
+  const updateStoreTheme = (themeId: string) => {
+    const theme = STORE_THEME_OPTIONS.find((item) => item[0] === themeId) || STORE_THEME_OPTIONS[0];
+    setFormSettings((prev) => ({ ...prev, appTheme: theme[0], primaryColor: theme[2], appThemeCustomization: { ...(prev?.appThemeCustomization || {}), primaryColor: theme[2] } }));
+  };
+
+  const updatePrimaryNicho = (nicho: string) => {
+    setFormSettings((prev) => ({ ...prev, businessType: nicho, businessTypes: [nicho, ...((prev?.businessTypes || []).filter((item) => item !== nicho))] }));
+  };
 
   // Sync Firestore settings to form ONLY on initial load
   // This prevents re-renders from interrupting user input
@@ -400,13 +423,22 @@ export default function Settings() {
           )}
           {activeTab === 'store' && (
             <div className="space-y-5 animate-in fade-in slide-in-from-right-4">
-              <div><p className="text-xs font-black text-violet-700 uppercase tracking-wider">Minha Loja</p><h2 className="text-2xl font-black mt-1">Nome e informações</h2><p className="text-sm text-muted-foreground mt-1">Dados exibidos para seus clientes no catálogo.</p></div>
-              <div className="p-4 bg-violet-50 border border-violet-200 rounded-2xl">
-                <p className="text-xs font-black text-violet-700 uppercase">Minha Loja</p>
-                <p className="text-[10px] text-violet-600 mt-1">Identidade exibida no catálogo público.</p>
-              </div>
+              <div><p className="text-xs font-black text-violet-700 uppercase tracking-wider">Minha Loja</p><h2 className="text-2xl font-black mt-1">Nome, tema e nicho</h2><p className="text-sm text-muted-foreground mt-1">Ajuste a identidade da loja.</p></div>
               <InputField label="Nome da Loja" value={formSettings?.storeName} onChange={(v: string) => setFormSettings({...formSettings, storeName: v})} />
               <InputField label="WhatsApp" value={formSettings?.whatsapp} onChange={(v: string) => setFormSettings({...formSettings, whatsapp: v})} />
+
+              <div className="rs-store-card">
+                <label className="rs-store-label">Trocar tema</label>
+                <select value={selectedTheme[0]} onChange={(event) => updateStoreTheme(event.target.value)} className="rs-store-control">
+                  {STORE_THEME_OPTIONS.map((theme) => <option key={theme[0]} value={theme[0]}>{theme[1]}</option>)}
+                </select>
+                <p className="rs-store-preview"><span style={{ backgroundColor: selectedTheme[2] }} />Salve para aplicar.</p>
+                <label className="rs-store-label mt-3 block">Alterar nicho principal</label>
+                <select value={selectedPrimaryNicho} onChange={(event) => updatePrimaryNicho(event.target.value)} className="rs-store-control">
+                  {ONBOARDING_NICHO_IDS.map((nicho) => <option key={nicho} value={nicho}>{nicho}</option>)}
+                </select>
+                <p className="rs-store-help">Dados preservados.</p>
+              </div>
             </div>
           )}
 

@@ -8,7 +8,7 @@ const BarcodeScanner = lazy(
 );
 import { Product, defaultSettings } from "@/lib/mock-data";
 import type { PlanType } from "@shared/monetization";
-import { getFirebaseAuth, getFirebaseIdToken, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";
+import { getFirebaseAuth, logTelemetryEvent } from "@/lib/firebase";
 import {
   getFirestore,
   doc,
@@ -17,12 +17,11 @@ import {
   getCountFromServer,
   collection
 } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { getStorage } from "firebase/storage";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { usePlanData } from "@/hooks/usePlanData";
 import { notifyError, notifySuccess } from "@/lib/notify";
-import { safeLogger } from "@/lib/safe-logger";
 import { buildProductSearchFields } from "@/lib/product-search";
 import { checkProductLimit } from "@/lib/plan-helpers";
 import {
@@ -131,9 +130,37 @@ function saveLocalBrandSuggestion(nicho: string, value: string, existing: string
   if (!normalized) return existing;
   const merged = [normalized, ...existing.filter((item) => item.toLocaleLowerCase("pt-BR") !== normalized.toLocaleLowerCase("pt-BR"))].slice(0, 20);
   if (typeof window !== "undefined") {
-    try { localStorage.setItem(brandSuggestionStorageKey(nicho), JSON.stringify(merged)); } catch (storageError) { safeLogger.debug("brand_suggestion_cache_failed", { module: "add-product", error: storageError }); }
+    try { localStorage.setItem(brandSuggestionStorageKey(nicho), JSON.stringify(merged)); } catch {}
   }
   return merged;
+}
+
+type ProductSaveStage = "auth" | "limit" | "upload" | "firestore" | "unknown";
+
+function getErrorCode(error: unknown): string {
+  return typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code || "") : "";
+}
+
+function getProductSaveErrorMessage(error: unknown, stage: ProductSaveStage): string {
+  const code = getErrorCode(error);
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return "Sem conexão. Tente novamente.";
+  if (code.includes("auth") || (code === "permission-denied" && stage === "auth")) return "Sessão expirada. Faça login novamente.";
+  if (stage === "limit") return "Limite de produtos atingido.";
+  if (stage === "upload" || code.startsWith("storage/")) return "Falha ao enviar imagem.";
+  if (code === "permission-denied") return "Permissão negada. Faça login novamente.";
+  if (code === "unavailable" || code === "deadline-exceeded") return "Serviço indisponível. Tente em instantes.";
+  if (stage === "firestore") return "Falha ao salvar no estoque.";
+  return "Não foi possível salvar o produto.";
+}
+
+function sanitizeProductExtras(extras: Record<string, string>) {
+  return Object.fromEntries(Object.entries(extras).filter(([, value]) => value !== undefined && value !== null).map(([key, value]) => [key, String(value).trim()]));
+}
+
+async function cleanupUploadedProductImages(paths: string[]) {
+  if (!paths.length) return;
+  const storage = getStorage();
+  await Promise.allSettled(paths.map((path) => deleteObject(ref(storage, path))));
 }
 
 interface ProductFormData {
@@ -148,8 +175,6 @@ interface ProductFormData {
   description: string;
   imageUrl: string;
   storagePath: string;
-  thumbnailUrl: string;
-  thumbnailStoragePath: string;
   extras: Record<string, string>;
   isFeatured: boolean;
   isOnSale: boolean;
@@ -179,14 +204,9 @@ const [, setLocation] = useLocation();
   const hasMultipleNichos = businessTypes.length > 1;
 
   const [saveConfirmation, setSaveConfirmation] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [uploadError, setUploadError] = useState<string>("");
-  const [debugStatus, setDebugStatus] = useState({
-    uid: "",
-    saveAttempted: false,
-    saveError: ""
-  });
   const selectedFileRef = useRef<File | null>(null);
-  const selectedThumbnailRef = useRef<File | null>(null);
 
   // Active product nicho: if user has multiple types, user selects manually
   const [activeNicho, setActiveNicho] = useState<NichoId>(
@@ -218,8 +238,6 @@ const [, setLocation] = useLocation();
   description: "",
   imageUrl: "",
   storagePath: "",
-  thumbnailUrl: "",
-  thumbnailStoragePath: "",
   extras: {}, // ✅ CORRETO
   isFeatured: false,
   isOnSale: false,
@@ -313,8 +331,6 @@ const [, setLocation] = useLocation();
                 description: product.description || "",
                 imageUrl: product.imageUrl || "",
                 storagePath: product.storagePath || "",
-                thumbnailUrl: product.thumbnailUrl || "",
-                thumbnailStoragePath: product.thumbnailStoragePath || "",
                 extras: product.extras || {},
                 isFeatured: product.isFeatured || false,
                 isOnSale: product.isOnSale || false,
@@ -324,7 +340,7 @@ const [, setLocation] = useLocation();
               });
             }
           })
-          .catch(err => safeLogger.error("add_product_load_failed", err, { module: "add-product", productId: id }));
+          .catch(() => logTelemetryEvent("add_product_load_failed" as any, { stage: "load" }).catch(() => {}));
       }
     }
   }, [id]);
@@ -410,202 +426,116 @@ const [, setLocation] = useLocation();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
+
+    let saveStage: ProductSaveStage = "unknown";
+    let uploadedPaths: string[] = [];
+    setIsSaving(true);
 
     try {
       setUploadError("");
       setFormError("");
-      setDebugStatus({ uid: "", saveAttempted: true, saveError: "" });
       const auth = getFirebaseAuth();
       const uid = auth?.currentUser?.uid;
 
+      saveStage = "auth";
       if (!uid) {
-        setDebugStatus({ uid: "", saveAttempted: true, saveError: "UID null" });
-        setFormError("Erro: usuário não autenticado. Faça login novamente.");
+        const message = "Sessão expirada. Faça login novamente.";
+        setFormError(message);
+        notifyError(message);
         return;
       }
 
-      setDebugStatus({ uid: uid, saveAttempted: true, saveError: "" });
-      let imageUrl = formData.imageUrl || "";
-      let storagePath = formData.storagePath || "";
-      let thumbnailUrl = formData.thumbnailUrl || "";
-      let thumbnailStoragePath = formData.thumbnailStoragePath || "";
-      const file = selectedFileRef.current;
-      const thumbnailFile = selectedThumbnailRef.current;
       const firestore = getFirestore();
-const productRef = doc(collection(firestore, "users", uid, "products"));
-const productId = id || productRef.id;
+      const productRef = id ? doc(firestore, "users", uid, "products", id) : doc(collection(firestore, "users", uid, "products"));
+      const productId = id || productRef.id;
 
+      const normalizedBrand = normalizeBrandInput(formData.brand);
+      const productName = formData.name.trim();
+      const category = formData.category.trim();
+      const costPrice = Number(formData.costPrice);
+      const salePrice = Number(formData.salePrice);
+      const stock = Number(formData.stock);
 
-      if (file) {
-        try {
-          const storage = getStorage();
-          const safeName = file.name.replace(/\s+/g, "_");
-          storagePath = `users/${uid}/products/${productId}/${safeName}`;
-          const storageRef = ref(storage, storagePath);
-          await uploadBytes(storageRef, file, {
-            cacheControl: "public,max-age=31536000,immutable",
-            contentType: file.type || "image/jpeg",
-          });
-          imageUrl = await getDownloadURL(storageRef);
+      if (!productName) { setFormError("Nome do produto é obrigatório."); return; }
+      if (!Number.isFinite(costPrice) || costPrice < 0) { setFormError("Preço de custo inválido."); return; }
+      if (!Number.isFinite(salePrice) || salePrice <= 0) { setFormError("Preço de venda deve ser maior que 0."); return; }
+      if (!Number.isFinite(stock) || stock < 0) { setFormError("Estoque inválido."); return; }
+      if (!category) { setFormError("Categoria é obrigatória."); return; }
 
-          if (thumbnailFile) {
-            try {
-              const safeThumbName = thumbnailFile.name.replace(/\s+/g, "_");
-              thumbnailStoragePath = `users/${uid}/products/${productId}/${safeThumbName}`;
-              const thumbnailRef = ref(storage, thumbnailStoragePath);
-              await uploadBytes(thumbnailRef, thumbnailFile, {
-                cacheControl: "public,max-age=31536000,immutable",
-                contentType: thumbnailFile.type || "image/jpeg",
-              });
-              thumbnailUrl = await getDownloadURL(thumbnailRef);
-            } catch (thumbnailErr) {
-              safeLogger.warn("add_product_thumbnail_upload_failed", { module: "add-product", productId, error: thumbnailErr });
-              thumbnailUrl = imageUrl;
-              thumbnailStoragePath = storagePath;
-            }
-          } else {
-            thumbnailUrl = imageUrl;
-            thumbnailStoragePath = storagePath;
-          }
-        } catch (uploadErr) {
-          safeLogger.warn("add_product_image_upload_failed", { module: "add-product", productId, error: uploadErr });
-          setUploadError("Falha no upload da imagem. O produto será salvo sem foto.");
-          imageUrl = "";
-          storagePath = "";
-          thumbnailUrl = "";
-          thumbnailStoragePath = "";
+      if (!id) {
+        saveStage = "limit";
+        const productCountSnapshot = await getCountFromServer(collection(firestore, "users", uid, "products"));
+        const safePlan: PlanType = activePlan === "premium" ? "premium" : "free";
+        const { allowed } = checkProductLimit(safePlan, productCountSnapshot.data().count, true);
+        if (!allowed) {
+          setShowLimitModal(true);
+          setFormError("Limite de produtos atingido.");
+          return;
         }
       }
 
-      const normalizedBrand = normalizeBrandInput(formData.brand);
+      let imageUrl = formData.imageUrl || "";
+      let storagePath = formData.storagePath || "";
+      const file = selectedFileRef.current;
+
+      if (file) {
+        saveStage = "upload";
+        try {
+          const storage = getStorage();
+          const safeName = file.name.replace(/[^a-z0-9._-]+/gi, "_");
+          storagePath = `users/${uid}/products/${productId}/${safeName}`;
+          const storageRef = ref(storage, storagePath);
+          await uploadBytes(storageRef, file, { cacheControl: "public,max-age=31536000,immutable", contentType: file.type || "image/jpeg" });
+          uploadedPaths.push(storagePath);
+          imageUrl = await getDownloadURL(storageRef);
+        } catch (uploadErr) {
+          logTelemetryEvent("add_product_image_upload_failed" as any, { stage: "upload", errorCode: getErrorCode(uploadErr), hasImage: true, productType: activeNicho }).catch(() => {});
+          setUploadError(getProductSaveErrorMessage(uploadErr, "upload"));
+          imageUrl = "";
+          storagePath = "";
+        }
+      }
+
       if (normalizedBrand && brandMode === "custom") {
         setLocalBrandSuggestions((current) => saveLocalBrandSuggestion(activeNicho, normalizedBrand, current));
       }
 
-     const productData = {
-  ...formData,
-  brand: normalizedBrand,
-  gender: formData.gender || "unisex",
-  imageUrl,
-  storagePath,
-  thumbnailUrl,
-  thumbnailStoragePath,
-  productType: activeNicho,
-  ...buildProductSearchFields({
-    name: formData.name,
-    brand: normalizedBrand,
-    category: formData.category,
-    barcode: formData.barcode,
-    productType: activeNicho,
-  }),
-};
+      const productData = {
+        ...formData,
+        name: productName, brand: normalizedBrand, category, costPrice, salePrice, stock, imageUrl, storagePath,
+        barcode: formData.barcode.trim(),
+        description: formData.description.trim(),
+        extras: sanitizeProductExtras(formData.extras),
+        discountPercent: Number.isFinite(Number(formData.discountPercent)) ? Number(formData.discountPercent) : 0,
+        productType: activeNicho,
+        gender: formData.gender || "unisex",
+        ...buildProductSearchFields({ name: productName, brand: normalizedBrand, category, barcode: formData.barcode, productType: activeNicho }),
+      };
 
-      // VALIDATION: Ensure required fields exist and are valid
-      if (!productData.name || productData.name.trim().length === 0) {
-        setFormError("Nome do produto é obrigatório.");
-        return;
-      }
-     if (!Number.isFinite(productData.costPrice) || productData.costPrice < 0) {
-  setFormError("Preço de custo inválido.");
-  return;
-}
- if (!Number.isFinite(productData.salePrice) || productData.salePrice <= 0) {
-  setFormError("Preço de venda deve ser maior que 0.");
-  return;
-}
-      if (!productData.category || productData.category.trim().length === 0) {
-        setFormError("Categoria é obrigatória.");
-        return;
-      }
-
-
-      if (id) {
-        try {
-     await setDoc(
-  doc(firestore, "users", uid, "products", id),
-  { ...productData, id },
-  { merge: true }
-);
-        } catch (writeErr) {
-          const errorMsg = (writeErr as Error)?.message || "unknown error";
-          safeLogger.error("add_product_update_failed", errorMsg, { module: "add-product", productId });
-          setDebugStatus({ uid: uid, saveAttempted: true, saveError: `EDIT failed: ${errorMsg}` });
-          setFormError(`Erro ao atualizar: ${errorMsg}`);
-          throw writeErr;
+      saveStage = "firestore";
+      try {
+        if (id) {
+          await setDoc(productRef, { ...productData, id }, { merge: true });
+        } else {
+          await setDoc(productRef, { ...productData, id: productId });
         }
-      } else {
-        // Validate plan limits for new products.
-if (!uid) {
-  setFormError("Usuário não autenticado.");
-  notifyError("Sessão expirada. Faça login novamente.");
-  return;
-}
-
-const productCountSnapshot = await getCountFromServer(
-  collection(firestore, "users", uid, "products")
-);
-
-const productCount = productCountSnapshot.data().count;
-
-const safePlan: PlanType = activePlan === "premium" ? "premium" : "free";
-const { allowed } = checkProductLimit(safePlan, productCount, true);
-
-if (!allowed) {
-  setShowLimitModal(true);
-  setFormError("Limite de produtos atingido no plano.");
-  return;
-}
-
-        const newProduct: Product = { ...productData, id: productId };
-        try {
-          await measureOperation("product_creation", async () => {
-  await setDoc(
-    doc(firestore, "users", uid, "products", productId),
-    newProduct
-  );
-
-  const docRef = doc(firestore, "users", uid, "products", productId);
-  const docSnap = await getDoc(docRef);
-
-  if (!docSnap.exists()) {
-    safeLogger.error("add_product_verification_failed", undefined, { module: "add-product", productId });
-    setFormError("Erro ao salvar no servidor.");
-    throw new Error("Verification failed");
-  }
-
-});
-        } catch (writeErr) {
-          const errorMsg = (writeErr as Error)?.message || "unknown error";
-          safeLogger.error("add_product_create_failed", errorMsg, { module: "add-product", productId });
-          setDebugStatus({ uid: uid, saveAttempted: true, saveError: `CREATE failed: ${errorMsg}` });
-          setFormError("Erro ao salvar produto.");
-          notifyError("Erro ao salvar produto.");
-          throw writeErr;
-        }
+      } catch (writeErr) {
+        if (uploadedPaths.length) await cleanupUploadedProductImages(uploadedPaths);
+        throw writeErr;
       }
 
       setSuccess(true);
       notifySuccess(id ? "Produto atualizado." : "Produto salvo.");
 
-      const userId = auth?.currentUser?.uid;
-      if (userId && !id) {
-     logTelemetryEvent("product_created", {
-  productId,
-  category: formData.category,
-  price: formData.salePrice,
-  nicho: activeNicho,
-  hasImage: !!imageUrl,
-  extrasCount: Object.keys(formData.extras).length
-}, userId);
-        trackAnalyticsEvent("view_item", {
-          items: [{ item_id: productId, item_name: formData.name, price: formData.salePrice }],
-        });
-      }
-
       setTimeout(() => setLocation("/products"), 1500);
     } catch (err) {
-      notifyError("Erro ao salvar produto.");
-      safeLogger.error("add_product_submit_failed", err, { module: "add-product", productId: id || "new" });
+      const message = getProductSaveErrorMessage(err, saveStage);
+      setFormError(message);
+      notifyError(message);
+      logTelemetryEvent("add_product_submit_failed" as any, { stage: saveStage, errorCode: getErrorCode(err), hasImage: Boolean(selectedFileRef.current), productType: activeNicho, isEdit: Boolean(id) }).catch(() => {});
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -625,7 +555,6 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
 
   try {
     const compressedBlob = await compressImage(file, 1200, 1200, 0.82, 2 * 1024 * 1024, "image/webp");
-    const thumbnailBlob = await compressImage(file, 360, 360, 0.74, 280 * 1024, "image/webp");
 
     if (!compressedBlob) {
       setFormError("Erro ao processar a imagem.");
@@ -639,12 +568,6 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     });
 
     selectedFileRef.current = compressedFile;
-    selectedThumbnailRef.current = thumbnailBlob
-      ? new File([thumbnailBlob], optimizedImageName(file.name, thumbnailBlob.type, "_thumb"), {
-          type: thumbnailBlob.type || "image/jpeg",
-          lastModified: Date.now(),
-        })
-      : null;
 
     setFormData(prev => {
       if (prev.imageUrl) {
@@ -657,7 +580,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     });
 
   } catch (err) {
-    safeLogger.error("add_product_image_compression_failed", err, { module: "add-product" });
+    logTelemetryEvent("add_product_image_compression_failed" as any, { stage: "compression" }).catch(() => {});
     setFormError("Erro ao otimizar a imagem.");
   } finally {
     setIsCompressingImage(false);
@@ -1065,7 +988,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
             className="rs-pressable min-h-12 w-full bg-primary text-white font-bold rounded-2xl py-4 mt-4 shadow-lg shadow-primary/20 active:scale-95 transition-all"
             data-testid="button-save-product"
           >
-            {id ? 'Atualizar Produto' : 'Salvar no Estoque'}
+            {isSaving ? 'Salvando...' : (id ? 'Atualizar Produto' : 'Salvar no Estoque')}
           </button>
         </form>
       </div>

@@ -216,11 +216,6 @@ export default function Marketing() {
     notifyInfo("Compartilhamento do catálogo aberto no WhatsApp.");
   };
 
-  const handleOpenCatalog = () => {
-    if (!requireCatalogUrl()) return;
-    window.open(catalogUrl, "_blank", "noopener,noreferrer");
-  };
-
   const downloadEntryCard = async (entry: MarketingHistoryEntry) => {
     const blob = await createMarketingCard(entry);
     downloadMarketingCard(blob, entry.productName);
