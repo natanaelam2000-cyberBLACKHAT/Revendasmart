@@ -15,12 +15,13 @@ const budgets = [
   { label: 'public catalog route', pattern: /^public-catalog-.*\.js$/, maxKb: 30 },
   { label: 'reports route', pattern: /^reports-.*\.js$/, maxKb: 35 },
   { label: 'settings route', pattern: /^settings-.*\.js$/, maxKb: 50 },
+  { label: 'store intelligence panel', pattern: /^StoreIntelligencePanel-.*\.js$/, maxKb: 18 },
   { label: 'scanner vendor', pattern: /^vendor-scanner-.*\.js$/, maxKb: 430 },
   { label: 'recharts vendor', pattern: /^vendor-recharts-.*\.js$/, maxKb: 350 },
 ];
 
 const totalBudgets = {
-  jsKb: 2250,
+  jsKb: 2265,
   jsGzipKb: 700,
 };
 
