@@ -524,21 +524,6 @@
       "source": "Revenda Smart Performance Engineering Skills"
     },
     {
-      "name": "implementing-secret-scanning-with-gitleaks",
-      "tier": "Tier S",
-      "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
-      "path": ".codex/skills/implementing-secret-scanning-with-gitleaks/SKILL.md",
-      "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY",
-      "category": "security",
-      "tags": [
-        "firebase",
-        "revendasmart",
-        "security",
-        "tier-s"
-      ]
-    },
-    {
       "name": "implementing-sigstore-for-software-signing",
       "tier": "Tier A",
       "source": "Anthropic-Cybersecurity-Skills adapted for Revenda Smart",
@@ -1402,20 +1387,6 @@
       "riskLevel": "medium",
       "defaultMode": "REVIEW_ONLY",
       "source": "Revenda Smart Performance Engineering Skills"
-    },
-    {
-      "name": "revendasmart-secret-manager-review",
-      "tier": "Revenda Smart",
-      "source": "Revenda Smart custom operational skill",
-      "path": ".codex/skills/revendasmart-secret-manager-review/SKILL.md",
-      "riskLevel": "medium",
-      "defaultMode": "REVIEW_ONLY",
-      "category": "security",
-      "tags": [
-        "revenda-smart",
-        "revendasmart",
-        "security"
-      ]
     },
     {
       "name": "revendasmart-security-review",
