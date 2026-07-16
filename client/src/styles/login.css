@@ -1,0 +1,670 @@
+/* Revenda Smart official premium login */
+.rs-login-shell {
+  min-height: 100svh;
+  overflow-x: hidden;
+  background:
+    radial-gradient(circle at 82% 4%, rgba(214, 163, 48, 0.16), transparent 24rem),
+    radial-gradient(circle at 70% 18%, rgba(92, 31, 171, 0.09), transparent 28rem),
+    linear-gradient(180deg, #ffffff 0%, #fbf9ff 48%, #f5f0ff 100%);
+  color: #130728;
+}
+
+.rs-login-stage {
+  position: relative;
+  isolation: isolate;
+  width: min(100%, 1120px);
+  min-height: 100svh;
+  margin: 0 auto;
+  padding: max(1.4rem, env(safe-area-inset-top)) clamp(1.2rem, 4vw, 3rem) max(1.4rem, env(safe-area-inset-bottom));
+}
+
+.rs-login-orbit {
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  border: 1px solid rgba(214, 163, 48, 0.18);
+  border-radius: 999px;
+  transform: rotate(-14deg);
+}
+
+.rs-login-orbit-one {
+  width: 34rem;
+  height: 34rem;
+  top: -12rem;
+  right: -14rem;
+}
+
+.rs-login-orbit-two {
+  width: 25rem;
+  height: 25rem;
+  top: 6rem;
+  right: -10rem;
+  border-color: rgba(92, 31, 171, 0.1);
+}
+
+.rs-login-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.72rem;
+  margin-bottom: clamp(2.1rem, 5vw, 3.9rem);
+}
+
+.rs-login-brand-symbol {
+  width: clamp(3.2rem, 10vw, 4.2rem);
+  height: clamp(3.2rem, 10vw, 4.2rem);
+  flex: 0 0 auto;
+  object-fit: contain;
+  border-radius: 999px;
+  filter: drop-shadow(0 12px 22px rgba(83, 24, 135, 0.18));
+}
+
+.rs-login-brand-wordmark {
+  width: min(58vw, 16.5rem);
+  height: auto;
+  object-fit: contain;
+}
+
+.rs-login-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.6rem;
+}
+
+.rs-login-copy h1 {
+  max-width: 40rem;
+  font-size: clamp(2.72rem, 12.8vw, 5.7rem);
+  line-height: 0.98;
+  letter-spacing: -0.07em;
+  font-weight: 950;
+  color: #120826;
+}
+
+.rs-login-copy h1 span {
+  display: block;
+  color: #5b18c8;
+}
+
+.rs-login-title-stroke {
+  width: min(72%, 27rem);
+  height: 0.66rem;
+  margin: -0.18rem 0 1.35rem auto;
+  border-bottom: 3px solid #d6a330;
+  border-radius: 999px;
+  transform: rotate(-1.5deg);
+}
+
+.rs-login-copy p {
+  max-width: 33rem;
+  color: #6e687a;
+  font-size: clamp(1.02rem, 4vw, 1.35rem);
+  line-height: 1.55;
+  font-weight: 650;
+}
+
+.rs-login-dashboard-preview {
+  position: relative;
+  min-height: 13rem;
+}
+
+.rs-login-dashboard-preview::before {
+  content: "";
+  position: absolute;
+  inset: 0.8rem 0 0 auto;
+  width: min(44vw, 16rem);
+  height: min(44vw, 16rem);
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(92, 31, 200, 0.14), transparent 68%);
+}
+
+.rs-login-human-card {
+  position: relative;
+  width: min(72vw, 18rem);
+  margin-left: auto;
+  padding: 3.3rem 1.28rem 1.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.92);
+  border-radius: 2.2rem;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 26px 70px rgba(35, 18, 70, 0.16);
+  backdrop-filter: blur(18px);
+}
+
+.rs-login-avatar {
+  position: absolute;
+  top: -2.55rem;
+  left: 50%;
+  display: grid;
+  width: 5.45rem;
+  height: 5.45rem;
+  transform: translateX(-50%);
+  place-items: center;
+  border: 4px solid #fff;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #f7d378, #6b21d9 54%, #2d094f);
+  color: #fff;
+  font-size: 2rem;
+  font-weight: 950;
+  box-shadow: 0 12px 28px rgba(90, 38, 145, 0.22), 0 0 0 3px rgba(214, 163, 48, 0.38);
+}
+
+.rs-login-star {
+  position: absolute;
+  top: -0.78rem;
+  right: 4.35rem;
+  display: grid;
+  width: 2.05rem;
+  height: 2.05rem;
+  place-items: center;
+  border-radius: 999px;
+  background: #d6a330;
+  color: #fff;
+  box-shadow: 0 10px 20px rgba(214, 163, 48, 0.3);
+}
+
+.rs-login-human-card strong,
+.rs-login-human-card > div span {
+  display: block;
+  text-align: center;
+}
+
+.rs-login-human-card strong {
+  color: #160b2e;
+  font-size: 1.45rem;
+  font-weight: 950;
+}
+
+.rs-login-human-card > div span {
+  margin-top: 0.1rem;
+  color: #767081;
+  font-weight: 700;
+}
+
+.rs-login-human-card ul {
+  display: grid;
+  gap: 0.9rem;
+  margin-top: 1.45rem;
+}
+
+.rs-login-human-card li {
+  display: flex;
+  align-items: center;
+  gap: 0.82rem;
+  color: #2b2239;
+  font-size: 0.96rem;
+  font-weight: 750;
+}
+
+.rs-login-human-card li svg {
+  width: 1.22rem;
+  height: 1.22rem;
+  color: #d09a20;
+}
+
+.rs-login-benefits {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1.85rem;
+}
+
+.rs-login-benefit {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.rs-login-benefit-icon {
+  display: grid;
+  width: 3.35rem;
+  height: 3.35rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgba(214, 163, 48, 0.32);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 10px 24px rgba(35, 18, 70, 0.1);
+}
+
+.rs-login-benefit-icon svg {
+  width: 1.35rem;
+  height: 1.35rem;
+  color: #5b18c8;
+}
+
+.rs-login-benefit h2 {
+  color: #4c16ad;
+  font-size: clamp(0.96rem, 3.7vw, 1.08rem);
+  font-weight: 950;
+}
+
+.rs-login-benefit p {
+  margin-top: 0.12rem;
+  color: #736d7c;
+  font-size: clamp(0.86rem, 3.2vw, 0.98rem);
+  font-weight: 650;
+}
+
+.rs-login-kpis {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+  margin-top: 2rem;
+  padding: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 1.55rem;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 20px 58px rgba(35, 18, 70, 0.12);
+  backdrop-filter: blur(16px);
+}
+
+.rs-login-kpi {
+  min-width: 0;
+  padding-right: 0.62rem;
+  border-right: 1px solid rgba(214, 163, 48, 0.34);
+}
+
+.rs-login-kpi:nth-child(2n) {
+  border-right: 0;
+}
+
+.rs-login-kpi span,
+.rs-login-kpi small {
+  display: block;
+}
+
+.rs-login-kpi span {
+  color: #858091;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.rs-login-kpi strong {
+  display: block;
+  margin-top: 0.22rem;
+  color: #38106f;
+  font-size: clamp(1rem, 4vw, 1.25rem);
+  font-weight: 950;
+}
+
+.rs-login-kpi small {
+  color: #159447;
+  font-size: 0.78rem;
+  font-weight: 950;
+}
+
+.rs-login-kpi svg {
+  width: 100%;
+  height: 1.45rem;
+  margin-top: 0.35rem;
+}
+
+.rs-login-kpi polyline {
+  fill: none;
+  stroke: #5b18c8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 4;
+}
+
+.rs-login-kpi:nth-child(2n) polyline {
+  stroke: #d29b21;
+}
+
+.rs-login-panel-cta {
+  display: none;
+}
+
+.rs-login-form {
+  display: grid;
+  gap: 0.72rem;
+  margin-top: 1.55rem;
+}
+
+.rs-login-field {
+  display: flex;
+  min-height: 3.95rem;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0 1.05rem;
+  border: 1px solid #e7e2ee;
+  border-radius: 0.88rem;
+  background: rgba(255, 255, 255, 0.74);
+  color: #555062;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.82);
+  transition: border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+}
+
+.rs-login-field:focus-within {
+  border-color: rgba(91, 24, 200, 0.55);
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(91, 24, 200, 0.11);
+}
+
+.rs-login-field svg {
+  width: 1.24rem;
+  height: 1.24rem;
+  flex: 0 0 auto;
+}
+
+.rs-login-field input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: #1f1630;
+  font-size: 1rem;
+  font-weight: 700;
+  outline: none;
+}
+
+.rs-login-field input::placeholder {
+  color: #8b8494;
+  font-weight: 650;
+}
+
+.rs-login-eye {
+  display: grid;
+  width: 2.4rem;
+  height: 2.4rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 999px;
+  color: #4d4659;
+  transition: background 180ms ease, color 180ms ease, transform 180ms ease;
+}
+
+.rs-login-eye:active {
+  transform: scale(0.94);
+}
+
+.rs-login-eye:focus-visible,
+.rs-login-link-button:focus-visible,
+.rs-login-submit:focus-visible,
+.rs-login-signup a:focus-visible,
+.rs-login-remember:focus-within {
+  outline: 3px solid rgba(214, 163, 48, 0.55);
+  outline-offset: 3px;
+}
+
+.rs-login-form-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.9rem;
+  margin-top: 0.28rem;
+}
+
+.rs-login-remember {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  gap: 0.65rem;
+  color: #706978;
+  font-size: 0.9rem;
+  font-weight: 750;
+  border-radius: 0.8rem;
+}
+
+.rs-login-remember input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.rs-login-remember span {
+  display: grid;
+  width: 1.55rem;
+  height: 1.55rem;
+  place-items: center;
+  border: 2px solid rgba(91, 24, 200, 0.22);
+  border-radius: 0.42rem;
+  background: #fff;
+  color: transparent;
+}
+
+.rs-login-remember span svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.rs-login-remember input:checked + span {
+  border-color: #5b18c8;
+  background: #5b18c8;
+  color: #fff;
+}
+
+.rs-login-link-button {
+  min-height: 2.75rem;
+  border-radius: 0.8rem;
+  color: #4d16ae;
+  font-size: 0.9rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.rs-login-alert {
+  margin-top: 0.2rem;
+  padding: 0.82rem 1rem;
+  border-radius: 1rem;
+  text-align: center;
+  font-size: 0.86rem;
+  font-weight: 850;
+}
+
+.rs-login-alert-error {
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.rs-login-alert-success {
+  background: #eefbf3;
+  color: #15803d;
+}
+
+.rs-login-submit {
+  display: flex;
+  min-height: 4.35rem;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 0.7rem;
+  border-radius: 1rem;
+  background: linear-gradient(135deg, #4811b8 0%, #6d25df 100%);
+  color: #fff;
+  box-shadow: 0 18px 34px rgba(91, 24, 200, 0.28);
+  transition: transform 180ms ease, box-shadow 180ms ease, opacity 180ms ease;
+}
+
+.rs-login-submit span {
+  font-size: 1.02rem;
+  font-weight: 950;
+}
+
+.rs-login-submit svg,
+.rs-login-spinner {
+  width: 1.45rem;
+  height: 1.45rem;
+}
+
+.rs-login-submit:active {
+  transform: translateY(1px) scale(0.985);
+  box-shadow: 0 10px 22px rgba(91, 24, 200, 0.22);
+}
+
+.rs-login-submit:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.rs-login-spinner {
+  border: 2px solid rgba(255, 255, 255, 0.42);
+  border-top-color: #fff;
+  border-radius: 999px;
+  animation: rs-login-spin 850ms linear infinite;
+}
+
+.rs-login-signup {
+  margin-top: 1.4rem;
+  padding-bottom: 0.4rem;
+  text-align: center;
+  color: #74707d;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.rs-login-signup a {
+  color: #4d16ae;
+  font-weight: 950;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+@keyframes rs-login-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (min-width: 760px) {
+  .rs-login-stage {
+    padding-inline: clamp(2.4rem, 7vw, 5rem);
+  }
+
+  .rs-login-brand {
+    margin-bottom: 2.6rem;
+  }
+
+  .rs-login-hero-grid {
+    grid-template-columns: minmax(0, 1.02fr) minmax(18rem, 0.72fr);
+    align-items: center;
+  }
+
+  .rs-login-benefits {
+    max-width: 35rem;
+  }
+
+  .rs-login-kpis {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    align-items: stretch;
+  }
+
+  .rs-login-kpi:nth-child(2n) {
+    border-right: 1px solid rgba(214, 163, 48, 0.34);
+  }
+
+  .rs-login-kpi:nth-child(4) {
+    border-right: 0;
+  }
+
+  .rs-login-panel-cta {
+    display: grid;
+    min-width: 0;
+    place-items: center;
+    gap: 0.35rem;
+    padding: 0.8rem;
+    border-radius: 1.25rem;
+    background: linear-gradient(135deg, #5b18c8, #7f34ea);
+    color: #fff;
+    box-shadow: 0 16px 30px rgba(91, 24, 200, 0.24);
+    text-align: center;
+  }
+
+  .rs-login-panel-cta svg {
+    width: 2rem;
+    height: 2rem;
+  }
+
+  .rs-login-panel-cta span {
+    font-size: 0.78rem;
+    font-weight: 900;
+  }
+
+  .rs-login-form {
+    max-width: 44rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .rs-login-form-row,
+  .rs-login-alert,
+  .rs-login-submit {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (min-width: 1120px) {
+  .rs-login-stage {
+    display: grid;
+    grid-template-rows: auto auto auto auto auto;
+  }
+
+  .rs-login-copy h1 {
+    font-size: 5.45rem;
+  }
+}
+
+@media (max-width: 520px) {
+  .rs-login-stage {
+    padding-inline: 1.08rem;
+  }
+
+  .rs-login-brand {
+    gap: 0.58rem;
+  }
+
+  .rs-login-dashboard-preview {
+    min-height: 11.4rem;
+    margin-top: -0.5rem;
+  }
+
+  .rs-login-human-card {
+    width: min(76vw, 16rem);
+    padding: 3rem 1rem 1.05rem;
+    border-radius: 1.8rem;
+  }
+
+  .rs-login-human-card ul {
+    gap: 0.72rem;
+  }
+
+  .rs-login-benefits {
+    margin-top: 1.4rem;
+  }
+
+  .rs-login-kpis {
+    margin-top: 1.55rem;
+  }
+
+  .rs-login-form-row {
+    align-items: flex-start;
+  }
+
+  .rs-login-remember,
+  .rs-login-link-button {
+    font-size: 0.82rem;
+  }
+}
+
+@media (max-width: 380px) {
+  .rs-login-copy h1 {
+    font-size: 2.35rem;
+  }
+
+  .rs-login-form-row {
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .rs-login-link-button {
+    align-self: flex-end;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rs-login-submit,
+  .rs-login-eye,
+  .rs-login-field {
+    transition: none;
+  }
+
+  .rs-login-spinner {
+    animation-duration: 1.6s;
+  }
+}

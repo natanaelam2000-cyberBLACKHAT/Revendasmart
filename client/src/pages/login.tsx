@@ -3,12 +3,77 @@ import { useLocation, Link } from "wouter";
 import { sendPasswordResetEmail, signInWithEmailAndPassword } from "firebase/auth";
 import { getFirebaseAuth, getFirebaseError, logTelemetryEvent, setTelemetryUserId, trackAnalyticsEvent, setFirebaseAnalyticsUserId } from "@/lib/firebase";
 import { getApiUrl } from "@/lib/api-config";
-import { BarChart3, CheckCircle2, LogIn, ShieldCheck, Sparkles, TrendingUp } from "lucide-react";
+import "@/styles/login.css";
+import {
+  ArrowRight,
+  BarChart3,
+  Bell,
+  CheckCircle2,
+  Eye,
+  EyeOff,
+  LockKeyhole,
+  Mail,
+  Palette,
+  ShieldCheck,
+  Smartphone,
+  Target,
+  TrendingUp,
+  Users,
+} from "lucide-react";
+
+const REMEMBER_EMAIL_KEY = "rs:login:remembered-email";
+
+const loginBenefits = [
+  { icon: Smartphone, title: "App do seu jeito", description: "Personalize cores, logo e mensagens" },
+  { icon: BarChart3, title: "Controle total da sua revenda", description: "Vendas, estoque, clientes e financeiro" },
+  { icon: TrendingUp, title: "Resultados em tempo real", description: "Acompanhe indicadores e evolua" },
+  { icon: Bell, title: "Gestão inteligente", description: "Alertas, metas e oportunidades" },
+  { icon: ShieldCheck, title: "Segurança e confiança", description: "Seus dados protegidos sempre" },
+];
+
+const panelItems = [
+  { icon: BarChart3, label: "Meu painel" },
+  { icon: Target, label: "Metas" },
+  { icon: Users, label: "Clientes" },
+  { icon: Palette, label: "Produtos" },
+  { icon: ShieldCheck, label: "Preferências" },
+];
+
+const kpis = [
+  { label: "Faturamento hoje", value: "R$ 58.750,00", trend: "+18%", tone: "purple" },
+  { label: "Pedidos", value: "1.248", trend: "+18%", tone: "gold" },
+  { label: "Conversão", value: "21,8%", trend: "+3,2%", tone: "purple" },
+  { label: "Clientes ativos", value: "856", trend: "+12%", tone: "gold" },
+];
+
+function getRememberedEmail() {
+  if (typeof window === "undefined") return "";
+  try {
+    return window.localStorage.getItem(REMEMBER_EMAIL_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function setRememberedEmail(email: string, shouldRemember: boolean) {
+  if (typeof window === "undefined") return;
+  try {
+    if (shouldRemember && email) {
+      window.localStorage.setItem(REMEMBER_EMAIL_KEY, email);
+    } else {
+      window.localStorage.removeItem(REMEMBER_EMAIL_KEY);
+    }
+  } catch {
+    // Remembering the e-mail is convenience only and must never block login.
+  }
+}
 
 export default function Login() {
   const [, setLocation] = useLocation();
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(() => getRememberedEmail());
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [rememberEmail, setRememberEmail] = useState(() => Boolean(getRememberedEmail()));
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [resetLoading, setResetLoading] = useState(false);
@@ -20,6 +85,7 @@ export default function Login() {
     setLoading(true);
 
     try {
+      const trimmedEmail = email.trim();
       // Get Firebase Auth instance (safe lazy initialization)
       const auth = getFirebaseAuth();
       
@@ -32,9 +98,10 @@ export default function Login() {
       }
 
       // Authenticate with Firebase Auth (real authentication - NOT mock data)
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const userCredential = await signInWithEmailAndPassword(auth, trimmedEmail, password);
       const user = userCredential.user;
       const uid = user.uid;
+      setRememberedEmail(trimmedEmail, rememberEmail);
       
       // Track login event (both telemetry and analytics)
       setTelemetryUserId(uid);
@@ -130,101 +197,175 @@ export default function Login() {
   // };
 
   return (
-    <main className="min-h-screen overflow-hidden bg-[#160b2e] text-white lg:grid lg:grid-cols-[1.05fr_.95fr]">
-      <section className="relative hidden min-h-screen flex-col justify-between overflow-hidden p-10 lg:flex">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(245,194,87,.28),transparent_28%),radial-gradient(circle_at_82%_14%,rgba(125,92,255,.32),transparent_30%),linear-gradient(135deg,#221044,#120821)]" />
-        <div className="absolute -bottom-24 -left-20 h-80 w-80 rounded-full bg-[#7c3aed]/30 blur-3xl" />
-        <div className="absolute right-10 top-24 h-72 w-72 rounded-full bg-[#f6c76a]/20 blur-3xl" />
+    <main className="rs-login-shell">
+      <section className="rs-login-stage" aria-label="Revenda Smart acesso">
+        <div className="rs-login-orbit rs-login-orbit-one" aria-hidden="true" />
+        <div className="rs-login-orbit rs-login-orbit-two" aria-hidden="true" />
 
-        <div className="relative z-10 flex items-center gap-3">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white shadow-2xl shadow-black/20">
-            <img src="/logo-revenda-smart.png" alt="Revenda Smart" className="h-10 w-10 object-contain" width={40} height={40} decoding="async" fetchPriority="high" />
-          </div>
-          <div>
-            <p className="text-sm font-black uppercase tracking-[0.22em] text-[#f6c76a]">Revenda Smart</p>
-            <p className="text-xs font-semibold text-white/62">Controle premium para sua revenda</p>
-          </div>
-        </div>
+        <header className="rs-login-brand" aria-label="Revenda Smart">
+          <img
+            src="/logo-revenda-smart-symbol.png"
+            alt=""
+            className="rs-login-brand-symbol"
+            width={58}
+            height={58}
+            decoding="async"
+            fetchPriority="high"
+          />
+          <img
+            src="/logo-revenda-smart.png"
+            alt="Revenda Smart"
+            className="rs-login-brand-wordmark"
+            width={220}
+            height={74}
+            decoding="async"
+            fetchPriority="high"
+          />
+        </header>
 
-        <div className="relative z-10 max-w-xl space-y-8">
-          <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-[#f6c76a] backdrop-blur">
-            <Sparkles className="h-4 w-4" /> Gestão, vendas e catálogo em um só lugar
+        <div className="rs-login-hero-grid">
+          <div className="rs-login-copy">
+            <h1>
+              Sua revenda,
+              <span>do seu jeito,</span>
+              com controle total.
+            </h1>
+            <div className="rs-login-title-stroke" aria-hidden="true" />
+            <p>
+              Personalize seu app, acompanhe tudo em tempo real e tome decisões com confiança para vender mais.
+            </p>
           </div>
-          <div className="space-y-5">
-            <h1 className="text-5xl font-black leading-[.95] tracking-[-0.06em]">Sua revenda organizada com aparência de negócio grande.</h1>
-            <p className="max-w-lg text-lg font-medium leading-8 text-white/72">Cadastre produtos, controle vendas, acompanhe clientes e divulgue sua loja com mais confiança — sem perder a simplicidade do dia a dia.</p>
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            {[
-              { icon: BarChart3, label: "Controle", value: "Dashboard" },
-              { icon: TrendingUp, label: "Crescimento", value: "Vendas" },
-              { icon: ShieldCheck, label: "Segurança", value: "Firebase" },
-            ].map((item) => (
-              <div key={item.label} className="rounded-3xl border border-white/12 bg-white/10 p-4 shadow-2xl shadow-black/10 backdrop-blur">
-                <item.icon className="mb-4 h-5 w-5 text-[#f6c76a]" />
-                <p className="text-xs font-bold text-white/55">{item.label}</p>
-                <p className="mt-1 text-sm font-black">{item.value}</p>
+
+          <div className="rs-login-dashboard-preview" aria-label="Prévia do painel Revenda Smart">
+            <div className="rs-login-human-card" aria-hidden="true">
+              <div className="rs-login-avatar">A</div>
+              <div>
+                <strong>Olá, Ana!</strong>
+                <span>Revenda Açaí</span>
               </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="relative z-10 flex items-center gap-3 text-sm font-semibold text-white/68">
-          <CheckCircle2 className="h-5 w-5 text-[#f6c76a]" /> Experiência pensada para Android, PWA e uso real em loja.
-        </div>
-      </section>
-
-      <section className="relative flex min-h-screen items-center justify-center bg-[linear-gradient(180deg,#fbf8ff,#f3edff)] p-5 text-slate-950 lg:bg-white">
-        <div className="absolute inset-x-0 top-0 h-64 bg-[radial-gradient(circle_at_50%_0%,rgba(124,58,237,.18),transparent_65%)] lg:hidden" />
-        <div className="relative z-10 w-full max-w-md">
-          <div className="mb-7 rounded-[2rem] border border-white/80 bg-white/85 p-5 text-center shadow-[0_24px_70px_rgba(79,70,229,.16)] backdrop-blur">
-            <img src="/logo-revenda-smart.png" alt="Revenda Smart" className="mx-auto h-auto w-full max-w-[240px] object-contain mix-blend-multiply" width={240} height={90} decoding="async" fetchPriority="high" />
-            <p className="mt-3 text-sm font-semibold text-slate-500">Entre para continuar cuidando da sua loja.</p>
-          </div>
-
-          <form onSubmit={handleLogin} className="rounded-[2rem] border border-white bg-white p-5 shadow-[0_24px_70px_rgba(15,23,42,.10)] sm:p-6">
-            <div className="mb-5">
-              <p className="text-xs font-black uppercase tracking-[0.18em] text-primary">Acesso seguro</p>
-              <h2 className="mt-1 text-2xl font-black tracking-tight text-slate-950">Bem-vindo de volta</h2>
+              <div className="rs-login-star">★</div>
+              <ul>
+                {panelItems.map((item) => (
+                  <li key={item.label}>
+                    <item.icon aria-hidden="true" />
+                    <span>{item.label}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
-
-            <div className="space-y-4">
-              <div className="space-y-1.5">
-                <label className="px-1 text-[10px] font-black uppercase tracking-widest text-slate-500">E-mail</label>
-                <input required type="email" inputMode="email" autoComplete="username" autoCapitalize="none" enterKeyHint="next" className="w-full rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-950 shadow-inner outline-none transition-all focus:border-primary focus:bg-white focus:ring-4 focus:ring-primary/10" value={email} onChange={e => setEmail(e.target.value)} placeholder="seu@email.com" disabled={loading} />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="px-1 text-[10px] font-black uppercase tracking-widest text-slate-500">Senha</label>
-                <input required type="password" autoComplete="current-password" enterKeyHint="done" className="w-full rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-950 shadow-inner outline-none transition-all focus:border-primary focus:bg-white focus:ring-4 focus:ring-primary/10" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" disabled={loading} />
-              </div>
-            </div>
-
-            {error && <p className="mt-4 rounded-2xl bg-red-50 p-3 text-center text-xs font-bold text-destructive" data-testid="text-login-error">{error}</p>}
-            {success && <p className="mt-4 rounded-2xl bg-green-50 p-3 text-center text-xs font-bold text-green-700" data-testid="text-login-success">{success}</p>}
-
-            <button type="submit" disabled={loading} className="rs-pressable mt-6 flex w-full items-center justify-center gap-2 rounded-[2rem] bg-primary py-4 text-xs font-black uppercase tracking-[0.2em] text-white shadow-xl shadow-primary/20 transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-50">
-              {loading ? (
-                <>
-                  <div className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
-                  Entrando...
-                </>
-              ) : (
-                <>
-                  <LogIn className="h-4 w-4" /> Entrar Agora
-                </>
-              )}
-            </button>
-
-            <button type="button" onClick={handlePasswordReset} disabled={loading || resetLoading} className="mt-4 w-full text-sm font-bold text-primary underline underline-offset-4 disabled:opacity-50" data-testid="button-forgot-password">
-              {resetLoading ? "Enviando link..." : "Esqueci minha senha"}
-            </button>
-          </form>
-
-          <p className="mt-7 text-center text-sm font-medium text-slate-500">
-            Não tem conta? <Link href="/signup" className="font-black text-primary">Criar conta</Link>
-          </p>
+          </div>
         </div>
+
+        <div className="rs-login-benefits" aria-label="Benefícios do Revenda Smart">
+          {loginBenefits.map((benefit) => (
+            <article key={benefit.title} className="rs-login-benefit">
+              <div className="rs-login-benefit-icon">
+                <benefit.icon aria-hidden="true" />
+              </div>
+              <div>
+                <h2>{benefit.title}</h2>
+                <p>{benefit.description}</p>
+              </div>
+            </article>
+          ))}
+        </div>
+
+        <div className="rs-login-kpis" aria-label="Indicadores de exemplo do Revenda Smart">
+          {kpis.map((kpi) => (
+            <div className="rs-login-kpi" key={kpi.label}>
+              <span>{kpi.label}</span>
+              <strong>{kpi.value}</strong>
+              <small>{kpi.trend}</small>
+              <svg viewBox="0 0 92 26" aria-hidden="true" focusable="false">
+                <polyline
+                  points={kpi.tone === "gold" ? "2,18 18,14 34,17 50,9 68,13 90,5" : "2,19 18,12 34,14 50,8 68,11 90,3"}
+                />
+              </svg>
+            </div>
+          ))}
+          <div className="rs-login-panel-cta" aria-hidden="true">
+            <BarChart3 />
+            <span>Ver painel completo</span>
+          </div>
+        </div>
+
+        <form onSubmit={handleLogin} className="rs-login-form" aria-label="Entrar no Revenda Smart">
+          <label className="rs-login-field">
+            <span className="sr-only">E-mail</span>
+            <Mail aria-hidden="true" />
+            <input
+              required
+              type="email"
+              inputMode="email"
+              autoComplete="username"
+              autoCapitalize="none"
+              enterKeyHint="next"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="E-mail"
+              disabled={loading}
+              data-testid="input-login-email"
+            />
+          </label>
+
+          <label className="rs-login-field">
+            <span className="sr-only">Senha</span>
+            <LockKeyhole aria-hidden="true" />
+            <input
+              required
+              type={showPassword ? "text" : "password"}
+              autoComplete="current-password"
+              enterKeyHint="done"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="Senha"
+              disabled={loading}
+              data-testid="input-login-password"
+            />
+            <button
+              type="button"
+              className="rs-login-eye"
+              onClick={() => setShowPassword((current) => !current)}
+              aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}
+              disabled={loading}
+            >
+              {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+            </button>
+          </label>
+
+          <div className="rs-login-form-row">
+            <label className="rs-login-remember">
+              <input
+                type="checkbox"
+                checked={rememberEmail}
+                onChange={(event) => setRememberEmail(event.target.checked)}
+              />
+              <span aria-hidden="true"><CheckCircle2 /></span>
+              Lembrar meus dados
+            </label>
+            <button
+              type="button"
+              onClick={handlePasswordReset}
+              disabled={loading || resetLoading}
+              className="rs-login-link-button"
+              data-testid="button-forgot-password"
+            >
+              {resetLoading ? "Enviando..." : "Esqueci minha senha"}
+            </button>
+          </div>
+
+          {error && <p className="rs-login-alert rs-login-alert-error" data-testid="text-login-error">{error}</p>}
+          {success && <p className="rs-login-alert rs-login-alert-success" data-testid="text-login-success">{success}</p>}
+
+          <button type="submit" disabled={loading} className="rs-login-submit">
+            <span>{loading ? "Entrando..." : "Entrar agora"}</span>
+            {loading ? <span className="rs-login-spinner" aria-hidden="true" /> : <ArrowRight aria-hidden="true" />}
+          </button>
+        </form>
+
+        <p className="rs-login-signup">
+          Não tem conta? <Link href="/signup">Criar conta</Link>
+        </p>
       </section>
     </main>
   );
