@@ -204,20 +204,11 @@ export default function Login() {
 
         <header className="rs-login-brand" aria-label="Revenda Smart">
           <img
-            src="/logo-revenda-smart-symbol.png"
-            alt=""
-            className="rs-login-brand-symbol"
-            width={58}
-            height={58}
-            decoding="async"
-            fetchPriority="high"
-          />
-          <img
             src="/logo-revenda-smart.png"
             alt="Revenda Smart"
-            className="rs-login-brand-wordmark"
-            width={220}
-            height={74}
+            className="rs-login-brand-logo"
+            width={288}
+            height={97}
             decoding="async"
             fetchPriority="high"
           />
@@ -237,6 +228,14 @@ export default function Login() {
           </div>
 
           <div className="rs-login-dashboard-preview" aria-label="Prévia do painel Revenda Smart">
+            <div className="rs-login-person-illustration" aria-hidden="true">
+              <div className="rs-login-person-head">
+                <span className="rs-login-person-hair" />
+                <span className="rs-login-person-glasses" />
+              </div>
+              <div className="rs-login-person-body" />
+              <div className="rs-login-person-tablet" />
+            </div>
             <div className="rs-login-human-card" aria-hidden="true">
               <div className="rs-login-avatar">A</div>
               <div>

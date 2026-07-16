@@ -45,23 +45,14 @@
 .rs-login-brand {
   display: flex;
   align-items: center;
-  gap: 0.72rem;
   margin-bottom: clamp(2.1rem, 5vw, 3.9rem);
 }
 
-.rs-login-brand-symbol {
-  width: clamp(3.2rem, 10vw, 4.2rem);
-  height: clamp(3.2rem, 10vw, 4.2rem);
-  flex: 0 0 auto;
-  object-fit: contain;
-  border-radius: 999px;
-  filter: drop-shadow(0 12px 22px rgba(83, 24, 135, 0.18));
-}
-
-.rs-login-brand-wordmark {
-  width: min(58vw, 16.5rem);
+.rs-login-brand-logo {
+  width: min(68vw, 18rem);
   height: auto;
   object-fit: contain;
+  filter: drop-shadow(0 12px 22px rgba(83, 24, 135, 0.12));
 }
 
 .rs-login-hero-grid {
@@ -103,7 +94,7 @@
 
 .rs-login-dashboard-preview {
   position: relative;
-  min-height: 13rem;
+  min-height: clamp(18rem, 54vw, 25rem);
 }
 
 .rs-login-dashboard-preview::before {
@@ -116,8 +107,94 @@
   background: radial-gradient(circle, rgba(92, 31, 200, 0.14), transparent 68%);
 }
 
+.rs-login-person-illustration {
+  position: absolute;
+  top: 0.1rem;
+  right: clamp(0.1rem, 4vw, 2.8rem);
+  width: clamp(10.5rem, 34vw, 19.5rem);
+  height: clamp(11.5rem, 37vw, 21rem);
+  filter: drop-shadow(0 28px 42px rgba(35, 18, 70, 0.12));
+}
+
+.rs-login-person-head {
+  position: absolute;
+  top: 0.3rem;
+  right: 28%;
+  width: 29%;
+  aspect-ratio: 1;
+  border-radius: 44% 44% 48% 48%;
+  background: linear-gradient(145deg, #f2c8a9, #d99a78);
+  box-shadow: inset -0.36rem -0.2rem 0 rgba(110, 61, 43, 0.08);
+}
+
+.rs-login-person-hair {
+  position: absolute;
+  inset: -12% -8% 54% -12%;
+  border-radius: 999px 999px 42% 48%;
+  background: linear-gradient(135deg, #211629, #4b3348);
+}
+
+.rs-login-person-glasses {
+  position: absolute;
+  left: 17%;
+  right: 15%;
+  top: 43%;
+  height: 0.34rem;
+  border-top: 2px solid rgba(42, 35, 51, 0.8);
+}
+
+.rs-login-person-body {
+  position: absolute;
+  top: 24%;
+  right: 8%;
+  width: 58%;
+  height: 55%;
+  border-radius: 28% 34% 12% 14%;
+  background:
+    linear-gradient(142deg, rgba(255,255,255,0.55), transparent 28%),
+    linear-gradient(135deg, #d9eaff, #9ec2ef 58%, #74a4d8);
+  transform: rotate(2deg);
+}
+
+.rs-login-person-body::before,
+.rs-login-person-body::after {
+  content: "";
+  position: absolute;
+  bottom: 18%;
+  width: 38%;
+  height: 18%;
+  border-radius: 999px;
+  background: #d7a183;
+}
+
+.rs-login-person-body::before {
+  left: -18%;
+  transform: rotate(22deg);
+}
+
+.rs-login-person-body::after {
+  right: -10%;
+  transform: rotate(-24deg);
+}
+
+.rs-login-person-tablet {
+  position: absolute;
+  right: 22%;
+  bottom: 18%;
+  width: 58%;
+  height: 31%;
+  border: 0.42rem solid rgba(255, 255, 255, 0.92);
+  border-radius: 1rem;
+  background: linear-gradient(145deg, #dfe5ee, #9ba8b8);
+  transform: rotate(-8deg);
+  box-shadow: 0 18px 30px rgba(35, 18, 70, 0.16);
+}
+
 .rs-login-human-card {
-  position: relative;
+  position: absolute;
+  right: clamp(0.2rem, 2vw, 1.2rem);
+  bottom: 0;
+  z-index: 2;
   width: min(72vw, 18rem);
   margin-left: auto;
   padding: 3.3rem 1.28rem 1.25rem;
@@ -217,16 +294,16 @@
   height: 3.35rem;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid rgba(214, 163, 48, 0.32);
+  border: 1px solid rgba(214, 163, 48, 0.58);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 10px 24px rgba(35, 18, 70, 0.1);
+  background: radial-gradient(circle at 35% 25%, #7c3aed, #4c0d8c 72%);
+  box-shadow: 0 10px 24px rgba(35, 18, 70, 0.12), inset 0 0 0 3px rgba(255,255,255,0.82);
 }
 
 .rs-login-benefit-icon svg {
   width: 1.35rem;
   height: 1.35rem;
-  color: #5b18c8;
+  color: #f6d474;
 }
 
 .rs-login-benefit h2 {
@@ -610,11 +687,18 @@
   }
 
   .rs-login-dashboard-preview {
-    min-height: 11.4rem;
+    min-height: 20rem;
     margin-top: -0.5rem;
   }
 
+  .rs-login-person-illustration {
+    right: -0.4rem;
+    width: min(54vw, 12.5rem);
+    height: min(58vw, 13.5rem);
+  }
+
   .rs-login-human-card {
+    right: 0;
     width: min(76vw, 16rem);
     padding: 3rem 1rem 1.05rem;
     border-radius: 1.8rem;

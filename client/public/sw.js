@@ -1,17 +1,10 @@
-const CACHE_NAME = 'revenda-smart-static-v3';
+const CACHE_NAME = 'revenda-smart-static-v4';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
   '/manifest.json',
-  '/favicon.png',
-  '/apple-touch-icon.png',
   '/logo-revenda-smart.png',
-  '/logo-revenda-smart-symbol.png',
-  '/opengraph.jpg',
-  '/icons/icon-192x192.png',
-  '/icons/icon-512x512.png',
-  '/icons/icon-maskable-192x192.png',
-  '/icons/icon-maskable-512x512.png'
+  '/logo-revenda-smart-symbol.png'
 ];
 
 const STATIC_CACHEABLE_DESTINATIONS = new Set(['script', 'style', 'font', 'image', 'manifest']);
@@ -22,12 +15,8 @@ function isStaticAssetRequest(request, url) {
   return isSameOrigin(url) && (
     STATIC_CACHEABLE_DESTINATIONS.has(request.destination)
     || url.pathname.startsWith('/assets/')
-    || url.pathname.startsWith('/icons/')
-    || url.pathname === '/favicon.png'
-    || url.pathname === '/apple-touch-icon.png'
     || url.pathname === '/logo-revenda-smart.png'
     || url.pathname === '/logo-revenda-smart-symbol.png'
-    || url.pathname === '/opengraph.jpg'
   );
 }
 
