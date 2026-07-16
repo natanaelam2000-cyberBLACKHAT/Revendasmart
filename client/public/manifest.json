@@ -21,8 +21,8 @@
   "prefer_related_applications": false,
   "icons": [
     {
-      "src": "/logo-revenda-smart-symbol.png",
-      "sizes": "512x512",
+      "src": "/logo-revenda-smart-symbol-official.png",
+      "sizes": "1254x1254",
       "type": "image/png",
       "purpose": "any maskable"
     }
@@ -35,8 +35,8 @@
       "url": "/products",
       "icons": [
         {
-          "src": "/logo-revenda-smart-symbol.png",
-          "sizes": "512x512",
+          "src": "/logo-revenda-smart-symbol-official.png",
+          "sizes": "1254x1254",
           "type": "image/png"
         }
       ]
@@ -48,8 +48,8 @@
       "url": "/clients",
       "icons": [
         {
-          "src": "/logo-revenda-smart-symbol.png",
-          "sizes": "512x512",
+          "src": "/logo-revenda-smart-symbol-official.png",
+          "sizes": "1254x1254",
           "type": "image/png"
         }
       ]
@@ -61,8 +61,8 @@
       "url": "/sell",
       "icons": [
         {
-          "src": "/logo-revenda-smart-symbol.png",
-          "sizes": "512x512",
+          "src": "/logo-revenda-smart-symbol-official.png",
+          "sizes": "1254x1254",
           "type": "image/png"
         }
       ]
@@ -74,8 +74,8 @@
       "url": "/catalog",
       "icons": [
         {
-          "src": "/logo-revenda-smart-symbol.png",
-          "sizes": "512x512",
+          "src": "/logo-revenda-smart-symbol-official.png",
+          "sizes": "1254x1254",
           "type": "image/png"
         }
       ]

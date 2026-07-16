@@ -4,47 +4,9 @@ import { sendPasswordResetEmail, signInWithEmailAndPassword } from "firebase/aut
 import { getFirebaseAuth, getFirebaseError, logTelemetryEvent, setTelemetryUserId, trackAnalyticsEvent, setFirebaseAnalyticsUserId } from "@/lib/firebase";
 import { getApiUrl } from "@/lib/api-config";
 import "@/styles/login.css";
-import {
-  ArrowRight,
-  BarChart3,
-  Bell,
-  CheckCircle2,
-  Eye,
-  EyeOff,
-  LockKeyhole,
-  Mail,
-  Palette,
-  ShieldCheck,
-  Smartphone,
-  Target,
-  TrendingUp,
-  Users,
-} from "lucide-react";
+import { ArrowRight, CheckCircle2, Eye, EyeOff, LockKeyhole, Mail } from "lucide-react";
 
 const REMEMBER_EMAIL_KEY = "rs:login:remembered-email";
-
-const loginBenefits = [
-  { icon: Smartphone, title: "App do seu jeito", description: "Personalize cores, logo e mensagens" },
-  { icon: BarChart3, title: "Controle total da sua revenda", description: "Vendas, estoque, clientes e financeiro" },
-  { icon: TrendingUp, title: "Resultados em tempo real", description: "Acompanhe indicadores e evolua" },
-  { icon: Bell, title: "Gestão inteligente", description: "Alertas, metas e oportunidades" },
-  { icon: ShieldCheck, title: "Segurança e confiança", description: "Seus dados protegidos sempre" },
-];
-
-const panelItems = [
-  { icon: BarChart3, label: "Meu painel" },
-  { icon: Target, label: "Metas" },
-  { icon: Users, label: "Clientes" },
-  { icon: Palette, label: "Produtos" },
-  { icon: ShieldCheck, label: "Preferências" },
-];
-
-const kpis = [
-  { label: "Faturamento hoje", value: "R$ 58.750,00", trend: "+18%", tone: "purple" },
-  { label: "Pedidos", value: "1.248", trend: "+18%", tone: "gold" },
-  { label: "Conversão", value: "21,8%", trend: "+3,2%", tone: "purple" },
-  { label: "Clientes ativos", value: "856", trend: "+12%", tone: "gold" },
-];
 
 function getRememberedEmail() {
   if (typeof window === "undefined") return "";
@@ -198,98 +160,32 @@ export default function Login() {
 
   return (
     <main className="rs-login-shell">
-      <section className="rs-login-stage" aria-label="Revenda Smart acesso">
-        <div className="rs-login-orbit rs-login-orbit-one" aria-hidden="true" />
-        <div className="rs-login-orbit rs-login-orbit-two" aria-hidden="true" />
+      <section className="rs-login-frame" aria-label="Entrar no Revenda Smart">
+        <img
+          src="/login-reference-official.png"
+          alt=""
+          className="rs-login-reference"
+          width={900}
+          height={1600}
+          decoding="async"
+          fetchPriority="high"
+          aria-hidden="true"
+        />
 
-        <header className="rs-login-brand" aria-label="Revenda Smart">
-          <img
-            src="/logo-revenda-smart.png"
-            alt="Revenda Smart"
-            className="rs-login-brand-logo"
-            width={288}
-            height={97}
-            decoding="async"
-            fetchPriority="high"
-          />
-        </header>
-
-        <div className="rs-login-hero-grid">
-          <div className="rs-login-copy">
-            <h1>
-              Sua revenda,
-              <span>do seu jeito,</span>
-              com controle total.
-            </h1>
-            <div className="rs-login-title-stroke" aria-hidden="true" />
-            <p>
-              Personalize seu app, acompanhe tudo em tempo real e tome decisões com confiança para vender mais.
-            </p>
-          </div>
-
-          <div className="rs-login-dashboard-preview" aria-label="Prévia do painel Revenda Smart">
-            <div className="rs-login-person-illustration" aria-hidden="true">
-              <div className="rs-login-person-head">
-                <span className="rs-login-person-hair" />
-                <span className="rs-login-person-glasses" />
-              </div>
-              <div className="rs-login-person-body" />
-              <div className="rs-login-person-tablet" />
-            </div>
-            <div className="rs-login-human-card" aria-hidden="true">
-              <div className="rs-login-avatar">A</div>
-              <div>
-                <strong>Olá, Ana!</strong>
-                <span>Revenda Açaí</span>
-              </div>
-              <div className="rs-login-star">★</div>
-              <ul>
-                {panelItems.map((item) => (
-                  <li key={item.label}>
-                    <item.icon aria-hidden="true" />
-                    <span>{item.label}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
+        <div className="rs-login-accessible-copy">
+          <h1>Sua revenda, do seu jeito, com controle total.</h1>
+          <p>Personalize seu app, acompanhe tudo em tempo real e tome decisões com confiança para vender mais.</p>
+          <ul>
+            <li>App do seu jeito: personalize cores, logo e mensagens.</li>
+            <li>Controle total da sua revenda: vendas, estoque, clientes e financeiro.</li>
+            <li>Resultados em tempo real: acompanhe indicadores e evolua.</li>
+            <li>Gestão inteligente: alertas, metas e oportunidades.</li>
+            <li>Segurança e confiança: seus dados protegidos sempre.</li>
+          </ul>
         </div>
 
-        <div className="rs-login-benefits" aria-label="Benefícios do Revenda Smart">
-          {loginBenefits.map((benefit) => (
-            <article key={benefit.title} className="rs-login-benefit">
-              <div className="rs-login-benefit-icon">
-                <benefit.icon aria-hidden="true" />
-              </div>
-              <div>
-                <h2>{benefit.title}</h2>
-                <p>{benefit.description}</p>
-              </div>
-            </article>
-          ))}
-        </div>
-
-        <div className="rs-login-kpis" aria-label="Indicadores de exemplo do Revenda Smart">
-          {kpis.map((kpi) => (
-            <div className="rs-login-kpi" key={kpi.label}>
-              <span>{kpi.label}</span>
-              <strong>{kpi.value}</strong>
-              <small>{kpi.trend}</small>
-              <svg viewBox="0 0 92 26" aria-hidden="true" focusable="false">
-                <polyline
-                  points={kpi.tone === "gold" ? "2,18 18,14 34,17 50,9 68,13 90,5" : "2,19 18,12 34,14 50,8 68,11 90,3"}
-                />
-              </svg>
-            </div>
-          ))}
-          <div className="rs-login-panel-cta" aria-hidden="true">
-            <BarChart3 />
-            <span>Ver painel completo</span>
-          </div>
-        </div>
-
-        <form onSubmit={handleLogin} className="rs-login-form" aria-label="Entrar no Revenda Smart">
-          <label className="rs-login-field">
+        <form onSubmit={handleLogin} className="rs-login-overlay-form" aria-label="Entrar no Revenda Smart">
+          <label className="rs-login-field rs-login-email-field">
             <span className="sr-only">E-mail</span>
             <Mail aria-hidden="true" />
             <input
@@ -307,7 +203,7 @@ export default function Login() {
             />
           </label>
 
-          <label className="rs-login-field">
+          <label className="rs-login-field rs-login-password-field">
             <span className="sr-only">Senha</span>
             <LockKeyhole aria-hidden="true" />
             <input
@@ -332,7 +228,7 @@ export default function Login() {
             </button>
           </label>
 
-          <div className="rs-login-form-row">
+          <div className="rs-login-actions-row">
             <label className="rs-login-remember">
               <input
                 type="checkbox"
