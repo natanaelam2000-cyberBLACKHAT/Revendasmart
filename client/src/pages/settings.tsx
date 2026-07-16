@@ -13,7 +13,8 @@ import { getApiUrl } from "@/lib/api-config";
 import { QRCodeSVG } from "qrcode.react";
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
-import { ONBOARDING_NICHO_IDS } from "@/lib/nicho-config";
+import { NICHO_CONFIG, ONBOARDING_NICHO_IDS, type NichoId } from "@/lib/nicho-config";
+import { APP_THEMES, BUTTON_TONES, CARD_TONES, MOTION_LEVELS, RADIUS_LEVELS, SHADOW_LEVELS, buildAppThemeCustomization, resolveAppThemeId, type AppThemeCustomization } from "@/lib/app-themes";
 import {
   Store, CreditCard,
   Download, Save, ChevronRight, Bell, Upload, RefreshCw, Users, Share2, ExternalLink, FileSpreadsheet, QrCode, Copy, Mail, Scale, HelpCircle, ChevronDown, User, KeyRound, LogOut, ArrowLeft, Receipt
@@ -45,11 +46,6 @@ const VALID_SETTINGS_TABS = new Set([
 const normalizeSettingsTab = (value: string | null) =>
   value && VALID_SETTINGS_TABS.has(value) ? value : "menu";
 
-const STORE_THEME_OPTIONS = [
-  ["purple", "Roxo", "#6d5dfc"], ["blue", "Azul", "#2563eb"], ["green", "Verde", "#059669"],
-  ["rose", "Rosa", "#db2777"], ["orange", "Laranja", "#f97316"], ["black", "Preto Premium", "#111827"],
-] as const;
-const DEFAULT_STORE_THEME_ID = "purple";
 
 async function compressLogo(file: File, maxSize = 512, quality = 0.82): Promise<Blob | null> {
   return new Promise((resolve) => {
@@ -85,20 +81,52 @@ export default function Settings() {
   // This ensures we only sync ONCE on mount, not on every Firestore update
   const hasInitialized = useRef(false);
 
-  const selectedThemeId = formSettings?.appTheme || DEFAULT_STORE_THEME_ID;
-  const selectedTheme = useMemo(
-    () => STORE_THEME_OPTIONS.find((theme) => theme[0] === selectedThemeId) || STORE_THEME_OPTIONS[0],
-    [selectedThemeId]
+  const selectedThemeId = resolveAppThemeId(formSettings?.appTheme);
+  const selectedTheme = useMemo(() => APP_THEMES.find((theme) => theme.id === selectedThemeId) || APP_THEMES[0], [selectedThemeId]);
+  const themeCustomization = useMemo(
+    () => buildAppThemeCustomization(selectedThemeId, formSettings?.appThemeCustomization as AppThemeCustomization | undefined),
+    [formSettings?.appThemeCustomization, selectedThemeId]
   );
-  const selectedPrimaryNicho = formSettings?.businessType || "Geral";
+  const selectedPrimaryNicho = (formSettings?.businessType && NICHO_CONFIG[formSettings.businessType as NichoId]) ? formSettings.businessType : "Geral";
+  const selectedBusinessTypes = useMemo(() => {
+    const rawTypes = Array.isArray(formSettings?.businessTypes) ? formSettings.businessTypes : [];
+    const validTypes = rawTypes.filter((item): item is NichoId => item in NICHO_CONFIG);
+    const withPrimary = selectedPrimaryNicho in NICHO_CONFIG ? [selectedPrimaryNicho as NichoId, ...validTypes] : validTypes;
+    const unique = Array.from(new Set(withPrimary));
+    return unique.length > 0 ? unique : ["Geral" as NichoId];
+  }, [formSettings?.businessTypes, selectedPrimaryNicho]);
+
+  const updateThemeCustomization = (patch: Partial<AppThemeCustomization>) => {
+    setFormSettings((prev) => {
+      const baseThemeId = resolveAppThemeId(prev?.appTheme);
+      const nextCustomization = buildAppThemeCustomization(baseThemeId, { ...(prev?.appThemeCustomization as AppThemeCustomization | undefined), ...patch });
+      return { ...prev, appThemeCustomization: nextCustomization, primaryColor: nextCustomization.primaryColor };
+    });
+  };
 
   const updateStoreTheme = (themeId: string) => {
-    const theme = STORE_THEME_OPTIONS.find((item) => item[0] === themeId) || STORE_THEME_OPTIONS[0];
-    setFormSettings((prev) => ({ ...prev, appTheme: theme[0], primaryColor: theme[2], appThemeCustomization: { ...(prev?.appThemeCustomization || {}), primaryColor: theme[2] } }));
+    const nextTheme = APP_THEMES.find((item) => item.id === themeId) || APP_THEMES[0];
+    const nextCustomization = buildAppThemeCustomization(nextTheme.id, { ...themeCustomization, primaryColor: nextTheme.primaryColor });
+    setFormSettings((prev) => ({ ...prev, appTheme: nextTheme.id, primaryColor: nextCustomization.primaryColor, appThemeCustomization: nextCustomization }));
   };
 
   const updatePrimaryNicho = (nicho: string) => {
-    setFormSettings((prev) => ({ ...prev, businessType: nicho, businessTypes: [nicho, ...((prev?.businessTypes || []).filter((item) => item !== nicho))] }));
+    const safeNicho = (nicho in NICHO_CONFIG ? nicho : "Geral") as NichoId;
+    setFormSettings((prev) => {
+      const current = Array.isArray(prev?.businessTypes) ? prev.businessTypes.filter((item): item is NichoId => item in NICHO_CONFIG) : [];
+      return { ...prev, businessType: safeNicho, businessTypes: [safeNicho, ...current.filter((item) => item !== safeNicho)] };
+    });
+  };
+
+  const toggleBusinessType = (nicho: NichoId) => {
+    setFormSettings((prev) => {
+      const current = Array.isArray(prev?.businessTypes) ? prev.businessTypes.filter((item): item is NichoId => item in NICHO_CONFIG) : [];
+      const exists = current.includes(nicho);
+      const nextTypes = exists ? current.filter((item) => item !== nicho) : [...current, nicho];
+      const normalizedTypes = nextTypes.length > 0 ? nextTypes : [selectedPrimaryNicho as NichoId];
+      const nextPrimary = normalizedTypes.includes(prev?.businessType as NichoId) ? prev?.businessType : normalizedTypes[0];
+      return { ...prev, businessType: nextPrimary, businessTypes: normalizedTypes };
+    });
   };
 
   // Sync Firestore settings to form ONLY on initial load
@@ -427,17 +455,82 @@ export default function Settings() {
               <InputField label="Nome da Loja" value={formSettings?.storeName} onChange={(v: string) => setFormSettings({...formSettings, storeName: v})} />
               <InputField label="WhatsApp" value={formSettings?.whatsapp} onChange={(v: string) => setFormSettings({...formSettings, whatsapp: v})} />
 
-              <div className="rs-store-card">
-                <p className="rs-store-help">Tema atual: {selectedTheme[1]} · Nicho principal: {selectedPrimaryNicho}</p>
-                <label htmlFor="store-theme-select" className="rs-store-action">Trocar tema</label>
-                <select id="store-theme-select" aria-label="Trocar tema" value={selectedTheme[0]} onChange={(event) => updateStoreTheme(event.target.value)} className="rs-store-control">
-                  {STORE_THEME_OPTIONS.map((theme) => <option key={theme[0]} value={theme[0]}>{theme[1]}</option>)}
-                </select>
-                <p className="rs-store-preview"><span style={{ backgroundColor: selectedTheme[2] }} /></p>
-                <label htmlFor="store-nicho-select" className="rs-store-action">Alterar nicho</label>
+              <div className="rs-store-card rs-store-premium-panel">
+                <div className="rs-store-panel-head">
+                  <div>
+                    <p className="rs-store-help">Tema atual: {selectedTheme.label}</p>
+                    <h3>Personalização visual da loja</h3>
+                    <p>Ajuste cores, botões, cards e sensação do app sem recriar sua conta.</p>
+                  </div>
+                  <div className="rs-store-mini-preview" style={{ background: `linear-gradient(135deg, ${themeCustomization.primaryColor}, ${selectedTheme.primaryColor})` }}>
+                    <span>{(formSettings?.storeName || "R").charAt(0).toLocaleUpperCase("pt-BR")}</span>
+                    <small>{selectedTheme.label.replace("Tema ", "")}</small>
+                  </div>
+                </div>
+
+                <div className="rs-store-theme-grid" aria-label="Trocar tema">
+                  {APP_THEMES.map((theme) => (
+                    <button key={theme.id} type="button" onClick={() => updateStoreTheme(theme.id)} className={`rs-store-theme-option ${selectedThemeId === theme.id ? "is-selected" : ""}`}>
+                      <span className={`rs-store-theme-swatch bg-gradient-to-br ${theme.swatch}`} />
+                      <strong>{theme.label}</strong>
+                      <small>{theme.description}</small>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="rs-store-fine-tune">
+                  <label className="rs-store-color-control">
+                    <span>Cor principal</span>
+                    <input type="color" aria-label="Cor principal da loja" value={themeCustomization.primaryColor} onChange={(event) => updateThemeCustomization({ primaryColor: event.target.value })} />
+                  </label>
+                  {[
+                    { label: "Botões", key: "buttonTone", options: BUTTON_TONES },
+                    { label: "Cards", key: "cardTone", options: CARD_TONES },
+                    { label: "Sombras", key: "shadowIntensity", options: SHADOW_LEVELS },
+                    { label: "Bordas", key: "radius", options: RADIUS_LEVELS },
+                    { label: "Animações", key: "motion", options: MOTION_LEVELS },
+                  ].map((group) => (
+                    <div key={group.key} className="rs-store-choice-row">
+                      <p>{group.label}</p>
+                      <div>
+                        {group.options.map((option) => {
+                          const selectedValue = themeCustomization[group.key as keyof typeof themeCustomization];
+                          return (
+                            <button key={option.id} type="button" onClick={() => updateThemeCustomization({ [group.key]: option.id } as Partial<AppThemeCustomization>)} className={selectedValue === option.id ? "is-selected" : ""}>
+                              {option.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rs-store-card rs-store-premium-panel">
+                <div className="rs-store-panel-head">
+                  <div>
+                    <p className="rs-store-help">Nicho principal: {NICHO_CONFIG[selectedPrimaryNicho as NichoId]?.label || selectedPrimaryNicho}</p>
+                    <h3>Organização por nicho</h3>
+                    <p>Altere o foco da loja e mantenha nichos adicionais ativos sem apagar produtos, clientes ou histórico.</p>
+                  </div>
+                </div>
+                <label htmlFor="store-nicho-select" className="rs-store-action">Alterar nicho principal</label>
                 <select id="store-nicho-select" aria-label="Alterar nicho" value={selectedPrimaryNicho} onChange={(event) => updatePrimaryNicho(event.target.value)} className="rs-store-control">
-                  {ONBOARDING_NICHO_IDS.map((nicho) => <option key={nicho} value={nicho}>{nicho}</option>)}
+                  {ONBOARDING_NICHO_IDS.map((nicho) => <option key={nicho} value={nicho}>{NICHO_CONFIG[nicho as NichoId]?.label || nicho}</option>)}
                 </select>
+                <div className="rs-store-nicho-grid" aria-label="Nichos adicionais">
+                  {ONBOARDING_NICHO_IDS.map((nicho) => {
+                    const config = NICHO_CONFIG[nicho as NichoId];
+                    const isSelected = selectedBusinessTypes.includes(nicho as NichoId);
+                    return (
+                      <button key={nicho} type="button" onClick={() => toggleBusinessType(nicho as NichoId)} className={isSelected ? "is-selected" : ""}>
+                        <strong>{config?.label || nicho}</strong>
+                        <small>{config?.desc || "Nicho da loja"}</small>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           )}

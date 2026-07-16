@@ -66,14 +66,14 @@ export async function createMarketingCard(payload: MarketingAdInput, onImageFall
   if (logo) fit(ctx, logo, 132, 128, 72, 72); else { ctx.fillStyle = theme.accent; font(ctx, 42); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText((config.storeName || "R").slice(0, 1).toUpperCase(), 168, 165); }
   ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"; ctx.fillStyle = theme.foreground; font(ctx, 38); wrap(ctx, config.storeName, 236, 157, 560, 42, 1);
   ctx.fillStyle = theme.muted; font(ctx, 18, 800); ctx.fillText("REVENDA SMART", 238, 190); font(ctx, 20); tag(ctx, `${template.emoji} Oferta`, 805, 140, theme.accent);
-  rect(ctx, 142, 232, 796, 70, 35, theme.dark); ctx.fillStyle = "#fff"; font(ctx, 28); ctx.textAlign = "center"; ctx.textBaseline = "middle"; wrap(ctx, config.headline, 540, 276, 720, 32, 1);
-  const product = await resolveImage(config, warn); rect(ctx, 132, 320, 816, 405, 50, "#fff", theme.ring);
-  if (product) fit(ctx, product, 158, 340, 764, 365); else { ctx.fillStyle = theme.accent; ctx.globalAlpha = .14; ctx.beginPath(); ctx.arc(540, 505, 96, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1; ctx.fillStyle = "#64748b"; font(ctx, 28); ctx.textAlign = "center"; ctx.fillText("Sem imagem", 540, 555); }
-  let x = 146; font(ctx, 20); for (const chip of chips) x += tag(ctx, chip[0], x, 748, chip[1] ? theme.cta : theme.soft, chip[1] ? "#fff" : theme.dark);
-  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"; ctx.fillStyle = theme.foreground; font(ctx, config.productName.length > 44 ? 46 : 54); wrap(ctx, config.productName, 146, 840, 788, 54, 2);
-  if (config.note) { ctx.fillStyle = theme.muted; font(ctx, 22, 800); wrap(ctx, config.note, 146, 918, 460, 26, 1); }
-  ctx.fillStyle = theme.muted; font(ctx, 20); ctx.fillText("POR APENAS", 146, 948); ctx.fillStyle = theme.accent; font(ctx, 66); ctx.fillText(config.priceText, 146, 1004);
-  if (ctaText) { rect(ctx, 640, 925, 306, 82, 30, theme.cta); ctx.fillStyle = "#fff"; font(ctx, 22); ctx.textAlign = "center"; ctx.textBaseline = "middle"; wrap(ctx, ctaText, 793, 970, 260, 25, 2); }
+  rect(ctx, 142, 226, 796, 72, 36, theme.dark); ctx.fillStyle = "#fff"; font(ctx, 28); ctx.textAlign = "center"; ctx.textBaseline = "middle"; wrap(ctx, config.headline, 540, 272, 720, 32, 1);
+  const product = await resolveImage(config, warn); rect(ctx, 118, 316, 844, 452, 56, "#fff", theme.ring);
+  if (product) fit(ctx, product, 142, 338, 796, 408); else { ctx.fillStyle = theme.accent; ctx.globalAlpha = .14; ctx.beginPath(); ctx.arc(540, 535, 112, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1; ctx.fillStyle = "#64748b"; font(ctx, 30); ctx.textAlign = "center"; ctx.fillText("Produto sem imagem", 540, 560); }
+  let x = 132; font(ctx, 20); for (const chip of chips) x += tag(ctx, chip[0], x, 790, chip[1] ? theme.cta : theme.soft, chip[1] ? "#fff" : theme.dark);
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"; ctx.fillStyle = theme.foreground; font(ctx, config.productName.length > 48 ? 42 : 50); wrap(ctx, config.productName, 132, 872, 816, 50, 2);
+  if (config.note) { ctx.fillStyle = theme.muted; font(ctx, 21, 800); wrap(ctx, config.note, 132, 940, 460, 26, 1); }
+  ctx.fillStyle = theme.muted; font(ctx, 20); ctx.fillText("POR APENAS", 132, 966); ctx.fillStyle = theme.accent; font(ctx, 70); ctx.fillText(config.priceText, 132, 1028);
+  if (ctaText) { rect(ctx, 632, 930, 328, 88, 34, theme.cta); ctx.fillStyle = "#fff"; font(ctx, 23); ctx.textAlign = "center"; ctx.textBaseline = "middle"; wrap(ctx, ctaText, 796, 978, 278, 26, 2); }
   return new Promise((resolve, reject) => { try { canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("Falha no PNG")), "image/png", .95); } catch { reject(new Error("Falha no PNG")); } });
 }
 export function downloadMarketingCard(blob: Blob, productName: string) {

@@ -23,6 +23,7 @@ import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { usePlanData } from "@/hooks/usePlanData";
 import { notifyError, notifySuccess } from "@/lib/notify";
 import { buildProductCreatePayload } from "@/lib/product-payload";
+import { rememberRecentProductId } from "@/lib/recent-products";
 import { checkProductLimit } from "@/lib/plan-helpers";
 import {
   getNichoConfig,
@@ -529,6 +530,7 @@ const [, setLocation] = useLocation();
         throw writeErr;
       }
 
+      if (!id) rememberRecentProductId(productId);
       setSuccess(true);
       notifySuccess(id ? "Produto atualizado." : "Produto salvo.");
 

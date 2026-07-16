@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
+  doc,
+  getDoc,
   getDocs,
   getFirestore,
   limit,
@@ -14,6 +16,7 @@ import {
 } from "firebase/firestore";
 import { getFirebaseAuth } from "@/lib/firebase";
 import type { Product } from "@/lib/mock-data";
+import { readRecentProductIds } from "@/lib/recent-products";
 
 const PRODUCT_PICKER_PAGE_SIZE = 30;
 
@@ -39,6 +42,22 @@ function mergeProducts(current: Product[], incoming: Product[]): Product[] {
     if (product?.id) byId.set(product.id, product);
   }
   return Array.from(byId.values()).sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+}
+
+async function loadRecentProductDocs(uid: string, currentProducts: Product[]): Promise<Product[]> {
+  const existingIds = new Set(currentProducts.map((product) => product.id));
+  const recentIds = readRecentProductIds().filter((productId) => !existingIds.has(productId)).slice(0, 3);
+  if (recentIds.length === 0) return [];
+
+  const firestore = getFirestore();
+  const snapshots = await Promise.all(
+    recentIds.map((productId) => getDoc(doc(firestore, "users", uid, "products", productId)).catch(() => null))
+  );
+
+  return snapshots
+    .filter((snapshot): snapshot is NonNullable<typeof snapshot> => Boolean(snapshot?.exists()))
+    .map((snapshot) => ({ ...snapshot.data(), id: snapshot.id } as Product))
+    .filter((product) => product?.id);
 }
 
 export function useProductPickerData(): ProductPickerData {
@@ -89,6 +108,9 @@ export function useProductPickerData(): ProductPickerData {
           const pageProducts = snapshot.docs.map(mapProductDoc).filter((product) => product?.id);
           lastVisibleRef.current = snapshot.docs[snapshot.docs.length - 1] ?? null;
           setProducts(pageProducts);
+          void loadRecentProductDocs(user.uid, pageProducts).then((recentProducts) => {
+            if (recentProducts.length > 0) setProducts((current) => mergeProducts(current, recentProducts));
+          });
           setHasMore(snapshot.docs.length === PRODUCT_PICKER_PAGE_SIZE);
           setError("");
           setLoading(false);

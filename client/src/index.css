@@ -360,3 +360,33 @@ html[data-rs-shadow="strong"] .shadow-xl {
 .rs-store-control:focus{box-shadow:0 0 0 2px hsl(var(--primary)/.2)}
 .rs-store-preview,.rs-store-help{margin-top:.6rem;font-size:.72rem;line-height:1.45;color:hsl(var(--muted-foreground))}
 .rs-store-preview span{margin-right:.45rem;display:inline-block;height:.75rem;width:.75rem;border-radius:999px;vertical-align:-.1rem}
+
+
+/* Minha Loja premium controls */
+.rs-store-premium-panel{display:grid;gap:1rem;padding:1rem}
+.rs-store-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem}
+.rs-store-panel-head h3{margin-top:.2rem;font-size:1rem;font-weight:900;color:hsl(var(--foreground));letter-spacing:-.02em}
+.rs-store-panel-head p:last-child{margin-top:.25rem;font-size:.75rem;line-height:1.5;color:hsl(var(--muted-foreground))}
+.rs-store-mini-preview{display:grid;min-width:5.5rem;height:5.5rem;place-items:center;border-radius:1.35rem;color:white;box-shadow:0 16px 34px hsl(var(--foreground)/.16);text-align:center}
+.rs-store-mini-preview span{font-size:1.65rem;font-weight:900;line-height:1}
+.rs-store-mini-preview small{max-width:4.5rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.58rem;font-weight:900;text-transform:uppercase;letter-spacing:.08em}
+.rs-store-theme-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.65rem}
+.rs-store-theme-option{min-width:0;border:1px solid hsl(var(--border)/.7);border-radius:1.15rem;background:white;padding:.7rem;text-align:left;box-shadow:0 1px 3px hsl(var(--foreground)/.06);transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease}
+.rs-store-theme-option:active{transform:scale(.98)}
+.rs-store-theme-option.is-selected{border-color:hsl(var(--primary));box-shadow:0 12px 26px hsl(var(--primary)/.12)}
+.rs-store-theme-swatch{display:block;height:2.25rem;border-radius:.9rem;margin-bottom:.55rem}
+.rs-store-theme-option strong,.rs-store-nicho-grid strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.72rem;font-weight:900;color:hsl(var(--foreground))}
+.rs-store-theme-option small,.rs-store-nicho-grid small{margin-top:.25rem;display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font-size:.62rem;line-height:1.25;color:hsl(var(--muted-foreground))}
+.rs-store-fine-tune{display:grid;gap:.75rem;border-top:1px solid hsl(var(--border)/.55);padding-top:.85rem}
+.rs-store-color-control{display:flex;align-items:center;justify-content:space-between;gap:1rem;border-radius:1rem;background:hsl(var(--secondary)/.45);padding:.75rem .9rem;font-size:.72rem;font-weight:900;color:hsl(var(--foreground))}
+.rs-store-color-control input{height:2.4rem;width:3.2rem;border:0;border-radius:.8rem;background:white;padding:.25rem}
+.rs-store-choice-row{display:grid;gap:.45rem}
+.rs-store-choice-row p{font-size:.62rem;font-weight:900;letter-spacing:.12em;text-transform:uppercase;color:hsl(var(--muted-foreground))}
+.rs-store-choice-row div{display:flex;gap:.45rem;overflow-x:auto;padding-bottom:.1rem}
+.rs-store-choice-row button{flex-shrink:0;border-radius:999px;background:hsl(var(--secondary));padding:.55rem .75rem;font-size:.62rem;font-weight:900;color:hsl(var(--muted-foreground))}
+.rs-store-choice-row button.is-selected{background:hsl(var(--primary));color:white}
+.rs-store-nicho-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.6rem}
+.rs-store-nicho-grid button{min-width:0;border:1px solid hsl(var(--border)/.65);border-radius:1rem;background:white;padding:.8rem;text-align:left;transition:all .16s ease}
+.rs-store-nicho-grid button.is-selected{border-color:hsl(var(--primary));background:hsl(var(--primary)/.07)}
+@media (min-width:640px){.rs-store-theme-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.rs-store-nicho-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.rs-store-premium-panel{padding:1.25rem}}
+@media (max-width:430px){.rs-store-panel-head{display:grid}.rs-store-mini-preview{width:100%;height:4.5rem}.rs-store-theme-grid,.rs-store-nicho-grid{grid-template-columns:1fr}.rs-store-choice-row div{scroll-snap-type:x mandatory}.rs-store-choice-row button{scroll-snap-align:start}}

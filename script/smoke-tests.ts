@@ -67,6 +67,7 @@ const addProduct = read("client/src/pages/add-product.tsx");
 const mockData = read("client/src/lib/mock-data.ts");
 const productSearch = read("client/src/lib/product-search.ts");
 const productPayload = read("client/src/lib/product-payload.ts");
+const recentProducts = read("client/src/lib/recent-products.ts");
 const internalTelemetry = read("client/src/lib/internal-telemetry.ts");
 const storeHealth = read("client/src/lib/store-health.ts");
 const catalogProductsHook = read("client/src/hooks/useCatalogProductsData.ts");
@@ -205,6 +206,12 @@ assert.ok(buildProductSearchBackfillPatch({ name: "Perfume Novo", brand: "Marca"
 assert.match(productSearch, /SERVER_SIDE_PRODUCT_SEARCH_ENABLED = false/);
 assert.match(productSearch, /CATALOG_SERVER_SEARCH_ENABLED = SERVER_SIDE_PRODUCT_SEARCH_ENABLED/);
 assert.match(productPayload, /buildProductSearchFields/);
+assert.match(recentProducts, /rememberRecentProductId/);
+assert.match(recentProducts, /readRecentProductIds/);
+assert.match(addProduct, /rememberRecentProductId\(productId\)/);
+assert.match(paginatedProductsHook, /loadRecentProductDocs/);
+assert.match(productPickerHook, /loadRecentProductDocs/);
+assert.match(productPickerHook, /mergeProducts\(current, recentProducts\)/);
 assert.match(addProduct, /buildProductCreatePayload/);
 assert.match(addProduct, /cleanupUploadedProductImages/);
 assert.match(addProduct, /deleteObject/);
@@ -381,11 +388,12 @@ assert.match(settings, /path: "\/settings\?tab=store"/);
 assert.match(settings, /activeTab === 'store'/);
 assert.match(settings, /Tema atual:/);
 assert.match(settings, /Trocar tema/);
-assert.match(settings, /store-theme-select/);
+assert.match(settings, /rs-store-theme-grid/);
+assert.match(settings, /rs-store-theme-option/);
+assert.match(settings, /Personalização visual da loja/);
 assert.match(settings, /Nicho principal:/);
 assert.match(settings, /Alterar nicho/);
 assert.match(settings, /store-nicho-select/);
-assert.match(settings, /htmlFor="store-theme-select"/);
 assert.match(settings, /htmlFor="store-nicho-select"/);
 assert.match(settings, /updateStoreTheme/);
 assert.match(settings, /updatePrimaryNicho/);
@@ -898,3 +906,14 @@ if (process.env.RUN_LIVE_PUBLIC_CATALOG_SMOKE === "1") {
 }
 
 console.log("Smoke tests passed: catalog, images, navigation, modules, subscription and ranking.");
+
+assert.match(marketingCard, /toBlob/);
+assert.match(marketingCard, /Produto sem imagem/);
+assert.match(marketingCanvas, /buildMarketingAdVisualModel/);
+assert.match(settings, /Personalização visual da loja/);
+assert.match(settings, /rs-store-theme-grid/);
+assert.match(settings, /rs-store-nicho-grid/);
+assert.match(settings, /toggleBusinessType/);
+assert.match(settings, /APP_THEMES/);
+assert.match(read("client/src/pages/login.tsx"), /Sua revenda organizada com aparência de negócio grande/);
+assert.match(read("client/src/pages/login.tsx"), /logo-revenda-smart\.png/);
