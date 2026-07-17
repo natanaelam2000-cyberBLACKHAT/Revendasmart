@@ -78,6 +78,12 @@ const searchDataModelDoc = read("docs/architecture/SEARCH_DATA_MODEL.md");
 const searchBackfillDoc = read("docs/operations/SEARCH_BACKFILL.md");
 const searchBackfillScript = read("scripts/search/backfill-search-fields.ts");
 const vercel = JSON.parse(read("vercel.json"));
+const packageJson = JSON.parse(read("package.json"));
+const firebaseJson = JSON.parse(read("firebase.json"));
+const firebaseClient = read("client/src/lib/firebase.ts");
+const buildScript = read("script/build.ts");
+const firebaseEmulatorTests = read("script/firebase-emulator-tests.ts");
+const firebaseEmulatorDocs = read("docs/FIREBASE_EMULATOR_TESTING.md");
 
 function productIndexSignature(fields: Array<Record<string, string>>) {
   return fields.map((field) => `${field.fieldPath}:${field.arrayConfig || field.order}`).join("|");
@@ -970,5 +976,40 @@ assert.doesNotMatch(loginPage, /Gestão, vendas e catálogo em um só lugar/);
 assert.doesNotMatch(loginPage, /bg-\[\#160b2e\]/);
 assert.doesNotMatch(loginPage, /rs-login-person-illustration/);
 assert.doesNotMatch(loginPage, />A<|rs-login-avatar/);
+
+// Firebase emulator static guardrails
+assert.equal(firebaseJson.emulators.auth.port, 9099);
+assert.equal(firebaseJson.emulators.auth.host, "127.0.0.1");
+assert.equal(firebaseJson.emulators.firestore.port, 8080);
+assert.equal(firebaseJson.emulators.firestore.host, "127.0.0.1");
+assert.equal(firebaseJson.emulators.storage.port, 9199);
+assert.equal(firebaseJson.emulators.storage.host, "127.0.0.1");
+assert.equal(firebaseJson.emulators.ui.port, 4000);
+assert.equal(firebaseJson.emulators.hub.port, 4400);
+assert.equal(firebaseJson.emulators.logging.port, 4500);
+assert.equal(firebaseJson.emulators.singleProjectMode, true);
+assert.match(packageJson.scripts["emulators:start"], /firebase-tools@15\.24\.0/);
+assert.match(packageJson.scripts["emulators:start"], /--project demo-revendasmart/);
+assert.match(packageJson.scripts["test:firebase"], /emulators:exec/);
+assert.match(packageJson.scripts["test:firebase"], /auth,firestore,storage/);
+assert.match(packageJson.scripts["test:firebase:run"], /firebase-emulator-tests\.ts/);
+assert.match(firebaseClient, /VITE_USE_FIREBASE_EMULATORS/);
+assert.match(firebaseClient, /connectAuthEmulator/);
+assert.match(firebaseClient, /connectFirestoreEmulator/);
+assert.match(firebaseClient, /connectStorageEmulator/);
+assert.match(firebaseClient, /import\.meta\.env\.PROD/);
+assert.match(firebaseClient, /__revendaSmartFirebaseEmulatorsConnected/);
+assert.doesNotMatch(firebaseClient, /import \{ getFirestore, connectFirestoreEmulator \} from "firebase\/firestore"/);
+assert.doesNotMatch(firebaseClient, /import \{ getStorage, connectStorageEmulator \} from "firebase\/storage"/);
+assert.match(buildScript, /loadEnv\("production"/);
+assert.match(buildScript, /VITE_USE_FIREBASE_EMULATORS=true/);
+assert.match(firebaseEmulatorTests, /demo-revendasmart/);
+assert.match(firebaseEmulatorTests, /FIRESTORE_EMULATOR_HOST/);
+assert.match(firebaseEmulatorTests, /FIREBASE_AUTH_EMULATOR_HOST/);
+assert.match(firebaseEmulatorTests, /FIREBASE_STORAGE_EMULATOR_HOST/);
+assert.match(firebaseEmulatorTests, /outro usuário não lê produto do owner/);
+assert.match(firebaseEmulatorTests, /SVG é bloqueado no Storage/);
+assert.match(firebaseEmulatorDocs, /Nunca execute esses testes contra produção/);
+assert.match(firebaseEmulatorDocs, /VITE_USE_FIREBASE_EMULATORS=true npm run dev:client/);
 
 console.log("Smoke tests passed: catalog, images, navigation, modules, subscription and ranking.");

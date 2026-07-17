@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from "firebase/app";
-import { getAuth, Auth, User, setPersistence, browserLocalPersistence } from "firebase/auth";
+import { getAuth, connectAuthEmulator, Auth, User, setPersistence, browserLocalPersistence } from "firebase/auth";
 import { initializeErrorLogging, logError, setUserContext } from "./error-logging";
 import { initializeInternalTelemetry } from "./internal-telemetry";
 import { initializeFirebaseAnalytics } from "./firebase-analytics";
@@ -19,6 +19,37 @@ const firebaseConfig = {
 let app: FirebaseApp | null = null;
 let authInstance: Auth | null = null;
 let initError: string | null = null;
+
+const FIREBASE_EMULATORS_CONNECTED_KEY = "__revendaSmartFirebaseEmulatorsConnected";
+
+function shouldUseFirebaseEmulators() {
+  return import.meta.env.VITE_USE_FIREBASE_EMULATORS === "true";
+}
+
+async function connectFirestoreAndStorageEmulators(firebaseApp: FirebaseApp) {
+  const [{ getFirestore, connectFirestoreEmulator }, { getStorage, connectStorageEmulator }] = await Promise.all([
+    import("firebase/firestore"),
+    import("firebase/storage"),
+  ]);
+
+  connectFirestoreEmulator(getFirestore(firebaseApp), "127.0.0.1", 8080);
+  connectStorageEmulator(getStorage(firebaseApp), "127.0.0.1", 9199);
+}
+
+function connectFirebaseEmulatorsOnce(firebaseApp: FirebaseApp, auth: Auth) {
+  if (!shouldUseFirebaseEmulators()) return;
+
+  if (import.meta.env.PROD) {
+    throw new Error("VITE_USE_FIREBASE_EMULATORS=true não pode ser usado em produção.");
+  }
+
+  const emulatorState = globalThis as typeof globalThis & { [FIREBASE_EMULATORS_CONNECTED_KEY]?: boolean };
+  if (emulatorState[FIREBASE_EMULATORS_CONNECTED_KEY]) return;
+
+  connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
+  void connectFirestoreAndStorageEmulators(firebaseApp);
+  emulatorState[FIREBASE_EMULATORS_CONNECTED_KEY] = true;
+}
 
 /**
  * Initialize Firebase safely
@@ -46,6 +77,7 @@ app = getApps().length === 0
 
 
 authInstance = getAuth(app);
+connectFirebaseEmulatorsOnce(app, authInstance);
 
 // força persistência corretamente
 setPersistence(authInstance, browserLocalPersistence)

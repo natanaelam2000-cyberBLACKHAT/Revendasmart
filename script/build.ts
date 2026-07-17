@@ -1,5 +1,5 @@
 import { build as esbuild } from "esbuild";
-import { build as viteBuild } from "vite";
+import { build as viteBuild, loadEnv } from "vite";
 import { rm, readFile } from "fs/promises";
 
 // server deps to bundle to reduce openat(2) syscalls
@@ -32,7 +32,19 @@ const allowlist = [
   "zod-validation-error",
 ];
 
+
+function assertProductionBuildDoesNotUseFirebaseEmulators() {
+  const viteEnv = loadEnv("production", process.cwd(), "");
+  const emulatorFlag = process.env.VITE_USE_FIREBASE_EMULATORS || viteEnv.VITE_USE_FIREBASE_EMULATORS;
+
+  if (emulatorFlag === "true") {
+    throw new Error("VITE_USE_FIREBASE_EMULATORS=true é permitido apenas em ambiente local e bloqueia build de produção.");
+  }
+}
+
 async function buildAll() {
+  assertProductionBuildDoesNotUseFirebaseEmulators();
+
   await rm("dist", { recursive: true, force: true });
 
   console.log("building client...");
