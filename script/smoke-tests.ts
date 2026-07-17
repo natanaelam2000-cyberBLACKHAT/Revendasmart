@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
+import fs, { existsSync } from "node:fs";
 import { APP_THEME_IDS, APP_THEMES, DEFAULT_APP_THEME_ID, DESIGN_TOKEN_NAMES, buildDesignSystemVariables, resolveAppThemeId } from "../client/src/lib/app-themes";
 import { NICHO_CONFIG, ONBOARDING_NICHO_IDS, getNichoConfig, getProductCategoriesForNicho } from "../client/src/lib/nicho-config";
 import { CATALOG_SERVER_SEARCH_ENABLED, PRODUCT_SEARCH_SCHEMA_VERSION, SERVER_SIDE_CLIENT_SEARCH_ENABLED, SERVER_SIDE_PRODUCT_SEARCH_ENABLED, buildProductSearchBackfillPatch, buildProductSearchFields, buildProductServerSearchPlan, buildProductServerSearchQuerySpec, canUseCatalogServerSearch, getProductSearchIndexStatus, isLikelyBarcodeSearchTerm, isProductSearchIndexed, normalizeProductBarcode, normalizeProductSearchText, productMatchesLocalSearch, sanitizeProductSearchPageSize } from "../client/src/lib/product-search";
@@ -106,8 +106,6 @@ const androidStylesV28 = read("android/app/src/main/res/values-v28/styles.xml");
 const androidMainActivity = read("android/app/src/main/java/com/revendasmart/app/MainActivity.java");
 const androidDocs = read("docs/ANDROID_CAPACITOR.md");
 const androidDebugDocs = read("docs/ANDROID_DEBUG_TESTING.md");
-const vercelApiCatchAll = read("api/[...path].ts");
-const vercelApiIndex = read("api/index.ts");
 const androidGitignore = read("android/.gitignore");
 const androidBuildDebugScript = read("scripts/android/build-debug.mjs");
 const androidInstallDebugScript = read("scripts/android/install-debug.mjs");
@@ -1146,21 +1144,15 @@ assert.match(serviceWorker, /cache\.put\(request, response\.clone\(\)\)/);
 assert.doesNotMatch(serviceWorker, /\/api\//);
 assert.ok(vercel.rewrites.some((rule: any) => rule.source === "/u/:storeSlug" && rule.destination === "/index.html"));
 assert.ok(vercel.rewrites.some((rule: any) => rule.source === "/:path*" && rule.destination === "/index.html"));
-assert.match(vercelApiCatchAll, /REVENDA_SMART_SERVERLESS\s*=\s*"1"/);
-assert.match(vercelApiCatchAll, /import\("\.\.\/server\/index"\)/);
-assert.match(vercelApiCatchAll, /await mod\.serverReady/);
-assert.match(vercelApiCatchAll, /sendInitializationError/);
-assert.match(vercelApiCatchAll, /shouldUsePartiallyInitializedExpress/);
-assert.match(vercelApiCatchAll, /return app\(req, res\)/);
-assert.match(vercelApiIndex, /export \{ default \} from "\.\/\[\.\.\.path\]"/);
-assert.match(serverIndex, /export const app = express\(\)/);
-assert.match(serverIndex, /export const serverReady = \(async \(\) =>/);
-assert.match(serverIndex, /REVENDA_SMART_SERVERLESS/);
-assert.match(serverIndex, /app\.use\("\/api", sendApiNotFound\)/);
-assert.match(serverIndex, /buildSafeErrorBody\(404/);
-assert.match(serverIndex, /return res\.sendStatus\(204\)/);
-assert.match(serverIndex, /!IS_SERVERLESS[\s\S]*serveStatic\(app\)/);
-assert.doesNotMatch(vercelApiCatchAll, /serveStatic|index\.html|listen\(/);
+const apiRewriteIndex = vercel.rewrites.findIndex((rule: any) => rule.source === "/api/:path*");
+const spaFallbackIndex = vercel.rewrites.findIndex((rule: any) => rule.source === "/:path*" && rule.destination === "/index.html");
+assert.ok(apiRewriteIndex >= 0, "Vercel must route /api/:path* before the SPA fallback");
+assert.ok(spaFallbackIndex >= 0, "Vercel must keep the SPA fallback for frontend routes");
+assert.ok(apiRewriteIndex < spaFallbackIndex, "Vercel API rewrite must be evaluated before SPA fallback");
+assert.equal(vercel.rewrites[apiRewriteIndex].destination, "https://revendasmart-backend-cc2743rkmq-uc.a.run.app/api/:path*");
+assert.doesNotMatch(JSON.stringify(vercel.rewrites), /api\/api/);
+assert.equal(existsSync("api/index.ts"), false);
+assert.equal(existsSync("api/[...path].ts"), false);
 
 
 // Android Capacitor foundation guardrails.
