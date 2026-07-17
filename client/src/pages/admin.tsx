@@ -10,7 +10,7 @@ import {
   ShieldCheck, Package, Users, CircleDollarSign, Receipt, 
   AlertTriangle, Activity, Database, Clock, ChevronRight, ToggleLeft, ToggleRight, Gift
 } from "lucide-react";
-import { format, subDays, isSameDay } from "date-fns";
+import { format, subDays, isSameDay } from "@/lib/date-utils";
 import { getApiUrl } from "@/lib/api-config";
 
 export default function AdminMetrics() {

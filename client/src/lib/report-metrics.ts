@@ -14,7 +14,7 @@ import {
   subMonths,
   subWeeks,
   subYears,
-} from "date-fns";
+} from "@/lib/date-utils";
 import type { Client, Product, Sale } from "@/lib/mock-data";
 
 export interface PeriodFinancialMetric {

@@ -1,4 +1,4 @@
-﻿import { differenceInCalendarDays, endOfMonth, getDate, isSameMonth, parseISO } from "date-fns";
+import { differenceInCalendarDays, endOfMonth, getDate, isSameMonth, parseISO } from "@/lib/date-utils";
 import type { Client, Product, Sale } from "@/lib/mock-data";
 
 export interface MetricComparison {

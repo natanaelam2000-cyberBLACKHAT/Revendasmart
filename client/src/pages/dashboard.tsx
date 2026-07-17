@@ -9,7 +9,7 @@ import {
   Sparkles, ArrowRight, TrendingDown, Users, Bell as BellIcon,
   Plus, ShoppingCart, Receipt, Megaphone, BookOpen, Palette, CreditCard, Store
 } from "lucide-react";
-import { isToday, parseISO } from "date-fns";
+import { isToday, parseISO } from "@/lib/date-utils";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { getApiUrl } from "@/lib/api-config";
 import { getFirebaseAuth } from "@/lib/firebase";

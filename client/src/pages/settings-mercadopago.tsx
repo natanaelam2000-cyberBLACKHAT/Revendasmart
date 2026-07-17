@@ -8,8 +8,7 @@ import {
   Link2, CheckCircle, XCircle, AlertCircle, RefreshCw,
   ExternalLink, Shield, Clock, Star, Trash2, ChevronLeft
 } from "lucide-react";
-import { format, formatDistanceToNow, parseISO } from "date-fns";
-import { ptBR } from "date-fns/locale";
+import { format, formatDistanceToNow, parseISO, ptBR } from "@/lib/date-utils";
 import {
   useMPConnections,
   startMPOAuth,

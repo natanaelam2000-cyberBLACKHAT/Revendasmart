@@ -6,7 +6,7 @@ import { Layout } from "@/components/layout";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { EmptyState } from "@/components/EmptyState";
 import { Activity, AlertTriangle, BarChart3, Calendar, ChevronLeft, Clock, Heart, MessageSquare, Phone, ShoppingBag, Star, UserRound } from "lucide-react";
-import { format } from "date-fns";
+import { format } from "@/lib/date-utils";
 import { calculateClientCrmMetrics, filterClientSales, type ClientClassificationTone, type ClientPreferenceItem } from "@/lib/client-metrics";
 
 const currency = (value: number) => `R$ ${value.toFixed(2)}`;

@@ -7,7 +7,7 @@ import {
   Download, Bell, Link2, Copy, Check, RefreshCw, ExternalLink, Plus
 } from "lucide-react";
 import { Installment, defaultSettings } from "@/lib/mock-data";
-import { format, isToday, isBefore, addDays, parseISO, isSameDay, startOfDay } from "date-fns";
+import { format, isToday, isBefore, addDays, parseISO, isSameDay, startOfDay } from "@/lib/date-utils";
 import { getFirebaseAuth, logError, logEvent, logTelemetryEvent, trackAnalyticsEvent } from "@/lib/firebase";
 import { collection, query, onSnapshot, doc, updateDoc, orderBy, where, limit, startAfter, getDocs, getFirestore, documentId, type DocumentData, type QueryConstraint, type QueryDocumentSnapshot } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";

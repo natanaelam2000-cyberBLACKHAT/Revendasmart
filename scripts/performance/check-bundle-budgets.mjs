@@ -27,6 +27,10 @@ const totalBudgets = {
 
 const maxSingleAssetKb = 500;
 
+const forbiddenFrontendChunks = [
+  { label: 'date-fns frontend vendor', pattern: /^vendor-date-fns-.*\.js$/ },
+];
+
 function kb(bytes) {
   return Math.round((bytes / 1024) * 100) / 100;
 }
@@ -50,6 +54,13 @@ const files = fs.readdirSync(assetsDir)
   });
 
 const errors = [];
+for (const forbidden of forbiddenFrontendChunks) {
+  const matches = files.filter((file) => forbidden.pattern.test(file.name));
+  for (const file of matches) {
+    errors.push(`${forbidden.label}: ${file.name} não deve voltar ao bundle do frontend`);
+  }
+}
+
 for (const budget of budgets) {
   const matches = files.filter((file) => budget.pattern.test(file.name));
   if (matches.length === 0) {

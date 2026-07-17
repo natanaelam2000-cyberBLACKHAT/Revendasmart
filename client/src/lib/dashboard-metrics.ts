@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { differenceInDays, parseISO } from "date-fns";
+import { differenceInDays, parseISO } from "@/lib/date-utils";
 import type { Client, Product, Sale } from "@/lib/mock-data";
 
 export interface DashboardInsight {

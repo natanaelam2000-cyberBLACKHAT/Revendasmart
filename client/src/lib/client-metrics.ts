@@ -1,4 +1,4 @@
-﻿import { differenceInDays, format, parseISO } from "date-fns";
+import { differenceInDays, format, parseISO } from "@/lib/date-utils";
 import type { Product, Sale } from "@/lib/mock-data";
 
 export type ClientClassification = "Novo Cliente" | "Cliente Frequente" | "Cliente VIP" | "Cliente Inativo";

@@ -6,7 +6,7 @@ import { ProductImageCard } from "@/components/ProductImageCard";
 import { ChevronLeft, Package, PlusCircle } from "lucide-react";
 import { useProductsData } from "@/hooks/useProductsData";
 import { useMonthlySalesData } from "@/hooks/useMonthlySalesData";
-import { parseISO } from "date-fns";
+import { parseISO } from "@/lib/date-utils";
 
 export default function ProductsSold() {
   const [, setLocation] = useLocation();

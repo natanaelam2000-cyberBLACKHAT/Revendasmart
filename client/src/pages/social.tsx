@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Layout } from "@/components/layout";
 import { initialProducts, Product, getStored, saveStored, STORAGE_KEYS, ScheduledPost } from "@/lib/mock-data";
 import { Calendar, Share2, Instagram, Facebook, MessageSquare, Plus, Trash2, Tag, Gift, Sparkles, Heart } from "lucide-react";
-import { format, parseISO } from "date-fns";
+import { format, parseISO } from "@/lib/date-utils";
 
 export default function Social() {
   const [products] = useState<Product[]>(() => getStored(STORAGE_KEYS.PRODUCTS, initialProducts));

@@ -1,8 +1,7 @@
 import { useState, useMemo } from "react";
 import { Layout } from "@/components/layout";
 import { getStored, STORAGE_KEYS, Installment, Client, initialClients } from "@/lib/mock-data";
-import { format, isToday, isTomorrow, isBefore, isAfter, parseISO, startOfDay, addDays } from "date-fns";
-import { ptBR } from "date-fns/locale";
+import { format, isToday, isTomorrow, isBefore, isAfter, parseISO, startOfDay, addDays, ptBR } from "@/lib/date-utils";
 import { Calendar as CalendarIcon, ChevronRight, AlertCircle, CheckCircle, Clock } from "lucide-react";
 import { useLocation } from "wouter";
 
