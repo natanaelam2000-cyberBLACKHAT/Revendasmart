@@ -111,8 +111,91 @@
   * {
     @apply border-border;
   }
+
+  html {
+    width: 100%;
+    min-height: 100%;
+    background: hsl(var(--background));
+  }
+
   body {
     @apply font-sans antialiased bg-background text-foreground;
+    width: 100%;
+    min-width: 320px;
+    max-width: 100%;
+    min-height: 100dvh;
+    margin: 0;
+    overscroll-behavior-y: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  #root {
+    width: 100%;
+    max-width: 100%;
+    min-height: 100dvh;
+    isolation: isolate;
+  }
+
+  @media (display-mode: standalone) {
+    html,
+    body,
+    #root {
+      min-height: 100dvh;
+    }
+  }
+}
+
+.rs-safe-x {
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
+}
+
+.rs-app-shell,
+.rs-app-frame {
+  width: 100%;
+  min-height: 100dvh;
+  max-width: 100%;
+}
+
+.rs-app-frame {
+  padding-bottom: 7rem;
+}
+
+.rs-app-header {
+  padding-top: max(1.5rem, env(safe-area-inset-top));
+}
+
+.rs-bottom-nav-edge {
+  padding-top: 0.5rem;
+  padding-left: max(0.5rem, env(safe-area-inset-left));
+  padding-right: max(0.5rem, env(safe-area-inset-right));
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+
+.rs-sidebar-safe {
+  padding-top: max(1.75rem, env(safe-area-inset-top));
+  padding-left: max(1.25rem, env(safe-area-inset-left));
+}
+
+@media (min-width: 640px) {
+  .rs-safe-x {
+    padding-left: max(1.5rem, env(safe-area-inset-left));
+    padding-right: max(1.5rem, env(safe-area-inset-right));
+  }
+}
+
+@media (min-width: 1024px) {
+  .rs-safe-x {
+    padding-left: max(2rem, env(safe-area-inset-left));
+    padding-right: max(2rem, env(safe-area-inset-right));
+  }
+
+  .rs-app-frame {
+    padding-bottom: 2rem;
+  }
+
+  .rs-app-header {
+    padding-top: 1.5rem;
   }
 }
 

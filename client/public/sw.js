@@ -1,4 +1,4 @@
-const CACHE_NAME = 'revenda-smart-static-v6';
+const CACHE_NAME = 'revenda-smart-static-v7';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',

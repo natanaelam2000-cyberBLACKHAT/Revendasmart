@@ -26,9 +26,9 @@ export function Layout({ children, title, hideBottomNav = false }: LayoutProps) 
     : location.startsWith(href) || (href === "/settings" && location === "/subscribe");
 
   return (
-    <div className="min-h-screen bg-slate-50 text-foreground">
+    <div className="rs-app-shell bg-slate-50 text-foreground">
       {!hideBottomNav && (
-        <aside className="hidden lg:flex fixed inset-y-0 left-0 z-50 w-64 flex-col bg-white border-r border-border/60 px-5 py-7">
+        <aside className="rs-sidebar-safe hidden lg:flex fixed inset-y-0 left-0 z-50 w-64 flex-col bg-white border-r border-border/60 px-5 py-7">
           <Link href="/">
             <div className="flex items-center gap-3 px-2 mb-9 cursor-pointer">
               <div className="w-11 h-11 rounded-2xl bg-primary text-white flex items-center justify-center font-black shadow-lg shadow-primary/20">R</div>
@@ -64,9 +64,9 @@ export function Layout({ children, title, hideBottomNav = false }: LayoutProps) 
       )}
 
       <div className={!hideBottomNav ? "lg:pl-64" : ""}>
-        <div className="min-h-screen w-full max-w-[1200px] mx-auto bg-background lg:bg-transparent pb-28 lg:pb-8">
+        <div className="rs-app-frame bg-background lg:bg-transparent">
           {title && (
-            <header className="px-4 sm:px-6 lg:px-8 pt-6 pb-4 bg-white/95 lg:bg-transparent sticky top-0 z-40 border-b lg:border-b-0 border-border/50 backdrop-blur">
+            <header className="rs-safe-x rs-app-header pb-4 bg-white/95 lg:bg-transparent sticky top-0 z-40 border-b lg:border-b-0 border-border/50 backdrop-blur">
               <h1 className="text-xl lg:text-2xl font-black">{title}</h1>
             </header>
           )}
@@ -76,7 +76,7 @@ export function Layout({ children, title, hideBottomNav = false }: LayoutProps) 
 
       {!hideBottomNav && (
         <nav
-          className="lg:hidden fixed bottom-0 left-0 right-0 z-50 border-t border-border/70 bg-white/95 px-2 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-10px_34px_rgba(15,23,42,0.10)] backdrop-blur-xl"
+          className="rs-bottom-nav-edge lg:hidden fixed bottom-0 left-0 right-0 z-50 border-t border-border/70 bg-white/95 shadow-[0_-10px_34px_rgba(15,23,42,0.10)] backdrop-blur-xl"
           aria-label="Navegação principal"
         >
           <div className="mx-auto grid max-w-xl grid-cols-6 gap-1">
