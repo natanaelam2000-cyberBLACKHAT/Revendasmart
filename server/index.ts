@@ -4,7 +4,8 @@ import express, { type Request, Response, NextFunction } from "express";
 import { createServer } from "http";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
-import { logError, logInfo, logWarn, requestIdMiddleware, sanitizeForLog } from "./logger";
+import { getFirebaseAdmin } from "./firebase-admin-init";
+import { buildHealthPayload, buildReadinessPayload, buildSafeErrorBody, classifySafeError, logError, logInfo, logWarn, requestIdMiddleware, sanitizeForLog, type ReadinessCheckStatus, type SafeHttpErrorCode } from "./logger";
 
 if (process.env.NODE_ENV !== "production") {
   loadDotenv();
@@ -14,6 +15,49 @@ const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const REQUEST_BODY_LIMIT = "100kb";
 const URL_ENCODED_PARAMETER_LIMIT = 100;
 const SENTRY_DSN = process.env.SENTRY_DSN?.trim();
+
+
+
+function normalizeObservedPath(pathname: string): string {
+  return pathname
+    .split("/")
+    .map((segment) => {
+      if (!segment) return segment;
+      if (/^\d+$/.test(segment)) return ":number";
+      if (/^[0-9a-f]{24,}$/i.test(segment)) return ":id";
+      if (/^[a-zA-Z0-9_-]{28,}$/.test(segment)) return ":id";
+      if (/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(segment)) return ":id";
+      return segment;
+    })
+    .join("/");
+}
+
+function getObservedRoute(req: Request): string {
+  const routePath = (req as any).route?.path;
+  if (typeof routePath === "string") {
+    return `${req.baseUrl ?? ""}${routePath}` || req.path;
+  }
+  return normalizeObservedPath(req.path);
+}
+
+function getSafeHttpErrorCode(status: number): SafeHttpErrorCode | undefined {
+  if (status < 400) return undefined;
+  return classifySafeError(status, undefined).code;
+}
+
+async function withTimeout<T>(operation: () => Promise<T> | T, timeoutMs: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(operation),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error("Readiness check timed out"), { safeCode: "EXTERNAL_SERVICE_ERROR" })), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 if (SENTRY_DSN) {
   Sentry.init({
@@ -174,12 +218,18 @@ app.use((req, res, next) => {
     const responseBytes = typeof contentLength === "string" || typeof contentLength === "number"
       ? String(contentLength)
       : "unknown";
+    const safeErrorCode = typeof res.locals.safeErrorCode === "string"
+      ? res.locals.safeErrorCode
+      : getSafeHttpErrorCode(res.statusCode);
     logInfo("http.request", {
       requestId: req.requestId,
       method: req.method,
-      route: requestPath,
+      route: getObservedRoute(req),
       status: res.statusCode,
       durationMs: duration,
+      eventType: "http_request",
+      result: res.statusCode >= 400 ? "error" : "success",
+      ...(safeErrorCode ? { errorCode: safeErrorCode } : {}),
       responseBytes,
     });
   });
@@ -187,15 +237,11 @@ app.use((req, res, next) => {
   next();
 });
 
-// Healthcheck endpoint
-app.get("/health", (req, res) => {
-  const baseHealth = {
-    status: "ok",
-    timestamp: new Date().toISOString(),
-    requestId: req.requestId,
-  };
+// Healthcheck endpoint: process liveness only.
+app.get(["/health", "/api/health"], (req, res) => {
+  const baseHealth = buildHealthPayload(req.requestId);
 
-  if (IS_PRODUCTION) {
+  if (req.path === "/api/health" || IS_PRODUCTION) {
     return res.status(200).json(baseHealth);
   }
 
@@ -207,6 +253,29 @@ app.get("/health", (req, res) => {
       heapTotal: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
     },
   });
+});
+
+// Readiness endpoint: lightweight dependency checks, no writes and no external payment calls.
+app.get("/api/readiness", async (req, res) => {
+  const checks: Record<string, ReadinessCheckStatus> = { firebaseAdmin: "failed" };
+
+  try {
+    await withTimeout(() => {
+      getFirebaseAdmin();
+      checks.firebaseAdmin = "ok";
+    }, 500);
+  } catch (error) {
+    logWarn("http.readiness_check_failed", {
+      requestId: req.requestId,
+      dependency: "firebaseAdmin",
+      errorCode: "READINESS_CHECK_FAILED",
+    });
+  }
+
+  const readiness = buildReadinessPayload(req.requestId, checks);
+  if (readiness.statusCode === 503) res.locals.safeErrorCode = "EXTERNAL_SERVICE_ERROR";
+
+  return res.status(readiness.statusCode).json(readiness.body);
 });
 
 (async () => {
@@ -237,15 +306,15 @@ app.get("/health", (req, res) => {
       const technicalMessage = err instanceof Error
         ? err.message
         : "Internal Server Error";
-      const publicMessage = process.env.NODE_ENV === "production"
-        ? "Ocorreu um erro temporário."
-        : technicalMessage;
+      const safeError = classifySafeError(status, err);
+      res.locals.safeErrorCode = safeError.code;
 
       logError("http.unhandled_error", err, {
         requestId: req.requestId,
         method: req.method,
-        route: req.path,
+        route: getObservedRoute(req),
         status,
+        errorCode: safeError.code,
         message: technicalMessage,
       });
 
@@ -253,7 +322,7 @@ app.get("/health", (req, res) => {
         return next(err);
       }
 
-      return res.status(status).json({ message: publicMessage });
+      return res.status(status).json(buildSafeErrorBody(status, err, req.requestId));
     });
 
     if (process.env.NODE_ENV === "production") {

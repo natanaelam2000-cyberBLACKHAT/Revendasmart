@@ -8,10 +8,17 @@ import { defaultSettings } from "../client/src/lib/mock-data";
 import { buildProductCreatePayload } from "../client/src/lib/product-payload";
 import { MARKETING_AD_THEME_IDS, buildMarketingAdConfig, buildMarketingAdMessage, buildMarketingWhatsappUrl, formatMarketingPrice, normalizeMarketingAdConfig, sanitizeMarketingHistoryPayload } from "../client/src/lib/marketing-ad";
 import { validateMercadoPagoAccessTokenForEnvironment } from "../server/mercadopago-environment";
+import { buildHealthPayload, buildReadinessPayload, buildSafeErrorBody, classifySafeError, createRequestId, normalizeRequestId, requestIdMiddleware, sanitizeForLog } from "../server/logger";
 
 const read = (path: string) => fs.readFileSync(path, "utf8");
 const routes = read("server/routes.ts");
 const serverIndex = read("server/index.ts");
+const loggerSource = read("server/logger.ts");
+const observabilityDocs = read("docs/OBSERVABILITY.md");
+const tokenEfficiencyDocs = read("docs/TOKEN_EFFICIENCY_SKILLS.md");
+const minimalChangeSkill = read(".codex/skills/minimal-change-engineering/SKILL.md");
+const conciseOutputSkill = read(".codex/skills/concise-technical-output/SKILL.md");
+const terminalOutputSkill = read(".codex/skills/terminal-output-efficiency/SKILL.md");
 const publicCatalog = read("client/src/pages/public-catalog.tsx");
 const catalog = read("client/src/pages/catalog.tsx");
 const productsPage = read("client/src/pages/products.tsx");
@@ -215,6 +222,18 @@ assert.equal(buildProductSearchBackfillPatch({ ...indexedProductSearchRecord }),
 assert.ok(buildProductSearchBackfillPatch({ name: "Perfume Novo", brand: "Marca", category: "Perfumes", barcode: "0012345678905", productType: "Cosmeticos" }));
 assert.match(productSearch, /SERVER_SIDE_PRODUCT_SEARCH_ENABLED = false/);
 assert.match(productSearch, /CATALOG_SERVER_SEARCH_ENABLED = SERVER_SIDE_PRODUCT_SEARCH_ENABLED/);
+
+for (const skill of [minimalChangeSkill, conciseOutputSkill, terminalOutputSkill]) {
+  assert.match(skill, /defaultMode: REVIEW_ONLY/);
+  assert.match(skill, /Não fazer commit/);
+  assert.match(skill, /Não fazer deploy/);
+  assert.match(skill, /Não imprimir segredos/);
+  assert.match(skill, /production/);
+}
+assert.match(tokenEfficiencyDocs, /RTK foi analisado/);
+assert.match(tokenEfficiencyDocs, /não foi instalado/i);
+assert.match(tokenEfficiencyDocs, /Bonsai Memory foi avaliado/);
+assert.match(tokenEfficiencyDocs, /Medições locais reais/);
 assert.match(productPayload, /buildProductSearchFields/);
 assert.match(recentProducts, /rememberRecentProductId/);
 assert.match(recentProducts, /readRecentProductIds/);
@@ -739,6 +758,91 @@ assert.match(mercadoPagoSandboxDocs, /Não usar token `APP_USR-\*`/);
 assert.match(mercadoPagoSandboxDocs, /Não usar token `TEST-\*` com ambiente de produção/);
 assert.match(mercadoPagoSandboxDocs, /produção não foi acessada/);
 assert.equal(packageJson.scripts["test:mercado-pago:sandbox"], "tsx script/mercado-pago-sandbox-tests.ts");
+
+const generatedRequestId = createRequestId();
+assert.match(generatedRequestId, /^[a-f0-9]{16}$/);
+assert.equal(classifySafeError(400, undefined).code, "VALIDATION_ERROR");
+assert.equal(classifySafeError(401, undefined).code, "UNAUTHENTICATED");
+assert.equal(classifySafeError(403, undefined).code, "FORBIDDEN");
+assert.equal(classifySafeError(404, undefined).code, "NOT_FOUND");
+assert.equal(classifySafeError(409, undefined).code, "CONFLICT");
+assert.equal(classifySafeError(429, undefined).code, "RATE_LIMITED");
+assert.equal(classifySafeError(503, undefined).code, "EXTERNAL_SERVICE_ERROR");
+const safeErrorFixture = buildSafeErrorBody(500, new Error("Database stack SECRET token line"), "req-test-123");
+assert.equal(safeErrorFixture.error.code, "INTERNAL_SERVER_ERROR");
+assert.equal(safeErrorFixture.error.requestId, "req-test-123");
+assert.equal(JSON.stringify(safeErrorFixture).includes("stack"), false);
+assert.equal(JSON.stringify(safeErrorFixture).includes("SECRET"), false);
+const healthFixture = buildHealthPayload("req-health-123");
+assert.equal(healthFixture.status, "ok");
+assert.equal(healthFixture.requestId, "req-health-123");
+assert.match(healthFixture.timestamp, /^\d{4}-\d{2}-\d{2}T/);
+const readinessOkFixture = buildReadinessPayload("req-ready-123", { firebaseAdmin: "ok" });
+assert.equal(readinessOkFixture.statusCode, 200);
+assert.equal(readinessOkFixture.body.status, "ready");
+assert.equal(readinessOkFixture.body.requestId, "req-ready-123");
+assert.deepEqual(readinessOkFixture.body.checks, { firebaseAdmin: "ok" });
+const readinessFailedFixture = buildReadinessPayload("req-ready-456", { firebaseAdmin: "failed" });
+assert.equal(readinessFailedFixture.statusCode, 503);
+assert.equal(readinessFailedFixture.body.status, "degraded");
+assert.equal(readinessFailedFixture.body.requestId, "req-ready-456");
+function runRequestIdMiddlewareForTest(headerValue?: unknown) {
+  const headers: Record<string, unknown> = {};
+  if (headerValue !== undefined) headers["x-request-id"] = headerValue;
+  const req = { headers } as any;
+  const responseHeaders: Record<string, string> = {};
+  const res = { setHeader(name: string, value: string) { responseHeaders[name] = value; } } as any;
+  let nextCalled = false;
+  requestIdMiddleware(req, res, () => { nextCalled = true; });
+  assert.equal(nextCalled, true);
+  assert.equal(responseHeaders["X-Request-Id"], req.requestId);
+  return req.requestId as string;
+}
+assert.match(runRequestIdMiddlewareForTest(), /^[a-f0-9]{16}$/);
+assert.equal(runRequestIdMiddlewareForTest("valid-REQ_123"), "valid-REQ_123");
+assert.match(runRequestIdMiddlewareForTest("bad header with spaces"), /^[a-f0-9]{16}$/);
+const sanitizedLogFixture = JSON.stringify(sanitizeForLog({
+  headers: { authorization: "Bearer TEST-12345678901234567890", cookie: "session=abc" },
+  body: { password: "123456", email: "cliente@example.com", phone: "1199999-8888" },
+  query: { access_token: "APP_USR-12345678901234567890" },
+}));
+assert.equal(sanitizedLogFixture.includes("Bearer TEST-"), false);
+assert.equal(sanitizedLogFixture.includes("session=abc"), false);
+assert.equal(sanitizedLogFixture.includes("123456"), false);
+assert.equal(sanitizedLogFixture.includes("cliente@example.com"), false);
+assert.equal(sanitizedLogFixture.includes("APP_USR-"), false);
+assert.equal(normalizeRequestId("abc-123_DEF:456"), "abc-123_DEF:456");
+assert.equal(normalizeRequestId("short"), null);
+assert.equal(normalizeRequestId("bad header with spaces"), null);
+assert.equal(normalizeRequestId("x".repeat(81)), null);
+assert.match(serverIndex, /app\.use\(requestIdMiddleware\)/);
+assert.match(loggerSource, /res\.setHeader\("X-Request-Id", requestId\)/);
+assert.match(loggerSource, /token\|secret\|password\|senha\|authorization\|cookie/);
+assert.match(loggerSource, /payload\|client_secret\|access\[_-\]\?token\|refresh\[_-\]\?token/);
+const httpRequestLoggerBlock = serverIndex.slice(serverIndex.indexOf('logInfo("http.request"'), serverIndex.indexOf('// Healthcheck endpoint'));
+assert.match(httpRequestLoggerBlock, /eventType:\s*"http_request"/);
+assert.match(httpRequestLoggerBlock, /result:\s*res\.statusCode >= 400 \? "error" : "success"/);
+assert.match(httpRequestLoggerBlock, /errorCode:\s*safeErrorCode/);
+assert.match(httpRequestLoggerBlock, /route:\s*getObservedRoute\(req\)/);
+assert.doesNotMatch(httpRequestLoggerBlock, /authorization|cookie|headers|body|rawBody|query|originalUrl/);
+assert.match(serverIndex, /app\.get\(\["\/health", "\/api\/health"\]/);
+assert.match(serverIndex, /app\.get\("\/api\/readiness"/);
+const readinessBlock = serverIndex.slice(serverIndex.indexOf('app.get("/api/readiness"'), serverIndex.indexOf('(async () =>'));
+assert.match(readinessBlock, /getFirebaseAdmin\(\)/);
+assert.match(readinessBlock, /withTimeout/);
+assert.match(readinessBlock, /buildReadinessPayload\(req\.requestId, checks\)/);
+assert.match(readinessBlock, /res\.status\(readiness\.statusCode\)/);
+assert.match(readinessBlock, /EXTERNAL_SERVICE_ERROR/);
+assert.doesNotMatch(readinessBlock, /MercadoPago|mercadopago|MERCADOPAGO|process\.env/);
+const errorHandlerBlock = serverIndex.slice(serverIndex.indexOf('app.use((err: any'));
+assert.match(errorHandlerBlock, /classifySafeError\(status, err\)/);
+assert.match(errorHandlerBlock, /res\.locals\.safeErrorCode = safeError\.code/);
+assert.match(errorHandlerBlock, /buildSafeErrorBody\(status, err, req\.requestId\)/);
+assert.doesNotMatch(errorHandlerBlock, /stack/);
+assert.match(observabilityDocs, /X-Request-Id/);
+assert.match(observabilityDocs, /Authorization/);
+assert.match(observabilityDocs, /\/api\/health/);
+assert.match(observabilityDocs, /\/api\/readiness/);
 assert.doesNotMatch(mpConnections, /OAuth state (created|consumed) for uid=|OAuth state not found: \$\{nonce\}/);
 assert.match(app, /function PublicRouter/);
 assert.match(app, /PrivateRouter = lazy/);

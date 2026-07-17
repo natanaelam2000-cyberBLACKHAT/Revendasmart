@@ -9,6 +9,82 @@ declare module "express-serve-static-core" {
 
 export type LogContext = Record<string, unknown>;
 
+
+export type SafeHttpErrorCode =
+  | "VALIDATION_ERROR"
+  | "UNAUTHENTICATED"
+  | "FORBIDDEN"
+  | "NOT_FOUND"
+  | "CONFLICT"
+  | "RATE_LIMITED"
+  | "EXTERNAL_SERVICE_ERROR"
+  | "INTERNAL_SERVER_ERROR";
+
+const SAFE_ERROR_MESSAGES: Record<SafeHttpErrorCode, string> = {
+  VALIDATION_ERROR: "Dados inválidos.",
+  UNAUTHENTICATED: "Faça login para continuar.",
+  FORBIDDEN: "Você não tem permissão para acessar este recurso.",
+  NOT_FOUND: "Recurso não encontrado.",
+  CONFLICT: "Não foi possível concluir por conflito de estado.",
+  RATE_LIMITED: "Muitas tentativas. Aguarde um momento e tente novamente.",
+  EXTERNAL_SERVICE_ERROR: "Serviço externo temporariamente indisponível.",
+  INTERNAL_SERVER_ERROR: "Ocorreu um erro temporário.",
+};
+
+export function classifySafeError(status: number, err: unknown): { code: SafeHttpErrorCode; message: string } {
+  const explicitCode = typeof (err as any)?.safeCode === "string" ? (err as any).safeCode : "";
+  if (explicitCode && Object.prototype.hasOwnProperty.call(SAFE_ERROR_MESSAGES, explicitCode)) {
+    const code = explicitCode as SafeHttpErrorCode;
+    return { code, message: SAFE_ERROR_MESSAGES[code] };
+  }
+
+  if (status === 400 || status === 422) return { code: "VALIDATION_ERROR", message: SAFE_ERROR_MESSAGES.VALIDATION_ERROR };
+  if (status === 401) return { code: "UNAUTHENTICATED", message: SAFE_ERROR_MESSAGES.UNAUTHENTICATED };
+  if (status === 403) return { code: "FORBIDDEN", message: SAFE_ERROR_MESSAGES.FORBIDDEN };
+  if (status === 404) return { code: "NOT_FOUND", message: SAFE_ERROR_MESSAGES.NOT_FOUND };
+  if (status === 409) return { code: "CONFLICT", message: SAFE_ERROR_MESSAGES.CONFLICT };
+  if (status === 429) return { code: "RATE_LIMITED", message: SAFE_ERROR_MESSAGES.RATE_LIMITED };
+  if (status === 502 || status === 503 || status === 504) {
+    return { code: "EXTERNAL_SERVICE_ERROR", message: SAFE_ERROR_MESSAGES.EXTERNAL_SERVICE_ERROR };
+  }
+  return { code: "INTERNAL_SERVER_ERROR", message: SAFE_ERROR_MESSAGES.INTERNAL_SERVER_ERROR };
+}
+
+export function buildSafeErrorBody(status: number, err: unknown, requestId: string | undefined) {
+  const safeError = classifySafeError(status, err);
+  return {
+    message: safeError.message,
+    error: {
+      code: safeError.code,
+      message: safeError.message,
+      requestId: requestId ?? "unknown",
+    },
+  };
+}
+
+export type ReadinessCheckStatus = "ok" | "failed";
+
+export function buildHealthPayload(requestId: string | undefined) {
+  return {
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    requestId,
+  };
+}
+
+export function buildReadinessPayload(requestId: string | undefined, checks: Record<string, ReadinessCheckStatus>) {
+  const ready = Object.values(checks).every((status) => status === "ok");
+  return {
+    statusCode: ready ? 200 : 503,
+    body: {
+      status: ready ? "ready" : "degraded",
+      timestamp: new Date().toISOString(),
+      requestId,
+      checks,
+    },
+  };
+}
+
 type LogLevel = "info" | "warn" | "error";
 
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
@@ -162,11 +238,11 @@ export function logError(event: string, error?: unknown, context: LogContext = {
   });
 }
 
-function createRequestId(): string {
+export function createRequestId(): string {
   return randomUUID().replace(/-/g, "").slice(0, 16);
 }
 
-function normalizeRequestId(value: unknown): string | null {
+export function normalizeRequestId(value: unknown): string | null {
   const raw = Array.isArray(value) ? value[0] : value;
   if (typeof raw !== "string") return null;
   const trimmed = raw.trim();

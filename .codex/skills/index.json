@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.0.0",
-  "generatedAt": "2026-07-12T17:44:49Z",
+  "generatedAt": "2026-07-17T03:23:25Z",
   "project": "Revenda Smart",
   "externalRepository": "https://github.com/mukul975/Anthropic-Cybersecurity-Skills",
   "externalCommit": "673da1f3b0b7be34ffc9624ef3858fe45f1c3bed",
@@ -193,6 +193,22 @@
         "security",
         "tier-s",
         "webhook"
+      ]
+    },
+    {
+      "name": "concise-technical-output",
+      "tier": "Token Efficiency",
+      "source": "Revenda Smart token efficiency skill",
+      "path": ".codex/skills/concise-technical-output/SKILL.md",
+      "riskLevel": "low",
+      "defaultMode": "REVIEW_ONLY",
+      "category": "architecture",
+      "tags": [
+        "architecture",
+        "communication",
+        "reporting",
+        "revendasmart",
+        "token-efficiency"
       ]
     },
     {
@@ -567,6 +583,22 @@
       "riskLevel": "high",
       "defaultMode": "REVIEW_ONLY",
       "source": "Revenda Smart Performance Engineering Skills"
+    },
+    {
+      "name": "minimal-change-engineering",
+      "tier": "Token Efficiency",
+      "source": "Revenda Smart token efficiency skill",
+      "path": ".codex/skills/minimal-change-engineering/SKILL.md",
+      "riskLevel": "low",
+      "defaultMode": "REVIEW_ONLY",
+      "category": "architecture",
+      "tags": [
+        "architecture",
+        "minimal-change",
+        "revendasmart",
+        "safe-fix",
+        "token-efficiency"
+      ]
     },
     {
       "name": "monitoring-real-user-performance",
@@ -1505,6 +1537,22 @@
         "revendasmart",
         "second-sweep",
         "security"
+      ]
+    },
+    {
+      "name": "terminal-output-efficiency",
+      "tier": "Token Efficiency",
+      "source": "Revenda Smart token efficiency skill",
+      "path": ".codex/skills/terminal-output-efficiency/SKILL.md",
+      "riskLevel": "low",
+      "defaultMode": "REVIEW_ONLY",
+      "category": "architecture",
+      "tags": [
+        "architecture",
+        "diagnostics",
+        "revendasmart",
+        "terminal",
+        "token-efficiency"
       ]
     },
     {
