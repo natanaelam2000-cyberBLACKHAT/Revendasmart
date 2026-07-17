@@ -1,29 +1,15 @@
-/* Marketing ad preview: CSS keeps repeated visual classes out of the Marketing JS chunk. */
-.ma24{position:relative;margin-inline:auto;aspect-ratio:1/1;width:100%;max-width:520px;overflow:hidden;border:1px solid;border-radius:2rem;padding:1rem;box-shadow:0 20px 42px hsl(var(--foreground)/.14)}
+/* Marketing ad preview: clean premium product card + real WhatsApp CTA. */
+.ma24{position:relative;margin-inline:auto;aspect-ratio:1/1;width:100%;max-width:560px;overflow:hidden;border:1px solid;border-radius:2rem;background:linear-gradient(135deg,#fff,#f8fbff 56%,#eaf3ff);padding:1rem;box-shadow:0 20px 42px hsl(var(--foreground)/.12)}
 @media (min-width:640px){.ma24{padding:1.25rem}}
-.ma12{max-width:260px;border-radius:1.5rem;padding:.75rem}
-.ma22{pointer-events:none;position:absolute;border-radius:999px;filter:blur(32px)}
-.ma7{right:-3rem;top:-3rem;width:9rem;height:9rem;opacity:.25}
-.ma0{left:-2.5rem;bottom:-3.5rem;width:10rem;height:10rem;opacity:.2}
-.ma17{position:relative;display:flex;height:100%;flex-direction:column;border:1px solid;border-radius:1.6rem;padding:1rem;box-shadow:0 6px 20px hsl(var(--foreground)/.06)}
-.ma14,.ma6,.ma13{display:flex;align-items:center;gap:.75rem}
-.ma14,.ma13{justify-content:space-between}
-.ma6{min-width:0;gap:.625rem}
-.ma20{display:flex;height:2.75rem;width:2.75rem;flex-shrink:0;align-items:center;justify-content:center;overflow:hidden;border:1px solid;border-radius:1rem;background:white;font-size:.875rem;font-weight:900;box-shadow:0 1px 3px hsl(var(--foreground)/.08)}
-.ma20 img,.ma4 img{height:100%;width:100%;object-fit:cover}
-.ma3{min-width:0}.ma5{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.875rem;font-weight:900;line-height:1.15}
-@media (min-width:640px){.ma5{font-size:1rem}}
-.ma10,.ma1{font-size:.625rem;font-weight:900;letter-spacing:.16em;text-transform:uppercase}
-.ma18{flex-shrink:0;border-radius:999px;padding:.375rem .75rem;color:white;font-size:.625rem;font-weight:900;text-transform:uppercase;letter-spacing:.04em;box-shadow:0 1px 3px hsl(var(--foreground)/.08)}
-.ma8{margin-top:.75rem;border-radius:1rem;padding:.5rem .75rem;text-align:center;color:white;font-size:.75rem;font-weight:900;letter-spacing:.04em;text-transform:uppercase;box-shadow:0 1px 3px hsl(var(--foreground)/.08)}
-.ma21{margin-top:.75rem;display:grid;min-height:0;flex:1;grid-template-rows:minmax(0,1fr) auto;gap:.75rem}
-.ma4{position:relative;overflow:hidden;border:1px solid;border-radius:1.5rem;background:white;padding:.75rem;box-shadow:inset 0 2px 8px hsl(var(--foreground)/.08)}
-.ma4 img{object-fit:contain}.ma2{display:flex;height:100%;min-height:150px;flex-direction:column;align-items:center;justify-content:center;border-radius:1.25rem;text-align:center;font-size:.75rem;font-weight:700}.ma2 span{margin-bottom:.5rem;font-size:1.875rem}
-.ma11{display:grid;gap:.5rem}.ma16{display:flex;flex-wrap:wrap;gap:.375rem}.ma16 span{border-radius:999px;padding:.25rem .625rem;font-size:.625rem;font-weight:900}
-.ma9{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font-size:1.25rem;font-weight:900;line-height:1.1;letter-spacing:-.025em}
-@media (min-width:640px){.ma9{font-size:1.5rem}.ma15{font-size:2.25rem}}
-.ma19{display:-webkit-box;overflow:hidden;-webkit-line-clamp:1;-webkit-box-orient:vertical;font-size:.75rem;font-weight:700}
-.ma13{align-items:flex-end}.ma15{font-size:1.875rem;font-weight:900;line-height:1}.ma23{max-width:45%;border-radius:1rem;padding:.5rem .75rem;text-align:center;color:white;font-size:.625rem;font-weight:900;line-height:1.2;box-shadow:0 1px 3px hsl(var(--foreground)/.08)}
+.ma12{max-width:280px;border-radius:1.5rem;padding:.75rem}
+.ma17{position:relative;height:100%;overflow:hidden;border-radius:1.6rem;background:rgba(255,255,255,.94);box-shadow:0 10px 30px hsl(var(--foreground)/.08);padding:1rem}
+.ma17:after{content:"";position:absolute;right:-18%;top:18%;width:58%;height:58%;border-radius:999px;background:#2563eb22;pointer-events:none}
+.ma14,.ma6{display:flex;align-items:center}.ma14{position:relative;z-index:1;justify-content:space-between;gap:.75rem}.ma6{min-width:0;gap:.625rem}.ma20{display:flex;height:2.75rem;width:2.75rem;flex-shrink:0;align-items:center;justify-content:center;overflow:hidden;border:1px solid;border-radius:1rem;background:white;font-size:.875rem;font-weight:900;box-shadow:0 1px 3px hsl(var(--foreground)/.08)}
+.ma20 img,.ma4 img{height:100%;width:100%;object-fit:cover}.ma3{min-width:0}.ma5{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.92rem;font-weight:900;line-height:1.15;color:#0f172a}.ma10{font-size:.58rem;font-weight:900;letter-spacing:.16em;text-transform:uppercase;color:#64748b}.ma18{flex-shrink:0;border-radius:999px;padding:.42rem .72rem;color:white;font-size:.58rem;font-weight:900;text-transform:uppercase;letter-spacing:.04em;box-shadow:0 1px 3px hsl(var(--foreground)/.08)}
+.ma21{position:relative;z-index:1;display:grid;height:calc(100% - 3.25rem);grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);align-items:center;gap:.75rem;padding-top:.75rem}.ma11{display:grid;gap:.55rem;align-content:center;min-width:0}.ma8{font-size:.68rem;font-weight:950;letter-spacing:.12em;text-transform:uppercase}.ma9{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font-size:clamp(1.55rem,5.4vw,2.45rem);font-weight:950;line-height:1.02;letter-spacing:-.045em;color:#0f172a}.ma19{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font-size:.72rem;font-weight:700;line-height:1.45;color:#475569}.ma15{font-size:clamp(1.85rem,6vw,2.9rem);font-weight:950;line-height:1;color:#0f172a}
+.ma16{display:grid;gap:.35rem}.ma16 span{display:flex;align-items:center;gap:.42rem;min-width:0;font-size:.64rem;font-weight:850;color:#1e293b}.ma16 b{display:inline-flex;height:1.15rem;width:1.15rem;flex-shrink:0;align-items:center;justify-content:center;border-radius:999px;background:#2563eb;color:white;font-size:.65rem;line-height:1}.ma16 .ma25 b{background:#22c55e}.ma23{margin-top:.25rem;display:inline-flex;min-height:2.75rem;max-width:100%;align-items:center;justify-content:center;border-radius:1rem;background:#2563eb;padding:.65rem .95rem;color:white;font-size:.78rem;font-weight:950;line-height:1.15;box-shadow:0 14px 24px rgba(37,99,235,.24);transition:transform .16s ease,box-shadow .16s ease}.ma23:disabled{opacity:.72}.ma23:not(:disabled):active{transform:scale(.98)}
+.ma4{position:relative;min-width:0;overflow:hidden;border:1px solid;border-radius:1.4rem;background:rgba(255,255,255,.74);padding:.75rem;box-shadow:inset 0 2px 8px hsl(var(--foreground)/.07)}.ma4 img{object-fit:contain}.ma2{display:flex;height:100%;min-height:210px;flex-direction:column;align-items:center;justify-content:center;border-radius:1.25rem;text-align:center;font-size:.75rem;font-weight:800;background:#eff6ff}.ma2 span{margin-bottom:.5rem;font-size:1.875rem}
+@media (max-width:430px){.ma24{max-width:min(100%,390px);border-radius:1.5rem;padding:.75rem}.ma17{padding:.78rem}.ma20{height:2.3rem;width:2.3rem}.ma5{font-size:.78rem}.ma18{font-size:.5rem;padding:.35rem .55rem}.ma21{grid-template-columns:1fr .88fr;gap:.45rem;height:calc(100% - 2.7rem)}.ma8{font-size:.55rem}.ma9{font-size:1.28rem}.ma19{font-size:.62rem}.ma15{font-size:1.55rem}.ma16{gap:.22rem}.ma16 span{font-size:.52rem}.ma16 b{height:.95rem;width:.95rem;font-size:.52rem}.ma23{min-height:2.25rem;border-radius:.78rem;font-size:.62rem;padding:.5rem .65rem}.ma4{padding:.45rem;border-radius:1rem}.ma2{min-height:140px}}
 
 
 /* Marketing page compact classes reduce repeated Tailwind strings in the route chunk. */

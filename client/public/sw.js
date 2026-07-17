@@ -1,9 +1,9 @@
-const CACHE_NAME = 'revenda-smart-static-v5';
+const CACHE_NAME = 'revenda-smart-static-v6';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
   '/manifest.json',
-  '/login-reference-official.png',
+  '/login-hero-approved.png',
   '/logo-revenda-smart-official.png',
   '/logo-revenda-smart-symbol-official.png'
 ];
@@ -16,7 +16,7 @@ function isStaticAssetRequest(request, url) {
   return isSameOrigin(url) && (
     STATIC_CACHEABLE_DESTINATIONS.has(request.destination)
     || url.pathname.startsWith('/assets/')
-    || url.pathname === '/login-reference-official.png'
+    || url.pathname === '/login-hero-approved.png'
     || url.pathname === '/logo-revenda-smart-official.png'
     || url.pathname === '/logo-revenda-smart-symbol-official.png'
   );

@@ -14,7 +14,7 @@ import { MarketingStats } from "@/components/MarketingStats";
 import { MarketingAdCanvas } from "@/components/MarketingAdCanvas";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { createMarketingCard, downloadMarketingCard } from "@/lib/marketing-card";
-import { MARKETING_AD_THEME_IDS, MARKETING_AD_THEMES, MARKETING_TEMPLATES, buildMarketingAdConfig, buildMarketingAdMessage, buildMarketingVolumeText, formatMarketingPrice, normalizeMarketingAdConfig, parseMarketingPriceNumber, resolveMarketingTemplate, type MarketingAdThemeId, type MarketingBackgroundStyle, type MarketingTemplateId } from "@/lib/marketing-ad";
+import { MARKETING_AD_THEME_IDS, MARKETING_AD_THEMES, MARKETING_TEMPLATES, buildMarketingAdConfig, buildMarketingAdMessage, buildMarketingVolumeText, buildMarketingWhatsappUrl, formatMarketingPrice, normalizeMarketingAdConfig, parseMarketingPriceNumber, resolveMarketingTemplate, type MarketingAdThemeId, type MarketingBackgroundStyle, type MarketingTemplateId } from "@/lib/marketing-ad";
 import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
 
 async function copyTextWithFallback(text: string) {
@@ -34,6 +34,7 @@ async function copyTextWithFallback(text: string) {
 }
 
 const MARKETING_AD_THEME_STORAGE_KEY = "rs:marketing-ad-theme";
+const WHATSAPP_SETUP_MESSAGE = "Cadastre o WhatsApp da sua loja para receber pedidos por este card.";
 
 function readStoredMarketingTheme(): MarketingAdThemeId {
   if (typeof window === "undefined") return "brand";
@@ -69,6 +70,7 @@ export default function Marketing() {
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [includePayment, setIncludePayment] = useState(false);
   const [activeTab, setActiveTab] = useState<"generator" | "history">("generator");
+  const [showWhatsappSetupNotice, setShowWhatsappSetupNotice] = useState(false);
   const [catalogCopied, setCatalogCopied] = useState(false);
   const generatedKeys = useRef(new Set<string>());
   const copyResetTimeoutRef = useRef<number | null>(null);
@@ -110,6 +112,7 @@ export default function Marketing() {
   const currentTemplate = resolveMarketingTemplate(template);
   const currentImageUrl = selectedItem ? getProductImage(selectedItem) || undefined : undefined;
   const storeLogoUrl = String(settings.storeIdentity?.logoUrl || settings.storeLogo || "").trim();
+  const storeWhatsappNumber = String(settings.whatsapp || (settings as typeof settings & { whatsappNumber?: string; phone?: string }).whatsappNumber || (settings as typeof settings & { whatsappNumber?: string; phone?: string }).phone || "").replace(/\D/g, "");
   const currentAdConfig = useMemo(() => {
     if (!selectedItem) return null;
     return buildMarketingAdConfig({
@@ -141,6 +144,7 @@ export default function Marketing() {
     });
   }, [adTheme, backgroundStyle, catalogUrl, ctaText, currentImageUrl, currentTemplate.headline, currentTemplate.id, note, priceOverride, selectedItem, settings.primaryColor, settings.storeName, showBrand, showStockStatus, showVolume, showWhatsAppCta, storeLogoUrl]);
   const generatedText = useMemo(() => currentAdConfig ? buildMarketingAdMessage(currentAdConfig, { includePayment, pixKey: settings.pixKey, paymentLink: settings.paymentLink }) : "", [currentAdConfig, includePayment, settings.paymentLink, settings.pixKey]);
+  const previewWhatsappUrl = useMemo(() => generatedText ? buildMarketingWhatsappUrl({ phone: storeWhatsappNumber, message: generatedText }) : "", [generatedText, storeWhatsappNumber]);
 
   const [copied, setCopied] = useState(false);
   const currentPrice = currentAdConfig?.priceText || formatMarketingPrice(0);
@@ -184,10 +188,20 @@ export default function Marketing() {
     trackAnalyticsEvent("ad_text_copied", { item_id: productId });
   };
 
+  const openWhatsappSettings = () => { window.location.href = "/settings?tab=store"; };
+  const notifyMissingStoreWhatsapp = () => {
+    setShowWhatsappSetupNotice(true);
+    notifyError(WHATSAPP_SETUP_MESSAGE);
+  };
+
   const handleShare = async () => {
+    if (!storeWhatsappNumber || !previewWhatsappUrl) {
+      notifyMissingStoreWhatsapp();
+      return;
+    }
     await registerAction("shared");
-    notifyInfo("Compartilhamento aberto no WhatsApp.");
-    window.open(`https://wa.me/?text=${encodeURIComponent(generatedText)}`, "_blank", "noopener,noreferrer");
+    notifyInfo("WhatsApp da loja aberto.");
+    window.open(previewWhatsappUrl, "_blank", "noopener,noreferrer");
     const productId = selectedProductId || selectedKitId;
     const user = getFirebaseAuth()?.currentUser;
     logTelemetryEvent("ad_shared", { productId, channel: "whatsapp" }, user?.uid);
@@ -249,9 +263,14 @@ export default function Marketing() {
     notifySuccess("Anúncio copiado.");
   };
   const repeatShare = async (entry: MarketingHistoryEntry) => {
+    const whatsappUrl = buildMarketingWhatsappUrl({ phone: storeWhatsappNumber, message: entry.generatedText });
+    if (!storeWhatsappNumber || !whatsappUrl) {
+      notifyMissingStoreWhatsapp();
+      return;
+    }
     await recordAction(repeatPayload(entry, "shared"));
-    window.open(`https://wa.me/?text=${encodeURIComponent(entry.generatedText)}`, "_blank", "noopener,noreferrer");
-    notifyInfo("Compartilhamento aberto no WhatsApp.");
+    window.open(whatsappUrl, "_blank", "noopener,noreferrer");
+    notifyInfo("WhatsApp da loja aberto.");
   };
   const repeatDownload = async (entry: MarketingHistoryEntry) => {
     await downloadEntryCard(entry);
@@ -585,7 +604,13 @@ export default function Marketing() {
                       Editando anúncio salvo. Troque tema ou texto à vontade; o histórico só será substituído quando você confirmar.
                     </div>
                   )}
-                  <MarketingAdCanvas config={currentAdConfig} />
+                  <MarketingAdCanvas config={currentAdConfig} onCtaClick={handleShare} />
+                  {showWhatsappSetupNotice && !storeWhatsappNumber && (
+                    <div className="mk35" role="status">
+                      <p>{WHATSAPP_SETUP_MESSAGE}</p>
+                      <button type="button" onClick={openWhatsappSettings} className="mt-2 underline underline-offset-4" data-testid="button-configure-store-whatsapp">Configurar WhatsApp da loja</button>
+                    </div>
+                  )}
                   <div className="mk18">
                     <p className="mk53">Texto para WhatsApp</p>
                     <div className="mk32">{generatedText}</div>

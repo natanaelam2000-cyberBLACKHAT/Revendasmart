@@ -1,59 +1,67 @@
 import { buildMarketingAdVisualModel, type MarketingAdConfig } from "@/lib/marketing-ad";
 
-export function MarketingAdCanvas({ config, compact = false }: { config: MarketingAdConfig; compact?: boolean }) {
+export function MarketingAdCanvas({ config, compact = false, onCtaClick }: { config: MarketingAdConfig; compact?: boolean; onCtaClick?: () => void }) {
   const model = buildMarketingAdVisualModel(config);
-  const { theme, template, imageSrc, logoSrc, storeInitial, chips, ctaText } = model;
-  const isDark = config.backgroundStyle === "dark-premium" || theme.darkMode;
+  const { theme, imageSrc, logoSrc, storeInitial, features, ctaText, description, badgeText } = model;
+  const canClickCta = Boolean(onCtaClick && ctaText);
 
   return (
     <article
       data-testid="marketing-ad-canvas"
       className={`ma24${compact ? " ma12" : ""}`}
-      style={{ background: theme.background, borderColor: theme.ring, color: theme.foreground }}
+      style={{ borderColor: theme.ring, color: theme.foreground }}
       aria-label={`Preview do anúncio ${config.productName}`}
     >
-      <div className="ma22 ma7" style={{ backgroundColor: theme.accent }} />
-      <div className="ma22 ma0" style={{ backgroundColor: theme.cta }} />
-      <div
-        className="ma17"
-        style={{ backgroundColor: isDark ? "rgba(15,23,42,0.82)" : "rgba(255,255,255,0.88)", borderColor: theme.ring }}
-      >
+      <div className="ma17">
         <header className="ma14">
           <div className="ma6">
             <div className="ma20" style={{ borderColor: theme.ring, color: theme.accent }}>
               {logoSrc ? <img src={logoSrc} alt="Logo da loja" loading="lazy" decoding="async" /> : storeInitial}
             </div>
             <div className="ma3">
-              <p className="ma5" style={{ color: theme.foreground }}>{config.storeName}</p>
-              <p className="ma10" style={{ color: theme.muted }}>Revenda Smart</p>
+              <p className="ma5">{config.storeName}</p>
+              <p className="ma10">Revenda Smart</p>
             </div>
           </div>
-          <span className="ma18" style={{ backgroundColor: theme.accent }}>{template.emoji} Oferta</span>
+          <span className="ma18" style={{ backgroundColor: theme.accent }}>{badgeText}</span>
         </header>
-        <div className="ma8" style={{ backgroundColor: theme.dark }}>{config.headline}</div>
+
         <div className="ma21">
+          <section className="ma11">
+            <p className="ma8" style={{ color: theme.accent }}>{config.headline}</p>
+            <h3 className="ma9">{config.productName}</h3>
+            <p className="ma19">{description}</p>
+            <p className="ma15" style={{ color: theme.foreground }}>{config.priceText}</p>
+            {features.length > 0 && (
+              <div className="ma16" aria-label="Características do anúncio">
+                {features.map((feature) => (
+                  <span key={feature.text} className={feature.highlight ? "ma25" : ""}>
+                    <b>{feature.icon}</b>{feature.text}
+                  </span>
+                ))}
+              </div>
+            )}
+            {ctaText && (
+              <button
+                type="button"
+                className="ma23"
+                onClick={onCtaClick}
+                disabled={!canClickCta}
+                aria-label={`${ctaText} sobre ${config.productName}`}
+              >
+                {ctaText}
+              </button>
+            )}
+          </section>
+
           <div className="ma4" style={{ borderColor: theme.ring }}>
             {imageSrc ? (
               <img src={imageSrc} alt={config.productName} loading="lazy" decoding="async" />
             ) : (
-              <div className="ma2" style={{ backgroundColor: theme.soft, color: theme.muted }}>
+              <div className="ma2" style={{ color: theme.muted }}>
                 <span>📦</span>Produto sem imagem
               </div>
             )}
-          </div>
-          <div className="ma11">
-            <div className="ma16">
-              {chips.map(chip => <span key={chip[0]} style={{ backgroundColor: chip[1] ? theme.cta : theme.soft, color: chip[1] ? "white" : theme.dark }}>{chip[0]}</span>)}
-            </div>
-            <h3 className="ma9" style={{ color: theme.foreground }}>{config.productName}</h3>
-            {config.note && <p className="ma19" style={{ color: theme.muted }}>{config.note}</p>}
-            <div className="ma13">
-              <div>
-                <p className="ma1" style={{ color: theme.muted }}>Por apenas</p>
-                <p className="ma15" style={{ color: theme.accent }}>{config.priceText}</p>
-              </div>
-              {ctaText && <div className="ma23" style={{ backgroundColor: theme.cta }}>{ctaText}</div>}
-            </div>
           </div>
         </div>
       </div>

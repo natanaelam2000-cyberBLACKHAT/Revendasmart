@@ -159,40 +159,48 @@ export default function Login() {
   // };
 
   return (
-    <main className="rs-login-shell">
-      <section className="rs-login-frame" aria-label="Entrar no Revenda Smart">
-        <img
-          src="/login-reference-official.png"
-          alt=""
-          className="rs-login-reference"
-          width={900}
-          height={1600}
-          decoding="async"
-          fetchPriority="high"
-          aria-hidden="true"
-        />
-
-        <div className="rs-login-accessible-copy">
-          <h1>Sua revenda, do seu jeito, com controle total.</h1>
-          <p>Personalize seu app, acompanhe tudo em tempo real e tome decisões com confiança para vender mais.</p>
-          <ul>
-            <li>App do seu jeito: personalize cores, logo e mensagens.</li>
-            <li>Controle total da sua revenda: vendas, estoque, clientes e financeiro.</li>
-            <li>Resultados em tempo real: acompanhe indicadores e evolua.</li>
-            <li>Gestão inteligente: alertas, metas e oportunidades.</li>
-            <li>Segurança e confiança: seus dados protegidos sempre.</li>
-          </ul>
+    <main className="rs-login-page">
+      <section className="rs-login-card" aria-label="Entrar no Revenda Smart">
+        <div className="rs-login-hero" aria-describedby="rs-login-value-prop">
+          <img
+            src="/login-hero-approved.png"
+            alt=""
+            className="rs-login-hero-image"
+            width={935}
+            height={1236}
+            decoding="async"
+            fetchPriority="high"
+            aria-hidden="true"
+          />
+          <div id="rs-login-value-prop" className="rs-login-sr-only">
+            <h1>Sua revenda, do seu jeito, com controle total.</h1>
+            <p>Personalize seu app, acompanhe tudo em tempo real e tome decisões com confiança para vender mais.</p>
+            <ul>
+              <li>App do seu jeito: personalize cores, logo e mensagens.</li>
+              <li>Controle total da sua revenda: vendas, estoque, clientes e financeiro.</li>
+              <li>Resultados em tempo real: acompanhe indicadores e evolua.</li>
+              <li>Gestão inteligente: alertas, metas e oportunidades.</li>
+              <li>Segurança e confiança: seus dados protegidos sempre.</li>
+            </ul>
+          </div>
         </div>
 
-        <form onSubmit={handleLogin} className="rs-login-overlay-form" aria-label="Entrar no Revenda Smart">
-          <label className="rs-login-field rs-login-email-field">
-            <span className="sr-only">E-mail</span>
+        <form onSubmit={handleLogin} className="rs-login-form" aria-label="Entrar no Revenda Smart">
+          {(error || success) && (
+            <div className="rs-login-message-area" aria-live="polite">
+              {error && <p className="rs-login-alert rs-login-alert-error" data-testid="text-login-error">{error}</p>}
+              {success && <p className="rs-login-alert rs-login-alert-success" data-testid="text-login-success">{success}</p>}
+            </div>
+          )}
+
+          <label className="rs-login-field">
+            <span className="rs-login-sr-only">E-mail</span>
             <Mail aria-hidden="true" />
             <input
               required
               type="email"
               inputMode="email"
-              autoComplete="username"
+              autoComplete="email"
               autoCapitalize="none"
               enterKeyHint="next"
               value={email}
@@ -203,8 +211,8 @@ export default function Login() {
             />
           </label>
 
-          <label className="rs-login-field rs-login-password-field">
-            <span className="sr-only">Senha</span>
+          <label className="rs-login-field">
+            <span className="rs-login-sr-only">Senha</span>
             <LockKeyhole aria-hidden="true" />
             <input
               required
@@ -249,18 +257,15 @@ export default function Login() {
             </button>
           </div>
 
-          {error && <p className="rs-login-alert rs-login-alert-error" data-testid="text-login-error">{error}</p>}
-          {success && <p className="rs-login-alert rs-login-alert-success" data-testid="text-login-success">{success}</p>}
-
           <button type="submit" disabled={loading} className="rs-login-submit">
             <span>{loading ? "Entrando..." : "Entrar agora"}</span>
             {loading ? <span className="rs-login-spinner" aria-hidden="true" /> : <ArrowRight aria-hidden="true" />}
           </button>
-        </form>
 
-        <p className="rs-login-signup">
-          Não tem conta? <Link href="/signup">Criar conta</Link>
-        </p>
+          <p className="rs-login-signup">
+            Não tem conta? <Link href="/signup">Criar conta</Link>
+          </p>
+        </form>
       </section>
     </main>
   );
