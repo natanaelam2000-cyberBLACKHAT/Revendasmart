@@ -96,6 +96,14 @@ const firebaseClient = read("client/src/lib/firebase.ts");
 const buildScript = read("script/build.ts");
 const firebaseEmulatorTests = read("script/firebase-emulator-tests.ts");
 const firebaseEmulatorDocs = read("docs/FIREBASE_EMULATOR_TESTING.md");
+const capacitorConfig = read("capacitor.config.ts");
+const androidBuildGradle = read("android/app/build.gradle");
+const androidManifest = read("android/app/src/main/AndroidManifest.xml");
+const androidStrings = read("android/app/src/main/res/values/strings.xml");
+const androidStyles = read("android/app/src/main/res/values/styles.xml");
+const androidStylesV28 = read("android/app/src/main/res/values-v28/styles.xml");
+const androidMainActivity = read("android/app/src/main/java/com/revendasmart/app/MainActivity.java");
+const androidDocs = read("docs/ANDROID_CAPACITOR.md");
 
 function productIndexSignature(fields: Array<Record<string, string>>) {
   return fields.map((field) => `${field.fieldPath}:${field.arrayConfig || field.order}`).join("|");
@@ -1119,6 +1127,51 @@ assert.match(serviceWorker, /request\.mode === 'navigate'/);
 assert.match(serviceWorker, /cache\.put\(request, response\.clone\(\)\)/);
 assert.doesNotMatch(serviceWorker, /\/api\//);
 assert.ok(vercel.rewrites.some((rule: any) => rule.source === "/u/:storeSlug" && rule.destination === "/index.html"));
+
+
+// Android Capacitor foundation guardrails.
+assert.match(capacitorConfig, /appId:\s*"com\.revendasmart\.app"/);
+assert.match(capacitorConfig, /appName:\s*"Revenda Smart"/);
+assert.match(capacitorConfig, /webDir:\s*"dist\/public"/);
+assert.equal(packageJson.dependencies?.["@capacitor/core"]?.replace(/[\^~]/g, ""), "8.4.2");
+assert.equal(packageJson.dependencies?.["@capacitor/android"]?.replace(/[\^~]/g, ""), "8.4.2");
+assert.equal(packageJson.devDependencies?.["@capacitor/cli"]?.replace(/[\^~]/g, ""), "8.4.2");
+assert.equal(packageJson.scripts?.["android:copy"], "npm run build && cap copy android");
+assert.equal(packageJson.scripts?.["android:sync"], "npm run build && cap sync android");
+assert.equal(packageJson.scripts?.["android:open"], "cap open android");
+assert.equal(packageJson.scripts?.["android:doctor"], "cap doctor android");
+assert.match(androidBuildGradle, /namespace\s*=\s*"com\.revendasmart\.app"/);
+assert.match(androidBuildGradle, /applicationId\s+"com\.revendasmart\.app"/);
+assert.match(androidBuildGradle, /androidx\.core:core:/);
+assert.match(androidManifest, /android\.permission\.INTERNET/);
+assert.match(androidManifest, /android:theme="@style\/AppTheme\.NoActionBarLaunch"/);
+assert.match(androidManifest, /android:exported="true"/);
+assert.match(androidManifest, /android:icon="@mipmap\/ic_launcher"/);
+assert.match(androidManifest, /android:roundIcon="@mipmap\/ic_launcher_round"/);
+assert.match(androidStrings, /<string name="app_name">Revenda Smart<\/string>/);
+assert.match(androidStrings, /<string name="title_activity_main">Revenda Smart<\/string>/);
+assert.match(androidStrings, /<string name="package_name">com\.revendasmart\.app<\/string>/);
+assert.match(androidStrings, /<string name="custom_url_scheme">com\.revendasmart\.app<\/string>/);
+assert.match(androidStyles, /Theme\.SplashScreen/);
+assert.match(androidStyles, /windowSplashScreenBackground/);
+assert.match(androidStyles, /windowSplashScreenAnimatedIcon/);
+assert.match(androidStyles, /@color\/splashBackground/);
+assert.match(androidStyles, /android:statusBarColor">@android:color\/transparent/);
+assert.match(androidStyles, /android:navigationBarColor">@android:color\/transparent/);
+assert.match(androidStyles, /android:windowLightStatusBar">true/);
+assert.match(androidStyles, /android:windowLightNavigationBar">true/);
+assert.match(androidStylesV28, /android:windowLayoutInDisplayCutoutMode">shortEdges/);
+assert.match(androidMainActivity, /package com\.revendasmart\.app;/);
+assert.match(androidMainActivity, /WindowCompat\.setDecorFitsSystemWindows\(window, false\)/);
+assert.match(androidMainActivity, /setStatusBarColor\(Color\.TRANSPARENT\)/);
+assert.match(androidMainActivity, /setNavigationBarColor\(Color\.TRANSPARENT\)/);
+assert.match(androidDocs, /com\.revendasmart\.app/);
+assert.match(androidDocs, /não gera APK\/AAB/i);
+assert.match(androidDocs, /keystore/i);
+assert.match(androidDocs, /Play Store/i);
+assert.match(androidDocs, /testes posteriores no Galaxy/i);
+assert.match(androidDocs, /android:doctor/i);
+assert.match(androidDocs, /google-services\.json/i);
 
 // Referral/Premium security regression checks.
 const trackReferralStart = routes.indexOf('app.post("/api/referral/track-event"');
