@@ -165,6 +165,7 @@ function parseCorsOrigins(value: string | undefined): string[] {
 
 const allowedCorsOrigins = new Set([
   "https://revendasmart.vercel.app",
+  "https://localhost", // Android Capacitor WebView origin
   "http://localhost:3000",
   "http://localhost:5000",
   ...parseCorsOrigins(process.env.FRONTEND_URL),

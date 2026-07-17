@@ -23,10 +23,13 @@
     "test:firebase": "npm_config_cache=/tmp/revendasmart-npm-cache npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore,storage \"npm run test:firebase:run\"",
     "test:mercado-pago:sandbox": "tsx script/mercado-pago-sandbox-tests.ts",
     "android:add": "cap add android",
-    "android:copy": "npm run build && cap copy android",
-    "android:sync": "npm run build && cap sync android",
+    "android:copy": "node scripts/android/sync-web.mjs copy",
+    "android:sync": "node scripts/android/sync-web.mjs sync",
     "android:open": "cap open android",
-    "android:doctor": "cap doctor android"
+    "android:doctor": "cap doctor android",
+    "android:build:debug": "node scripts/android/build-debug.mjs",
+    "android:install:debug": "node scripts/android/install-debug.mjs",
+    "android:logcat": "node scripts/android/logcat.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.2",

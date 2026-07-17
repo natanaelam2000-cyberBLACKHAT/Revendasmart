@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getFirebaseIdToken } from "@/lib/firebase";
 import { getCurrentUserId } from "@/lib/mock-data";
+import { getApiUrl } from "@/lib/api-config";
 
 interface MigrationStatus {
   ready: boolean;
@@ -53,7 +54,7 @@ export function useMigrationStatus(): MigrationStatus {
         const headers: Record<string, string> = { "Content-Type": "application/json" };
         if (token) headers["Authorization"] = `Bearer ${token}`;
 
-        const response = await fetch(`/api/user/migration-status/${userId}`, { headers });
+        const response = await fetch(getApiUrl(`/api/user/migration-status/${userId}`), { headers });
         
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);

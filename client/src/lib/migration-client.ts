@@ -4,6 +4,7 @@
  */
 
 import { getFirebaseIdToken } from "@/lib/firebase";
+import { getApiUrl } from "@/lib/api-config";
 
 /**
  * Call the validation endpoint with local data
@@ -32,7 +33,7 @@ export async function validateLegacyData(
     };
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
-    const response = await fetch(`/api/user/data/validate/${userId}`, {
+    const response = await fetch(getApiUrl(`/api/user/data/validate/${userId}`), {
       method: "POST",
       headers,
       body: JSON.stringify({ data }),
@@ -79,7 +80,7 @@ export async function checkMigrationReadiness(userId: string): Promise<{
     };
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
-    const response = await fetch(`/api/user/migration-status/${userId}`, { headers });
+    const response = await fetch(getApiUrl(`/api/user/migration-status/${userId}`), { headers });
 
     if (!response.ok) {
       return {

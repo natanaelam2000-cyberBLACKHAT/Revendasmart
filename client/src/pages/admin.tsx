@@ -126,7 +126,7 @@ export default function AdminMetrics() {
     try {
       const token = await auth?.currentUser?.getIdToken();
       if (!token) return;
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ""}/api/admin/global-config`, {
+      const response = await fetch(getApiUrl("/api/admin/global-config"), {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await readJsonResponse(response);
@@ -146,7 +146,7 @@ export default function AdminMetrics() {
     try {
       const token = await auth?.currentUser?.getIdToken();
       if (!token) throw new Error("Sem autenticação");
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ""}/api/admin/global-config`, {
+      const response = await fetch(getApiUrl("/api/admin/global-config"), {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({

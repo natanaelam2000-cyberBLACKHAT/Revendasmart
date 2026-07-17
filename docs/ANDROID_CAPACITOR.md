@@ -45,7 +45,7 @@ O app Android empacota a aplicação web gerada pelo Vite dentro da WebView Capa
 - Configuração Capacitor: `capacitor.config.ts`
 - Projeto Android nativo: `android/`
 
-Não usar `server.url`, URL da Vercel, live reload permanente ou hostname externo como conteúdo principal do app Android.
+Não usar configuração remota de servidor do Capacitor, URL da Vercel, live reload permanente ou hostname externo como conteúdo principal do app Android.
 
 ## Scripts
 
@@ -204,3 +204,21 @@ npm run android:sync
 npm run android:doctor
 git diff --check
 ```
+
+## Roteamento de APIs no Android
+
+No APK Capacitor, os arquivos locais são carregados pela WebView em uma origem própria, normalmente semelhante a `https://localhost`. Por isso, chamadas relativas para `/api` não bastam: elas tentariam atingir a origem local da WebView em vez do backend público.
+
+O build Android usa explicitamente:
+
+```text
+VITE_API_BASE_URL=https://revendasmart.vercel.app
+```
+
+Essa URL pública não é segredo. Ela é injetada pelo script `npm run android:sync`, que executa um build web com a variável definida e valida que o pacote gerado contém o domínio público esperado.
+
+No site hospedado na Vercel, quando `VITE_API_BASE_URL` não está definida, o app usa `window.location.origin`, preservando a mesma origem.
+
+No desenvolvimento web local, o app também usa `window.location.origin`. Para trocar o domínio futuramente, altere o valor padrão em `scripts/android/sync-web.mjs` ou defina `VITE_API_BASE_URL` explicitamente no ambiente antes do sync.
+
+Não usar configuração remota de servidor do Capacitor, live reload permanente ou URL da Vercel como configuração remota do Capacitor de produção. O Android deve empacotar assets locais e chamar APIs por HTTPS.

@@ -10,6 +10,7 @@ import { MARKETING_AD_THEME_IDS, buildMarketingAdConfig, buildMarketingAdMessage
 import { validateMercadoPagoAccessTokenForEnvironment } from "../server/mercadopago-environment";
 import { buildHealthPayload, buildReadinessPayload, buildSafeErrorBody, classifySafeError, createRequestId, normalizeRequestId, requestIdMiddleware, sanitizeForLog } from "../server/logger";
 import { ApiError, apiRequest, buildApiErrorDisplayMessage, formatApiSupportCode } from "../client/src/lib/api-client";
+import { buildApiUrl, normalizeApiBaseUrl, resolveApiBaseUrl } from "../client/src/lib/api-config";
 
 const read = (path: string) => fs.readFileSync(path, "utf8");
 const routes = read("server/routes.ts");
@@ -104,6 +105,12 @@ const androidStyles = read("android/app/src/main/res/values/styles.xml");
 const androidStylesV28 = read("android/app/src/main/res/values-v28/styles.xml");
 const androidMainActivity = read("android/app/src/main/java/com/revendasmart/app/MainActivity.java");
 const androidDocs = read("docs/ANDROID_CAPACITOR.md");
+const androidDebugDocs = read("docs/ANDROID_DEBUG_TESTING.md");
+const androidGitignore = read("android/.gitignore");
+const androidBuildDebugScript = read("scripts/android/build-debug.mjs");
+const androidInstallDebugScript = read("scripts/android/install-debug.mjs");
+const androidLogcatScript = read("scripts/android/logcat.mjs");
+const androidSyncWebScript = read("scripts/android/sync-web.mjs");
 
 function productIndexSignature(fields: Array<Record<string, string>>) {
   return fields.map((field) => `${field.fieldPath}:${field.arrayConfig || field.order}`).join("|");
@@ -254,6 +261,15 @@ function jsonApiResponse(body: unknown, status = 200, headers: Record<string, st
 function textApiResponse(body: string, status: number, headers: Record<string, string> = {}) {
   return new Response(body, { status, headers });
 }
+
+assert.equal(normalizeApiBaseUrl("https://revendasmart.vercel.app/"), "https://revendasmart.vercel.app");
+assert.equal(resolveApiBaseUrl("https://revendasmart.vercel.app/", "https://localhost"), "https://revendasmart.vercel.app");
+assert.equal(resolveApiBaseUrl(undefined, "https://revendasmart.vercel.app"), "https://revendasmart.vercel.app");
+assert.equal(buildApiUrl("https://revendasmart.vercel.app/", "/api/test"), "https://revendasmart.vercel.app/api/test");
+assert.equal(buildApiUrl("https://revendasmart.vercel.app/", "api/test"), "https://revendasmart.vercel.app/api/test");
+assert.equal(buildApiUrl("", "/api/test"), "/api/test");
+assert.equal(buildApiUrl("https://revendasmart.vercel.app", "https://example.com/api/test"), "https://example.com/api/test");
+
 
 const apiSuccess = await apiRequest<{ ok: true; value: number }>("/api/test-success", {
   fetchImpl: async (input) => {
@@ -1136,8 +1152,8 @@ assert.match(capacitorConfig, /webDir:\s*"dist\/public"/);
 assert.equal(packageJson.dependencies?.["@capacitor/core"]?.replace(/[\^~]/g, ""), "8.4.2");
 assert.equal(packageJson.dependencies?.["@capacitor/android"]?.replace(/[\^~]/g, ""), "8.4.2");
 assert.equal(packageJson.devDependencies?.["@capacitor/cli"]?.replace(/[\^~]/g, ""), "8.4.2");
-assert.equal(packageJson.scripts?.["android:copy"], "npm run build && cap copy android");
-assert.equal(packageJson.scripts?.["android:sync"], "npm run build && cap sync android");
+assert.equal(packageJson.scripts?.["android:copy"], "node scripts/android/sync-web.mjs copy");
+assert.equal(packageJson.scripts?.["android:sync"], "node scripts/android/sync-web.mjs sync");
 assert.equal(packageJson.scripts?.["android:open"], "cap open android");
 assert.equal(packageJson.scripts?.["android:doctor"], "cap doctor android");
 assert.match(androidBuildGradle, /namespace\s*=\s*"com\.revendasmart\.app"/);
@@ -1172,6 +1188,62 @@ assert.match(androidDocs, /Play Store/i);
 assert.match(androidDocs, /testes posteriores no Galaxy/i);
 assert.match(androidDocs, /android:doctor/i);
 assert.match(androidDocs, /google-services\.json/i);
+
+assert.match(packageJson.scripts?.["android:sync"] ?? "", /scripts\/android\/sync-web\.mjs sync/);
+assert.match(packageJson.scripts?.["android:copy"] ?? "", /scripts\/android\/sync-web\.mjs copy/);
+assert.match(androidSyncWebScript, /DEFAULT_ANDROID_API_BASE_URL = "https:\/\/revendasmart\.vercel\.app"/);
+assert.match(androidSyncWebScript, /VITE_API_BASE_URL/);
+assert.match(androidSyncWebScript, /https:/);
+assert.match(androidSyncWebScript, /localhost/);
+assert.match(androidSyncWebScript, /FORBIDDEN_BUNDLE_MARKERS/);
+assert.match(androidSyncWebScript, /pathToFileURL/);
+assert.match(androidBuildDebugScript, /npm", \["run", "android:sync"\]|npm\.cmd", \["run", "android:sync"\]/);
+assert.match(serverIndex, /"https:\/\/localhost", \/\/ Android Capacitor WebView origin/);
+assert.match(serverIndex, /Access-Control-Allow-Headers[\s\S]*Authorization/);
+assert.match(serverIndex, /Access-Control-Allow-Methods[\s\S]*OPTIONS/);
+assert.match(serverIndex, /Access-Control-Allow-Credentials[\s\S]*true/);
+assert.doesNotMatch(serverIndex, /Access-Control-Allow-Origin", "\*"/);
+assert.match(androidDocs, /VITE_API_BASE_URL=https:\/\/revendasmart\.vercel\.app/);
+assert.match(androidDebugDocs, /VITE_API_BASE_URL=https:\/\/revendasmart\.vercel\.app/);
+const { normalizeAndroidApiBaseUrl } = await import("../scripts/android/sync-web.mjs");
+assert.equal(normalizeAndroidApiBaseUrl("https://revendasmart.vercel.app/"), "https://revendasmart.vercel.app");
+for (const badAndroidApiBaseUrl of ["", "http://revendasmart.vercel.app", "https://localhost", "https://127.0.0.1", "not-a-url"]) {
+  assert.throws(() => normalizeAndroidApiBaseUrl(badAndroidApiBaseUrl));
+}
+assert.doesNotMatch(androidDocs, /server\.url|http:\/\/localhost|usesCleartextTraffic/);
+
+assert.equal(packageJson.scripts?.["android:build:debug"], "node scripts/android/build-debug.mjs");
+assert.equal(packageJson.scripts?.["android:install:debug"], "node scripts/android/install-debug.mjs");
+assert.equal(packageJson.scripts?.["android:logcat"], "node scripts/android/logcat.mjs");
+assert.match(androidGitignore, /^local\.properties$/m);
+assert.match(androidGitignore, /^\.gradle\/$/m);
+assert.match(androidGitignore, /^build\/$/m);
+assert.match(androidGitignore, /^app\/src\/main\/assets\/public$/m);
+assert.match(androidGitignore, /^\*\.apk$/m);
+assert.match(androidGitignore, /^\*\.aab$/m);
+assert.match(androidGitignore, /^\*\.jks$/m);
+assert.match(androidGitignore, /^\*\.keystore$/m);
+assert.match(androidGitignore, /^google-services\.json$/m);
+assert.doesNotMatch(androidManifest, /usesCleartextTraffic="true"/);
+assert.doesNotMatch(androidManifest, /android\.permission\.(CAMERA|RECORD_AUDIO|ACCESS_FINE_LOCATION|READ_CONTACTS|SEND_SMS|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|POST_NOTIFICATIONS)/);
+assert.doesNotMatch(capacitorConfig, /server\.url|url:\s*["']https?:\/\//);
+assert.doesNotMatch(capacitorConfig, /localhost|127\.0\.0\.1|cleartext/i);
+assert.doesNotMatch(androidBuildGradle, /storePassword|keyPassword|signingConfig\s+release/);
+assert.doesNotMatch(androidBuildDebugScript, /assembleRelease|bundleRelease|signing|keystore/i);
+assert.doesNotMatch(androidInstallDebugScript, /assembleRelease|bundleRelease|signing|keystore/i);
+assert.doesNotMatch(androidLogcatScript, /adb logcat\s*[`"']?\s*$/);
+assert.match(androidBuildDebugScript, /assembleDebug/);
+assert.match(androidBuildDebugScript, /ANDROID_HOME.*ANDROID_SDK_ROOT|ANDROID_SDK_ROOT.*ANDROID_HOME/s);
+assert.match(androidBuildDebugScript, /menos de 1 GB livre/);
+assert.match(androidInstallDebugScript, /ANDROID_SERIAL/);
+assert.match(androidInstallDebugScript, /nenhum aparelho autorizado/);
+assert.match(androidLogcatScript, /com\.revendasmart\.app/);
+assert.match(androidDebugDocs, /Windows \+ Android Studio/);
+assert.match(androidDebugDocs, /Checklist funcional no Galaxy/);
+assert.match(androidDebugDocs, /android\/app\/build\/outputs\/apk\/debug\/app-debug\.apk/);
+assert.doesNotMatch(androidDebugDocs, /server\.url|http:\/\/localhost|usesCleartextTraffic/);
+assert.match(androidDebugDocs, /não gerou APK/i);
+assert.match(androidDebugDocs, /configuração remota de servidor do Capacitor/);
 
 // Referral/Premium security regression checks.
 const trackReferralStart = routes.indexOf('app.post("/api/referral/track-event"');
