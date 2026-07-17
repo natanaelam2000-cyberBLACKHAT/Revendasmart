@@ -33,6 +33,11 @@ import { getFirebaseAdmin } from "./firebase-admin-init";
 import type { SubscriptionStatus, GlobalConfig } from "../shared/monetization";
 import { DEFAULT_GLOBAL_CONFIG } from "../shared/monetization";
 import { logError, logInfo, logWarn } from "./logger";
+import {
+  maskMercadoPagoExternalId,
+  normalizeMercadoPagoEnvironment,
+  validateMercadoPagoAccessTokenForEnvironment,
+} from "./mercadopago-environment";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -42,6 +47,11 @@ const WEBHOOK_SECRET = process.env.MERCADOPAGO_WEBHOOK_SECRET?.trim() ?? "";
 const WEBHOOK_MAX_AGE_MS = 5 * 60 * 1000;
 const APP_BASE_URL = process.env.APP_BASE_URL ?? "https://revendasmart-backend-164193806378.us-central1.run.app";
 const FRONTEND_URL = process.env.FRONTEND_URL ?? "https://revendasmart.vercel.app";
+const MERCADO_PAGO_ENV = normalizeMercadoPagoEnvironment(process.env.MERCADO_PAGO_ENV);
+const MP_CREDENTIAL_VALIDATION = validateMercadoPagoAccessTokenForEnvironment(
+  CENTRAL_ACCESS_TOKEN,
+  MERCADO_PAGO_ENV,
+);
 
 // Premium subscription price in BRL (monthly)
 const PREMIUM_PRICE_BRL = parseFloat(process.env.PREMIUM_PRICE_BRL ?? "19.90");
@@ -49,12 +59,15 @@ const PREMIUM_PLAN_NAME = "RevendaSmart Premium";
 
 logInfo("subscriptions.initialized", {
   credentialConfigured: Boolean(CENTRAL_ACCESS_TOKEN),
+  credentialValid: MP_CREDENTIAL_VALIDATION.ok,
+  credentialMode: MP_CREDENTIAL_VALIDATION.ok ? MP_CREDENTIAL_VALIDATION.mode : MP_CREDENTIAL_VALIDATION.code,
+  mercadoPagoEnvironment: MERCADO_PAGO_ENV,
   premiumPriceConfigured: Number.isFinite(PREMIUM_PRICE_BRL),
 });
 
 const mpClient = new MercadoPagoConfig({
-accessToken: CENTRAL_ACCESS_TOKEN,
-options: { timeout: 15000 },
+  accessToken: MP_CREDENTIAL_VALIDATION.ok ? CENTRAL_ACCESS_TOKEN : "",
+  options: { timeout: 15000 },
 });
 
 function normalizeDetails(details: unknown[]): unknown {
@@ -83,6 +96,40 @@ function logSubError(op: string, uid: string | null, msg: string, ctx?: Record<s
     uid,
     ...(ctx ?? {}),
   });
+}
+
+type SubscriptionCredentialProblem =
+  | "MERCADOPAGO_NOT_CONFIGURED"
+  | "PRODUCTION_TOKEN_IN_SANDBOX"
+  | "SANDBOX_TOKEN_IN_PRODUCTION"
+  | "UNKNOWN_SANDBOX_TOKEN";
+
+function getSubscriptionCredentialProblem(): SubscriptionCredentialProblem | null {
+  if (!CENTRAL_ACCESS_TOKEN) return "MERCADOPAGO_NOT_CONFIGURED";
+  if (!MP_CREDENTIAL_VALIDATION.ok) return MP_CREDENTIAL_VALIDATION.code;
+  return null;
+}
+
+function sendSubscriptionCredentialError(
+  res: Response,
+  operation: "create" | "cancel" | "sync-now" | "webhook",
+  uid?: string | null,
+): boolean {
+  const credentialProblem = getSubscriptionCredentialProblem();
+  if (!credentialProblem) return false;
+
+  logWarn("subscriptions.credentials.blocked", {
+    operation,
+    uid: uid ?? null,
+    errorCode: credentialProblem,
+    mercadoPagoEnvironment: MERCADO_PAGO_ENV,
+  });
+
+  res.status(operation === "webhook" ? 503 : 500).json({
+    error: credentialProblem,
+    message: "Serviço de assinatura não está configurado para este ambiente.",
+  });
+  return true;
 }
 
 const SUBSCRIPTION_RATE_LIMIT_WINDOW_MS = 60 * 1000;
@@ -323,8 +370,8 @@ const trialEnd = new Date(
 existingData.trialEndsAt?.toDate?.() ?? existingData.trialEndsAt
 );
 
-if (!Number.isNaN(trialEnd.getTime()) && now < trialEnd) {  
-  return { premiumActive: true, reason: "trial_active" };  
+if (!Number.isNaN(trialEnd.getTime()) && now < trialEnd) {
+  return { premiumActive: true, reason: "trial_active" };
 }
 
 }
@@ -377,20 +424,108 @@ currentPlan: "premium",
 updatedAt: admin.firestore.FieldValue.serverTimestamp(),
 }, { merge: true });
 }
+
+type SubscriptionSyncSource = "webhook" | "sync-now" | "manual";
+type SubscriptionSyncContext = {
+  eventId?: string | null;
+  eventOccurredAt?: Date | string | number | null;
+  source?: SubscriptionSyncSource;
+};
+type SubscriptionSyncResult = {
+  applied: boolean;
+  reason: "applied" | "duplicate_event" | "stale_event";
+  premiumActive?: boolean;
+};
+
+function toDateOrNull(value: unknown): Date | null {
+  if (!value) return null;
+  const rawValue = typeof (value as any)?.toDate === "function" ? (value as any).toDate() : value;
+  const date = rawValue instanceof Date ? rawValue : new Date(rawValue as any);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function isDuplicateSubscriptionEvent(existingData: any, eventId?: string | null): boolean {
+  return Boolean(eventId && existingData?.lastSubscriptionEventId === eventId);
+}
+
+function isOlderSubscriptionEvent(existingData: any, eventOccurredAt?: Date | null): boolean {
+  const existingEventDate = toDateOrNull(existingData?.lastSubscriptionEventAt);
+  if (!existingEventDate || !eventOccurredAt) return false;
+  return eventOccurredAt.getTime() < existingEventDate.getTime();
+}
+
+function getSubscriptionWebhookTimestamp(req: Request): Date | null {
+  const signatureHeader = getSingleHeader(req, "x-signature");
+  const timestampPart = signatureHeader
+    .split(",")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith("ts="));
+  const timestamp = timestampPart?.slice(3) ?? "";
+  if (!/^\d{10,13}$/.test(timestamp)) return null;
+  const numericTimestamp = Number(timestamp);
+  const timestampMs = timestamp.length === 10 ? numericTimestamp * 1000 : numericTimestamp;
+  return Number.isFinite(timestampMs) ? new Date(timestampMs) : null;
+}
+
+function extractMercadoPagoSubscriptionEventDate(mpSub: any, fallbackDate?: Date | null): Date | null {
+  return (
+    toDateOrNull(mpSub?.last_modified) ??
+    toDateOrNull(mpSub?.date_last_updated) ??
+    toDateOrNull(mpSub?.date_updated) ??
+    toDateOrNull(mpSub?.date_created) ??
+    fallbackDate ??
+    null
+  );
+}
+
+function buildSubscriptionEventId(req: Request, body: any, subscriptionId: string): string | null {
+  const requestId = getSingleHeader(req, "x-request-id").trim();
+  const rawNotificationId = body?.id;
+  const notificationId = typeof rawNotificationId === "string" || typeof rawNotificationId === "number"
+    ? String(rawNotificationId).trim()
+    : "";
+  const action = typeof body?.action === "string" ? body.action.trim() : "";
+  const type = typeof body?.type === "string" ? body.type.trim() : "";
+  const parts = [notificationId, action, type, requestId].filter(Boolean);
+  if (parts.length > 0) return parts.join(":");
+  return subscriptionId ? `preapproval:${subscriptionId}` : null;
+}
+
 async function syncPlanDataFromSubscription(
 uid: string,
 subscriptionId: string,
 subscriptionStatus: SubscriptionStatus,
 paymentStatus?: string,
 nextBillingDate?: string | null,
-mercadoPagoPaymentId?: string | null
-) {
+mercadoPagoPaymentId?: string | null,
+eventContext: SubscriptionSyncContext = {},
+): Promise<SubscriptionSyncResult> {
 const admin = getFirebaseAdmin();
 const db = admin.firestore();
 const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
 
 const existingSnap = await planRef.get();
 const existingData = existingSnap.data();
+const eventId = eventContext.eventId?.trim() || null;
+const eventOccurredAt = toDateOrNull(eventContext.eventOccurredAt);
+
+if (isDuplicateSubscriptionEvent(existingData, eventId)) {
+  subInfo("[syncPlanDataFromSubscription] duplicate_event", {
+    subscriptionId: maskMercadoPagoExternalId(subscriptionId),
+    eventId: maskMercadoPagoExternalId(eventId),
+    source: eventContext.source ?? "manual",
+  });
+  return { applied: false, reason: "duplicate_event" };
+}
+
+if (isOlderSubscriptionEvent(existingData, eventOccurredAt)) {
+  subInfo("[syncPlanDataFromSubscription] stale_event", {
+    subscriptionId: maskMercadoPagoExternalId(subscriptionId),
+    eventId: maskMercadoPagoExternalId(eventId),
+    source: eventContext.source ?? "manual",
+  });
+  return { applied: false, reason: "stale_event" };
+}
 
 const premiumReconciliation = reconcilePremiumStatus(
 subscriptionStatus,
@@ -409,7 +544,11 @@ const update: Record<string, any> = {
   currentPlan: premiumActive ? "premium" : "free",
   autoRenew: premiumActive,
   updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  lastSubscriptionSyncSource: eventContext.source ?? "manual",
 };
+
+if (eventId) update.lastSubscriptionEventId = eventId;
+if (eventOccurredAt) update.lastSubscriptionEventAt = eventOccurredAt;
 
 // ✅ AGORA SIM — fora do objeto
 if (premiumActive && !existingData?.premiumOverride && !existingData?.trialActive) {
@@ -423,15 +562,15 @@ subInfo(`[syncPlanDataFromSubscription] reason=${premiumReconciliation.reason}`)
 if (premiumActive) {
 update.premiumExpiresAt = null;
 
-if (!existingData?.premiumStartedAt) {  
-  update.premiumStartedAt = admin.firestore.FieldValue.serverTimestamp();  
-}  
+if (!existingData?.premiumStartedAt) {
+  update.premiumStartedAt = admin.firestore.FieldValue.serverTimestamp();
+}
 
-update.lastPaymentAt = admin.firestore.FieldValue.serverTimestamp();  
-update.canceledAt = null;  
+update.lastPaymentAt = admin.firestore.FieldValue.serverTimestamp();
+update.canceledAt = null;
 
-if (nextBillingDate) {  
-  update.nextBillingAt = new Date(nextBillingDate);  
+if (nextBillingDate) {
+  update.nextBillingAt = new Date(nextBillingDate);
 }
 
 } else {
@@ -441,7 +580,9 @@ update.canceledAt = admin.firestore.FieldValue.serverTimestamp();
 }
 
 await planRef.set(update, { merge: true });
+return { applied: true, reason: "applied", premiumActive };
 }
+
 // ---------------------------------------------------------------------------
 // Global Config Management (system/config)
 // ---------------------------------------------------------------------------
@@ -453,15 +594,15 @@ const db = admin.firestore();
 const configRef = db.collection("system").doc("config");
 const configSnap = await configRef.get();
 
-if (!configSnap.exists) {  
-  return DEFAULT_GLOBAL_CONFIG;  
-}  
+if (!configSnap.exists) {
+  return DEFAULT_GLOBAL_CONFIG;
+}
 
-const data = configSnap.data();  
-return {  
-  premiumOpenAccess: data?.premiumOpenAccess ?? false,  
-  premiumOpenAccessUntil: data?.premiumOpenAccessUntil?.toDate() ?? null,  
-  premiumOpenAccessMessage: data?.premiumOpenAccessMessage ?? null,  
+const data = configSnap.data();
+return {
+  premiumOpenAccess: data?.premiumOpenAccess ?? false,
+  premiumOpenAccessUntil: data?.premiumOpenAccessUntil?.toDate() ?? null,
+  premiumOpenAccessMessage: data?.premiumOpenAccessMessage ?? null,
 };
 
 } catch (error) {
@@ -522,12 +663,7 @@ export function registerSubscriptionRoutes(
 
 subInfo("[subscriptions/create] Request received");
 
-    if (!CENTRAL_ACCESS_TOKEN) {
-      return res.status(500).json({
-        error: "MERCADOPAGO_NOT_CONFIGURED",
-        message: "Serviço de assinatura não está configurado.",
-      });
-    }
+    if (sendSubscriptionCredentialError(res, "create", uid)) return;
 
     try {
       const admin = getFirebaseAdmin();
@@ -605,6 +741,12 @@ subInfo("[subscriptions/create] Request received");
       if (!planData?.subscriptionId) {
         return res.status(404).json({ error: "NO_SUBSCRIPTION" });
       }
+
+      if (normalizeStatus(planData.subscriptionStatus) === "cancelled") {
+        return res.json({ success: true, status: "cancelled", idempotent: true });
+      }
+
+      if (sendSubscriptionCredentialError(res, "cancel", uid)) return;
 
       const preApproval = new PreApproval(mpClient);
       await preApproval.update({
@@ -686,6 +828,74 @@ currentPlan: premiumActive ? "premium" : "free",
       });
     }
   });
+
+  // ✅ SYNC NOW
+  app.post("/api/app-subscription/sync-now", requireAuth, subscriptionMutationRateLimit, async (req: Request, res: Response) => {
+    const uid = (req as any).firebaseUid as string;
+
+    try {
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+      const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+      const planSnap = await planRef.get();
+      const planData = planSnap.data();
+
+      if (!planData?.subscriptionId) {
+        return res.status(404).json({ error: "NO_SUBSCRIPTION" });
+      }
+
+      if (sendSubscriptionCredentialError(res, "sync-now", uid)) return;
+
+      const preApproval = new PreApproval(mpClient);
+      const mpSub = await preApproval.get({ id: planData.subscriptionId });
+      const externalReference = (mpSub as any).external_reference ?? null;
+
+      if (externalReference && String(externalReference) !== uid) {
+        subWarn("[subscriptions/sync-now] Rejected ownership mismatch", {
+          uid,
+          subscriptionId: maskMercadoPagoExternalId(planData.subscriptionId),
+        });
+        return res.status(403).json({ error: "SUBSCRIPTION_OWNERSHIP_MISMATCH" });
+      }
+
+      const status = (mpSub.status ?? planData.subscriptionStatus ?? "pending") as SubscriptionStatus;
+      const paymentStatus =
+        (mpSub as any).first_payment_status ||
+        ((mpSub as any).payer_id ? "approved" : undefined);
+      const nextBillingDate = (mpSub as any).next_payment_date ?? null;
+      const mercadoPagoPaymentId = (mpSub as any).payment_id ?? null;
+
+      const syncResult = await syncPlanDataFromSubscription(
+        uid,
+        planData.subscriptionId,
+        status,
+        paymentStatus,
+        nextBillingDate,
+        mercadoPagoPaymentId,
+        { source: "sync-now" },
+      );
+
+      return res.json({
+        success: true,
+        subscriptionId: planData.subscriptionId,
+        subscriptionStatus: status,
+        paymentStatus: paymentStatus ?? null,
+        applied: syncResult.applied,
+        reason: syncResult.reason,
+        premiumActive: syncResult.premiumActive ?? null,
+      });
+
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logSubError("subscription_sync_now", uid, msg, {
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
+      return res.status(500).json({
+        error: "SUBSCRIPTION_SYNC_ERROR",
+        message: "Não foi possível sincronizar a assinatura agora. Tente novamente em instantes.",
+      });
+    }
+  });
 app.post("/api/app-subscription/webhook", subscriptionWebhookRateLimit, async (req: Request, res: Response) => {
   try {
     if (!WEBHOOK_SECRET) {
@@ -712,6 +922,10 @@ app.post("/api/app-subscription/webhook", subscriptionWebhookRateLimit, async (r
       return res.status(signatureResult.status).json({ error: signatureResult.code });
     }
 
+    if (sendSubscriptionCredentialError(res, "webhook", null)) return;
+
+    const signatureTimestamp = getSubscriptionWebhookTimestamp(req);
+    const eventId = buildSubscriptionEventId(req, body, subscriptionId);
     const preApproval = new PreApproval(mpClient);
     const mpSub = await preApproval.get({ id: subscriptionId });
 
@@ -728,17 +942,19 @@ app.post("/api/app-subscription/webhook", subscriptionWebhookRateLimit, async (r
 
     const nextBillingDate = (mpSub as any).next_payment_date ?? null;
     const mercadoPagoPaymentId = (mpSub as any).payment_id ?? null;
+    const eventOccurredAt = extractMercadoPagoSubscriptionEventDate(mpSub, signatureTimestamp);
 
-    await syncPlanDataFromSubscription(
+    const syncResult = await syncPlanDataFromSubscription(
       uid,
       subscriptionId,
       status,
       paymentStatus,
       nextBillingDate,
-      mercadoPagoPaymentId
+      mercadoPagoPaymentId,
+      { eventId, eventOccurredAt, source: "webhook" },
     );
 
-    return res.status(200).json({ ok: true });
+    return res.status(200).json({ ok: true, applied: syncResult.applied, reason: syncResult.reason });
 
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Unknown error";

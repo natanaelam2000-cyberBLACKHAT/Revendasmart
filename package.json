@@ -20,7 +20,8 @@
     "emulators:start": "npm_config_cache=/tmp/revendasmart-npm-cache npx --yes firebase-tools@15.24.0 emulators:start --project demo-revendasmart --only auth,firestore,storage",
     "emulators:exec": "npm_config_cache=/tmp/revendasmart-npm-cache npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore,storage",
     "test:firebase:run": "tsx script/firebase-emulator-tests.ts",
-    "test:firebase": "npm_config_cache=/tmp/revendasmart-npm-cache npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore,storage \"npm run test:firebase:run\""
+    "test:firebase": "npm_config_cache=/tmp/revendasmart-npm-cache npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore,storage \"npm run test:firebase:run\"",
+    "test:mercado-pago:sandbox": "tsx script/mercado-pago-sandbox-tests.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
