@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getFirebaseAuth } from "@/lib/firebase";
-import { getApiUrl } from "@/lib/api-config";
+import { apiRequest, buildApiErrorDisplayMessage } from "@/lib/api-client";
 
 interface PlanData {
   currentPlan?: string;
@@ -32,24 +32,14 @@ export function usePlanData() {
         return;
       }
 
-      const token = await user.getIdToken();
-
-      const res = await fetch(
-        getApiUrl(`/api/plan/data/${user.uid}`),
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
-
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
+      const json = await apiRequest<PlanData>(`/api/plan/data/${user.uid}`, {
+        auth: true,
+        getAuthToken: () => user.getIdToken(),
+      });
 
       setData(json);
     } catch (e) {
-      console.error("[usePlanData] error:", e);
-      setError(e instanceof Error ? e.message : "Erro ao carregar assinatura");
+      setError(buildApiErrorDisplayMessage(e, "Erro ao carregar assinatura"));
     } finally {
       setLoading(false);
     }

@@ -17,8 +17,7 @@ import {
   CheckCircle,
   ChevronLeft,
 } from "lucide-react";
-import { getFirebaseIdToken } from "@/lib/firebase";
-import { getApiUrl } from "@/lib/api-config";
+import { ApiError, apiRequest, buildApiErrorDisplayMessage } from "@/lib/api-client";
 import { usePlanData } from "@/hooks/usePlanData";
 import { isPremiumFromGlobalAccess, type GlobalConfig, type PlanData as MonetizationPlanData } from "@shared/monetization";
 
@@ -26,6 +25,7 @@ import { isPremiumFromGlobalAccess, type GlobalConfig, type PlanData as Monetiza
 // Types
 // ---------------------------------------------------------------------------
 type PageStatus = "idle" | "loading" | "redirecting" | "success" | "error" | "cancelling" | "cancelled";
+type CreateSubscriptionResponse = { initPoint?: string };
 
 // ---------------------------------------------------------------------------
 // Helper: format date for PT-BR
@@ -132,76 +132,10 @@ export default function Subscribe() {
     setStatus("loading");
     setErrorMsg("");
     try {
-      const token = await getFirebaseIdToken();
-      if (!token) throw new Error("Sessão expirada. Faça login novamente.");
-
-      const apiUrl = getApiUrl("/api/app-subscription/create");
-      const res = await fetch(apiUrl, {
+      const data = await apiRequest<CreateSubscriptionResponse>("/api/app-subscription/create", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        auth: true,
       });
-
-      const data = await res.json();
-      if (!res.ok) {
-        console.error("[subscribe/handleSubscribe] Error response:", data);
-        if (data.error === "ALREADY_SUBSCRIBED") {
-          // Already subscribed — just refresh and go to success view
-          setStatus("success");
-          refresh?.();
-          return;
-        }
-        
-        // Extract message from response (ALWAYS STRING)
-        let errorMsg = "Erro ao criar assinatura";
-        
-        // Priority order: message (string) > details.message > details.error > error field
-        if (typeof data.message === 'string' && data.message.length > 0) {
-          errorMsg = data.message;
-        } else if (typeof data.message === 'object' && data.message !== null) {
-          // Message is object — try to extract string from it
-          console.warn("[subscribe/handleSubscribe] Message is object, attempting to extract:", data.message);
-          
-          if (data.message.message && typeof data.message.message === 'string') {
-            errorMsg = data.message.message;
-          } else if (data.message.error && typeof data.message.error === 'string') {
-            errorMsg = data.message.error;
-          } else if (data.message.details && typeof data.message.details === 'string') {
-            errorMsg = data.message.details;
-          } else {
-            // Last resort: serialize only if reasonable size
-            const serialized = JSON.stringify(data.message);
-            if (serialized.length < 200) {
-              errorMsg = `Erro: ${serialized}`;
-            }
-          }
-        }
-        
-        // Try details field if message didn't work
-        if (errorMsg === "Erro ao criar assinatura" && data.details) {
-          if (data.details.message && typeof data.details.message === 'string') {
-            errorMsg = data.details.message;
-          } else if (data.details.error && typeof data.details.error === 'string') {
-            errorMsg = data.details.error;
-          }
-        }
-        
-        // Add error code if available and not already in message
-        if (data.error && typeof data.error === 'string' && !errorMsg.includes(data.error)) {
-          errorMsg = `${errorMsg} (${data.error})`;
-        }
-        
-        // Final validation — never return [object Object]
-        if (errorMsg === "[object Object]" || errorMsg.includes("[object Object]")) {
-          console.error("[subscribe/handleSubscribe] Invalid error payload received.");
-          errorMsg = "Erro ao criar assinatura. Verifique os logs.";
-        }
-        
-        console.error("[subscribe/handleSubscribe] FINAL ERROR MESSAGE:", errorMsg);
-        throw new Error(errorMsg);
-      }
 
       if (!data.initPoint) throw new Error("Link de checkout não retornado pela API.");
 
@@ -209,9 +143,12 @@ export default function Subscribe() {
       // Redirect to Mercado Pago checkout
       window.location.href = data.initPoint;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Erro inesperado. Tente novamente.";
-      console.error("[subscribe/handleSubscribe] Caught error:", msg);
-      setErrorMsg(msg);
+      if (err instanceof ApiError && err.code === "ALREADY_SUBSCRIBED") {
+        setStatus("success");
+        refresh?.();
+        return;
+      }
+      setErrorMsg(buildApiErrorDisplayMessage(err, "Erro inesperado. Tente novamente."));
       setStatus("error");
     }
   }
@@ -220,27 +157,16 @@ export default function Subscribe() {
     setStatus("cancelling");
     setErrorMsg("");
     try {
-      const token = await getFirebaseIdToken();
-      if (!token) throw new Error("Sessão expirada. Faça login novamente.");
-
-      const res = await fetch(getApiUrl("/api/app-subscription/cancel"), {
+      await apiRequest("/api/app-subscription/cancel", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        auth: true,
       });
-
-      const data = await res.json();
-
-      if (!res.ok) throw new Error(data.message ?? "Erro ao cancelar assinatura.");
 
       setStatus("cancelled");
       setShowCancelConfirm(false);
       refresh?.();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Erro inesperado.";
-      setErrorMsg(msg);
+      setErrorMsg(buildApiErrorDisplayMessage(err, "Erro inesperado."));
       setStatus("error");
     }
   }

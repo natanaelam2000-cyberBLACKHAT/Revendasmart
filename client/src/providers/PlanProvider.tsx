@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { PLAN_CONFIG, type PlanType } from "@shared/monetization";
-import { getApiUrl } from "@/lib/api-config";
+import { apiRequest, buildApiErrorDisplayMessage } from "@/lib/api-client";
 import { getFirebaseAuth } from "@/lib/firebase";
 
 type ActivePlan = PlanType | "admin";
@@ -76,13 +76,10 @@ function resolveLimits(activePlan: ActivePlan): PlanLimits {
 }
 
 async function fetchPlanData(user: User): Promise<PlanData> {
-  const token = await user.getIdToken();
-  const response = await fetch(getApiUrl(`/api/plan/data/${user.uid}`), {
-    headers: { Authorization: `Bearer ${token}` },
+  return await apiRequest<PlanData>(`/api/plan/data/${user.uid}`, {
+    auth: true,
+    getAuthToken: () => user.getIdToken(),
   });
-
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return await response.json() as PlanData;
 }
 
 export function PlanProvider({ children }: { children: ReactNode }) {
@@ -104,8 +101,7 @@ export function PlanProvider({ children }: { children: ReactNode }) {
       const data = await fetchPlanData(user);
       setPlanData(data);
     } catch (err) {
-      console.error("[PlanProvider] error:", err);
-      setError(err instanceof Error ? err.message : "Erro ao carregar assinatura");
+      setError(buildApiErrorDisplayMessage(err, "Erro ao carregar assinatura"));
     } finally {
       setLoading(false);
     }

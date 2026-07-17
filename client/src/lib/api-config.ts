@@ -4,7 +4,7 @@
  * Falls back to window.location.origin in local development
  */
 export function getApiBaseUrl(): string {
-  const viteApiBase = import.meta.env.VITE_API_BASE_URL;
+  const viteApiBase = import.meta.env?.VITE_API_BASE_URL;
   
   if (viteApiBase) {
     return viteApiBase;

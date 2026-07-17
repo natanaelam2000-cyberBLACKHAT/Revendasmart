@@ -9,6 +9,7 @@ import { buildProductCreatePayload } from "../client/src/lib/product-payload";
 import { MARKETING_AD_THEME_IDS, buildMarketingAdConfig, buildMarketingAdMessage, buildMarketingWhatsappUrl, formatMarketingPrice, normalizeMarketingAdConfig, sanitizeMarketingHistoryPayload } from "../client/src/lib/marketing-ad";
 import { validateMercadoPagoAccessTokenForEnvironment } from "../server/mercadopago-environment";
 import { buildHealthPayload, buildReadinessPayload, buildSafeErrorBody, classifySafeError, createRequestId, normalizeRequestId, requestIdMiddleware, sanitizeForLog } from "../server/logger";
+import { ApiError, apiRequest, buildApiErrorDisplayMessage, formatApiSupportCode } from "../client/src/lib/api-client";
 
 const read = (path: string) => fs.readFileSync(path, "utf8");
 const routes = read("server/routes.ts");
@@ -234,6 +235,158 @@ assert.match(tokenEfficiencyDocs, /RTK foi analisado/);
 assert.match(tokenEfficiencyDocs, /não foi instalado/i);
 assert.match(tokenEfficiencyDocs, /Bonsai Memory foi avaliado/);
 assert.match(tokenEfficiencyDocs, /Medições locais reais/);
+
+function jsonApiResponse(body: unknown, status = 200, headers: Record<string, string> = {}) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json", ...headers },
+  });
+}
+
+function textApiResponse(body: string, status: number, headers: Record<string, string> = {}) {
+  return new Response(body, { status, headers });
+}
+
+const apiSuccess = await apiRequest<{ ok: true; value: number }>("/api/test-success", {
+  fetchImpl: async (input) => {
+    assert.match(String(input), /\/api\/test-success$/);
+    return jsonApiResponse({ ok: true, value: 7 });
+  },
+});
+assert.deepEqual(apiSuccess, { ok: true, value: 7 });
+const apiNoBody = await apiRequest<void>("/api/no-content", {
+  fetchImpl: async () => new Response(null, { status: 204 }),
+});
+assert.equal(apiNoBody, undefined);
+try {
+  await apiRequest("/api/error-json-request-id", {
+    fetchImpl: async () => jsonApiResponse({ message: "Falha segura", error: { code: "SAFE_FAILURE", requestId: "req-body-123" } }, 500, { "X-Request-Id": "req-header-999" }),
+  });
+  assert.fail("apiRequest should throw on 500");
+} catch (error) {
+  assert.ok(error instanceof ApiError);
+  assert.equal(error.status, 500);
+  assert.equal(error.code, "SAFE_FAILURE");
+  assert.equal(error.message, "Falha segura");
+  assert.equal(error.requestId, "req-body-123");
+  assert.equal(formatApiSupportCode(error), "Código de atendimento: REQ-BODY-123");
+}
+try {
+  await apiRequest("/api/error-header-request-id", {
+    fetchImpl: async () => jsonApiResponse({ message: "Serviço indisponível" }, 503, { "X-Request-Id": "req-header-123" }),
+  });
+  assert.fail("apiRequest should use X-Request-Id fallback");
+} catch (error) {
+  assert.ok(error instanceof ApiError);
+  assert.equal(error.requestId, "req-header-123");
+  assert.match(buildApiErrorDisplayMessage(error), /Código de atendimento: REQ-HEADER-/);
+}
+try {
+  await apiRequest("/api/error-text", { fetchImpl: async () => textApiResponse("Erro de texto seguro", 500, { "X-Request-Id": "req-text-123" }) });
+  assert.fail("apiRequest should throw on text error");
+} catch (error) {
+  assert.ok(error instanceof ApiError);
+  assert.equal(error.message, "Erro de texto seguro");
+}
+try {
+  await apiRequest("/api/error-html", { fetchImpl: async () => textApiResponse("<html><body>stack</body></html>", 500, { "Content-Type": "text/html", "X-Request-Id": "req-html-123" }) });
+  assert.fail("apiRequest should hide HTML errors");
+} catch (error) {
+  assert.ok(error instanceof ApiError);
+  assert.equal(error.message, "Falha temporária do serviço. Tente novamente.");
+  assert.equal(error.requestId, "req-html-123");
+}
+for (const [status, code] of [[401, "UNAUTHENTICATED"], [403, "FORBIDDEN"], [404, "NOT_FOUND"], [409, "CONFLICT"], [429, "RATE_LIMITED"], [500, "INTERNAL_SERVER_ERROR"]] as const) {
+  try {
+    await apiRequest(`/api/status-${status}`, { fetchImpl: async () => jsonApiResponse({}, status) });
+    assert.fail(`apiRequest should throw on ${status}`);
+  } catch (error) {
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.status, status);
+    assert.equal(error.code, code);
+  }
+}
+let authHeaderSeen = "";
+await apiRequest("/api/auth-required", {
+  auth: true,
+  getAuthToken: () => "FIREBASE_SECRET_TOKEN",
+  fetchImpl: async (_input, init) => {
+    authHeaderSeen = new Headers(init?.headers).get("Authorization") ?? "";
+    return jsonApiResponse({ ok: true });
+  },
+});
+assert.equal(authHeaderSeen, "Bearer FIREBASE_SECRET_TOKEN");
+let authHeaderWithoutAuth = "present";
+await apiRequest("/api/no-auth", {
+  fetchImpl: async (_input, init) => {
+    authHeaderWithoutAuth = new Headers(init?.headers).get("Authorization") ?? "";
+    return jsonApiResponse({ ok: true });
+  },
+});
+assert.equal(authHeaderWithoutAuth, "");
+try {
+  await apiRequest("/api/token-hidden", {
+    auth: true,
+    getAuthToken: () => "FIREBASE_SECRET_TOKEN",
+    fetchImpl: async () => jsonApiResponse({ message: "Bearer FIREBASE_SECRET_TOKEN stack" }, 500, { "X-Request-Id": "req-secret-123" }),
+  });
+  assert.fail("apiRequest should sanitize token-like backend messages");
+} catch (error) {
+  assert.ok(error instanceof ApiError);
+  assert.equal(error.message.includes("FIREBASE_SECRET_TOKEN"), false);
+}
+let writeAttempts = 0;
+try {
+  await apiRequest("/api/write-no-retry", {
+    method: "POST",
+    body: { value: true },
+    fetchImpl: async (_input, init) => {
+      writeAttempts += 1;
+      assert.equal(new Headers(init?.headers).get("Content-Type"), "application/json");
+      assert.equal(init?.body, JSON.stringify({ value: true }));
+      return jsonApiResponse({}, 500);
+    },
+  });
+  assert.fail("apiRequest should throw on write failure");
+} catch (error) {
+  assert.ok(error instanceof ApiError);
+  assert.equal(writeAttempts, 1);
+}
+try {
+  await apiRequest("/api/timeout", {
+    timeoutMs: 5,
+    fetchImpl: async (_input, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+    }),
+  });
+  assert.fail("apiRequest should timeout");
+} catch (error) {
+  assert.ok(error instanceof ApiError);
+  assert.equal(error.code, "TIMEOUT");
+}
+try {
+  const controller = new AbortController();
+  const pending = apiRequest("/api/manual-abort", {
+    signal: controller.signal,
+    fetchImpl: async (_input, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+    }),
+  });
+  controller.abort();
+  await pending;
+  assert.fail("apiRequest should respect manual abort");
+} catch (error) {
+  assert.ok(error instanceof ApiError);
+  assert.equal(error.code, "REQUEST_ABORTED");
+}
+try {
+  await apiRequest("/api/network-error", { fetchImpl: async () => { throw new TypeError("fetch failed"); } });
+  assert.fail("apiRequest should convert network errors");
+} catch (error) {
+  assert.ok(error instanceof ApiError);
+  assert.equal(error.code, "NETWORK_ERROR");
+  assert.equal(error.message.includes("fetch failed"), false);
+}
 assert.match(productPayload, /buildProductSearchFields/);
 assert.match(recentProducts, /rememberRecentProductId/);
 assert.match(recentProducts, /readRecentProductIds/);
