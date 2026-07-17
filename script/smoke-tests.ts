@@ -106,6 +106,8 @@ const androidStylesV28 = read("android/app/src/main/res/values-v28/styles.xml");
 const androidMainActivity = read("android/app/src/main/java/com/revendasmart/app/MainActivity.java");
 const androidDocs = read("docs/ANDROID_CAPACITOR.md");
 const androidDebugDocs = read("docs/ANDROID_DEBUG_TESTING.md");
+const vercelApiCatchAll = read("api/[...path].ts");
+const vercelApiIndex = read("api/index.ts");
 const androidGitignore = read("android/.gitignore");
 const androidBuildDebugScript = read("scripts/android/build-debug.mjs");
 const androidInstallDebugScript = read("scripts/android/install-debug.mjs");
@@ -1143,6 +1145,22 @@ assert.match(serviceWorker, /request\.mode === 'navigate'/);
 assert.match(serviceWorker, /cache\.put\(request, response\.clone\(\)\)/);
 assert.doesNotMatch(serviceWorker, /\/api\//);
 assert.ok(vercel.rewrites.some((rule: any) => rule.source === "/u/:storeSlug" && rule.destination === "/index.html"));
+assert.ok(vercel.rewrites.some((rule: any) => rule.source === "/:path*" && rule.destination === "/index.html"));
+assert.match(vercelApiCatchAll, /REVENDA_SMART_SERVERLESS\s*=\s*"1"/);
+assert.match(vercelApiCatchAll, /import\("\.\.\/server\/index"\)/);
+assert.match(vercelApiCatchAll, /await mod\.serverReady/);
+assert.match(vercelApiCatchAll, /sendInitializationError/);
+assert.match(vercelApiCatchAll, /shouldUsePartiallyInitializedExpress/);
+assert.match(vercelApiCatchAll, /return app\(req, res\)/);
+assert.match(vercelApiIndex, /export \{ default \} from "\.\/\[\.\.\.path\]"/);
+assert.match(serverIndex, /export const app = express\(\)/);
+assert.match(serverIndex, /export const serverReady = \(async \(\) =>/);
+assert.match(serverIndex, /REVENDA_SMART_SERVERLESS/);
+assert.match(serverIndex, /app\.use\("\/api", sendApiNotFound\)/);
+assert.match(serverIndex, /buildSafeErrorBody\(404/);
+assert.match(serverIndex, /return res\.sendStatus\(204\)/);
+assert.match(serverIndex, /!IS_SERVERLESS[\s\S]*serveStatic\(app\)/);
+assert.doesNotMatch(vercelApiCatchAll, /serveStatic|index\.html|listen\(/);
 
 
 // Android Capacitor foundation guardrails.

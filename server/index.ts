@@ -12,6 +12,7 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
+const IS_SERVERLESS = process.env.REVENDA_SMART_SERVERLESS === "1" || process.env.VERCEL === "1";
 const REQUEST_BODY_LIMIT = "100kb";
 const URL_ENCODED_PARAMETER_LIMIT = 100;
 const SENTRY_DSN = process.env.SENTRY_DSN?.trim();
@@ -87,9 +88,9 @@ process.on("unhandledRejection", (reason) => {
 // Optional: Event loop and memory monitoring can be enabled on demand
 // Removed for now to avoid startup issues — can be re-added if needed
 
-const app = express();
+export const app = express();
 app.disable("x-powered-by");
-const httpServer = createServer(app);
+export const httpServer = createServer(app);
 
 app.use(requestIdMiddleware);
 
@@ -198,7 +199,7 @@ app.use((req, res, next) => {
   );
 
   if (req.method === "OPTIONS") {
-    return res.sendStatus(200);
+    return res.sendStatus(204);
   }
 
   next();
@@ -279,71 +280,86 @@ app.get("/api/readiness", async (req, res) => {
   return res.status(readiness.statusCode).json(readiness.body);
 });
 
-(async () => {
+function sendApiNotFound(req: Request, res: Response) {
+  res.locals.safeErrorCode = "NOT_FOUND" satisfies SafeHttpErrorCode;
+  return res.status(404).json(buildSafeErrorBody(404, undefined, req.requestId));
+}
+
+function registerErrorHandler() {
+  app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+    Sentry.withScope((scope) => {
+      scope.setTag("requestId", req.requestId ?? "unknown");
+      scope.setContext("request", {
+        method: req.method,
+        path: req.path,
+      });
+      Sentry.captureException(err);
+    });
+
+    const rawStatus = Number(err?.status ?? err?.statusCode ?? 500);
+    const status = Number.isInteger(rawStatus) && rawStatus >= 400 && rawStatus < 600
+      ? rawStatus
+      : 500;
+    const technicalMessage = err instanceof Error
+      ? err.message
+      : "Internal Server Error";
+    const safeError = classifySafeError(status, err);
+    res.locals.safeErrorCode = safeError.code;
+
+    logError("http.unhandled_error", err, {
+      requestId: req.requestId,
+      method: req.method,
+      route: getObservedRoute(req),
+      status,
+      errorCode: safeError.code,
+      message: technicalMessage,
+    });
+
+    if (res.headersSent) {
+      return next(err);
+    }
+
+    return res.status(status).json(buildSafeErrorBody(status, err, req.requestId));
+  });
+}
+
+export const serverReady = (async () => {
   try {
     logInfo("server.starting", {
       nodeEnv: process.env.NODE_ENV ?? "development",
       portConfigured: Boolean(process.env.PORT),
       sentryEnabled: Boolean(SENTRY_DSN),
+      serverless: IS_SERVERLESS,
     });
 
     await registerRoutes(httpServer, app);
     logInfo("server.routes_registered");
 
-    app.use((err: any, req: Request, res: Response, next: NextFunction) => {
-      Sentry.withScope((scope) => {
-        scope.setTag("requestId", req.requestId ?? "unknown");
-        scope.setContext("request", {
-          method: req.method,
-          path: req.path,
-        });
-        Sentry.captureException(err);
-      });
+    app.use("/api", sendApiNotFound);
+    registerErrorHandler();
 
-      const rawStatus = Number(err?.status ?? err?.statusCode ?? 500);
-      const status = Number.isInteger(rawStatus) && rawStatus >= 400 && rawStatus < 600
-        ? rawStatus
-        : 500;
-      const technicalMessage = err instanceof Error
-        ? err.message
-        : "Internal Server Error";
-      const safeError = classifySafeError(status, err);
-      res.locals.safeErrorCode = safeError.code;
-
-      logError("http.unhandled_error", err, {
-        requestId: req.requestId,
-        method: req.method,
-        route: getObservedRoute(req),
-        status,
-        errorCode: safeError.code,
-        message: technicalMessage,
-      });
-
-      if (res.headersSent) {
-        return next(err);
+    if (!IS_SERVERLESS) {
+      if (process.env.NODE_ENV === "production") {
+        serveStatic(app);
+        logInfo("server.static_configured");
+      } else {
+        const { setupVite } = await import("./vite");
+        await setupVite(httpServer, app);
+        logInfo("server.vite_configured");
       }
 
-      return res.status(status).json(buildSafeErrorBody(status, err, req.requestId));
-    });
+      // 🔥 ESSENCIAL PARA CLOUD RUN
+      const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8080;
 
-    if (process.env.NODE_ENV === "production") {
-      serveStatic(app);
-      logInfo("server.static_configured");
-    } else {
-      const { setupVite } = await import("./vite");
-      await setupVite(httpServer, app);
-      logInfo("server.vite_configured");
+      httpServer.listen(PORT, "0.0.0.0", () => {
+        logInfo("server.listening", { port: PORT });
+      });
     }
-
-    // 🔥 ESSENCIAL PARA CLOUD RUN
-    const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8080;
-
-    httpServer.listen(PORT, "0.0.0.0", () => {
-      logInfo("server.listening", { port: PORT });
-    });
-
   } catch (err) {
     logError("server.startup_failed", err, { fatal: true });
-    process.exit(1);
+    if (!IS_SERVERLESS) {
+      process.exit(1);
+    }
+    throw err;
   }
 })();
