@@ -6,6 +6,19 @@ export type MarketingShareResult = {
 
 type WebShareDataWithFiles = ShareData & { files?: File[] };
 
+export class MarketingShareCancelledError extends Error {
+  constructor() {
+    super("Compartilhamento cancelado.");
+    this.name = "MarketingShareCancelledError";
+  }
+}
+
+export function isMarketingShareCancelledError(error: unknown): boolean {
+  if (error instanceof MarketingShareCancelledError) return true;
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /cancel|abort|dismiss|fechad|cancelad/i.test(message);
+}
+
 type ShareMarketingCardOptions = {
   blob: Blob;
   productName: string;
@@ -59,12 +72,17 @@ async function shareNatively(options: ShareMarketingCardOptions, fileName: strin
     recursive: true,
   });
 
-  await Share.share({
-    title: options.title || "Anúncio Revenda Smart",
-    text: options.text,
-    files: [savedFile.uri],
-    dialogTitle: options.dialogTitle || "Compartilhar anúncio",
-  });
+  try {
+    await Share.share({
+      title: options.title || "Anúncio Revenda Smart",
+      text: options.text,
+      files: [savedFile.uri],
+      dialogTitle: options.dialogTitle || "Compartilhar anúncio",
+    });
+  } catch (error) {
+    if (isMarketingShareCancelledError(error)) throw new MarketingShareCancelledError();
+    throw error;
+  }
 
   return { method: "native-file", fileName, uri: savedFile.uri };
 }
@@ -81,11 +99,16 @@ export async function shareMarketingCard(options: ShareMarketingCardOptions): Pr
   };
 
   if (typeof nav.share === "function" && typeof nav.canShare === "function" && nav.canShare({ files: [file] })) {
-    await nav.share({
-      title: options.title || "Anúncio Revenda Smart",
-      text: options.text,
-      files: [file],
-    });
+    try {
+      await nav.share({
+        title: options.title || "Anúncio Revenda Smart",
+        text: options.text,
+        files: [file],
+      });
+    } catch (error) {
+      if (isMarketingShareCancelledError(error)) throw new MarketingShareCancelledError();
+      throw error;
+    }
     return { method: "web-file", fileName };
   }
 

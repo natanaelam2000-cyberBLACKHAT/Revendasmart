@@ -10,6 +10,7 @@ import {
 import { getCurrentFirebaseUser, getFirebaseIdToken, getFirebaseAuth, measureOperation, logTelemetryEvent } from "@/lib/firebase";
 import { useLocation } from "wouter";
 import { getApiUrl } from "@/lib/api-config";
+import { buildPublicCatalogUrl } from "@/lib/public-url";
 import { QRCodeSVG } from "qrcode.react";
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
@@ -249,8 +250,7 @@ export default function Settings() {
       const storeName = formSettings?.storeName || "minha-loja";
       const slug = normalizeCatalogSlug(formSettings?.catalogSlug || formSettings?.catalog_slug || storeName);
       setFormSettings({ ...formSettings, catalogSlug: slug, catalog_slug: slug });
-      const origin = (typeof window !== "undefined" && window.location && window.location.origin) ? window.location.origin : "";
-      setGeneratedUrl(origin ? `${origin}/u/${slug}` : `/u/${slug}`);
+      setGeneratedUrl(buildPublicCatalogUrl(slug));
     } catch {
       setSaveMessage("Erro ao gerar link.");
     }

@@ -9,6 +9,7 @@ import { usePaginatedClientsData } from "@/hooks/usePaginatedClientsData";
 import { usePlan } from "@/providers/PlanProvider";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";
 import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
+import { buildPublicCatalogUrl } from "@/lib/public-url";
 
 export default function Clients() {
   const { clients, loading, loadingMore, error, hasMore, totalCount, loadMore, addClient, updateClient, deleteClient } = usePaginatedClientsData();
@@ -54,8 +55,7 @@ export default function Clients() {
       .replace(/-+/g, "-")
       .replace(/^-|-$/g, "");
 
-    const origin = typeof window !== "undefined" ? window.location.origin : "";
-    const catalogLink = `${origin}/u/${slug}`;
+    const catalogLink = buildPublicCatalogUrl(slug);
 
     const message = `Olá! Temos novidades disponíveis. ✨\nVeja no catálogo:\n${catalogLink}`;
 

@@ -9,6 +9,7 @@ import { buildProductCreatePayload } from "../client/src/lib/product-payload";
 import { MARKETING_AD_THEME_IDS, buildMarketingAdConfig, buildMarketingAdMessage, buildMarketingWhatsappUrl, formatMarketingPrice, normalizeMarketingAdConfig, sanitizeMarketingHistoryPayload } from "../client/src/lib/marketing-ad";
 import { sanitizeMarketingFileName } from "../client/src/lib/marketing-share";
 import { buildPublicCatalogUrl, normalizePublicAppBaseUrl, resolvePublicAppBaseUrl } from "../client/src/lib/public-url";
+import { HOME_ACCORDION_SECTION_IDS, HOME_ACCORDION_STORAGE_KEY, HOME_SUMMARY_KPI_IDS, buildHomeDashboardViewModel, resolveHomeAccordionSectionId } from "../client/src/lib/home-dashboard-view-model";
 import { validateMercadoPagoAccessTokenForEnvironment } from "../server/mercadopago-environment";
 import { buildHealthPayload, buildReadinessPayload, buildSafeErrorBody, classifySafeError, createRequestId, normalizeRequestId, requestIdMiddleware, sanitizeForLog } from "../server/logger";
 import { ApiError, apiRequest, buildApiErrorDisplayMessage, formatApiSupportCode } from "../client/src/lib/api-client";
@@ -44,6 +45,7 @@ const settings = read("client/src/pages/settings.tsx");
 const images = read("client/src/components/ProductImageCard.tsx");
 const subscribe = read("client/src/pages/subscribe.tsx");
 const dashboard = read("client/src/pages/dashboard.tsx");
+const homeDashboardViewModel = read("client/src/lib/home-dashboard-view-model.ts");
 const storeIntelligencePanel = read("client/src/components/StoreIntelligencePanel.tsx");
 const clientDetail = read("client/src/pages/client-detail.tsx");
 const clientDetailHook = read("client/src/hooks/useClientDetailData.ts");
@@ -601,6 +603,8 @@ assert.match(marketingShare, /@capacitor\/share/);
 assert.match(marketingShare, /@capacitor\/filesystem/);
 assert.match(marketingShare, /Capacitor\.isNativePlatform\(\)/);
 assert.match(marketingShare, /Directory\.Cache/);
+assert.match(marketingShare, /MarketingShareCancelledError/);
+assert.match(marketing, /Compartilhamento cancelado/);
 assert.match(marketingShare, /Filesystem\.writeFile/);
 assert.match(marketingShare, /Share\.share/);
 assert.match(marketingShare, /files:\s*\[savedFile\.uri\]/);
@@ -650,7 +654,7 @@ assert.match(marketingCss, /\.mk52\{grid-template-columns:repeat\(2,minmax\(0,1f
 assert.doesNotMatch(marketingCss, /min-width:\s*4\d\dpx|(?:^|[;{])width:\s*4\d\dpx/);
 assert.match(storeHealth, /buildStoreIntelligence/);
 assert.match(storeHealth, /evitando novas leituras Firestore/);
-assert.match(dashboard, /StoreIntelligencePanel/);
+assert.doesNotMatch(dashboard, /StoreIntelligencePanel/);
 assert.match(storeIntelligencePanel, /buildStoreIntelligence/);
 assert.match(storeIntelligencePanel, /Saude da loja/);
 assert.match(storeIntelligencePanel, /BI automatico/);
@@ -744,11 +748,15 @@ assert.match(clientMetrics, /favoriteProducts/);
 assert.match(clientMetrics, /groupClientTimelineByMonth/);
 assert.match(clientMetrics, /calculateClientBehaviorSummary/);
 assert.match(dashboardMetrics, /calculateDashboardPremiumIndicators/);
-assert.match(dashboard, /Centro de comando/);
-assert.match(dashboard, /commandCenter/);
-assert.match(dashboard, /commandKpis/);
-assert.match(dashboard, /executiveWidgets/);
-assert.match(dashboard, /smartAlerts/);
+assert.doesNotMatch(dashboard, /Centro de comando/);
+assert.doesNotMatch(dashboard, /commandCenter/);
+assert.doesNotMatch(dashboard, /commandKpis/);
+assert.doesNotMatch(dashboard, /executiveWidgets/);
+assert.doesNotMatch(dashboard, /smartAlerts/);
+assert.match(dashboard, /buildHomeDashboardViewModel/);
+assert.match(dashboard, /O que precisa da sua atenção/);
+assert.match(dashboard, /Produtos e estoque/);
+assert.match(dashboard, /Saúde da loja/);
 
 assert.match(dashboardMetrics, /calculateExecutiveSummary/);
 assert.match(dashboardMetrics, /calculateMonthlyGoal/);
@@ -757,8 +765,8 @@ assert.match(dashboardMetrics, /calculateWorstProduct/);
 assert.match(dashboardMetrics, /statusLabel/);
 assert.doesNotMatch(dashboardMetrics, /999/);
 assert.match(dashboardMetrics, /calculateAttentionItems/);
-assert.match(dashboard, /Alertas inteligentes/);
-assert.match(dashboard, /Meta mensal/);
+assert.doesNotMatch(dashboard, /Alertas inteligentes/);
+assert.doesNotMatch(dashboard, />Meta mensal</);
 assert.match(dashboard, /monthlyGoalInput/);
 assert.match(dashboard, /handleSaveMonthlyGoal/);
 assert.match(dashboard, /Ticket médio/);
@@ -1099,8 +1107,8 @@ assert.doesNotMatch(nichoConfig, /brandLabel: 'Marca \/ Origem'/);
 assert.match(addProduct, /getProductCategoriesForNicho/);
 assert.match(addProduct, /baseCategorySuggestions/);
 assert.match(dashboard, /OnboardingChecklist/);
-assert.match(dashboard, /Configurar nome da loja/);
-assert.match(dashboard, /Concluir configuração/);
+assert.match(dashboard, /Escolher tema/);
+assert.match(dashboard, /Cadastrar primeiro produto/);
 assert.match(dashboard, /products\.length > 0/);
 assert.match(onboardingChecklist, /local|Primeiros passos|Configure sua loja/);
 assert.match(planProvider, /api\/plan\/data/);
@@ -1458,6 +1466,90 @@ assert.doesNotMatch(loginPage, /Gestão, vendas e catálogo em um só lugar/);
 assert.doesNotMatch(loginPage, /bg-\[\#160b2e\]/);
 assert.doesNotMatch(loginPage, /rs-login-person-illustration/);
 assert.doesNotMatch(loginPage, />A<|rs-login-avatar/);
+
+
+// Android/public URL and compact Home guardrails
+assert.match(settings, /buildPublicCatalogUrl\(slug\)/);
+assert.match(clientsPage, /buildPublicCatalogUrl\(slug\)/);
+assert.doesNotMatch(settings, /window\.location\.origin[^\n]+\/u\//);
+assert.doesNotMatch(clientsPage, /window\.location\.origin[^\n]+\/u\//);
+assert.doesNotMatch(marketingShare, /wa\.me/);
+assert.match(marketingShare, /Share\.share\(\{[\s\S]*files: \[savedFile\.uri\]/);
+assert.match(marketingShare, /Filesystem\.writeFile/);
+assert.match(marketingShare, /Directory\.Cache/);
+assert.match(marketingShare, /MarketingShareCancelledError/);
+assert.match(marketing, /Compartilhamento cancelado/);
+assert.match(marketingShare, /nav\.canShare\(\{ files: \[file\] \}\)/);
+assert.match(androidSyncWebScript, /VITE_PUBLIC_APP_URL/);
+assert.match(androidSyncWebScript, /VITE_API_BASE_URL/);
+assert.match(androidSyncWebScript, /revendasmart\.vercel\.app/);
+assert.match(publicUrl, /VITE_PUBLIC_APP_URL/);
+assert.match(publicUrl, /resolvePublicAppBaseUrl/);
+assert.doesNotMatch(publicUrl, /https:\/\/localhost/);
+
+const homeReferenceDate = new Date("2026-07-15T12:00:00.000Z");
+const homeFixture = buildHomeDashboardViewModel({
+  referenceDate: homeReferenceDate,
+  settings: {
+    storeName: "Adriana Perfumes",
+    monthlyGoal: 10000,
+    lowStockThreshold: 3,
+    catalogSlug: "adriana-perfumes",
+    enablePublicCatalog: true,
+    appTheme: "purple-default",
+    onboarding_completed: true,
+  } as any,
+  products: [
+    { id: "p1", name: "Kaiak Oceano", brand: "Natura", category: "Perfumes", stock: 2, costPrice: 50, salePrice: 100 },
+    { id: "p2", name: "Glamour Diva", brand: "Boticário", category: "Perfumes", stock: 1, costPrice: 0, salePrice: 80 },
+    { id: "p3", name: "Ameixa e Flor de Baunilha", brand: "Natura", category: "Corpo", stock: 7, costPrice: 40, salePrice: 70 },
+    { id: "p4", name: "Produto sem estoque", brand: "", category: "Kits", stock: 0, costPrice: 15, salePrice: 30 },
+  ] as any,
+  clients: [
+    { id: "c1", name: "Ana", phone: "11999990000" },
+    { id: "c2", name: "Bia", phone: "11999990001" },
+    { id: "c3", name: "Cris", phone: "11999990002" },
+  ] as any,
+  sales: [
+    { id: "s1", clientId: "c1", date: "2026-07-10T10:00:00.000Z", totalPrice: 1200, paymentType: "pix", products: [{ productId: "p1", quantity: 12, price: 100 }] },
+    { id: "s2", clientId: "c2", date: "2026-05-01T10:00:00.000Z", totalPrice: 80, paymentType: "pix", products: [{ productId: "p2", quantity: 1, price: 80 }] },
+  ] as any,
+});
+assert.deepEqual(HOME_SUMMARY_KPI_IDS, ["monthlyRevenue", "monthlyProfit", "averageTicket", "activeClients"]);
+assert.equal(HOME_SUMMARY_KPI_IDS.length, 4);
+assert.equal(homeFixture.summary.monthlyRevenue, 1200);
+assert.equal(homeFixture.summary.averageTicket, 1200);
+assert.equal(homeFixture.summary.activeClients, 1);
+assert.equal(homeFixture.products.champion?.product.id, "p1");
+assert.equal(homeFixture.inventory.totalProducts, 4);
+assert.equal(homeFixture.inventory.outOfStockCount, 1);
+assert.ok(homeFixture.priorities.length <= 3);
+assert.deepEqual(homeFixture.priorities.map((item) => item.severity), [...homeFixture.priorities.map((item) => item.severity)].sort((a, b) => a - b));
+assert.equal(resolveHomeAccordionSectionId("health"), "health");
+assert.equal(resolveHomeAccordionSectionId("invalid-section"), null);
+assert.equal(HOME_ACCORDION_STORAGE_KEY, "revendasmart:home:accordion:v1");
+assert.ok(HOME_ACCORDION_SECTION_IDS.includes("month"));
+const emptyHome = buildHomeDashboardViewModel({ referenceDate: homeReferenceDate, settings: {} as any, products: [] as any, clients: [] as any, sales: [] as any });
+assert.equal(emptyHome.summary.averageTicket, null);
+assert.equal(emptyHome.products.champion, null);
+assert.equal(emptyHome.products.critical.length, 0);
+assert.match(homeDashboardViewModel, /cliente ativo na Home/i);
+assert.doesNotMatch(homeDashboardViewModel, /onSnapshot|getDocs|collection\(/);
+assert.match(dashboard, /buildHomeDashboardViewModel/);
+assert.match(dashboard, /HOME_ACCORDION_STORAGE_KEY/);
+assert.match(dashboard, /home-summary-kpis/);
+assert.match(dashboard, /aria-expanded/);
+assert.match(dashboard, /aria-controls/);
+assert.match(dashboard, /data-home-accordion-panel/);
+assert.match(dashboard, /Registre uma venda para calcular/);
+assert.doesNotMatch(dashboard, /StoreIntelligencePanel/);
+assert.doesNotMatch(dashboard, /quickActions/);
+assert.doesNotMatch(dashboard, /Centro de comando/);
+assert.doesNotMatch(dashboard, /Estoque inteligente/);
+assert.doesNotMatch(dashboard, /Sem IA/);
+assert.doesNotMatch(dashboard, />Novo produto<|>Nova venda<|>Novo cliente<|>Nova cobrança<|>Compartilhar catálogo<|>Criar campanha</);
+assert.doesNotMatch(dashboard, /display:\s*none/);
+assert.doesNotMatch(dashboard, /onSnapshot|getDocs|getFirestore|collection\(/);
 
 // Firebase emulator static guardrails
 assert.equal(firebaseJson.emulators.auth.port, 9099);

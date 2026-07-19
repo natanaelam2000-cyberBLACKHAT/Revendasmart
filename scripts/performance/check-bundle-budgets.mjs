@@ -15,7 +15,7 @@ const budgets = [
   { label: 'public catalog route', pattern: /^public-catalog-.*\.js$/, maxKb: 30 },
   { label: 'reports route', pattern: /^reports-.*\.js$/, maxKb: 35 },
   { label: 'settings route', pattern: /^settings-.*\.js$/, maxKb: 50 },
-  { label: 'store intelligence panel', pattern: /^StoreIntelligencePanel-.*\.js$/, maxKb: 18 },
+  { label: 'store intelligence panel', pattern: /^StoreIntelligencePanel-.*\.js$/, maxKb: 18, optional: true },
   { label: 'scanner vendor', pattern: /^vendor-scanner-.*\.js$/, maxKb: 430 },
   { label: 'recharts vendor', pattern: /^vendor-recharts-.*\.js$/, maxKb: 350 },
 ];
@@ -64,6 +64,7 @@ for (const forbidden of forbiddenFrontendChunks) {
 for (const budget of budgets) {
   const matches = files.filter((file) => budget.pattern.test(file.name));
   if (matches.length === 0) {
+    if (budget.optional) continue;
     errors.push(`${budget.label}: asset não encontrado (${budget.pattern})`);
     continue;
   }

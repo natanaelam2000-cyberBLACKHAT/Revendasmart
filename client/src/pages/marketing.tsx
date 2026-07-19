@@ -14,7 +14,7 @@ import { MarketingStats } from "@/components/MarketingStats";
 import { MarketingAdCanvas } from "@/components/MarketingAdCanvas";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { createMarketingCard, downloadMarketingCard } from "@/lib/marketing-card";
-import { shareMarketingCard, type MarketingShareResult } from "@/lib/marketing-share";
+import { isMarketingShareCancelledError, shareMarketingCard, type MarketingShareResult } from "@/lib/marketing-share";
 import { buildPublicCatalogUrl } from "@/lib/public-url";
 import { MARKETING_AD_THEME_IDS, MARKETING_AD_THEMES, MARKETING_TEMPLATES, buildMarketingAdConfig, buildMarketingAdMessage, buildMarketingVolumeText, buildMarketingWhatsappUrl, formatMarketingPrice, normalizeMarketingAdConfig, parseMarketingPriceNumber, resolveMarketingTemplate, type MarketingAdThemeId, type MarketingBackgroundStyle, type MarketingTemplateId } from "@/lib/marketing-ad";
 import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
@@ -236,6 +236,10 @@ export default function Marketing() {
       logTelemetryEvent("ad_shared", { productId, channel: "whatsapp" }, user?.uid);
       trackAnalyticsEvent("share", { method: "whatsapp", content_type: "product", item_id: productId });
     } catch (error) {
+      if (isMarketingShareCancelledError(error)) {
+        notifyInfo("Compartilhamento cancelado.");
+        return;
+      }
       const message = error instanceof Error ? error.message : "Não foi possível compartilhar o card.";
       notifyError("Não foi possível compartilhar o card com imagem.");
       logError("ad_image_share_failed", message, { context: { template, hasProduct: !!selectedProductId, hasKit: !!selectedKitId } });
@@ -312,6 +316,10 @@ export default function Marketing() {
       await recordAction(payload);
       notifyShareResult(result);
     } catch (error) {
+      if (isMarketingShareCancelledError(error)) {
+        notifyInfo("Compartilhamento cancelado.");
+        return;
+      }
       const message = error instanceof Error ? error.message : "Não foi possível compartilhar o card salvo.";
       notifyError("Não foi possível compartilhar o card com imagem.");
       logError("ad_history_share_failed", message, { context: { entryAction: entry.action } });
