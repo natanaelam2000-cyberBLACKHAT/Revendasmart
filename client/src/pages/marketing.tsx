@@ -14,6 +14,8 @@ import { MarketingStats } from "@/components/MarketingStats";
 import { MarketingAdCanvas } from "@/components/MarketingAdCanvas";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { createMarketingCard, downloadMarketingCard } from "@/lib/marketing-card";
+import { shareMarketingCard, type MarketingShareResult } from "@/lib/marketing-share";
+import { buildPublicCatalogUrl } from "@/lib/public-url";
 import { MARKETING_AD_THEME_IDS, MARKETING_AD_THEMES, MARKETING_TEMPLATES, buildMarketingAdConfig, buildMarketingAdMessage, buildMarketingVolumeText, buildMarketingWhatsappUrl, formatMarketingPrice, normalizeMarketingAdConfig, parseMarketingPriceNumber, resolveMarketingTemplate, type MarketingAdThemeId, type MarketingBackgroundStyle, type MarketingTemplateId } from "@/lib/marketing-ad";
 import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
 
@@ -102,11 +104,7 @@ export default function Marketing() {
   const templates = MARKETING_TEMPLATES;
   const selectedItem = selectedProduct || selectedKit;
   const catalogSlug = String((settings as typeof settings & { catalogSlug?: string; catalog_slug?: string }).catalogSlug || (settings as typeof settings & { catalogSlug?: string; catalog_slug?: string }).catalog_slug || "").trim();
-  const catalogUrl = useMemo(() => {
-    if (!catalogSlug) return "";
-    const origin = typeof window !== "undefined" && window.location?.origin ? window.location.origin : "";
-    return origin ? `${origin}/u/${catalogSlug}` : `/u/${catalogSlug}`;
-  }, [catalogSlug]);
+  const catalogUrl = useMemo(() => buildPublicCatalogUrl(catalogSlug), [catalogSlug]);
   const featuredMarketingProducts = useMemo(() => filteredProducts.slice(0, 4), [filteredProducts]);
   const recentMaterialsCount = historyEntries.length;
   const currentTemplate = resolveMarketingTemplate(template);
@@ -194,18 +192,54 @@ export default function Marketing() {
     notifyError(WHATSAPP_SETUP_MESSAGE);
   };
 
-  const handleShare = async () => {
+  const notifyShareResult = (result: MarketingShareResult) => {
+    if (result.method === "web-download-fallback") {
+      notifyInfo("Seu navegador não compartilha imagem direto; baixei o PNG e copiei o texto.");
+      return;
+    }
+    notifySuccess("Card pronto para compartilhar com imagem.");
+  };
+
+  const shareAdBlob = async (payload: NonNullable<ReturnType<typeof entryPayload>>) => {
+    const blob = await createMarketingCard(payload, imageFallbackNotice);
+    const result = await shareMarketingCard({
+      blob,
+      productName: payload.productName,
+      text: payload.generatedText || generatedText,
+      title: `${payload.productName} | ${payload.storeName || "Revenda Smart"}`,
+      dialogTitle: "Compartilhar anúncio",
+      onWebDownloadFallback: (fallbackBlob) => downloadMarketingCard(fallbackBlob, payload.productName),
+      onTextFallback: copyTextWithFallback,
+    });
+    notifyShareResult(result);
+    return result;
+  };
+
+  const handleCardCtaClick = () => {
     if (!storeWhatsappNumber || !previewWhatsappUrl) {
       notifyMissingStoreWhatsapp();
       return;
     }
-    await registerAction("shared");
     notifyInfo("WhatsApp da loja aberto.");
     window.open(previewWhatsappUrl, "_blank", "noopener,noreferrer");
-    const productId = selectedProductId || selectedKitId;
-    const user = getFirebaseAuth()?.currentUser;
-    logTelemetryEvent("ad_shared", { productId, channel: "whatsapp" }, user?.uid);
-    trackAnalyticsEvent("share", { method: "whatsapp", content_type: "product", item_id: productId });
+  };
+
+  const handleShare = async () => {
+    const payload = entryPayload("shared");
+    if (!payload) return;
+
+    try {
+      const result = await shareAdBlob(payload);
+      await recordAction(payload);
+      const productId = selectedProductId || selectedKitId;
+      const user = getFirebaseAuth()?.currentUser;
+      logTelemetryEvent("ad_shared", { productId, channel: "whatsapp" }, user?.uid);
+      trackAnalyticsEvent("share", { method: "whatsapp", content_type: "product", item_id: productId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Não foi possível compartilhar o card.";
+      notifyError("Não foi possível compartilhar o card com imagem.");
+      logError("ad_image_share_failed", message, { context: { template, hasProduct: !!selectedProductId, hasKit: !!selectedKitId } });
+    }
   };
 
   const requireCatalogUrl = () => {
@@ -263,14 +297,25 @@ export default function Marketing() {
     notifySuccess("Anúncio copiado.");
   };
   const repeatShare = async (entry: MarketingHistoryEntry) => {
-    const whatsappUrl = buildMarketingWhatsappUrl({ phone: storeWhatsappNumber, message: entry.generatedText });
-    if (!storeWhatsappNumber || !whatsappUrl) {
-      notifyMissingStoreWhatsapp();
-      return;
+    const payload = repeatPayload(entry, "shared");
+    try {
+      const blob = await createMarketingCard(payload, imageFallbackNotice);
+      const result = await shareMarketingCard({
+        blob,
+        productName: payload.productName,
+        text: payload.generatedText,
+        title: `${payload.productName} | ${payload.storeName || "Revenda Smart"}`,
+        dialogTitle: "Compartilhar anúncio",
+        onWebDownloadFallback: (fallbackBlob) => downloadMarketingCard(fallbackBlob, payload.productName),
+        onTextFallback: copyTextWithFallback,
+      });
+      await recordAction(payload);
+      notifyShareResult(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Não foi possível compartilhar o card salvo.";
+      notifyError("Não foi possível compartilhar o card com imagem.");
+      logError("ad_history_share_failed", message, { context: { entryAction: entry.action } });
     }
-    await recordAction(repeatPayload(entry, "shared"));
-    window.open(whatsappUrl, "_blank", "noopener,noreferrer");
-    notifyInfo("WhatsApp da loja aberto.");
   };
   const repeatDownload = async (entry: MarketingHistoryEntry) => {
     await downloadEntryCard(entry);
@@ -604,7 +649,7 @@ export default function Marketing() {
                       Editando anúncio salvo. Troque tema ou texto à vontade; o histórico só será substituído quando você confirmar.
                     </div>
                   )}
-                  <MarketingAdCanvas config={currentAdConfig} onCtaClick={handleShare} />
+                  <MarketingAdCanvas config={currentAdConfig} onCtaClick={handleCardCtaClick} />
                   {showWhatsappSetupNotice && !storeWhatsappNumber && (
                     <div className="mk35" role="status">
                       <p>{WHATSAPP_SETUP_MESSAGE}</p>

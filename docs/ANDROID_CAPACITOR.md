@@ -213,12 +213,15 @@ O build Android usa explicitamente:
 
 ```text
 VITE_API_BASE_URL=https://revendasmart.vercel.app
+VITE_PUBLIC_APP_URL=https://revendasmart.vercel.app
 ```
 
-Essa URL pública não é segredo. Ela é injetada pelo script `npm run android:sync`, que executa um build web com a variável definida e valida que o pacote gerado contém o domínio público esperado.
+Essas URLs públicas não são segredo. Elas são injetadas pelo script `npm run android:sync`, que executa um build web com as variáveis definidas e valida que o pacote gerado contém os domínios públicos esperados.
 
-No site hospedado na Vercel, quando `VITE_API_BASE_URL` não está definida, o app usa `window.location.origin`, preservando a mesma origem.
+`VITE_API_BASE_URL` define para onde as chamadas `/api` vão no APK. `VITE_PUBLIC_APP_URL` define links públicos compartilháveis, como `https://revendasmart.vercel.app/u/<slug>`. Elas são conceitos separados.
 
-No desenvolvimento web local, o app também usa `window.location.origin`. Para trocar o domínio futuramente, altere o valor padrão em `scripts/android/sync-web.mjs` ou defina `VITE_API_BASE_URL` explicitamente no ambiente antes do sync.
+No site hospedado na Vercel, quando `VITE_API_BASE_URL` não está definida, o app usa `window.location.origin`, preservando a mesma origem. Quando `VITE_PUBLIC_APP_URL` não está definida, links públicos também podem usar a origem atual no navegador.
+
+No desenvolvimento web local, o app pode usar `window.location.origin` para testes locais. No Android, use sempre HTTPS público explícito; para trocar o domínio futuramente, altere os valores padrão em `scripts/android/sync-web.mjs` ou defina `VITE_API_BASE_URL` e `VITE_PUBLIC_APP_URL` explicitamente no ambiente antes do sync.
 
 Não usar configuração remota de servidor do Capacitor, live reload permanente ou URL da Vercel como configuração remota do Capacitor de produção. O Android deve empacotar assets locais e chamar APIs por HTTPS.

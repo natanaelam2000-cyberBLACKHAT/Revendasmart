@@ -170,14 +170,14 @@ O Cloud Shell validou estrutura, build web, sync e doctor, mas não gerou APK po
 
 ## Roteamento de APIs no APK debug
 
-O APK debug não deve chamar `/api` relativo à origem local da WebView. O script `npm run android:sync` define `VITE_API_BASE_URL=https://revendasmart.vercel.app` de forma multiplataforma via Node antes de copiar os assets para Android.
+O APK debug não deve chamar `/api` relativo à origem local da WebView e também não deve compartilhar links públicos usando `https://localhost`. O script `npm run android:sync` define `VITE_API_BASE_URL=https://revendasmart.vercel.app` e `VITE_PUBLIC_APP_URL=https://revendasmart.vercel.app` de forma multiplataforma via Node antes de copiar os assets para Android.
 
 Validações do script:
 
 - URL não pode estar vazia;
 - URL precisa usar HTTPS;
 - URL não pode apontar para localhost;
-- build precisa conter `https://revendasmart.vercel.app`;
+- build precisa conter `https://revendasmart.vercel.app` para API e URL pública;
 - build não pode conter URLs locais de desenvolvimento nem live reload.
 
 Para desenvolvimento local web, continue usando a origem atual do navegador. Para Android, use sempre `npm run android:sync` ou `npm run android:build:debug`, nunca um build manual sem a variável de API.
