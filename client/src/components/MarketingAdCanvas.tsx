@@ -20,7 +20,7 @@ export function MarketingAdCanvas({ config, compact = false, onCtaClick }: { con
             </div>
             <div className="ma3">
               <p className="ma5">{config.storeName}</p>
-              <p className="ma10">Revenda Smart</p>
+              <p className="ma10">Loja oficial</p>
             </div>
           </div>
           <span className="ma18" style={{ backgroundColor: theme.accent }}>{badgeText}</span>
@@ -30,7 +30,7 @@ export function MarketingAdCanvas({ config, compact = false, onCtaClick }: { con
           <section className="ma11">
             <p className="ma8" style={{ color: theme.accent }}>{config.headline}</p>
             <h3 className="ma9">{config.productName}</h3>
-            <p className="ma19">{description}</p>
+            {description && <p className="ma19">{description}</p>}
             <p className="ma15" style={{ color: theme.foreground }}>{config.priceText}</p>
             {features.length > 0 && (
               <div className="ma16" aria-label="Características do anúncio">
@@ -63,6 +63,10 @@ export function MarketingAdCanvas({ config, compact = false, onCtaClick }: { con
               </div>
             )}
           </div>
+        </div>
+        <div className="ma26" aria-label="Criado com Revenda Smart">
+          <img src="/logo-revenda-smart-symbol.png" alt="" aria-hidden="true" loading="lazy" decoding="async" />
+          <span>Criado com Revenda Smart</span>
         </div>
       </div>
     </article>

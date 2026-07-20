@@ -18,8 +18,12 @@ export interface HomePriorityItem {
 export interface HomePerformancePoint {
   key: string;
   label: string;
+  dateLabel: string;
+  isToday: boolean;
   revenue: number;
+  profit: number;
   salesCount: number;
+  itemsSold: number;
 }
 
 export interface HomeMainInsight {
@@ -145,17 +149,25 @@ function buildComparison(currentRevenue: number, previousRevenue: number): Pick<
   };
 }
 
-function buildPerformancePoints(referenceDate: Date, sales: Sale[]): HomeDashboardViewModel["performance"] {
+function buildPerformancePoints(referenceDate: Date, sales: Sale[], productsById: Map<string, Product>): HomeDashboardViewModel["performance"] {
   const points: HomePerformancePoint[] = [];
-  const totals = new Map<string, { revenue: number; salesCount: number }>();
+  const totals = new Map<string, { revenue: number; profit: number; salesCount: number; itemsSold: number }>();
+  const todayKey = dateKey(referenceDate);
+  const startDate = new Date(referenceDate);
+  startDate.setHours(0, 0, 0, 0);
+  startDate.setDate(startDate.getDate() - (PERFORMANCE_DAYS - 1));
+  const endDate = new Date(referenceDate);
+  endDate.setHours(23, 59, 59, 999);
 
   for (const sale of sales) {
     const parsed = parseSafeDate(sale.date);
-    if (!parsed) continue;
+    if (!parsed || parsed < startDate || parsed > endDate) continue;
     const key = dateKey(parsed);
-    const current = totals.get(key) || { revenue: 0, salesCount: 0 };
+    const current = totals.get(key) || { revenue: 0, profit: 0, salesCount: 0, itemsSold: 0 };
     current.revenue += saleTotal(sale);
+    current.profit += saleProfit(sale, productsById);
     current.salesCount += 1;
+    current.itemsSold += (sale.products || []).reduce((sum, item) => sum + safeNumber(item.quantity), 0);
     totals.set(key, current);
   }
 
@@ -164,17 +176,21 @@ function buildPerformancePoints(referenceDate: Date, sales: Sale[]): HomeDashboa
     day.setHours(12, 0, 0, 0);
     day.setDate(referenceDate.getDate() - offset);
     const key = dateKey(day);
-    const total = totals.get(key) || { revenue: 0, salesCount: 0 };
+    const total = totals.get(key) || { revenue: 0, profit: 0, salesCount: 0, itemsSold: 0 };
     points.push({
       key,
       label: day.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }),
+      dateLabel: day.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" }),
+      isToday: key === todayKey,
       revenue: total.revenue,
+      profit: total.profit,
       salesCount: total.salesCount,
+      itemsSold: total.itemsSold,
     });
   }
 
   const maxValue = Math.max(0, ...points.map((point) => point.revenue));
-  return { label: "Últimos 7 dias", points, maxValue, hasData: points.some((point) => point.salesCount > 0) };
+  return { label: "?ltimos 7 dias", points, maxValue, hasData: points.some((point) => point.salesCount > 0) };
 }
 
 function topEntry(map: Map<string, number>): { label: string; value: number } | null {
@@ -363,7 +379,7 @@ export function buildHomeDashboardViewModel({ products, clients, sales, settings
       previousRevenue,
       ...comparison,
     },
-    performance: buildPerformancePoints(referenceDate, sales),
+    performance: buildPerformancePoints(referenceDate, sales, productsById),
     goal: {
       target: goal.target,
       hasExplicitGoal: goal.hasExplicitGoal,

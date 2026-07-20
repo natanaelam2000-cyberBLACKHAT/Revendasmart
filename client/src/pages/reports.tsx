@@ -261,15 +261,15 @@ export default function Reports() {
             </div>
           </div>
 
-          <div className="rounded-[2rem] border border-border/50 bg-white p-4 sm:p-6 shadow-sm">
-            <div className="mb-5 flex items-center gap-2">
+          <div className="rounded-[2rem] border border-border/50 bg-white p-4 shadow-sm sm:p-5">
+            <div className="mb-3 flex items-center gap-2">
               <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-primary/10 text-primary"><PieChartIcon className="h-4 w-4" /></span>
               <h3 className="text-sm font-black text-foreground">Vendas por categoria</h3>
             </div>
-            <div className="h-72">
+            <div className="h-56 sm:h-60">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={charts.salesByCategory} dataKey="revenue" nameKey="name" innerRadius={58} outerRadius={88} paddingAngle={4}>
+                  <Pie data={charts.salesByCategory} dataKey="revenue" nameKey="name" innerRadius={46} outerRadius={74} paddingAngle={4}>
                     {charts.salesByCategory.map((entry, index) => <Cell key={entry.name} fill={COLORS[index % COLORS.length]} />)}
                   </Pie>
                   <Tooltip formatter={(value: number) => formatCurrency(value)} />
@@ -289,18 +289,18 @@ export default function Reports() {
         </section>
 
         <section className="grid gap-4 lg:grid-cols-2">
-          <div className="rounded-[2rem] border border-border/50 bg-white p-4 sm:p-6 shadow-sm">
-            <div className="mb-5 flex items-center gap-2">
+          <div className="rounded-[2rem] border border-border/50 bg-white p-4 shadow-sm sm:p-5">
+            <div className="mb-3 flex items-center gap-2">
               <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-primary/10 text-primary"><BarChart3 className="h-4 w-4" /></span>
               <h3 className="text-sm font-black text-foreground">Top 10 produtos</h3>
             </div>
-            <div className="h-72">
+            <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={charts.topProducts} layout="vertical">
+                <BarChart data={charts.topProducts} layout="vertical" margin={{ left: 8, right: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
                   <XAxis type="number" hide />
-                  <YAxis dataKey="name" type="category" width={92} tick={{ fontSize: 10 }} />
-                  <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                  <YAxis dataKey="name" type="category" width={124} tick={{ fontSize: 10 }} tickFormatter={(value) => String(value).length > 20 ? `${String(value).slice(0, 20)}?` : String(value)} />
+                  <Tooltip formatter={(value: number) => formatCurrency(value)} labelFormatter={(label) => String(label)} />
                   <Bar dataKey="revenue" name="Receita" fill="#ec4899" radius={[0, 10, 10, 0]} />
                 </BarChart>
               </ResponsiveContainer>

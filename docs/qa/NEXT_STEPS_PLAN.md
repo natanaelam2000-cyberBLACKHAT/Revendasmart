@@ -30,3 +30,10 @@
 3. Validar Data Safety, política de privacidade, exclusão de conta e termos.
 4. Rodar checklist mobile completo em aparelho intermediário.
 5. Rodar rollback drill.
+
+## Backlog futuro ? An?ncios Premium com descri??o assistida por IA
+
+- Status: futuro, n?o implementado nesta hotfix.
+- Escopo proposto: sugerir descri??es comerciais para cards de Marketing usando IA somente com a??o expl?cita do usu?rio.
+- Pr?-condi??es: pol?tica de privacidade revisada, consentimento claro, limites de custo, logs sem dados sens?veis e op??o de editar antes de salvar/compartilhar.
+- Fora do escopo atual: nenhuma IA generativa foi adicionada ao runtime, ao backend ou aos fluxos de an?ncios.

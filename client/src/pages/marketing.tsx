@@ -109,6 +109,7 @@ export default function Marketing() {
   const recentMaterialsCount = historyEntries.length;
   const currentTemplate = resolveMarketingTemplate(template);
   const currentImageUrl = selectedItem ? getProductImage(selectedItem) || undefined : undefined;
+  const storeDisplayName = String(settings.storeName || settings.storeIdentity?.name || "Minha loja").trim() || "Minha loja";
   const storeLogoUrl = String(settings.storeIdentity?.logoUrl || settings.storeLogo || "").trim();
   const storeWhatsappNumber = String(settings.whatsapp || (settings as typeof settings & { whatsappNumber?: string; phone?: string }).whatsappNumber || (settings as typeof settings & { whatsappNumber?: string; phone?: string }).phone || "").replace(/\D/g, "");
   const currentAdConfig = useMemo(() => {
@@ -128,7 +129,7 @@ export default function Marketing() {
       headline: currentTemplate.headline,
       note,
       ctaText,
-      storeName: settings.storeName || "Revenda Smart",
+      storeName: storeDisplayName,
       storeLogoUrl,
       primaryColor: settings.primaryColor || "#ec4899",
       templateId: currentTemplate.id,
@@ -140,7 +141,7 @@ export default function Marketing() {
       backgroundStyle,
       catalogUrl,
     });
-  }, [adTheme, backgroundStyle, catalogUrl, ctaText, currentImageUrl, currentTemplate.headline, currentTemplate.id, note, priceOverride, selectedItem, settings.primaryColor, settings.storeName, showBrand, showStockStatus, showVolume, showWhatsAppCta, storeLogoUrl]);
+  }, [adTheme, backgroundStyle, catalogUrl, ctaText, currentImageUrl, currentTemplate.headline, currentTemplate.id, note, priceOverride, selectedItem, settings.primaryColor, showBrand, showStockStatus, showVolume, showWhatsAppCta, storeDisplayName, storeLogoUrl]);
   const generatedText = useMemo(() => currentAdConfig ? buildMarketingAdMessage(currentAdConfig, { includePayment, pixKey: settings.pixKey, paymentLink: settings.paymentLink }) : "", [currentAdConfig, includePayment, settings.paymentLink, settings.pixKey]);
   const previewWhatsappUrl = useMemo(() => generatedText ? buildMarketingWhatsappUrl({ phone: storeWhatsappNumber, message: generatedText }) : "", [generatedText, storeWhatsappNumber]);
 
@@ -200,8 +201,15 @@ export default function Marketing() {
     notifySuccess("Card pronto para compartilhar com imagem.");
   };
 
+  const notifyCardGenerationError = (error: unknown, fallback: string) => {
+    const message = error instanceof Error ? error.message : fallback;
+    setImageError(message);
+    notifyError(message.includes("foto deste produto") ? message : fallback);
+    return message;
+  };
+
   const shareAdBlob = async (payload: NonNullable<ReturnType<typeof entryPayload>>) => {
-    const blob = await createMarketingCard(payload, imageFallbackNotice);
+    const blob = await createMarketingCard(payload);
     const result = await shareMarketingCard({
       blob,
       productName: payload.productName,
@@ -268,10 +276,8 @@ export default function Marketing() {
     notifyInfo("Compartilhamento do catálogo aberto no WhatsApp.");
   };
 
-  const imageFallbackNotice = () => notifyInfo("Imagem omitida; arte gerada sem ela.");
-
   const downloadEntryCard = async (entry: MarketingHistoryEntry) => {
-    const blob = await createMarketingCard(entry, imageFallbackNotice);
+    const blob = await createMarketingCard(entry);
     downloadMarketingCard(blob, entry.productName);
   };
 
@@ -279,7 +285,7 @@ export default function Marketing() {
     const payload = entryPayload("downloaded");
     if (!payload) return;
     try {
-      const blob = await createMarketingCard(payload, imageFallbackNotice);
+      const blob = await createMarketingCard(payload);
       downloadMarketingCard(blob, payload.productName);
       await recordAction(payload);
       notifySuccess("Card salvo.");
@@ -303,7 +309,7 @@ export default function Marketing() {
   const repeatShare = async (entry: MarketingHistoryEntry) => {
     const payload = repeatPayload(entry, "shared");
     try {
-      const blob = await createMarketingCard(payload, imageFallbackNotice);
+      const blob = await createMarketingCard(payload);
       const result = await shareMarketingCard({
         blob,
         productName: payload.productName,
@@ -326,9 +332,14 @@ export default function Marketing() {
     }
   };
   const repeatDownload = async (entry: MarketingHistoryEntry) => {
-    await downloadEntryCard(entry);
-    await recordAction(repeatPayload(entry, "downloaded"));
-    notifySuccess("Card salvo.");
+    try {
+      await downloadEntryCard(entry);
+      await recordAction(repeatPayload(entry, "downloaded"));
+      notifySuccess("Card salvo.");
+    } catch (error) {
+      const message = notifyCardGenerationError(error, "Não foi possível salvar o card.");
+      logError("ad_history_download_failed", message, { context: { entryAction: entry.action } });
+    }
   };
 
 

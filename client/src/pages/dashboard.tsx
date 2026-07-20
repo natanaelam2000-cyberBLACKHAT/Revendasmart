@@ -65,18 +65,26 @@ function EmptyState({ children }: { children: ReactNode }) {
   return <div className="rounded-2xl border border-dashed border-border/70 bg-secondary/20 px-4 py-5 text-sm font-semibold text-muted-foreground">{children}</div>;
 }
 
-function PerformanceChart({ points, maxValue }: { points: Array<{ key: string; label: string; revenue: number; salesCount: number }>; maxValue: number }) {
+function PerformanceChart({ points, maxValue, selectedKey, onSelect }: { points: Array<{ key: string; label: string; dateLabel: string; revenue: number; salesCount: number; isToday: boolean }>; maxValue: number; selectedKey: string; onSelect: (key: string) => void }) {
   return (
-    <div className="flex h-32 items-end gap-2" data-testid="home-performance-chart" aria-label="Gráfico simples de desempenho do período">
+    <div className="flex h-32 items-end gap-2" data-testid="home-performance-chart" aria-label="Gr?fico simples de desempenho dos ?ltimos sete dias">
       {points.map((point) => {
-        const height = maxValue > 0 ? Math.max(12, Math.round((point.revenue / maxValue) * 100)) : 12;
+        const height = maxValue > 0 && point.revenue > 0 ? Math.max(8, Math.round((point.revenue / maxValue) * 100)) : 0;
+        const isSelected = point.key === selectedKey;
         return (
-          <div key={point.key} className="flex min-w-0 flex-1 flex-col items-center gap-2">
-            <div className="flex h-24 w-full items-end rounded-full bg-primary/8 px-1 pb-1">
-              <div className="w-full rounded-full bg-gradient-to-t from-primary to-violet-400 transition-[height] duration-200 motion-reduce:transition-none" style={{ height: `${height}%` }} title={`${point.label}: ${formatHomeCurrency(point.revenue)}`} />
-            </div>
-            <span className="text-[10px] font-bold text-muted-foreground">{point.label.slice(0, 5)}</span>
-          </div>
+          <button
+            key={point.key}
+            type="button"
+            onClick={() => onSelect(point.key)}
+            className="group flex min-w-0 flex-1 flex-col items-center gap-2 rounded-2xl py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+            aria-pressed={isSelected}
+            aria-label={`${point.dateLabel}: ${formatHomeCurrency(point.revenue)}, ${point.salesCount} venda${point.salesCount === 1 ? "" : "s"}`}
+          >
+            <span className={`flex h-24 w-full items-end rounded-full px-1 pb-1 transition-colors ${isSelected ? "bg-primary/15" : "bg-primary/8 group-hover:bg-primary/12"} ${point.isToday ? "ring-1 ring-amber-300" : ""}`}>
+              <span className="w-full rounded-full bg-gradient-to-t from-primary to-violet-400 transition-[height] duration-200 motion-reduce:transition-none" style={{ height: `${height}%` }} title={`${point.label}: ${formatHomeCurrency(point.revenue)}`} />
+            </span>
+            <span className={`text-[10px] font-bold ${isSelected ? "text-primary" : "text-muted-foreground"}`}>{point.isToday ? "Hoje" : point.label.slice(0, 5)}</span>
+          </button>
         );
       })}
     </div>
@@ -93,10 +101,15 @@ export default function Dashboard() {
   const [monthlyGoalInput, setMonthlyGoalInput] = useState("");
   const [isSavingGoal, setIsSavingGoal] = useState(false);
   const [isOnboardingStripDismissed, setIsOnboardingStripDismissed] = useState(readOnboardingStripDismissed);
+  const [selectedPerformanceDay, setSelectedPerformanceDay] = useState<string | null>(null);
 
   const dataLoading = productsLoading || salesLoading || clientsLoading;
   const dataError = productsError || salesError || clientsError;
   const home = useMemo(() => buildHomeDashboardViewModel({ products, clients, sales, settings: settings as any }), [clients, products, sales, settings]);
+  const selectedPerformancePoint = useMemo(() => {
+    const fallback = home.performance.points.find((point) => point.isToday) || home.performance.points.at(-1) || home.performance.points[0];
+    return home.performance.points.find((point) => point.key === selectedPerformanceDay) || fallback;
+  }, [home.performance.points, selectedPerformanceDay]);
 
   useEffect(() => {
     setMonthlyGoalInput(home.goal.hasExplicitGoal ? String(home.goal.target) : "");
@@ -188,7 +201,7 @@ export default function Dashboard() {
           </div>
         </header>
 
-        <main className="mx-auto max-w-4xl space-y-4 px-4 py-5 sm:px-6 lg:px-8">
+        <main className="mx-auto max-w-4xl space-y-3 px-4 py-4 sm:px-6 lg:px-8">
           {showOnboardingStrip && (
             <section className="flex items-center justify-between gap-3 rounded-2xl border border-primary/10 bg-white px-4 py-3 shadow-sm" data-testid="home-onboarding-strip">
               <button type="button" onClick={() => setLocation("/onboarding")} className="min-w-0 flex-1 text-left">
@@ -218,10 +231,19 @@ export default function Dashboard() {
           </SectionCard>
 
           <SectionCard title="Desempenho" eyebrow={home.performance.label} action={<BarChart3 className="h-5 w-5 text-primary" aria-hidden="true" />}>
-            {home.performance.hasData ? (
-              <PerformanceChart points={home.performance.points} maxValue={home.performance.maxValue} />
+            {home.performance.hasData && selectedPerformancePoint ? (
+              <div className="space-y-3">
+                <PerformanceChart points={home.performance.points} maxValue={home.performance.maxValue} selectedKey={selectedPerformancePoint.key} onSelect={setSelectedPerformanceDay} />
+                <div className="grid grid-cols-2 gap-2 rounded-2xl bg-secondary/30 p-3 text-xs" data-testid="home-performance-detail">
+                  <p className="col-span-2 font-black capitalize text-foreground">{selectedPerformancePoint.dateLabel}</p>
+                  <span><b className="block text-foreground">{formatHomeCurrency(selectedPerformancePoint.revenue)}</b>Faturamento</span>
+                  <span><b className="block text-foreground">{formatHomeCurrency(selectedPerformancePoint.profit)}</b>Lucro estimado</span>
+                  <span><b className="block text-foreground">{selectedPerformancePoint.salesCount}</b>Venda{selectedPerformancePoint.salesCount === 1 ? "" : "s"}</span>
+                  <span><b className="block text-foreground">{shortNumber(selectedPerformancePoint.itemsSold)}</b>Item{selectedPerformancePoint.itemsSold === 1 ? "" : "s"} vendido{selectedPerformancePoint.itemsSold === 1 ? "" : "s"}</span>
+                </div>
+              </div>
             ) : (
-              <EmptyState>Dados insuficientes para mostrar a evolução do período.</EmptyState>
+              <EmptyState>Ainda n?o h? vendas nos ?ltimos 7 dias.</EmptyState>
             )}
           </SectionCard>
 

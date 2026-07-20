@@ -14,6 +14,7 @@ import { buildPublicCatalogUrl } from "@/lib/public-url";
 import { QRCodeSVG } from "qrcode.react";
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
+import { patchUserSettingsOptimistic } from "@/hooks/useUserSettings";
 import { NICHO_CONFIG, ONBOARDING_NICHO_IDS, type NichoId } from "@/lib/nicho-config";
 import { APP_THEMES, BUTTON_TONES, CARD_TONES, MOTION_LEVELS, RADIUS_LEVELS, SHADOW_LEVELS, buildAppThemeCustomization, resolveAppThemeId, type AppThemeCustomization } from "@/lib/app-themes";
 import {
@@ -200,14 +201,17 @@ export default function Settings() {
     setSaveMessage("");
 
     try {
+      const rawStoreName = String(formSettings?.storeName || "").replace(/\s+/g, " ").trim();
+      const normalizedStoreName = rawStoreName || "Minha loja";
+      const catalogSlug = normalizeCatalogSlug(formSettings?.catalogSlug || formSettings?.catalog_slug || normalizedStoreName || "minha-loja");
+      const normalizedSettings = { ...formSettings, storeName: normalizedStoreName, catalogSlug, catalog_slug: catalogSlug };
+      setFormSettings(normalizedSettings);
+
       const response = await measureOperation("catalog_settings_save", async () => {
         const token = await getFirebaseIdToken();
         const headers: Record<string, string> = { "Content-Type": "application/json" };
         if (token) headers["Authorization"] = `Bearer ${token}`;
 
-        const catalogSlug = normalizeCatalogSlug(formSettings?.catalogSlug || formSettings?.catalog_slug || formSettings?.storeName || "minha-loja");
-        const normalizedSettings = { ...formSettings, catalogSlug, catalog_slug: catalogSlug };
-        setFormSettings(normalizedSettings);
         return await fetch(getApiUrl(`/api/user/settings/${firebaseUid}`), {
           method: "POST",
           headers,
@@ -221,12 +225,18 @@ export default function Settings() {
 
       const result = await response.json();
       if (result.success) {
+        const returnedSettings = result.settings && typeof result.settings === "object" ? result.settings : {};
+        const confirmedSettings = {
+          ...normalizedSettings,
+          ...returnedSettings,
+          storeName: normalizedSettings.storeName,
+          catalogSlug: normalizedSettings.catalogSlug,
+          catalog_slug: normalizedSettings.catalog_slug,
+        };
         setSaveMessage("Configurações salvas.");
         notifySuccess("Configurações salvas.");
-        // Update form with returned settings to ensure sync
-        if (result.settings) {
-          setFormSettings(result.settings);
-        }
+        setFormSettings(confirmedSettings);
+        patchUserSettingsOptimistic(confirmedSettings);
         setTimeout(() => setSaveMessage(""), 3000);
       } else {
         throw new Error(result.error || "Erro ao salvar");
@@ -307,6 +317,7 @@ export default function Settings() {
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       setFormSettings(nextSettings);
+      patchUserSettingsOptimistic(nextSettings);
       setSaveMessage("Logo atualizado.");
       notifySuccess("Logo atualizado.");
     } catch (error) {

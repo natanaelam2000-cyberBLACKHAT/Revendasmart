@@ -238,7 +238,7 @@ export function calculateRanking(
       const quantity = Number(item.quantity || 0);
       const revenue = quantity * Number(item.price || 0);
       const profit = product ? quantity * (Number(item.price || 0) - Number(product.costPrice || 0)) : 0;
-      const productName = product?.name || "Produto removido";
+      const productName = product?.name || "Produto n?o dispon?vel";
       addRankingValue(productMap, item.productId, productName, revenue, profit, quantity);
       addRankingValue(categoryMap, product?.category || "Sem categoria", product?.category || "Sem categoria", revenue, profit, quantity);
       addRankingValue(brandMap, product?.brand || "Sem marca", product?.brand || "Sem marca", revenue, profit, quantity);
