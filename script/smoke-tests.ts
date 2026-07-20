@@ -9,7 +9,7 @@ import { buildProductCreatePayload } from "../client/src/lib/product-payload";
 import { MARKETING_AD_THEME_IDS, buildMarketingAdConfig, buildMarketingAdMessage, buildMarketingWhatsappUrl, formatMarketingPrice, normalizeMarketingAdConfig, sanitizeMarketingHistoryPayload } from "../client/src/lib/marketing-ad";
 import { sanitizeMarketingFileName } from "../client/src/lib/marketing-share";
 import { buildPublicCatalogUrl, normalizePublicAppBaseUrl, resolvePublicAppBaseUrl } from "../client/src/lib/public-url";
-import { HOME_ACCORDION_SECTION_IDS, HOME_ACCORDION_STORAGE_KEY, HOME_SUMMARY_KPI_IDS, buildHomeDashboardViewModel, resolveHomeAccordionSectionId } from "../client/src/lib/home-dashboard-view-model";
+import { HOME_SUMMARY_KPI_IDS, buildHomeDashboardViewModel } from "../client/src/lib/home-dashboard-view-model";
 import { validateMercadoPagoAccessTokenForEnvironment } from "../server/mercadopago-environment";
 import { buildHealthPayload, buildReadinessPayload, buildSafeErrorBody, classifySafeError, createRequestId, normalizeRequestId, requestIdMiddleware, sanitizeForLog } from "../server/logger";
 import { ApiError, apiRequest, buildApiErrorDisplayMessage, formatApiSupportCode } from "../client/src/lib/api-client";
@@ -754,9 +754,11 @@ assert.doesNotMatch(dashboard, /commandKpis/);
 assert.doesNotMatch(dashboard, /executiveWidgets/);
 assert.doesNotMatch(dashboard, /smartAlerts/);
 assert.match(dashboard, /buildHomeDashboardViewModel/);
+assert.match(dashboard, /Resumo do período/);
+assert.match(dashboard, /Desempenho/);
 assert.match(dashboard, /O que precisa da sua atenção/);
-assert.match(dashboard, /Produtos e estoque/);
-assert.match(dashboard, /Saúde da loja/);
+assert.doesNotMatch(dashboard, /Produtos e estoque/);
+assert.doesNotMatch(dashboard, /Saúde da loja/);
 
 assert.match(dashboardMetrics, /calculateExecutiveSummary/);
 assert.match(dashboardMetrics, /calculateMonthlyGoal/);
@@ -766,12 +768,12 @@ assert.match(dashboardMetrics, /statusLabel/);
 assert.doesNotMatch(dashboardMetrics, /999/);
 assert.match(dashboardMetrics, /calculateAttentionItems/);
 assert.doesNotMatch(dashboard, /Alertas inteligentes/);
-assert.doesNotMatch(dashboard, />Meta mensal</);
+assert.match(dashboard, /Meta mensal/);
 assert.match(dashboard, /monthlyGoalInput/);
 assert.match(dashboard, /handleSaveMonthlyGoal/);
-assert.match(dashboard, /Ticket médio/);
-assert.match(dashboard, /Produto campeão/);
-assert.match(dashboard, /Produto parado/);
+assert.doesNotMatch(dashboard, /Ticket médio/);
+assert.doesNotMatch(dashboard, /Produto campeão/);
+assert.doesNotMatch(dashboard, /Produto parado/);
 assert.match(monthlySales, /useMonthlySalesData/);
 assert.match(productsSold, /useMonthlySalesData/);
 assert.match(monthlySalesHook, /where\("date", ">=", range\.startIso\)/);
@@ -1106,10 +1108,10 @@ assert.match(nichoConfig, /Marca própria/);
 assert.doesNotMatch(nichoConfig, /brandLabel: 'Marca \/ Origem'/);
 assert.match(addProduct, /getProductCategoriesForNicho/);
 assert.match(addProduct, /baseCategorySuggestions/);
-assert.match(dashboard, /OnboardingChecklist/);
-assert.match(dashboard, /Escolher tema/);
-assert.match(dashboard, /Cadastrar primeiro produto/);
-assert.match(dashboard, /products\.length > 0/);
+assert.doesNotMatch(dashboard, /OnboardingChecklist/);
+assert.match(dashboard, /home-onboarding-strip/);
+assert.match(dashboard, /Finalize a configura..o da loja/);
+assert.match(dashboard, /products\.length === 0/);
 assert.match(onboardingChecklist, /local|Primeiros passos|Configure sua loja/);
 assert.match(planProvider, /api\/plan\/data/);
 assert.match(planProvider, /onAuthStateChanged/);
@@ -1468,7 +1470,7 @@ assert.doesNotMatch(loginPage, /rs-login-person-illustration/);
 assert.doesNotMatch(loginPage, />A<|rs-login-avatar/);
 
 
-// Android/public URL and compact Home guardrails
+// Android/public URL and executive Home guardrails
 assert.match(settings, /buildPublicCatalogUrl\(slug\)/);
 assert.match(clientsPage, /buildPublicCatalogUrl\(slug\)/);
 assert.doesNotMatch(settings, /window\.location\.origin[^\n]+\/u\//);
@@ -1500,7 +1502,7 @@ const homeFixture = buildHomeDashboardViewModel({
     onboarding_completed: true,
   } as any,
   products: [
-    { id: "p1", name: "Kaiak Oceano", brand: "Natura", category: "Perfumes", stock: 2, costPrice: 50, salePrice: 100 },
+    { id: "p1", name: "Kaiak Oceano", brand: "Natura", category: "Perfumes", stock: 2, costPrice: 50, salePrice: 100, imageUrl: "https://example.test/kaiak.png" },
     { id: "p2", name: "Glamour Diva", brand: "Boticário", category: "Perfumes", stock: 1, costPrice: 0, salePrice: 80 },
     { id: "p3", name: "Ameixa e Flor de Baunilha", brand: "Natura", category: "Corpo", stock: 7, costPrice: 40, salePrice: 70 },
     { id: "p4", name: "Produto sem estoque", brand: "", category: "Kits", stock: 0, costPrice: 15, salePrice: 30 },
@@ -1512,42 +1514,53 @@ const homeFixture = buildHomeDashboardViewModel({
   ] as any,
   sales: [
     { id: "s1", clientId: "c1", date: "2026-07-10T10:00:00.000Z", totalPrice: 1200, paymentType: "pix", products: [{ productId: "p1", quantity: 12, price: 100 }] },
-    { id: "s2", clientId: "c2", date: "2026-05-01T10:00:00.000Z", totalPrice: 80, paymentType: "pix", products: [{ productId: "p2", quantity: 1, price: 80 }] },
+    { id: "s2", clientId: "c2", date: "2026-06-01T10:00:00.000Z", totalPrice: 80, paymentType: "pix", products: [{ productId: "p2", quantity: 1, price: 80 }] },
   ] as any,
 });
-assert.deepEqual(HOME_SUMMARY_KPI_IDS, ["monthlyRevenue", "monthlyProfit", "averageTicket", "activeClients"]);
+assert.deepEqual(HOME_SUMMARY_KPI_IDS, ["monthlyRevenue", "monthlyProfit", "monthlySalesCount", "monthComparison"]);
 assert.equal(HOME_SUMMARY_KPI_IDS.length, 4);
 assert.equal(homeFixture.summary.monthlyRevenue, 1200);
-assert.equal(homeFixture.summary.averageTicket, 1200);
-assert.equal(homeFixture.summary.activeClients, 1);
-assert.equal(homeFixture.products.champion?.product.id, "p1");
-assert.equal(homeFixture.inventory.totalProducts, 4);
-assert.equal(homeFixture.inventory.outOfStockCount, 1);
+assert.equal(homeFixture.summary.monthlySalesCount, 1);
+assert.equal(homeFixture.summary.previousRevenue, 80);
+assert.equal(homeFixture.goal.hasExplicitGoal, true);
+assert.equal(homeFixture.goal.progressPercent, 12);
+assert.equal(homeFixture.performance.points.length, 7);
+assert.equal(homeFixture.performance.hasData, true);
 assert.ok(homeFixture.priorities.length <= 3);
+assert.ok(homeFixture.priorityTotalCount >= homeFixture.priorities.length);
+assert.ok(homeFixture.hiddenPriorityCount === Math.max(0, homeFixture.priorityTotalCount - 3));
 assert.deepEqual(homeFixture.priorities.map((item) => item.severity), [...homeFixture.priorities.map((item) => item.severity)].sort((a, b) => a - b));
-assert.equal(resolveHomeAccordionSectionId("health"), "health");
-assert.equal(resolveHomeAccordionSectionId("invalid-section"), null);
-assert.equal(HOME_ACCORDION_STORAGE_KEY, "revendasmart:home:accordion:v1");
-assert.ok(HOME_ACCORDION_SECTION_IDS.includes("month"));
+assert.ok(homeFixture.mainInsight);
 const emptyHome = buildHomeDashboardViewModel({ referenceDate: homeReferenceDate, settings: {} as any, products: [] as any, clients: [] as any, sales: [] as any });
-assert.equal(emptyHome.summary.averageTicket, null);
-assert.equal(emptyHome.products.champion, null);
-assert.equal(emptyHome.products.critical.length, 0);
-assert.match(homeDashboardViewModel, /cliente ativo na Home/i);
+assert.equal(emptyHome.summary.monthlySalesCount, 0);
+assert.equal(emptyHome.summary.comparisonPercent, null);
+assert.equal(emptyHome.goal.hasExplicitGoal, false);
+assert.equal(emptyHome.performance.hasData, false);
+assert.equal(emptyHome.mainInsight, null);
+assert.ok(emptyHome.priorities.length <= 3);
+assert.match(homeDashboardViewModel, /cliente ativo/i);
 assert.doesNotMatch(homeDashboardViewModel, /onSnapshot|getDocs|collection\(/);
 assert.match(dashboard, /buildHomeDashboardViewModel/);
-assert.match(dashboard, /HOME_ACCORDION_STORAGE_KEY/);
-assert.match(dashboard, /home-summary-kpis/);
-assert.match(dashboard, /aria-expanded/);
-assert.match(dashboard, /aria-controls/);
-assert.match(dashboard, /data-home-accordion-panel/);
-assert.match(dashboard, /Registre uma venda para calcular/);
+assert.match(dashboard, /Visão geral/);
+assert.match(dashboard, /Resumo do período/);
+assert.match(dashboard, /Desempenho/);
+assert.match(dashboard, /O que precisa da sua atenção/);
+assert.match(dashboard, /Meta mensal/);
+assert.match(dashboard, /Insight principal/);
+assert.match(dashboard, /Defina uma meta mensal/);
+assert.match(dashboard, /Finalize a configuração da loja/);
+assert.match(dashboard, /home-onboarding-strip/);
+assert.match(dashboard, /home-performance-chart/);
+assert.match(dashboard, /hiddenPriorityCount/);
+assert.doesNotMatch(dashboard, /OnboardingChecklist/);
+assert.doesNotMatch(dashboard, /home-summary-kpis[\s\S]*Ticket médio/);
+assert.doesNotMatch(dashboard, /HOME_ACCORDION_STORAGE_KEY|data-home-accordion|resolveHomeAccordionSectionId/);
 assert.doesNotMatch(dashboard, /StoreIntelligencePanel/);
 assert.doesNotMatch(dashboard, /quickActions/);
 assert.doesNotMatch(dashboard, /Centro de comando/);
 assert.doesNotMatch(dashboard, /Estoque inteligente/);
-assert.doesNotMatch(dashboard, /Sem IA/);
-assert.doesNotMatch(dashboard, />Novo produto<|>Nova venda<|>Novo cliente<|>Nova cobrança<|>Compartilhar catálogo<|>Criar campanha</);
+assert.doesNotMatch(dashboard, /Sem IA|regras determinísticas|listener extra|bundle|cache/);
+assert.doesNotMatch(dashboard, />Novo produto<|>Nova venda<|>Novo cliente<|>Nova cobrança<|>Compartilhar catálogo<|>Criar campanha<|>Registrar venda/);
 assert.doesNotMatch(dashboard, /display:\s*none/);
 assert.doesNotMatch(dashboard, /onSnapshot|getDocs|getFirestore|collection\(/);
 
