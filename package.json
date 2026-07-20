@@ -29,7 +29,12 @@
     "android:doctor": "cap doctor android",
     "android:build:debug": "node scripts/android/build-debug.mjs",
     "android:install:debug": "node scripts/android/install-debug.mjs",
-    "android:logcat": "node scripts/android/logcat.mjs"
+    "android:logcat": "node scripts/android/logcat.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:install": "playwright install chromium",
+    "security:gitleaks": "node scripts/security/run-gitleaks.mjs",
+    "quality:knip": "knip --config knip.json --reporter compact --no-exit-code"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.2",
@@ -108,6 +113,7 @@
   "devDependencies": {
     "@capacitor/cli": "^8.4.2",
     "@eslint/js": "^9.39.4",
+    "@playwright/test": "^1.61.1",
     "@replit/vite-plugin-cartographer": "^0.4.4",
     "@replit/vite-plugin-dev-banner": "^0.1.1",
     "@replit/vite-plugin-runtime-error-modal": "^0.0.4",
@@ -133,6 +139,7 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.6.0",
+    "knip": "^6.27.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.20.5",

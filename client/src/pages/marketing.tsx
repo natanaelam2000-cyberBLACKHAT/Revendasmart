@@ -62,7 +62,7 @@ export default function Marketing() {
   const [template, setTemplate] = useState<MarketingTemplateId>('promo');
   const [priceOverride, setPriceOverride] = useState('');
   const [note, setNote] = useState('');
-  const [ctaText, setCtaText] = useState('Peça pelo WhatsApp');
+  const [ctaText, setCtaText] = useState('Chamar no WhatsApp');
   const [adTheme, setAdTheme] = useState<MarketingAdThemeId>(() => readStoredMarketingTheme());
   const [showBrand, setShowBrand] = useState(true);
   const [showVolume, setShowVolume] = useState(true);
@@ -351,7 +351,7 @@ export default function Marketing() {
     setAdTheme(config.themeId);
     setPriceOverride(parseMarketingPriceNumber(config.price).toFixed(2));
     setNote(config.note || "");
-    setCtaText(config.ctaText || "Peça pelo WhatsApp");
+    setCtaText(config.ctaText || "Chamar no WhatsApp");
     setShowBrand(config.showBrand);
     setShowVolume(config.showVolume);
     setShowStockStatus(config.showStockStatus);

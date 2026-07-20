@@ -829,6 +829,22 @@
       ]
     },
     {
+      "name": "revendasmart-android-release",
+      "tier": "Custom Android",
+      "source": "Revenda Smart custom agent skill",
+      "path": ".codex/skills/revendasmart-android-release/SKILL.md",
+      "riskLevel": "medium",
+      "defaultMode": "REVIEW_ONLY",
+      "category": "production-readiness",
+      "tags": [
+        "android",
+        "mobile",
+        "production-readiness",
+        "release-readiness",
+        "revendasmart"
+      ]
+    },
+    {
       "name": "revendasmart-auth-authorization-review",
       "tier": "Revenda Smart",
       "source": "Revenda Smart custom operational skill",

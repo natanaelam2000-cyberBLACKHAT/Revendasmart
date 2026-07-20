@@ -1,0 +1,50 @@
+title = "Revenda Smart secret scanning"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "mercado-pago-token"
+description = "Mercado Pago APP_USR/TEST access token"
+regex = '''\b(?:APP_USR|TEST)-[A-Za-z0-9_-]{20,}\b'''
+keywords = ["APP_USR-", "TEST-"]
+
+[[rules]]
+id = "firebase-admin-private-key"
+description = "Firebase Admin or Google service account private key"
+regex = '''-----BEGIN (?:RSA |EC |OPENSSH |)?PRIVATE KEY-----'''
+keywords = ["BEGIN", "PRIVATE KEY"]
+
+[[rules]]
+id = "android-keystore-password"
+description = "Android signing password in Gradle or properties files"
+regex = '''(?i)\b(?:storePassword|keyPassword)\s*[=:]\s*['"]?[A-Za-z0-9_@%+=:,./-]{8,}'''
+keywords = ["storePassword", "keyPassword"]
+
+[[rules]]
+id = "vercel-token"
+description = "Vercel token"
+regex = '''\bvercel_[A-Za-z0-9]{20,}\b'''
+keywords = ["vercel_"]
+
+[[rules]]
+id = "gcp-service-account-json-key"
+description = "Google Cloud service account JSON key material"
+regex = '''"private_key"\s*:\s*"-----BEGIN PRIVATE KEY-----'''
+keywords = ["private_key", "BEGIN PRIVATE KEY"]
+
+[allowlist]
+description = "Ignore generated and local dependency directories"
+paths = [
+  '''^node_modules/''',
+  '''^dist/''',
+  '''^android/app/build/''',
+  '''^android/\.gradle/''',
+  '''^android/app/src/main/assets/public/''',
+  '''^\.vercel/''',
+  '''^\.gitleaks\.toml$''',
+  '''^scripts/security/run-gitleaks\.mjs$''',
+  '''^scripts/security/validate-agent-skills\.mjs$''',
+  '''^script/smoke-tests\.ts$''',
+  '''^CLOUD_RUN_MIGRATION\.md$''',
+]

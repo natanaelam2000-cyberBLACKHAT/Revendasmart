@@ -1,6 +1,7 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild, loadEnv } from "vite";
 import { rm, readFile } from "fs/promises";
+import { execSync } from "node:child_process";
 
 // server deps to bundle to reduce openat(2) syscalls
 // which helps cold start times
@@ -32,6 +33,14 @@ const allowlist = [
   "zod-validation-error",
 ];
 
+function resolveBuildId() {
+  if (process.env.VITE_APP_BUILD_ID) return process.env.VITE_APP_BUILD_ID;
+  try {
+    return execSync("git rev-parse --short=12 HEAD", { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return "local-dev";
+  }
+}
 
 function assertProductionBuildDoesNotUseFirebaseEmulators() {
   const viteEnv = loadEnv("production", process.cwd(), "");
@@ -44,6 +53,7 @@ function assertProductionBuildDoesNotUseFirebaseEmulators() {
 
 async function buildAll() {
   assertProductionBuildDoesNotUseFirebaseEmulators();
+  process.env.VITE_APP_BUILD_ID = resolveBuildId();
 
   await rm("dist", { recursive: true, force: true });
 

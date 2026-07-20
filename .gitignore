@@ -40,3 +40,5 @@ firebase-service-account*.json
 !docs/SECRET_MANAGER_CLOUD_RUN.md
 !scripts/security/verify-cloud-run-secrets.sh
 !scripts/security/update-secret-version.sh
+test-results/
+playwright-report/

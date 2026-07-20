@@ -11,6 +11,7 @@ import { getCurrentFirebaseUser, getFirebaseIdToken, getFirebaseAuth, measureOpe
 import { useLocation } from "wouter";
 import { getApiUrl } from "@/lib/api-config";
 import { buildPublicCatalogUrl } from "@/lib/public-url";
+import { APP_BUILD_ID, formatAppBuildId } from "@/lib/build-info";
 import { QRCodeSVG } from "qrcode.react";
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
@@ -1175,7 +1176,8 @@ Dica: Descreva seu problema e se possível anexe uma screenshot do erro.`
                   </div>
                   <div className="flex-1">
                     <h2 className="text-lg font-black text-primary mb-1">Revenda Smart</h2>
-                    <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Versão {APP_VERSION.replace('v', '')}</p>
+                    <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-1">Versão {APP_VERSION.replace('v', '')}</p>
+                    <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2" data-testid="app-build-id">Build {formatAppBuildId(APP_BUILD_ID)}</p>
                     <p className="text-xs text-muted-foreground leading-relaxed">Gerenciamento inteligente de estoque e catálogo digital para revendedores de cosméticos e perfumes.</p>
                   </div>
                 </div>

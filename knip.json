@@ -1,0 +1,7 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": ["client/src/main.tsx", "server/index.ts", "script/**/*.ts", "scripts/**/*.{ts,mjs}", "playwright.config.ts"],
+  "project": ["client/src/**/*.{ts,tsx}", "server/**/*.ts", "shared/**/*.ts", "script/**/*.ts", "scripts/**/*.{ts,mjs}", "tests/**/*.ts", "playwright.config.ts"],
+  "ignore": ["dist/**", "node_modules/**", "android/**", ".codex/**", "coverage/**"],
+  "ignoreBinaries": ["cap", "firebase", "vite", "tsx", "tsc", "eslint", "playwright", "knip"]
+}

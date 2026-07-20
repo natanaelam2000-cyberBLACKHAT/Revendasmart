@@ -7,6 +7,12 @@ import { spawnSync } from "node:child_process";
 export const DEFAULT_ANDROID_API_BASE_URL = "https://revendasmart.vercel.app";
 export const DEFAULT_ANDROID_PUBLIC_APP_URL = "https://revendasmart.vercel.app";
 const WEB_DIR = "dist/public";
+const ANDROID_WEB_DIR = "android/app/src/main/assets/public";
+const REQUIRED_ANDROID_BUNDLE_MARKERS = [
+  "Resumo do per\u00edodo",
+  "Insight principal",
+  "home-performance-detail",
+];
 const FORBIDDEN_BUNDLE_MARKERS = [
   "http://localhost:5000",
   "http://localhost/api",
@@ -19,6 +25,10 @@ const FORBIDDEN_BUNDLE_MARKERS = [
   "https://127.0.0.1/u/",
   "capacitor://localhost/u/",
   "file:///u/",
+  "Produto selecionado para voc\u00ea pedir direto pelo WhatsApp",
+  "Imagem omitida; arte gerada sem ela",
+  "Pe\u00e7a pelo WhatsApp",
+  "REVENDA SMART",
 ];
 
 function fail(message) {
@@ -38,6 +48,12 @@ function npmCommand() {
 
 function capCommand() {
   return process.platform === "win32" ? "node_modules/.bin/cap.cmd" : "node_modules/.bin/cap";
+}
+
+function resolveGitBuildId() {
+  const result = spawnSync("git", ["rev-parse", "--short=12", "HEAD"], { encoding: "utf8", shell: false });
+  if (result.status !== 0) return "local-dev";
+  return String(result.stdout || "").trim() || "local-dev";
 }
 
 function normalizeAndroidHttpsBaseUrl(value, envName) {
@@ -81,38 +97,61 @@ function walkFiles(dir) {
   return files;
 }
 
-function assertWebBuild(apiBaseUrl, publicAppUrl) {
-  const indexPath = join(WEB_DIR, "index.html");
+function readBuildFiles(dir) {
+  const indexPath = join(dir, "index.html");
   if (!statSync(indexPath, { throwIfNoEntry: false })?.isFile()) {
-    fail(`${indexPath} não encontrado após build.`);
+    fail(`${indexPath} nao encontrado apos build.`);
   }
+  return walkFiles(dir).filter((file) => /\.(html|js|css|json|map)$/.test(file));
+}
 
-  const files = walkFiles(WEB_DIR).filter((file) => /\.(html|js|css|json|map)$/.test(file));
-  let apiBaseSeen = false;
-  let publicAppSeen = false;
+function assertMarkerSeen(files, marker, label) {
+  for (const file of files) {
+    if (readFileSync(file, "utf8").includes(marker)) return;
+  }
+  fail(`${label} nao encontrado no bundle: ${marker}`);
+}
+
+function assertForbiddenMarkersAbsent(files) {
   for (const file of files) {
     const contents = readFileSync(file, "utf8");
-    if (contents.includes(apiBaseUrl)) apiBaseSeen = true;
-    if (contents.includes(publicAppUrl)) publicAppSeen = true;
     for (const marker of FORBIDDEN_BUNDLE_MARKERS) {
       if (contents.includes(marker)) fail(`marcador proibido encontrado em ${file}: ${marker}`);
     }
   }
-
-  if (!apiBaseSeen) fail(`domínio público de API não encontrado no build: ${apiBaseUrl}`);
-  if (!publicAppSeen) fail(`domínio público do app não encontrado no build: ${publicAppUrl}`);
 }
+
+function assertWebBuild(apiBaseUrl, publicAppUrl, buildId) {
+  const files = readBuildFiles(WEB_DIR);
+  assertForbiddenMarkersAbsent(files);
+  assertMarkerSeen(files, apiBaseUrl, "dominio publico de API");
+  assertMarkerSeen(files, publicAppUrl, "dominio publico do app");
+  for (const marker of REQUIRED_ANDROID_BUNDLE_MARKERS) assertMarkerSeen(files, marker, "marcador funcional Android");
+  assertMarkerSeen(files, buildId, "identificador de build");
+}
+
+function assertAndroidAssets(apiBaseUrl, publicAppUrl, buildId) {
+  const files = readBuildFiles(ANDROID_WEB_DIR);
+  assertForbiddenMarkersAbsent(files);
+  assertMarkerSeen(files, apiBaseUrl, "dominio publico de API nos assets Android");
+  assertMarkerSeen(files, publicAppUrl, "dominio publico do app nos assets Android");
+  for (const marker of REQUIRED_ANDROID_BUNDLE_MARKERS) assertMarkerSeen(files, marker, "marcador funcional nos assets Android");
+  assertMarkerSeen(files, buildId, "identificador de build nos assets Android");
+}
+
 
 export function runAndroidWebSync(command = "sync") {
   if (!["sync", "copy"].includes(command)) fail(`comando inválido: ${command}`);
   const apiBaseUrl = normalizeAndroidApiBaseUrl(process.env.VITE_API_BASE_URL || DEFAULT_ANDROID_API_BASE_URL);
   const publicAppUrl = normalizeAndroidPublicAppUrl(process.env.VITE_PUBLIC_APP_URL || DEFAULT_ANDROID_PUBLIC_APP_URL);
-  const env = { ...process.env, VITE_API_BASE_URL: apiBaseUrl, VITE_PUBLIC_APP_URL: publicAppUrl };
+  const buildId = process.env.VITE_APP_BUILD_ID || resolveGitBuildId();
+  const env = { ...process.env, VITE_API_BASE_URL: apiBaseUrl, VITE_PUBLIC_APP_URL: publicAppUrl, VITE_APP_BUILD_ID: buildId };
 
   run(npmCommand(), ["run", "build"], { env });
-  assertWebBuild(apiBaseUrl, publicAppUrl);
+  assertWebBuild(apiBaseUrl, publicAppUrl, buildId);
   run(capCommand(), [command, "android"]);
-  console.log(JSON.stringify({ command, webDir: WEB_DIR, apiBaseUrl, publicAppUrl }, null, 2));
+  assertAndroidAssets(apiBaseUrl, publicAppUrl, buildId);
+  console.log(JSON.stringify({ command, webDir: WEB_DIR, androidWebDir: ANDROID_WEB_DIR, apiBaseUrl, publicAppUrl, buildId }, null, 2));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

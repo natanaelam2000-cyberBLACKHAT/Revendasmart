@@ -1,0 +1,63 @@
+name: Quality Gates
+
+on:
+  pull_request:
+    paths:
+      - "client/**"
+      - "server/**"
+      - "shared/**"
+      - "script/**"
+      - "scripts/**"
+      - "tests/**"
+      - ".github/workflows/**"
+      - ".gitleaks.toml"
+      - "knip.json"
+      - "playwright.config.ts"
+      - "package.json"
+      - "package-lock.json"
+  push:
+    branches: [main]
+    paths:
+      - "client/**"
+      - "server/**"
+      - "shared/**"
+      - "script/**"
+      - "scripts/**"
+      - "tests/**"
+      - ".github/workflows/**"
+      - ".gitleaks.toml"
+      - "knip.json"
+      - "playwright.config.ts"
+      - "package.json"
+      - "package-lock.json"
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run skills:validate
+      - run: npm run check
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build
+      - run: npm run performance:bundle-check
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: npm run quality:knip
+      - name: Playwright setup guardrail
+        run: npm run test:e2e
+        env:
+          E2E_BASE_URL: ""
