@@ -11,7 +11,6 @@ const ANDROID_WEB_DIR = "android/app/src/main/assets/public";
 const REQUIRED_ANDROID_BUNDLE_MARKERS = [
   "Resumo do per\u00edodo",
   "Insight principal",
-  "home-performance-detail",
 ];
 const FORBIDDEN_BUNDLE_MARKERS = [
   "http://localhost:5000",

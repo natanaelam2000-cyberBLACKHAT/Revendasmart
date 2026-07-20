@@ -15,16 +15,6 @@ export interface HomePriorityItem {
   tone: PriorityTone;
 }
 
-export interface HomePerformancePoint {
-  key: string;
-  label: string;
-  dateLabel: string;
-  isToday: boolean;
-  revenue: number;
-  profit: number;
-  salesCount: number;
-  itemsSold: number;
-}
 
 export interface HomeMainInsight {
   title: string;
@@ -48,12 +38,6 @@ export interface HomeDashboardViewModel {
     comparisonLabel: string;
     comparisonTone: "up" | "down" | "flat" | "neutral";
   };
-  performance: {
-    label: string;
-    points: HomePerformancePoint[];
-    maxValue: number;
-    hasData: boolean;
-  };
   goal: {
     target: number;
     hasExplicitGoal: boolean;
@@ -76,7 +60,6 @@ interface HomeDashboardInput {
 }
 
 const DAY_MS = 86_400_000;
-const PERFORMANCE_DAYS = 7;
 
 export function formatHomeCurrency(value: number): string {
   const safe = Number.isFinite(value) ? value : 0;
@@ -102,9 +85,6 @@ function previousMonthOf(referenceDate: Date): Date {
   return new Date(referenceDate.getFullYear(), referenceDate.getMonth() - 1, 1);
 }
 
-function dateKey(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
 
 function productStock(product: Product): number {
   return Math.max(0, safeNumber(product.stock));
@@ -149,49 +129,6 @@ function buildComparison(currentRevenue: number, previousRevenue: number): Pick<
   };
 }
 
-function buildPerformancePoints(referenceDate: Date, sales: Sale[], productsById: Map<string, Product>): HomeDashboardViewModel["performance"] {
-  const points: HomePerformancePoint[] = [];
-  const totals = new Map<string, { revenue: number; profit: number; salesCount: number; itemsSold: number }>();
-  const todayKey = dateKey(referenceDate);
-  const startDate = new Date(referenceDate);
-  startDate.setHours(0, 0, 0, 0);
-  startDate.setDate(startDate.getDate() - (PERFORMANCE_DAYS - 1));
-  const endDate = new Date(referenceDate);
-  endDate.setHours(23, 59, 59, 999);
-
-  for (const sale of sales) {
-    const parsed = parseSafeDate(sale.date);
-    if (!parsed || parsed < startDate || parsed > endDate) continue;
-    const key = dateKey(parsed);
-    const current = totals.get(key) || { revenue: 0, profit: 0, salesCount: 0, itemsSold: 0 };
-    current.revenue += saleTotal(sale);
-    current.profit += saleProfit(sale, productsById);
-    current.salesCount += 1;
-    current.itemsSold += (sale.products || []).reduce((sum, item) => sum + safeNumber(item.quantity), 0);
-    totals.set(key, current);
-  }
-
-  for (let offset = PERFORMANCE_DAYS - 1; offset >= 0; offset -= 1) {
-    const day = new Date(referenceDate);
-    day.setHours(12, 0, 0, 0);
-    day.setDate(referenceDate.getDate() - offset);
-    const key = dateKey(day);
-    const total = totals.get(key) || { revenue: 0, profit: 0, salesCount: 0, itemsSold: 0 };
-    points.push({
-      key,
-      label: day.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }),
-      dateLabel: day.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" }),
-      isToday: key === todayKey,
-      revenue: total.revenue,
-      profit: total.profit,
-      salesCount: total.salesCount,
-      itemsSold: total.itemsSold,
-    });
-  }
-
-  const maxValue = Math.max(0, ...points.map((point) => point.revenue));
-  return { label: "?ltimos 7 dias", points, maxValue, hasData: points.some((point) => point.salesCount > 0) };
-}
 
 function topEntry(map: Map<string, number>): { label: string; value: number } | null {
   let best: { label: string; value: number } | null = null;
@@ -379,7 +316,6 @@ export function buildHomeDashboardViewModel({ products, clients, sales, settings
       previousRevenue,
       ...comparison,
     },
-    performance: buildPerformancePoints(referenceDate, sales, productsById),
     goal: {
       target: goal.target,
       hasExplicitGoal: goal.hasExplicitGoal,
