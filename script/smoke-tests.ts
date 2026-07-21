@@ -6,7 +6,7 @@ import { CATALOG_SERVER_SEARCH_ENABLED, PRODUCT_SEARCH_SCHEMA_VERSION, SERVER_SI
 import { buildStoreIntelligence } from "../client/src/lib/store-health";
 import { defaultSettings } from "../client/src/lib/mock-data";
 import { buildProductCreatePayload } from "../client/src/lib/product-payload";
-import { MARKETING_AD_THEME_IDS, buildMarketingAdConfig, buildMarketingAdMessage, buildMarketingAdVisualModel, buildMarketingWhatsappUrl, formatMarketingPrice, normalizeMarketingAdConfig, sanitizeMarketingHistoryPayload } from "../client/src/lib/marketing-ad";
+import { MARKETING_AD_THEME_IDS, buildMarketingAdConfig, buildMarketingAdMessage, buildMarketingAdVisualModel, buildMarketingWhatsappUrl, formatMarketingPrice, normalizeMarketingAdConfig, normalizeMarketingCtaText, normalizeMarketingGeneratedText, sanitizeMarketingHistoryPayload } from "../client/src/lib/marketing-ad";
 import { sanitizeMarketingFileName } from "../client/src/lib/marketing-share";
 import { buildPublicCatalogUrl, normalizePublicAppBaseUrl, resolvePublicAppBaseUrl } from "../client/src/lib/public-url";
 import { HOME_SUMMARY_KPI_IDS, buildHomeDashboardViewModel } from "../client/src/lib/home-dashboard-view-model";
@@ -567,6 +567,11 @@ const marketingAdFixture = buildMarketingAdConfig({
   showWhatsAppCta: true,
 });
 assert.equal(marketingAdFixture.priceText, "R$ 230,00");
+assert.equal(marketingAdFixture.ctaText, "Chamar no WhatsApp");
+assert.equal(normalizeMarketingCtaText("Pedir no WhatsApp"), "Chamar no WhatsApp");
+const normalizedLegacyMarketingText = normalizeMarketingGeneratedText("Produto selecionado para você pedir direto pelo WhatsApp.\nImagem omitida; arte gerada sem ela.\n💬 Peça pelo WhatsApp\n🛒 Catálogo: https://revendasmart.vercel.app/u/loja");
+assert.doesNotMatch(normalizedLegacyMarketingText, /Produto selecionado|Imagem omitida|Peça pelo WhatsApp/);
+assert.match(normalizedLegacyMarketingText, /Chamar no WhatsApp/);
 assert.equal(marketingAdFixture.stockStatus, "Pronta entrega");
 assert.match(buildMarketingAdMessage(marketingAdFixture), /Por apenas R\$ 230,00/);
 assert.match(buildMarketingAdMessage(marketingAdFixture), /Marca: Marca A/);
@@ -599,6 +604,11 @@ assert.match(marketingCard, /fitFontForLines\(ctx, config\.productName/);
 assert.doesNotMatch(marketing, /Imagem omitida; arte gerada sem ela/);
 assert.doesNotMatch(marketing, /imageFallbackNotice/);
 assert.doesNotMatch(marketingAd, /Produto selecionado/);
+assert.match(marketing, /normalizeMarketingGeneratedText\(entry\.generatedText\)/);
+assert.doesNotMatch(marketing, /navigator\.clipboard\.writeText\(entry\.generatedText\)/);
+assert.doesNotMatch(marketing, /downloadEntryCard\(entry\)/);
+assert.match(marketing, /repeatPayload\(entry, "downloaded"\)/);
+assert.match(marketing, /createMarketingCard\(payload\)/);
 assert.match(marketing, /shareMarketingCard/);
 assert.match(marketing, /handleCardCtaClick/);
 assert.match(marketing, /buildPublicCatalogUrl\(catalogSlug\)/);

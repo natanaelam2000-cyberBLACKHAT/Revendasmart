@@ -16,7 +16,7 @@ import { PageSkeleton } from "@/components/PageSkeleton";
 import { createMarketingCard, downloadMarketingCard } from "@/lib/marketing-card";
 import { isMarketingShareCancelledError, shareMarketingCard, type MarketingShareResult } from "@/lib/marketing-share";
 import { buildPublicCatalogUrl } from "@/lib/public-url";
-import { MARKETING_AD_THEME_IDS, MARKETING_AD_THEMES, MARKETING_TEMPLATES, buildMarketingAdConfig, buildMarketingAdMessage, buildMarketingVolumeText, buildMarketingWhatsappUrl, formatMarketingPrice, normalizeMarketingAdConfig, parseMarketingPriceNumber, resolveMarketingTemplate, type MarketingAdThemeId, type MarketingBackgroundStyle, type MarketingTemplateId } from "@/lib/marketing-ad";
+import { MARKETING_AD_THEME_IDS, MARKETING_AD_THEMES, MARKETING_TEMPLATES, buildMarketingAdConfig, buildMarketingAdMessage, buildMarketingVolumeText, buildMarketingWhatsappUrl, formatMarketingPrice, normalizeMarketingAdConfig, normalizeMarketingGeneratedText, parseMarketingPriceNumber, resolveMarketingTemplate, type MarketingAdThemeId, type MarketingBackgroundStyle, type MarketingTemplateId } from "@/lib/marketing-ad";
 import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
 
 async function copyTextWithFallback(text: string) {
@@ -276,11 +276,6 @@ export default function Marketing() {
     notifyInfo("Compartilhamento do catálogo aberto no WhatsApp.");
   };
 
-  const downloadEntryCard = async (entry: MarketingHistoryEntry) => {
-    const blob = await createMarketingCard(entry);
-    downloadMarketingCard(blob, entry.productName);
-  };
-
   const handleDownloadImage = async () => {
     const payload = entryPayload("downloaded");
     if (!payload) return;
@@ -299,11 +294,16 @@ export default function Marketing() {
 
   const repeatPayload = (entry: MarketingHistoryEntry, action: MarketingAction) => {
     const config = normalizeMarketingAdConfig(entry);
-    return { action, ...config, generatedText: entry.generatedText || buildMarketingAdMessage(config), template: config.templateId, price: config.priceText };
+    const normalizedGeneratedText = normalizeMarketingGeneratedText(entry.generatedText);
+    const generatedText = normalizedGeneratedText.includes(config.productName) && normalizedGeneratedText.includes(config.priceText)
+      ? normalizedGeneratedText
+      : buildMarketingAdMessage(config);
+    return { action, ...config, generatedText, template: config.templateId, price: config.priceText };
   };
   const repeatCopy = async (entry: MarketingHistoryEntry) => {
-    await navigator.clipboard.writeText(entry.generatedText);
-    await recordAction(repeatPayload(entry, "copied"));
+    const payload = repeatPayload(entry, "copied");
+    await copyTextWithFallback(payload.generatedText);
+    await recordAction(payload);
     notifySuccess("Anúncio copiado.");
   };
   const repeatShare = async (entry: MarketingHistoryEntry) => {
@@ -333,8 +333,10 @@ export default function Marketing() {
   };
   const repeatDownload = async (entry: MarketingHistoryEntry) => {
     try {
-      await downloadEntryCard(entry);
-      await recordAction(repeatPayload(entry, "downloaded"));
+      const payload = repeatPayload(entry, "downloaded");
+      const blob = await createMarketingCard(payload);
+      downloadMarketingCard(blob, payload.productName);
+      await recordAction(payload);
       notifySuccess("Card salvo.");
     } catch (error) {
       const message = notifyCardGenerationError(error, "Não foi possível salvar o card.");
