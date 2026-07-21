@@ -1345,6 +1345,18 @@ assert.match(androidBuildDebugScript, /ANDROID_HOME.*ANDROID_SDK_ROOT|ANDROID_SD
 assert.match(androidBuildDebugScript, /menos de 1 GB livre/);
 assert.match(androidInstallDebugScript, /ANDROID_SERIAL/);
 assert.match(androidInstallDebugScript, /nenhum aparelho autorizado/);
+assert.match(androidInstallDebugScript, /process\.platform === "win32"/);
+assert.match(androidInstallDebugScript, /ADB_PATH/);
+assert.match(androidInstallDebugScript, /ANDROID_HOME/);
+assert.match(androidInstallDebugScript, /ANDROID_SDK_ROOT/);
+assert.match(androidInstallDebugScript, /platform-tools/);
+assert.match(androidInstallDebugScript, /where\.exe/);
+assert.match(androidInstallDebugScript, /command -v adb/);
+assert.match(androidInstallDebugScript, /"version"/);
+assert.match(androidInstallDebugScript, /adb\.exe/);
+assert.match(androidInstallDebugScript, /Android.*Sdk.*platform-tools.*adb\.exe/s);
+assert.doesNotMatch(androidInstallDebugScript, /spawnSync\("bash"/);
+assert.doesNotMatch(androidInstallDebugScript, /which\s+adb/);
 assert.match(androidLogcatScript, /com\.revendasmart\.app/);
 assert.match(androidDebugDocs, /Windows \+ Android Studio/);
 assert.match(androidDebugDocs, /Checklist funcional no Galaxy/);
