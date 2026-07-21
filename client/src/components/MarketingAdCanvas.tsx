@@ -1,9 +1,43 @@
-import { buildMarketingAdVisualModel, type MarketingAdConfig } from "@/lib/marketing-ad";
+import { useEffect, useState } from "react";
+import { buildMarketingAdVisualModel, getMarketingAdImageCandidates, type MarketingAdConfig } from "@/lib/marketing-ad";
 
-export function MarketingAdCanvas({ config, compact = false, onCtaClick }: { config: MarketingAdConfig; compact?: boolean; onCtaClick?: () => void }) {
+type MarketingAdCanvasProps = {
+  config: MarketingAdConfig;
+  compact?: boolean;
+  onCtaClick?: () => void;
+  onImageError?: () => void;
+  onImageLoad?: () => void;
+};
+
+export function MarketingAdCanvas({ config, compact = false, onCtaClick, onImageError, onImageLoad }: MarketingAdCanvasProps) {
   const model = buildMarketingAdVisualModel(config);
-  const { theme, imageSrc, logoSrc, storeInitial, features, ctaText, description, badgeText } = model;
+  const { theme, logoSrc, storeInitial, features, ctaText, description, badgeText } = model;
+  const imageCandidates = getMarketingAdImageCandidates(model.config);
+  const imageKey = imageCandidates.join("|");
+  const [imageCandidateIndex, setImageCandidateIndex] = useState(0);
+  const [imageFailed, setImageFailed] = useState(false);
+  const imageSrc = imageFailed ? "" : imageCandidates[imageCandidateIndex] || "";
+  const hasConfiguredImage = imageCandidates.length > 0;
   const canClickCta = Boolean(onCtaClick && ctaText);
+
+  useEffect(() => {
+    setImageCandidateIndex(0);
+    setImageFailed(false);
+  }, [imageKey]);
+
+  const handleImageError = () => {
+    if (imageCandidateIndex + 1 < imageCandidates.length) {
+      setImageCandidateIndex((current) => current + 1);
+      return;
+    }
+    setImageFailed(true);
+    onImageError?.();
+  };
+
+  const handleImageLoad = () => {
+    setImageFailed(false);
+    onImageLoad?.();
+  };
 
   return (
     <article
@@ -56,7 +90,9 @@ export function MarketingAdCanvas({ config, compact = false, onCtaClick }: { con
 
           <div className="ma4" style={{ borderColor: theme.ring }}>
             {imageSrc ? (
-              <img src={imageSrc} alt={config.productName} loading="lazy" decoding="async" />
+              <img src={imageSrc} alt={config.productName} loading="lazy" decoding="async" onLoad={handleImageLoad} onError={handleImageError} />
+            ) : hasConfiguredImage ? (
+              <div className="ma2 ma2-failed" aria-hidden="true" />
             ) : (
               <div className="ma2" style={{ color: theme.muted }}>
                 <span>📦</span>Produto sem imagem

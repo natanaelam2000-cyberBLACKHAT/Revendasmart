@@ -13,7 +13,7 @@ import { MarketingHistoryPanel } from "@/components/MarketingHistoryPanel";
 import { MarketingStats } from "@/components/MarketingStats";
 import { MarketingAdCanvas } from "@/components/MarketingAdCanvas";
 import { PageSkeleton } from "@/components/PageSkeleton";
-import { createMarketingCard, downloadMarketingCard } from "@/lib/marketing-card";
+import { createMarketingCard, downloadMarketingCard, MARKETING_CARD_IMAGE_ERROR_MESSAGE } from "@/lib/marketing-card";
 import { isMarketingShareCancelledError, shareMarketingCard, type MarketingShareResult } from "@/lib/marketing-share";
 import { buildPublicCatalogUrl } from "@/lib/public-url";
 import { MARKETING_AD_THEME_IDS, MARKETING_AD_THEMES, MARKETING_TEMPLATES, buildMarketingAdConfig, buildMarketingAdMessage, buildMarketingVolumeText, buildMarketingWhatsappUrl, formatMarketingPrice, normalizeMarketingAdConfig, normalizeMarketingGeneratedText, parseMarketingPriceNumber, resolveMarketingTemplate, type MarketingAdThemeId, type MarketingBackgroundStyle, type MarketingTemplateId } from "@/lib/marketing-ad";
@@ -118,8 +118,8 @@ export default function Marketing() {
       productId: selectedItem.id,
       productName: selectedItem.name,
       productBrand: selectedItem.brand || "",
-      productImageUrl: currentImageUrl,
-      imageUrl: selectedItem.imageUrl || currentImageUrl,
+      productImageUrl: selectedItem.imageUrl || currentImageUrl,
+      imageUrl: selectedItem.thumbnailUrl || currentImageUrl,
       photoUrl: (selectedItem as { photoUrl?: string }).photoUrl,
       image: (selectedItem as { image?: string }).image,
       imageId: selectedItem.imageId,
@@ -147,6 +147,16 @@ export default function Marketing() {
 
   const [copied, setCopied] = useState(false);
   const currentPrice = currentAdConfig?.priceText || formatMarketingPrice(0);
+
+  useEffect(() => setImageError(""), [currentImageUrl, selectedItem?.id]);
+
+  const handlePreviewImageError = () => setImageError(MARKETING_CARD_IMAGE_ERROR_MESSAGE);
+  const handlePreviewImageLoad = () => setImageError((current) => current === MARKETING_CARD_IMAGE_ERROR_MESSAGE ? "" : current);
+  const canGenerateCurrentCard = () => {
+    if (imageError !== MARKETING_CARD_IMAGE_ERROR_MESSAGE) return true;
+    notifyError(MARKETING_CARD_IMAGE_ERROR_MESSAGE);
+    return false;
+  };
 
   const entryPayload = (action: MarketingAction) => currentAdConfig ? {
     action,
@@ -234,7 +244,7 @@ export default function Marketing() {
 
   const handleShare = async () => {
     const payload = entryPayload("shared");
-    if (!payload) return;
+    if (!payload || !canGenerateCurrentCard()) return;
 
     try {
       const result = await shareAdBlob(payload);
@@ -278,7 +288,7 @@ export default function Marketing() {
 
   const handleDownloadImage = async () => {
     const payload = entryPayload("downloaded");
-    if (!payload) return;
+    if (!payload || !canGenerateCurrentCard()) return;
     try {
       const blob = await createMarketingCard(payload);
       downloadMarketingCard(blob, payload.productName);
@@ -670,7 +680,7 @@ export default function Marketing() {
                       Editando anúncio salvo. Troque tema ou texto à vontade; o histórico só será substituído quando você confirmar.
                     </div>
                   )}
-                  <MarketingAdCanvas config={currentAdConfig} onCtaClick={handleCardCtaClick} />
+                  <MarketingAdCanvas config={currentAdConfig} onCtaClick={handleCardCtaClick} onImageError={handlePreviewImageError} onImageLoad={handlePreviewImageLoad} />
                   {showWhatsappSetupNotice && !storeWhatsappNumber && (
                     <div className="mk35" role="status">
                       <p>{WHATSAPP_SETUP_MESSAGE}</p>
@@ -736,6 +746,7 @@ export default function Marketing() {
           ) : (
             <MarketingHistoryPanel entries={historyEntries} loading={historyLoading} onCopy={repeatCopy} onShare={repeatShare} onDownload={repeatDownload} onRemove={removeEntry} onClear={clearHistory} onCreate={() => setActiveTab("generator")} onEdit={(entry) => applyEntryToEditor(entry, "edit")} onTheme={(entry) => applyEntryToEditor(entry, "theme")} onDuplicate={handleDuplicateEntry} />
           )}
+          <p className="mk-build-marker" aria-label="Versão da tela de Marketing">Marketing build b19f1e3-fix1</p>
         </div>
       </div>
     </Layout>
