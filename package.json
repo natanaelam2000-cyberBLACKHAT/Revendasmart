@@ -28,6 +28,7 @@
     "android:open": "cap open android",
     "android:doctor": "cap doctor android",
     "android:build:debug": "node scripts/android/build-debug.mjs",
+    "android:verify:debug": "node scripts/android/verify-debug-apk.mjs",
     "android:install:debug": "node scripts/android/install-debug.mjs",
     "android:logcat": "node scripts/android/logcat.mjs",
     "test:e2e": "playwright test",

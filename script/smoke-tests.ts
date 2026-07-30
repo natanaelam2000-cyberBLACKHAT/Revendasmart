@@ -116,6 +116,8 @@ const androidDocs = read("docs/ANDROID_CAPACITOR.md");
 const androidDebugDocs = read("docs/ANDROID_DEBUG_TESTING.md");
 const androidGitignore = read("android/.gitignore");
 const androidBuildDebugScript = read("scripts/android/build-debug.mjs");
+const androidBuildProvenanceScript = read("scripts/android/build-provenance.mjs");
+const androidVerifyDebugApkScript = read("scripts/android/verify-debug-apk.mjs");
 const androidInstallDebugScript = read("scripts/android/install-debug.mjs");
 const androidLogcatScript = read("scripts/android/logcat.mjs");
 const androidSyncWebScript = read("scripts/android/sync-web.mjs");
@@ -1284,6 +1286,10 @@ assert.match(androidSyncWebScript, /FORBIDDEN_BUNDLE_MARKERS/);
 assert.match(androidSyncWebScript, /REQUIRED_ANDROID_BUNDLE_MARKERS/);
 assert.match(androidSyncWebScript, /VITE_APP_BUILD_ID/);
 assert.match(androidSyncWebScript, /assertAndroidAssets/);
+assert.match(androidSyncWebScript, /build-manifest\.json|BUILD_MANIFEST_FILE/);
+assert.match(androidSyncWebScript, /createBuildManifest/);
+assert.match(androidSyncWebScript, /assertCopiedAssetsMatch/);
+assert.match(androidSyncWebScript, /worktreeFingerprint/);
 assert.match(androidSyncWebScript, /Produto selecionado para voc\\u00ea pedir direto pelo WhatsApp/);
 assert.match(androidSyncWebScript, /Imagem omitida; arte gerada sem ela/);
 assert.match(androidSyncWebScript, /Pe\\u00e7a pelo WhatsApp/);
@@ -1295,7 +1301,10 @@ assert.match(androidBuildDebugScript, /javaHomeCandidate/);
 assert.match(androidBuildDebugScript, /where\.exe/);
 assert.match(androidBuildDebugScript, /cmd\.exe/);
 assert.match(androidBuildDebugScript, /gradlew\.bat/);
-assert.match(androidBuildDebugScript, /createHash\("sha256"\)/);
+assert.match(androidBuildDebugScript, /"clean", "assembleDebug"/);
+assert.match(androidBuildDebugScript, /verify-debug-apk\.mjs/);
+assert.match(androidBuildDebugScript, /ANDROID_BUILD_STARTED_AT/);
+assert.match(androidBuildDebugScript, /rmSync\(apkPath/);
 assert.doesNotMatch(androidBuildDebugScript, /spawnSync\("bash"/);
 assert.doesNotMatch(androidBuildDebugScript, /sha256sum/);
 assert.match(serverIndex, /"https:\/\/localhost", \/\/ Android Capacitor WebView origin/);
@@ -1306,15 +1315,42 @@ assert.doesNotMatch(serverIndex, /Access-Control-Allow-Origin", "\*"/);
 assert.match(androidDocs, /VITE_API_BASE_URL=https:\/\/revendasmart\.vercel\.app/);
 assert.match(androidDebugDocs, /VITE_API_BASE_URL=https:\/\/revendasmart\.vercel\.app/);
 const { normalizeAndroidApiBaseUrl, normalizeAndroidPublicAppUrl } = await import("../scripts/android/sync-web.mjs");
+const { createBuildManifest, validateBuildManifest, compareDirectoryHashMaps } = await import("../scripts/android/build-provenance.mjs");
+const { parseAaptPackageName, isApkFresh, REQUIRED_APK_MARKERS, FORBIDDEN_APK_MARKERS } = await import("../scripts/android/verify-debug-apk.mjs");
 assert.equal(normalizeAndroidApiBaseUrl("https://revendasmart.vercel.app/"), "https://revendasmart.vercel.app");
 assert.equal(normalizeAndroidPublicAppUrl("https://revendasmart.vercel.app/u/demo"), "https://revendasmart.vercel.app");
 for (const badAndroidApiBaseUrl of ["", "http://revendasmart.vercel.app", "https://localhost", "https://127.0.0.1", "not-a-url"]) {
   assert.throws(() => normalizeAndroidApiBaseUrl(badAndroidApiBaseUrl));
   assert.throws(() => normalizeAndroidPublicAppUrl(badAndroidApiBaseUrl));
 }
+const buildSnapshotFixture = {
+  gitCommit: "a".repeat(40),
+  gitShortCommit: "a".repeat(12),
+  branch: "release/test",
+  worktreeClean: true,
+  worktreeFingerprint: "b".repeat(64),
+};
+const buildManifestFixture = createBuildManifest(buildSnapshotFixture, {
+  buildStartedAt: "2026-07-22T12:00:00.000Z",
+  generatedAt: "2026-07-22T12:01:00.000Z",
+});
+assert.equal(buildManifestFixture.packageName, "com.revendasmart.app");
+assert.equal(buildManifestFixture.buildType, "debug");
+assert.equal(validateBuildManifest(buildManifestFixture, buildSnapshotFixture), buildManifestFixture);
+assert.throws(() => validateBuildManifest({ ...buildManifestFixture, gitCommit: "c".repeat(40) }, buildSnapshotFixture));
+assert.deepEqual(
+  compareDirectoryHashMaps(new Map([["index.html", "aaa"], ["assets/app.js", "bbb"]]), new Map([["index.html", "aaa"], ["assets/app.js", "ccc"], ["old.js", "ddd"]])),
+  { missing: [], unexpected: ["old.js"], mismatched: ["assets/app.js"] },
+);
+assert.equal(parseAaptPackageName("package: name='com.revendasmart.app' versionCode='1'"), "com.revendasmart.app");
+assert.equal(isApkFresh(Date.parse("2026-07-22T12:02:00.000Z"), "2026-07-22T12:01:00.000Z", "2026-07-22T12:00:00.000Z"), true);
+assert.equal(isApkFresh(Date.parse("2026-07-22T11:59:00.000Z"), "2026-07-22T12:01:00.000Z", "2026-07-22T12:00:00.000Z"), false);
+assert.deepEqual(REQUIRED_APK_MARKERS, ["Chamar no WhatsApp", "Resumo do período", "O que precisa da sua atenção"]);
+assert.ok(FORBIDDEN_APK_MARKERS.includes("Últimos 7 dias"));
 assert.doesNotMatch(androidDocs, /server\.url|http:\/\/localhost|usesCleartextTraffic/);
 
 assert.equal(packageJson.scripts?.["android:build:debug"], "node scripts/android/build-debug.mjs");
+assert.equal(packageJson.scripts?.["android:verify:debug"], "node scripts/android/verify-debug-apk.mjs");
 assert.equal(packageJson.scripts?.["android:install:debug"], "node scripts/android/install-debug.mjs");
 assert.equal(packageJson.scripts?.["android:logcat"], "node scripts/android/logcat.mjs");
 assert.match(androidGitignore, /^local\.properties$/m);
@@ -1339,6 +1375,20 @@ assert.doesNotMatch(capacitorConfig, /localhost|127\.0\.0\.1|cleartext/i);
 assert.doesNotMatch(androidBuildGradle, /storePassword|keyPassword|signingConfig\s+release/);
 assert.doesNotMatch(androidBuildDebugScript, /assembleRelease|bundleRelease|signing|keystore/i);
 assert.doesNotMatch(androidInstallDebugScript, /assembleRelease|bundleRelease|signing|keystore/i);
+assert.match(androidBuildProvenanceScript, /worktreeFingerprint/);
+assert.match(androidBuildProvenanceScript, /"diff", "--binary"/);
+assert.match(androidVerifyDebugApkScript, /assets["'], ["']public/);
+assert.match(androidVerifyDebugApkScript, /aapt/);
+assert.match(androidVerifyDebugApkScript, /compareDirectoryHashMaps/);
+assert.match(androidVerifyDebugApkScript, /assertSingleApplicationBundle/);
+assert.match(androidVerifyDebugApkScript, /app-debug\.provenance\.json|DEBUG_PROVENANCE_RELATIVE_PATH/);
+assert.match(androidVerifyDebugApkScript, /Chamar no WhatsApp/);
+assert.match(androidVerifyDebugApkScript, /Resumo do per\\u00edodo/);
+assert.match(androidVerifyDebugApkScript, /O que precisa da sua aten\\u00e7\\u00e3o/);
+assert.match(androidInstallDebugScript, /verifyDebugApk/);
+assert.match(androidInstallDebugScript, /shell", "pm", "path"/);
+assert.match(androidInstallDebugScript, /"pull", installedBaseApk/);
+assert.match(androidInstallDebugScript, /installedSha256 !== verification\.apkSha256/);
 assert.doesNotMatch(androidLogcatScript, /adb logcat\s*[`"']?\s*$/);
 assert.match(androidBuildDebugScript, /assembleDebug/);
 assert.match(androidBuildDebugScript, /ANDROID_HOME.*ANDROID_SDK_ROOT|ANDROID_SDK_ROOT.*ANDROID_HOME/s);

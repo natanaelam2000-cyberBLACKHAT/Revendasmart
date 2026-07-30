@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { DEBUG_APK_RELATIVE_PATH, DEBUG_PROVENANCE_RELATIVE_PATH } from "./build-provenance.mjs";
 
-const packageName = "com.revendasmart.app";
-const apkPath = "android/app/build/outputs/apk/debug/app-debug.apk";
+const apkPath = DEBUG_APK_RELATIVE_PATH;
 const isWindows = process.platform === "win32";
 
 function formatCommand(command, args) {
@@ -94,10 +93,6 @@ function availableSpaceKb() {
   }
 }
 
-function sha256File(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
-
 const sdkRoot = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || "";
 if (!sdkRoot) fail("ANDROID_HOME ou ANDROID_SDK_ROOT não está configurado.");
 if (!existsSync(sdkRoot)) fail(`SDK Android não encontrado em ${sdkRoot}.`);
@@ -118,17 +113,22 @@ if (availableKb > 0 && availableKb < 1048576) {
   fail("menos de 1 GB livre no filesystem do projeto; não vou arriscar ENOSPC.");
 }
 
-let result = run(isWindows ? "npm.cmd" : "npm", ["run", "android:sync"]);
+const buildStartedAt = new Date().toISOString();
+rmSync(apkPath, { force: true });
+rmSync(DEBUG_PROVENANCE_RELATIVE_PATH, { force: true });
+
+let result = run(isWindows ? "npm.cmd" : "npm", ["run", "android:sync"], {
+  env: { ...process.env, ANDROID_BUILD_STARTED_AT: buildStartedAt },
+});
 if (result.status !== 0) process.exit(result.status ?? 1);
 
 const gradleCommand = isWindows ? "cmd.exe" : "./gradlew";
 const gradleArgs = isWindows
-  ? ["/d", "/s", "/c", "gradlew.bat", "assembleDebug", "--stacktrace", "--no-daemon"]
-  : ["assembleDebug", "--stacktrace", "--no-daemon"];
+  ? ["/d", "/s", "/c", "gradlew.bat", "clean", "assembleDebug", "--stacktrace", "--no-daemon"]
+  : ["clean", "assembleDebug", "--stacktrace", "--no-daemon"];
 result = run(gradleCommand, gradleArgs, { cwd: "android" });
 if (result.status !== 0) process.exit(result.status ?? 1);
 
 if (!existsSync(apkPath)) fail(`APK debug não encontrado em ${apkPath}.`);
-const size = statSync(apkPath).size;
-const sha256 = sha256File(apkPath);
-console.log(JSON.stringify({ packageName, variant: "debug", apkPath, sizeBytes: size, sha256 }, null, 2));
+result = run(process.execPath, ["scripts/android/verify-debug-apk.mjs", "--build-start", buildStartedAt]);
+process.exit(result.status ?? 1);
