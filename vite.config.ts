@@ -1,9 +1,12 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { readFileSync } from "node:fs";
 import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 import { metaImagesPlugin } from "./vite-plugin-meta-images";
+
+const appVersion = String(JSON.parse(readFileSync(path.resolve(import.meta.dirname, "package.json"), "utf8")).version || "").trim();
 
 export default defineConfig(({ mode }) => ({
   plugins: [
@@ -12,6 +15,10 @@ export default defineConfig(({ mode }) => ({
     tailwindcss(),
     metaImagesPlugin(),
   ],
+
+  define: {
+    "import.meta.env.VITE_APP_VERSION": JSON.stringify(appVersion),
+  },
 
   esbuild: mode === "production" ? { pure: ["console.log", "console.debug", "console.info"] } : undefined,
 

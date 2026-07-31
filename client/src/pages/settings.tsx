@@ -5,13 +5,13 @@ import { notifyError, notifySuccess, notifyWarning } from "@/lib/notify";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import {
   AppSettings,
-  logout, APP_VERSION, getCurrentUserId, getStored, STORAGE_KEYS
+  logout, getCurrentUserId, getStored, STORAGE_KEYS
 } from "@/lib/mock-data";
 import { getCurrentFirebaseUser, getFirebaseIdToken, getFirebaseAuth, measureOperation, logTelemetryEvent } from "@/lib/firebase";
 import { useLocation } from "wouter";
 import { getApiUrl } from "@/lib/api-config";
 import { buildPublicCatalogUrl } from "@/lib/public-url";
-import { APP_BUILD_ID, formatAppBuildId } from "@/lib/build-info";
+import { APP_BUILD_ID, APP_VERSION, formatAppBuildId } from "@/lib/build-info";
 import { QRCodeSVG } from "qrcode.react";
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
@@ -407,6 +407,10 @@ export default function Settings() {
             <button onClick={handleLogout} className="w-full flex items-center gap-4 p-4 sm:p-5 text-left hover:bg-red-50 transition-colors">
               <div className="w-11 h-11 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center"><LogOut className="w-5 h-5" /></div><div className="flex-1"><p className="text-sm sm:text-base font-bold text-red-600">Sair</p><p className="text-xs text-red-500/70 mt-0.5">Encerrar sessão</p></div><ChevronRight className="w-5 h-5 text-red-300" />
             </button>
+          </div>
+          <div className="mt-5 text-center text-muted-foreground" aria-label="Versão instalada do aplicativo">
+            <p className="text-[11px] font-semibold" data-testid="account-app-version">Revenda Smart v{APP_VERSION}</p>
+            <p className="mt-1 text-[10px]" data-testid="account-build-id">Build {formatAppBuildId(APP_BUILD_ID)}</p>
           </div>
         </div>
       </Layout>
@@ -1176,7 +1180,7 @@ Dica: Descreva seu problema e se possível anexe uma screenshot do erro.`
                   </div>
                   <div className="flex-1">
                     <h2 className="text-lg font-black text-primary mb-1">Revenda Smart</h2>
-                    <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-1">Versão {APP_VERSION.replace('v', '')}</p>
+                    <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-1">Versão {APP_VERSION}</p>
                     <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2" data-testid="app-build-id">Build {formatAppBuildId(APP_BUILD_ID)}</p>
                     <p className="text-xs text-muted-foreground leading-relaxed">Gerenciamento inteligente de estoque e catálogo digital para revendedores de cosméticos e perfumes.</p>
                   </div>
