@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { DEBUG_APK_RELATIVE_PATH, DEBUG_PROVENANCE_RELATIVE_PATH } from "./build-provenance.mjs";
 
 const apkPath = DEBUG_APK_RELATIVE_PATH;
@@ -11,9 +11,35 @@ function formatCommand(command, args) {
   return [command, ...args].join(" ");
 }
 
-function run(command, args, options = {}) {
+function runCommand(command, args, options = {}) {
   console.log(`$ ${formatCommand(command, args)}`);
-  return spawnSync(command, args, { stdio: "inherit", shell: false, ...options });
+  return new Promise((resolveCommand, rejectCommand) => {
+    let child;
+    try {
+      child = spawn(command, args, {
+        cwd: options.cwd,
+        env: options.env || process.env,
+        stdio: "inherit",
+        shell: false,
+        windowsHide: isWindows,
+      });
+    } catch (error) {
+      rejectCommand(new Error(`não foi possível iniciar ${formatCommand(command, args)}: ${error instanceof Error ? error.message : String(error)}`));
+      return;
+    }
+
+    child.once("error", (error) => {
+      rejectCommand(new Error(`não foi possível iniciar ${formatCommand(command, args)}: ${error.message}`));
+    });
+    child.once("close", (code, signal) => {
+      if (code === 0) {
+        resolveCommand();
+        return;
+      }
+      const outcome = code === null ? `sem exit code${signal ? ` (sinal ${signal})` : ""}` : `exit code ${code}`;
+      rejectCommand(new Error(`${formatCommand(command, args)} terminou com ${outcome}`));
+    });
+  });
 }
 
 function capture(command, args, options = {}) {
@@ -21,8 +47,7 @@ function capture(command, args, options = {}) {
 }
 
 function fail(message) {
-  console.error(`Android debug build bloqueado: ${message}`);
-  process.exit(1);
+  throw new Error(message);
 }
 
 function firstLine(value) {
@@ -35,6 +60,28 @@ function commandPathFromPath(command) {
     : capture("sh", ["-c", "command -v \"$1\"", "sh", command]);
   if (result.status !== 0) return "";
   return firstLine(result.stdout);
+}
+
+function resolveNpmInvocation() {
+  const nodeDirectory = dirname(process.execPath);
+  const npmCliCandidates = [
+    process.env.npm_execpath || "",
+    join(nodeDirectory, "node_modules", "npm", "bin", "npm-cli.js"),
+    resolve(nodeDirectory, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+  ].filter(Boolean);
+
+  for (const npmCliPath of [...new Set(npmCliCandidates)]) {
+    if (existsSync(npmCliPath)) {
+      return { command: process.execPath, args: [npmCliPath] };
+    }
+  }
+
+  if (!isWindows) {
+    const npmCommand = commandPathFromPath("npm");
+    if (npmCommand) return { command: npmCommand, args: [] };
+  }
+
+  fail("npm-cli.js não foi localizado. Execute este comando por npm run android:build:debug ou reinstale o Node.js com npm.");
 }
 
 function javaHomeCandidate(command) {
@@ -93,42 +140,50 @@ function availableSpaceKb() {
   }
 }
 
-const sdkRoot = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || "";
-if (!sdkRoot) fail("ANDROID_HOME ou ANDROID_SDK_ROOT não está configurado.");
-if (!existsSync(sdkRoot)) fail(`SDK Android não encontrado em ${sdkRoot}.`);
+async function main() {
+  const sdkRoot = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || "";
+  if (!sdkRoot) fail("ANDROID_HOME ou ANDROID_SDK_ROOT não está configurado.");
+  if (!existsSync(sdkRoot)) fail(`SDK Android não encontrado em ${sdkRoot}.`);
 
-const java = verifyJavaTool("java");
-const javac = verifyJavaTool("javac");
-console.log(`Java detectado: ${java.version}`);
-console.log(`Javac detectado: ${javac.version}`);
+  const java = verifyJavaTool("java");
+  const javac = verifyJavaTool("javac");
+  console.log(`Java detectado: ${java.version}`);
+  console.log(`Javac detectado: ${javac.version}`);
 
-const gradleWrapper = isWindows ? "android/gradlew.bat" : "android/gradlew";
-if (!existsSync(gradleWrapper)) fail(`${gradleWrapper} não encontrado. Execute a fundação Capacitor antes.`);
-if (existsSync("android/local.properties")) {
-  console.log("android/local.properties detectado localmente; confirme que ele permanece ignorado pelo Git.");
+  const gradleWrapper = isWindows ? "android/gradlew.bat" : "android/gradlew";
+  if (!existsSync(gradleWrapper)) fail(`${gradleWrapper} não encontrado. Execute a fundação Capacitor antes.`);
+  if (existsSync("android/local.properties")) {
+    console.log("android/local.properties detectado localmente; confirme que ele permanece ignorado pelo Git.");
+  }
+
+  const availableKb = availableSpaceKb();
+  if (availableKb > 0 && availableKb < 1048576) {
+    fail("menos de 1 GB livre no filesystem do projeto; não vou arriscar ENOSPC.");
+  }
+
+  const buildStartedAt = new Date().toISOString();
+  rmSync(apkPath, { force: true });
+  rmSync(DEBUG_PROVENANCE_RELATIVE_PATH, { force: true });
+
+  const npmInvocation = resolveNpmInvocation();
+  await runCommand(npmInvocation.command, [...npmInvocation.args, "run", "android:sync"], {
+    env: { ...process.env, ANDROID_BUILD_STARTED_AT: buildStartedAt },
+  });
+  console.log("Sincronização Android concluída; iniciando o Gradle.");
+
+  const gradleCommand = isWindows ? "cmd.exe" : "./gradlew";
+  const gradleArgs = isWindows
+    ? ["/d", "/s", "/c", "gradlew.bat", "clean", "assembleDebug", "--stacktrace", "--no-daemon"]
+    : ["clean", "assembleDebug", "--stacktrace", "--no-daemon"];
+  await runCommand(gradleCommand, gradleArgs, { cwd: "android" });
+
+  if (!existsSync(apkPath)) fail(`Gradle terminou sem criar o APK debug em ${apkPath}.`);
+  console.log(`APK debug criado em ${apkPath}; iniciando a verificação de proveniência.`);
+  await runCommand(process.execPath, ["scripts/android/verify-debug-apk.mjs", "--build-start", buildStartedAt]);
+  console.log("Pipeline Android debug concluído com APK verificado.");
 }
 
-const availableKb = availableSpaceKb();
-if (availableKb > 0 && availableKb < 1048576) {
-  fail("menos de 1 GB livre no filesystem do projeto; não vou arriscar ENOSPC.");
-}
-
-const buildStartedAt = new Date().toISOString();
-rmSync(apkPath, { force: true });
-rmSync(DEBUG_PROVENANCE_RELATIVE_PATH, { force: true });
-
-let result = run(isWindows ? "npm.cmd" : "npm", ["run", "android:sync"], {
-  env: { ...process.env, ANDROID_BUILD_STARTED_AT: buildStartedAt },
+main().catch((error) => {
+  console.error(`Android debug build bloqueado: ${error instanceof Error ? error.message : String(error)}`);
+  process.exitCode = 1;
 });
-if (result.status !== 0) process.exit(result.status ?? 1);
-
-const gradleCommand = isWindows ? "cmd.exe" : "./gradlew";
-const gradleArgs = isWindows
-  ? ["/d", "/s", "/c", "gradlew.bat", "clean", "assembleDebug", "--stacktrace", "--no-daemon"]
-  : ["clean", "assembleDebug", "--stacktrace", "--no-daemon"];
-result = run(gradleCommand, gradleArgs, { cwd: "android" });
-if (result.status !== 0) process.exit(result.status ?? 1);
-
-if (!existsSync(apkPath)) fail(`APK debug não encontrado em ${apkPath}.`);
-result = run(process.execPath, ["scripts/android/verify-debug-apk.mjs", "--build-start", buildStartedAt]);
-process.exit(result.status ?? 1);
