@@ -3,6 +3,7 @@ import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
+import { loadEnv } from "vite";
 import {
   ANDROID_WEB_DIR,
   BUILD_MANIFEST_FILE,
@@ -17,6 +18,41 @@ import {
 
 export const DEFAULT_ANDROID_API_BASE_URL = "https://revendasmart.vercel.app";
 export const DEFAULT_ANDROID_PUBLIC_APP_URL = "https://revendasmart.vercel.app";
+export const REQUIRED_ANDROID_FIREBASE_ENV_VARS = Object.freeze([
+  "VITE_FIREBASE_API_KEY",
+  "VITE_FIREBASE_AUTH_DOMAIN",
+  "VITE_FIREBASE_PROJECT_ID",
+  "VITE_FIREBASE_STORAGE_BUCKET",
+  "VITE_FIREBASE_MESSAGING_SENDER_ID",
+  "VITE_FIREBASE_APP_ID",
+]);
+
+function readNonEmptyEnvValue(env, name) {
+  return String(env?.[name] ?? "").trim();
+}
+
+export function resolveAndroidFirebaseConfig(processEnv = {}, fileEnv = {}) {
+  const values = {};
+  const missing = [];
+  for (const name of REQUIRED_ANDROID_FIREBASE_ENV_VARS) {
+    const value = readNonEmptyEnvValue(processEnv, name) || readNonEmptyEnvValue(fileEnv, name);
+    if (value) values[name] = value;
+    else missing.push(name);
+  }
+  return { values, missing, firebaseConfigPresent: missing.length === 0 };
+}
+
+export function assertAndroidFirebaseConfig(config) {
+  if (config?.firebaseConfigPresent === true && config.missing?.length === 0) return config;
+  const missing = Array.isArray(config?.missing) && config.missing.length
+    ? config.missing
+    : REQUIRED_ANDROID_FIREBASE_ENV_VARS;
+  throw new Error([
+    "Firebase config ausente para build Android:",
+    ...missing.map((name) => `- ${name}`),
+  ].join("\n"));
+}
+
 const REQUIRED_ANDROID_BUNDLE_MARKERS = [
   "Resumo do per\u00edodo",
   "Insight principal",
@@ -241,6 +277,9 @@ export async function runAndroidWebSync(command = "sync") {
   if (!["sync", "copy"].includes(command)) fail(`comando inválido: ${command}`);
   const root = resolveRepositoryRoot();
   process.chdir(root);
+  const firebaseFileEnv = loadEnv("production", join(root, "client"), "VITE_FIREBASE_");
+  const firebaseConfig = resolveAndroidFirebaseConfig(process.env, firebaseFileEnv);
+  assertAndroidFirebaseConfig(firebaseConfig);
   const snapshot = getGitSnapshot(root);
   const apiBaseUrl = normalizeAndroidApiBaseUrl(process.env.VITE_API_BASE_URL || DEFAULT_ANDROID_API_BASE_URL);
   const publicAppUrl = normalizeAndroidPublicAppUrl(process.env.VITE_PUBLIC_APP_URL || DEFAULT_ANDROID_PUBLIC_APP_URL);
@@ -250,7 +289,7 @@ export async function runAndroidWebSync(command = "sync") {
   }
   const buildId = snapshot.gitShortCommit;
   const buildStartedAt = normalizeBuildStartedAt(process.env.ANDROID_BUILD_STARTED_AT || new Date().toISOString());
-  const env = { ...process.env, VITE_API_BASE_URL: apiBaseUrl, VITE_PUBLIC_APP_URL: publicAppUrl, VITE_APP_BUILD_ID: buildId };
+  const env = { ...process.env, ...firebaseConfig.values, VITE_API_BASE_URL: apiBaseUrl, VITE_PUBLIC_APP_URL: publicAppUrl, VITE_APP_BUILD_ID: buildId };
   const npmInvocation = resolveNpmInvocation();
   const capInvocation = resolveCapInvocation(root);
 
@@ -259,7 +298,7 @@ export async function runAndroidWebSync(command = "sync") {
     manifest: () => {
       const completedSnapshot = getGitSnapshot(root);
       assertSnapshotUnchanged(snapshot, completedSnapshot);
-      const buildManifest = createBuildManifest(snapshot, { buildStartedAt });
+      const buildManifest = createBuildManifest(snapshot, { buildStartedAt, firebaseConfigPresent: firebaseConfig.firebaseConfigPresent });
       writeFileSync(join(WEB_BUILD_DIR, BUILD_MANIFEST_FILE), `${JSON.stringify(buildManifest, null, 2)}\n`, "utf8");
       assertWebBuild(apiBaseUrl, publicAppUrl, buildId);
     },
@@ -276,6 +315,7 @@ export async function runAndroidWebSync(command = "sync") {
     androidWebDir: ANDROID_WEB_DIR,
     apiBaseUrl,
     publicAppUrl,
+    firebaseConfigPresent: firebaseConfig.firebaseConfigPresent,
     buildId,
     gitCommit: snapshot.gitCommit,
     branch: snapshot.branch,

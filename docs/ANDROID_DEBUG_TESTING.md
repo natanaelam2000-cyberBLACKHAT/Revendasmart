@@ -27,6 +27,32 @@ Este documento registra a Sprint 29 do Revenda Smart: build Android debug reprod
 
 No Cloud Shell desta sprint, `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `adb` e `sdkmanager` não estavam disponíveis e o filesystem `/home` tinha menos de 1 GB livre. Por isso, `assembleDebug` ficou pendente de ambiente.
 
+## Configuração Firebase para build local e Android
+
+O Vite usa a pasta `client` como raiz. A configuração local oficial deve ficar em `client/.env.local`, que permanece ignorado pelo Git. O `android:sync` lê os mesmos arquivos de ambiente do modo `production` do Vite e bloqueia o build antes do Gradle quando algum campo obrigatório está ausente ou vazio.
+
+No PowerShell, prepare o clone sem versionar valores:
+
+```powershell
+cd C:\Users\natan\Documents\Revendasmart
+if (-not (Test-Path client\.env.local)) {
+  Copy-Item client\.env.example client\.env.local
+}
+notepad client\.env.local
+git check-ignore client/.env.local
+```
+
+Preencha localmente somente estes nomes:
+
+- `VITE_FIREBASE_API_KEY`;
+- `VITE_FIREBASE_AUTH_DOMAIN`;
+- `VITE_FIREBASE_PROJECT_ID`;
+- `VITE_FIREBASE_STORAGE_BUCKET`;
+- `VITE_FIREBASE_MESSAGING_SENDER_ID`;
+- `VITE_FIREBASE_APP_ID`.
+
+Não coloque valores reais em `client/.env.example`, documentação, commits ou logs. Variáveis definidas no processo têm precedência; caso contrário, o pipeline usa `client/.env.local` pela convenção normal do Vite.
+
 ## Comandos disponíveis
 
 ```bash

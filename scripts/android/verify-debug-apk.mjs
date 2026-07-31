@@ -141,6 +141,13 @@ export function isApkFresh(apkModifiedAtMs, generatedAt, buildStartedAt) {
   return generatedAtMs + toleranceMs >= buildStartedAtMs && apkModifiedAtMs + toleranceMs >= generatedAtMs;
 }
 
+export function assertFirebaseConfigPresentInManifest(manifest) {
+  if (manifest?.firebaseConfigPresent !== true) {
+    fail("o APK foi gerado sem configuração Firebase validada.");
+  }
+  return true;
+}
+
 function formatBytes(value) { return `${(value / 1024 / 1024).toFixed(2)} MiB`; }
 function canonicalRequestedApk(root, requestedPath) {
   const canonical = resolve(root, DEBUG_APK_RELATIVE_PATH);
@@ -186,6 +193,7 @@ export function verifyDebugApk(options = {}) {
     try { manifest = JSON.parse(readFileSync(manifestFiles[0], "utf8")); }
     catch { fail(`${BUILD_MANIFEST_FILE} não contém JSON válido.`); }
     validateBuildManifest(manifest, snapshot);
+    assertFirebaseConfigPresentInManifest(manifest);
     if (!isApkFresh(apkStat.mtimeMs, manifest.generatedAt, options.buildStartedAt || manifest.buildStartedAt)) {
       fail("o APK foi gerado antes do build web/sync atual.");
     }

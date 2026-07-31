@@ -114,6 +114,8 @@ const androidStylesV28 = read("android/app/src/main/res/values-v28/styles.xml");
 const androidMainActivity = read("android/app/src/main/java/com/revendasmart/app/MainActivity.java");
 const androidDocs = read("docs/ANDROID_CAPACITOR.md");
 const androidDebugDocs = read("docs/ANDROID_DEBUG_TESTING.md");
+const rootGitignore = read(".gitignore");
+const firebaseEnvExample = read("client/.env.example");
 const androidGitignore = read("android/.gitignore");
 const androidBuildDebugScript = read("scripts/android/build-debug.mjs");
 const androidBuildProvenanceScript = read("scripts/android/build-provenance.mjs");
@@ -1333,15 +1335,59 @@ assert.match(serverIndex, /Access-Control-Allow-Credentials[\s\S]*true/);
 assert.doesNotMatch(serverIndex, /Access-Control-Allow-Origin", "\*"/);
 assert.match(androidDocs, /VITE_API_BASE_URL=https:\/\/revendasmart\.vercel\.app/);
 assert.match(androidDebugDocs, /VITE_API_BASE_URL=https:\/\/revendasmart\.vercel\.app/);
-const { executeAndroidSyncSteps, normalizeAndroidApiBaseUrl, normalizeAndroidPublicAppUrl, resolveCapInvocation, resolveNpmInvocation, runCommand } = await import("../scripts/android/sync-web.mjs");
+const { assertAndroidFirebaseConfig, executeAndroidSyncSteps, normalizeAndroidApiBaseUrl, normalizeAndroidPublicAppUrl, REQUIRED_ANDROID_FIREBASE_ENV_VARS, resolveAndroidFirebaseConfig, resolveCapInvocation, resolveNpmInvocation, runCommand } = await import("../scripts/android/sync-web.mjs");
 const { createBuildManifest, validateBuildManifest, compareDirectoryHashMaps } = await import("../scripts/android/build-provenance.mjs");
-const { parseAaptPackageName, isApkFresh, REQUIRED_APK_MARKERS, FORBIDDEN_APK_MARKERS } = await import("../scripts/android/verify-debug-apk.mjs");
+const { assertFirebaseConfigPresentInManifest, parseAaptPackageName, isApkFresh, REQUIRED_APK_MARKERS, FORBIDDEN_APK_MARKERS } = await import("../scripts/android/verify-debug-apk.mjs");
 assert.equal(normalizeAndroidApiBaseUrl("https://revendasmart.vercel.app/"), "https://revendasmart.vercel.app");
 assert.equal(normalizeAndroidPublicAppUrl("https://revendasmart.vercel.app/u/demo"), "https://revendasmart.vercel.app");
 for (const badAndroidApiBaseUrl of ["", "http://revendasmart.vercel.app", "https://localhost", "https://127.0.0.1", "not-a-url"]) {
   assert.throws(() => normalizeAndroidApiBaseUrl(badAndroidApiBaseUrl));
   assert.throws(() => normalizeAndroidPublicAppUrl(badAndroidApiBaseUrl));
 }
+const firebaseEnvNames = [
+  "VITE_FIREBASE_API_KEY",
+  "VITE_FIREBASE_AUTH_DOMAIN",
+  "VITE_FIREBASE_PROJECT_ID",
+  "VITE_FIREBASE_STORAGE_BUCKET",
+  "VITE_FIREBASE_MESSAGING_SENDER_ID",
+  "VITE_FIREBASE_APP_ID",
+];
+assert.deepEqual(REQUIRED_ANDROID_FIREBASE_ENV_VARS, firebaseEnvNames);
+const syntheticFirebaseEnv = Object.fromEntries(firebaseEnvNames.map((name, index) => [name, `synthetic-${index}-value`]));
+const resolvedFirebaseConfig = resolveAndroidFirebaseConfig({}, syntheticFirebaseEnv);
+assert.equal(resolvedFirebaseConfig.firebaseConfigPresent, true);
+assert.deepEqual(resolvedFirebaseConfig.missing, []);
+assert.equal(assertAndroidFirebaseConfig(resolvedFirebaseConfig), resolvedFirebaseConfig);
+const processPreferredFirebaseConfig = resolveAndroidFirebaseConfig(
+  { VITE_FIREBASE_API_KEY: "process-value" },
+  syntheticFirebaseEnv,
+);
+assert.equal(processPreferredFirebaseConfig.values.VITE_FIREBASE_API_KEY, "process-value");
+for (const missingName of firebaseEnvNames) {
+  const incompleteFirebaseEnv = { ...syntheticFirebaseEnv };
+  delete incompleteFirebaseEnv[missingName];
+  const incompleteConfig = resolveAndroidFirebaseConfig({}, incompleteFirebaseEnv);
+  assert.equal(incompleteConfig.firebaseConfigPresent, false);
+  assert.deepEqual(incompleteConfig.missing, [missingName]);
+  assert.throws(
+    () => assertAndroidFirebaseConfig(incompleteConfig),
+    (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      assert.match(message, new RegExp(missingName));
+      for (const value of Object.values(syntheticFirebaseEnv)) assert.equal(message.includes(value), false);
+      return true;
+    },
+  );
+}
+assert.match(rootGitignore, /^\.env\.\*$/m);
+for (const name of firebaseEnvNames) assert.match(firebaseEnvExample, new RegExp(`^${name}=$`, "m"));
+assert.doesNotMatch(firebaseEnvExample, /^VITE_FIREBASE_[A-Z_]+=.+$/m);
+assert.match(androidSyncWebScript, /loadEnv\("production", join\(root, "client"\), "VITE_FIREBASE_"\)/);
+assert.doesNotMatch(androidSyncWebScript, /VITE_FIREBASE_[A-Z_]+\s*[:=]\s*["'][^"']+["']/);
+const firebaseGateIndex = androidSyncWebScript.indexOf("assertAndroidFirebaseConfig(firebaseConfig)");
+const androidPipelineIndex = androidSyncWebScript.indexOf("await executeAndroidSyncSteps");
+assert.ok(firebaseGateIndex >= 0 && androidPipelineIndex > firebaseGateIndex);
+
 const silentProcessLogger = { log() {}, error() {} };
 const npmInvocationFixture = resolveNpmInvocation();
 assert.equal(npmInvocationFixture.command, process.execPath);
@@ -1390,9 +1436,24 @@ const buildSnapshotFixture = {
 const buildManifestFixture = createBuildManifest(buildSnapshotFixture, {
   buildStartedAt: "2026-07-22T12:00:00.000Z",
   generatedAt: "2026-07-22T12:01:00.000Z",
+  firebaseConfigPresent: true,
 });
 assert.equal(buildManifestFixture.packageName, "com.revendasmart.app");
 assert.equal(buildManifestFixture.buildType, "debug");
+assert.equal(buildManifestFixture.firebaseConfigPresent, true);
+const serializedBuildManifest = JSON.stringify(buildManifestFixture);
+assert.doesNotMatch(serializedBuildManifest, /VITE_FIREBASE_|synthetic-/);
+for (const forbiddenField of ["apiKey", "authDomain", "projectId", "storageBucket", "messagingSenderId", "appId", "firebaseConfig"]) {
+  assert.equal(Object.prototype.hasOwnProperty.call(buildManifestFixture, forbiddenField), false);
+}
+assert.equal(assertFirebaseConfigPresentInManifest(buildManifestFixture), true);
+const buildManifestWithoutFirebase = { ...buildManifestFixture };
+Reflect.deleteProperty(buildManifestWithoutFirebase, "firebaseConfigPresent");
+assert.throws(() => validateBuildManifest(buildManifestWithoutFirebase, buildSnapshotFixture), /firebaseConfigPresent/);
+const buildManifestWithoutFirebaseConfig = { ...buildManifestFixture, firebaseConfigPresent: false };
+assert.equal(validateBuildManifest(buildManifestWithoutFirebaseConfig, buildSnapshotFixture), buildManifestWithoutFirebaseConfig);
+assert.throws(() => assertFirebaseConfigPresentInManifest(buildManifestWithoutFirebaseConfig), /sem configuração Firebase validada/);
+assert.match(androidVerifyDebugApkScript, /assertFirebaseConfigPresentInManifest\(manifest\)/);
 assert.equal(validateBuildManifest(buildManifestFixture, buildSnapshotFixture), buildManifestFixture);
 assert.throws(() => validateBuildManifest({ ...buildManifestFixture, gitCommit: "c".repeat(40) }, buildSnapshotFixture));
 assert.deepEqual(

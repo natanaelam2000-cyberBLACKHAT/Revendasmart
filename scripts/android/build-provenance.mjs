@@ -91,6 +91,7 @@ export function createBuildManifest(snapshot, options = {}) {
     buildStartedAt,
     packageName: ANDROID_PACKAGE_NAME,
     buildType: ANDROID_BUILD_TYPE,
+    firebaseConfigPresent: options.firebaseConfigPresent === true,
     worktreeClean: snapshot.worktreeClean,
     worktreeFingerprint: snapshot.worktreeFingerprint,
   };
@@ -108,6 +109,7 @@ export function validateBuildManifest(manifest, expected = {}) {
   if (manifest.packageName !== ANDROID_PACKAGE_NAME) throw new Error(`packageName do manifesto não é ${ANDROID_PACKAGE_NAME}.`);
   if (manifest.buildType !== ANDROID_BUILD_TYPE) throw new Error("o manifesto não pertence a um build debug.");
   if (!/^[a-f0-9]{64}$/i.test(String(manifest.worktreeFingerprint || ""))) throw new Error("worktreeFingerprint ausente ou inválido no manifesto.");
+  if (typeof manifest.firebaseConfigPresent !== "boolean") throw new Error("firebaseConfigPresent ausente no manifesto.");
   if (typeof manifest.worktreeClean !== "boolean") throw new Error("worktreeClean ausente no manifesto.");
   for (const field of ["gitCommit", "gitShortCommit", "branch", "worktreeFingerprint"]) {
     if (expected[field] !== undefined && manifest[field] !== expected[field]) throw new Error(`${field} do manifesto não corresponde ao estado atual.`);
