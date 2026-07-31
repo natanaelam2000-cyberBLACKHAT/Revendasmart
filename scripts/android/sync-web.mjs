@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import {
   ANDROID_WEB_DIR,
   BUILD_MANIFEST_FILE,
@@ -41,22 +41,97 @@ const FORBIDDEN_BUNDLE_MARKERS = [
 ];
 
 function fail(message) {
-  console.error(`Android web sync bloqueado: ${message}`);
-  process.exit(1);
+  throw new Error(message);
 }
 
-function run(command, args, options = {}) {
-  console.log(`$ ${[command, ...args].join(" ")}`);
-  const result = spawnSync(command, args, { stdio: "inherit", shell: false, ...options });
-  if (result.status !== 0) process.exit(result.status ?? 1);
+function formatCommand(command, args) {
+  return [command, ...args].join(" ");
 }
 
-function npmCommand() {
-  return process.platform === "win32" ? "npm.cmd" : "npm";
+function isFile(path) {
+  return statSync(path, { throwIfNoEntry: false })?.isFile() === true;
 }
 
-function capCommand() {
-  return process.platform === "win32" ? "node_modules/.bin/cap.cmd" : "node_modules/.bin/cap";
+export function runCommand(command, args, options = {}) {
+  const cwd = resolve(options.cwd || process.cwd());
+  const logger = options.logger || console;
+  logger.log(`$ ${formatCommand(command, args)}`);
+
+  return new Promise((resolveCommand, rejectCommand) => {
+    let child;
+    try {
+      child = spawn(command, args, {
+        cwd,
+        env: options.env || process.env,
+        stdio: options.stdio || "inherit",
+        shell: false,
+        windowsHide: process.platform === "win32",
+      });
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error ? `; code=${error.code}` : "";
+      const errno = error && typeof error === "object" && "errno" in error ? `; errno=${error.errno}` : "";
+      rejectCommand(new Error(`falha ao iniciar comando: ${formatCommand(command, args)}; cwd=${cwd}; erro=${error instanceof Error ? error.message : String(error)}${code}${errno}`));
+      return;
+    }
+
+    child.once("error", (error) => {
+      const code = error.code ? `; code=${error.code}` : "";
+      const errno = error.errno !== undefined ? `; errno=${error.errno}` : "";
+      rejectCommand(new Error(`falha ao iniciar comando: ${formatCommand(command, args)}; cwd=${cwd}; erro=${error.message}${code}${errno}`));
+    });
+    child.once("close", (code, signal) => {
+      if (code === 0) {
+        resolveCommand();
+        return;
+      }
+      const signalDetails = signal ? `; signal=${signal}` : "";
+      rejectCommand(new Error(`comando falhou: ${formatCommand(command, args)}; cwd=${cwd}; exit code=${code ?? "nulo"}${signalDetails}`));
+    });
+  });
+}
+
+export function resolveNpmInvocation(options = {}) {
+  const nodeExecutable = options.nodeExecutable || process.execPath;
+  const nodeDirectory = dirname(nodeExecutable);
+  const npmCliCandidates = [
+    options.npmExecPath || process.env.npm_execpath || "",
+    join(nodeDirectory, "node_modules", "npm", "bin", "npm-cli.js"),
+    resolve(nodeDirectory, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+  ].filter(Boolean);
+
+  for (const npmCliPath of [...new Set(npmCliCandidates)]) {
+    if (isFile(npmCliPath)) return { command: nodeExecutable, args: [npmCliPath] };
+  }
+
+  fail("npm-cli.js não foi localizado. Execute o sync por npm run android:sync ou reinstale o Node.js com npm.");
+}
+
+export function resolveCapInvocation(root = resolveRepositoryRoot(), nodeExecutable = process.execPath) {
+  const capCliPath = join(root, "node_modules", "@capacitor", "cli", "bin", "capacitor");
+  if (!isFile(capCliPath)) {
+    fail(`CLI do Capacitor não encontrado em ${capCliPath}. Execute npm ci antes do sync Android.`);
+  }
+  return { command: nodeExecutable, args: [capCliPath] };
+}
+
+export async function executeAndroidSyncSteps(steps, logger = console) {
+  const pipeline = [
+    { label: "Build web", success: "Build web", action: steps.build },
+    { label: "Manifesto/proveniência", success: "Manifesto", action: steps.manifest },
+    { label: "Capacitor sync", success: "Capacitor sync", action: steps.capacitor },
+    { label: "Validação de assets", success: "Android sync concluído", action: steps.validate },
+  ];
+
+  for (const [index, step] of pipeline.entries()) {
+    logger.log(`[${index + 1}/${pipeline.length}] ${step.label}`);
+    try {
+      await step.action();
+      logger.log(`OK: ${step.success}`);
+    } catch (error) {
+      logger.error(`FALHA: ${step.label}\n${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    }
+  }
 }
 
 function normalizeAndroidHttpsBaseUrl(value, envName) {
@@ -162,7 +237,7 @@ function assertCopiedAssetsMatch() {
   }
 }
 
-export function runAndroidWebSync(command = "sync") {
+export async function runAndroidWebSync(command = "sync") {
   if (!["sync", "copy"].includes(command)) fail(`comando inválido: ${command}`);
   const root = resolveRepositoryRoot();
   process.chdir(root);
@@ -176,16 +251,25 @@ export function runAndroidWebSync(command = "sync") {
   const buildId = snapshot.gitShortCommit;
   const buildStartedAt = normalizeBuildStartedAt(process.env.ANDROID_BUILD_STARTED_AT || new Date().toISOString());
   const env = { ...process.env, VITE_API_BASE_URL: apiBaseUrl, VITE_PUBLIC_APP_URL: publicAppUrl, VITE_APP_BUILD_ID: buildId };
+  const npmInvocation = resolveNpmInvocation();
+  const capInvocation = resolveCapInvocation(root);
 
-  run(npmCommand(), ["run", "build"], { env });
-  const completedSnapshot = getGitSnapshot(root);
-  assertSnapshotUnchanged(snapshot, completedSnapshot);
-  const buildManifest = createBuildManifest(snapshot, { buildStartedAt });
-  writeFileSync(join(WEB_BUILD_DIR, BUILD_MANIFEST_FILE), `${JSON.stringify(buildManifest, null, 2)}\n`, "utf8");
-  assertWebBuild(apiBaseUrl, publicAppUrl, buildId);
-  run(capCommand(), [command, "android"]);
-  assertAndroidAssets(apiBaseUrl, publicAppUrl, buildId);
-  assertCopiedAssetsMatch();
+  await executeAndroidSyncSteps({
+    build: () => runCommand(npmInvocation.command, [...npmInvocation.args, "run", "build"], { cwd: root, env }),
+    manifest: () => {
+      const completedSnapshot = getGitSnapshot(root);
+      assertSnapshotUnchanged(snapshot, completedSnapshot);
+      const buildManifest = createBuildManifest(snapshot, { buildStartedAt });
+      writeFileSync(join(WEB_BUILD_DIR, BUILD_MANIFEST_FILE), `${JSON.stringify(buildManifest, null, 2)}\n`, "utf8");
+      assertWebBuild(apiBaseUrl, publicAppUrl, buildId);
+    },
+    capacitor: () => runCommand(capInvocation.command, [...capInvocation.args, command, "android"], { cwd: root }),
+    validate: () => {
+      assertAndroidAssets(apiBaseUrl, publicAppUrl, buildId);
+      assertCopiedAssetsMatch();
+    },
+  });
+
   console.log(JSON.stringify({
     command,
     webDir: WEB_BUILD_DIR,
@@ -201,5 +285,8 @@ export function runAndroidWebSync(command = "sync") {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runAndroidWebSync(process.argv[2] || "sync");
+  runAndroidWebSync(process.argv[2] || "sync").catch((error) => {
+    console.error(`Android web sync bloqueado: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
 }

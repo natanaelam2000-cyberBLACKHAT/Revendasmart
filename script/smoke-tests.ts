@@ -1295,6 +1295,14 @@ assert.match(androidSyncWebScript, /Imagem omitida; arte gerada sem ela/);
 assert.match(androidSyncWebScript, /Pe\\u00e7a pelo WhatsApp/);
 assert.match(androidSyncWebScript, /REVENDA SMART/);
 assert.match(androidSyncWebScript, /pathToFileURL/);
+assert.match(androidSyncWebScript, /function runCommand\([\s\S]*new Promise/);
+assert.match(androidSyncWebScript, /spawn\(command, args,[\s\S]*stdio: options\.stdio \|\| "inherit"[\s\S]*shell: false/);
+assert.match(androidSyncWebScript, /child\.once\("error"/);
+assert.match(androidSyncWebScript, /child\.once\("close"/);
+assert.match(androidSyncWebScript, /process\.env\.npm_execpath/);
+assert.match(androidSyncWebScript, /node_modules", "@capacitor", "cli", "bin", "capacitor"/);
+assert.doesNotMatch(androidSyncWebScript, /npm\.cmd|npx\.cmd|cap\.cmd/);
+assert.doesNotMatch(androidSyncWebScript, /spawnSync|process\.exit\(/);
 assert.match(androidBuildDebugScript, /function runCommand\([\s\S]*new Promise/);
 assert.match(androidBuildDebugScript, /spawn\(command, args,[\s\S]*stdio: "inherit"[\s\S]*shell: false/);
 assert.match(androidBuildDebugScript, /child\.once\("error"/);
@@ -1325,7 +1333,7 @@ assert.match(serverIndex, /Access-Control-Allow-Credentials[\s\S]*true/);
 assert.doesNotMatch(serverIndex, /Access-Control-Allow-Origin", "\*"/);
 assert.match(androidDocs, /VITE_API_BASE_URL=https:\/\/revendasmart\.vercel\.app/);
 assert.match(androidDebugDocs, /VITE_API_BASE_URL=https:\/\/revendasmart\.vercel\.app/);
-const { normalizeAndroidApiBaseUrl, normalizeAndroidPublicAppUrl } = await import("../scripts/android/sync-web.mjs");
+const { executeAndroidSyncSteps, normalizeAndroidApiBaseUrl, normalizeAndroidPublicAppUrl, resolveCapInvocation, resolveNpmInvocation, runCommand } = await import("../scripts/android/sync-web.mjs");
 const { createBuildManifest, validateBuildManifest, compareDirectoryHashMaps } = await import("../scripts/android/build-provenance.mjs");
 const { parseAaptPackageName, isApkFresh, REQUIRED_APK_MARKERS, FORBIDDEN_APK_MARKERS } = await import("../scripts/android/verify-debug-apk.mjs");
 assert.equal(normalizeAndroidApiBaseUrl("https://revendasmart.vercel.app/"), "https://revendasmart.vercel.app");
@@ -1334,6 +1342,44 @@ for (const badAndroidApiBaseUrl of ["", "http://revendasmart.vercel.app", "https
   assert.throws(() => normalizeAndroidApiBaseUrl(badAndroidApiBaseUrl));
   assert.throws(() => normalizeAndroidPublicAppUrl(badAndroidApiBaseUrl));
 }
+const silentProcessLogger = { log() {}, error() {} };
+const npmInvocationFixture = resolveNpmInvocation();
+assert.equal(npmInvocationFixture.command, process.execPath);
+assert.match(npmInvocationFixture.args[0], /npm-cli\.js$/);
+assert.doesNotMatch(npmInvocationFixture.args[0], /\.cmd$/i);
+const capInvocationFixture = resolveCapInvocation();
+assert.equal(capInvocationFixture.command, process.execPath);
+assert.match(capInvocationFixture.args[0], /@capacitor[\\/]cli[\\/]bin[\\/]capacitor$/);
+assert.doesNotMatch(capInvocationFixture.args[0], /\.cmd$/i);
+await runCommand(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore", logger: silentProcessLogger });
+await assert.rejects(
+  runCommand(process.execPath, ["-e", "process.exit(7)"], { stdio: "ignore", logger: silentProcessLogger }),
+  /exit code=7/,
+);
+await assert.rejects(
+  runCommand("__missing_android_sync_command__", [], { stdio: "ignore", logger: silentProcessLogger }),
+  /falha ao iniciar comando:[\s\S]*cwd=[\s\S]*(ENOENT|não encontrado|not found)/i,
+);
+const successfulSyncSteps: string[] = [];
+await executeAndroidSyncSteps({
+  build: async () => { successfulSyncSteps.push("build"); },
+  manifest: async () => { successfulSyncSteps.push("manifest"); },
+  capacitor: async () => { successfulSyncSteps.push("capacitor"); },
+  validate: async () => { successfulSyncSteps.push("validate"); },
+}, silentProcessLogger);
+assert.deepEqual(successfulSyncSteps, ["build", "manifest", "capacitor", "validate"]);
+const failedSyncSteps: string[] = [];
+await assert.rejects(
+  executeAndroidSyncSteps({
+    build: async () => { failedSyncSteps.push("build"); throw new Error("synthetic build failure"); },
+    manifest: async () => { failedSyncSteps.push("manifest"); },
+    capacitor: async () => { failedSyncSteps.push("capacitor"); },
+    validate: async () => { failedSyncSteps.push("validate"); },
+  }, silentProcessLogger),
+  /synthetic build failure/,
+);
+assert.deepEqual(failedSyncSteps, ["build"]);
+
 const buildSnapshotFixture = {
   gitCommit: "a".repeat(40),
   gitShortCommit: "a".repeat(12),
