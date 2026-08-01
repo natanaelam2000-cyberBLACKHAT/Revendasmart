@@ -13,10 +13,11 @@ import { MarketingHistoryPanel } from "@/components/MarketingHistoryPanel";
 import { MarketingStats } from "@/components/MarketingStats";
 import { MarketingAdCanvas } from "@/components/MarketingAdCanvas";
 import { PageSkeleton } from "@/components/PageSkeleton";
-import { createMarketingCard, downloadMarketingCard, MARKETING_CARD_IMAGE_ERROR_MESSAGE } from "@/lib/marketing-card";
-import { isMarketingShareCancelledError, shareMarketingCard, type MarketingShareResult } from "@/lib/marketing-share";
+import { createMarketingCard, MarketingCardImageError, MarketingCardRenderError } from "@/lib/marketing-card";
+import { isMarketingShareCancelledError, MarketingFileOperationError, saveMarketingCard, shareMarketingCard, type MarketingShareResult } from "@/lib/marketing-share";
+import { MARKETING_IMAGE_ERROR_MESSAGE, MarketingImageResolutionError, resolveMarketingImageCandidates, type ResolvedMarketingImage } from "@/lib/marketing-image";
 import { buildPublicCatalogUrl } from "@/lib/public-url";
-import { MARKETING_AD_THEME_IDS, MARKETING_AD_THEMES, MARKETING_TEMPLATES, buildMarketingAdConfig, buildMarketingAdMessage, buildMarketingVolumeText, buildMarketingWhatsappUrl, formatMarketingPrice, normalizeMarketingAdConfig, normalizeMarketingGeneratedText, parseMarketingPriceNumber, resolveMarketingTemplate, type MarketingAdThemeId, type MarketingBackgroundStyle, type MarketingTemplateId } from "@/lib/marketing-ad";
+import { MARKETING_AD_THEME_IDS, MARKETING_AD_THEMES, MARKETING_TEMPLATES, buildMarketingAdConfig, buildMarketingAdMessage, buildMarketingVolumeText, buildMarketingWhatsappUrl, formatMarketingPrice, getMarketingAdImageCandidates, normalizeMarketingAdConfig, normalizeMarketingGeneratedText, parseMarketingPriceNumber, resolveMarketingTemplate, type MarketingAdThemeId, type MarketingBackgroundStyle, type MarketingTemplateId } from "@/lib/marketing-ad";
 import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
 
 async function copyTextWithFallback(text: string) {
@@ -38,6 +39,29 @@ async function copyTextWithFallback(text: string) {
 const MARKETING_AD_THEME_STORAGE_KEY = "rs:marketing-ad-theme";
 const WHATSAPP_SETUP_MESSAGE = "Cadastre o WhatsApp da sua loja para receber pedidos por este card.";
 
+type MarketingImageResolutionState = {
+  key: string;
+  status: "idle" | "resolving" | "ready" | "error";
+  resolved: ResolvedMarketingImage | null;
+  error: string;
+};
+
+function getMarketingOperationError(error: unknown, action: "download" | "share") {
+  if (error instanceof MarketingImageResolutionError || error instanceof MarketingCardImageError) {
+    return { message: MARKETING_IMAGE_ERROR_MESSAGE, code: "image-resolution" };
+  }
+  if (error instanceof MarketingCardRenderError) {
+    return { message: error.message, code: error.code };
+  }
+  if (error instanceof MarketingFileOperationError) {
+    return { message: error.message, code: error.code };
+  }
+  return {
+    message: action === "download" ? "Não foi possível salvar o card." : "Não foi possível compartilhar o card com imagem.",
+    code: action === "download" ? "download-unknown" : "share-unknown",
+  };
+}
+
 function readStoredMarketingTheme(): MarketingAdThemeId {
   if (typeof window === "undefined") return "brand";
   try {
@@ -54,7 +78,14 @@ export default function Marketing() {
   const settings = firestoreSettings || defaultSettings;
   const v2TemplatesEnabled = useFeatureEnabled("marketing_templates_v2_enabled");
 
-  const [imageError, setImageError] = useState("");
+  const [cardError, setCardError] = useState("");
+  const [cardAction, setCardAction] = useState<"download" | "share" | null>(null);
+  const [imageResolution, setImageResolution] = useState<MarketingImageResolutionState>({
+    key: "",
+    status: "idle",
+    resolved: null,
+    error: "",
+  });
 
   // Ad Generator State
   const [selectedProductId, setSelectedProductId] = useState('');
@@ -144,17 +175,60 @@ export default function Marketing() {
   }, [adTheme, backgroundStyle, catalogUrl, ctaText, currentImageUrl, currentTemplate.headline, currentTemplate.id, note, priceOverride, selectedItem, settings.primaryColor, showBrand, showStockStatus, showVolume, showWhatsAppCta, storeDisplayName, storeLogoUrl]);
   const generatedText = useMemo(() => currentAdConfig ? buildMarketingAdMessage(currentAdConfig, { includePayment, pixKey: settings.pixKey, paymentLink: settings.paymentLink }) : "", [currentAdConfig, includePayment, settings.paymentLink, settings.pixKey]);
   const previewWhatsappUrl = useMemo(() => generatedText ? buildMarketingWhatsappUrl({ phone: storeWhatsappNumber, message: generatedText }) : "", [generatedText, storeWhatsappNumber]);
+  const currentImageCandidates = useMemo(
+    () => currentAdConfig ? getMarketingAdImageCandidates(currentAdConfig) : [],
+    [currentAdConfig?.image, currentAdConfig?.imageUrl, currentAdConfig?.photoUrl, currentAdConfig?.productImageUrl],
+  );
+  const currentImageKey = currentImageCandidates.join("\u001f");
 
   const [copied, setCopied] = useState(false);
   const currentPrice = currentAdConfig?.priceText || formatMarketingPrice(0);
 
-  useEffect(() => setImageError(""), [currentImageUrl, selectedItem?.id]);
+  useEffect(() => {
+    let active = true;
+    setCardError("");
+    if (!currentAdConfig) {
+      setImageResolution({ key: "", status: "idle", resolved: null, error: "" });
+      return () => { active = false; };
+    }
+    if (!currentImageCandidates.length) {
+      setImageResolution({ key: currentImageKey, status: "ready", resolved: null, error: "" });
+      return () => { active = false; };
+    }
 
-  const handlePreviewImageError = () => setImageError(MARKETING_CARD_IMAGE_ERROR_MESSAGE);
-  const handlePreviewImageLoad = () => setImageError((current) => current === MARKETING_CARD_IMAGE_ERROR_MESSAGE ? "" : current);
+    setImageResolution({ key: currentImageKey, status: "resolving", resolved: null, error: "" });
+    void resolveMarketingImageCandidates(currentImageCandidates)
+      .then((resolved) => {
+        if (!active) return;
+        setImageResolution({ key: currentImageKey, status: "ready", resolved, error: "" });
+      })
+      .catch((error) => {
+        if (!active) return;
+        const message = error instanceof MarketingImageResolutionError ? error.message : MARKETING_IMAGE_ERROR_MESSAGE;
+        setImageResolution({ key: currentImageKey, status: "error", resolved: null, error: message });
+        setCardError(message);
+      });
+    return () => { active = false; };
+  }, [currentImageKey]);
+
+  const currentImageState = imageResolution.key === currentImageKey ? imageResolution : {
+    key: currentImageKey,
+    status: currentImageCandidates.length ? "resolving" as const : "ready" as const,
+    resolved: null,
+    error: "",
+  };
+  const currentResolvedImage = currentImageState.resolved;
+  const cardActionsBlocked = cardAction !== null || (currentImageCandidates.length > 0 && currentImageState.status !== "ready");
   const canGenerateCurrentCard = () => {
-    if (imageError !== MARKETING_CARD_IMAGE_ERROR_MESSAGE) return true;
-    notifyError(MARKETING_CARD_IMAGE_ERROR_MESSAGE);
+    if (!currentImageCandidates.length) return true;
+    if (currentImageState.status === "resolving") {
+      notifyInfo("Aguarde enquanto preparamos a foto do produto.");
+      return false;
+    }
+    if (currentImageState.status === "ready" && currentResolvedImage) return true;
+    const message = currentImageState.error || MARKETING_IMAGE_ERROR_MESSAGE;
+    setCardError(message);
+    notifyError(message);
     return false;
   };
 
@@ -211,22 +285,21 @@ export default function Marketing() {
     notifySuccess("Card pronto para compartilhar com imagem.");
   };
 
-  const notifyCardGenerationError = (error: unknown, fallback: string) => {
-    const message = error instanceof Error ? error.message : fallback;
-    setImageError(message);
-    notifyError(message.includes("foto deste produto") ? message : fallback);
-    return message;
+  const reportMarketingActionError = (error: unknown, action: "download" | "share") => {
+    const result = getMarketingOperationError(error, action);
+    setCardError(result.message);
+    notifyError(result.message);
+    return result;
   };
 
-  const shareAdBlob = async (payload: NonNullable<ReturnType<typeof entryPayload>>) => {
-    const blob = await createMarketingCard(payload);
+  const shareAdBlob = async (payload: NonNullable<ReturnType<typeof entryPayload>>, resolvedProductImage?: ResolvedMarketingImage | null) => {
+    const blob = await createMarketingCard(payload, { resolvedProductImage });
     const result = await shareMarketingCard({
       blob,
       productName: payload.productName,
       text: payload.generatedText || generatedText,
       title: `${payload.productName} | ${payload.storeName || "Revenda Smart"}`,
       dialogTitle: "Compartilhar anúncio",
-      onWebDownloadFallback: (fallbackBlob) => downloadMarketingCard(fallbackBlob, payload.productName),
       onTextFallback: copyTextWithFallback,
     });
     notifyShareResult(result);
@@ -244,10 +317,12 @@ export default function Marketing() {
 
   const handleShare = async () => {
     const payload = entryPayload("shared");
-    if (!payload || !canGenerateCurrentCard()) return;
+    if (!payload || cardAction || !canGenerateCurrentCard()) return;
 
+    setCardAction("share");
+    setCardError("");
     try {
-      const result = await shareAdBlob(payload);
+      await shareAdBlob(payload, currentResolvedImage);
       await recordAction(payload);
       const productId = selectedProductId || selectedKitId;
       const user = getFirebaseAuth()?.currentUser;
@@ -258,9 +333,10 @@ export default function Marketing() {
         notifyInfo("Compartilhamento cancelado.");
         return;
       }
-      const message = error instanceof Error ? error.message : "Não foi possível compartilhar o card.";
-      notifyError("Não foi possível compartilhar o card com imagem.");
-      logError("ad_image_share_failed", message, { context: { template, hasProduct: !!selectedProductId, hasKit: !!selectedKitId } });
+      const failure = reportMarketingActionError(error, "share");
+      logError("ad_image_share_failed", failure.message, { context: { stage: failure.code, template, hasProduct: !!selectedProductId, hasKit: !!selectedKitId } });
+    } finally {
+      setCardAction(null);
     }
   };
 
@@ -288,17 +364,19 @@ export default function Marketing() {
 
   const handleDownloadImage = async () => {
     const payload = entryPayload("downloaded");
-    if (!payload || !canGenerateCurrentCard()) return;
+    if (!payload || cardAction || !canGenerateCurrentCard()) return;
+    setCardAction("download");
+    setCardError("");
     try {
-      const blob = await createMarketingCard(payload);
-      downloadMarketingCard(blob, payload.productName);
+      const blob = await createMarketingCard(payload, { resolvedProductImage: currentResolvedImage });
+      const result = await saveMarketingCard({ blob, productName: payload.productName });
       await recordAction(payload);
-      notifySuccess("Card salvo.");
+      notifySuccess(`Card salvo em ${result.locationLabel}.`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Não foi possível baixar o card";
-      setImageError(message);
-      notifyError("Não foi possível salvar o card.");
-      logError("ad_image_generation_failed", message, { context: { template, hasProduct: !!selectedProductId, hasKit: !!selectedKitId } });
+      const failure = reportMarketingActionError(error, "download");
+      logError("ad_image_generation_failed", failure.message, { context: { stage: failure.code, template, hasProduct: !!selectedProductId, hasKit: !!selectedKitId } });
+    } finally {
+      setCardAction(null);
     }
   };
 
@@ -326,7 +404,6 @@ export default function Marketing() {
         text: payload.generatedText,
         title: `${payload.productName} | ${payload.storeName || "Revenda Smart"}`,
         dialogTitle: "Compartilhar anúncio",
-        onWebDownloadFallback: (fallbackBlob) => downloadMarketingCard(fallbackBlob, payload.productName),
         onTextFallback: copyTextWithFallback,
       });
       await recordAction(payload);
@@ -336,21 +413,20 @@ export default function Marketing() {
         notifyInfo("Compartilhamento cancelado.");
         return;
       }
-      const message = error instanceof Error ? error.message : "Não foi possível compartilhar o card salvo.";
-      notifyError("Não foi possível compartilhar o card com imagem.");
-      logError("ad_history_share_failed", message, { context: { entryAction: entry.action } });
+      const failure = reportMarketingActionError(error, "share");
+      logError("ad_history_share_failed", failure.message, { context: { stage: failure.code, entryAction: entry.action } });
     }
   };
   const repeatDownload = async (entry: MarketingHistoryEntry) => {
     try {
       const payload = repeatPayload(entry, "downloaded");
       const blob = await createMarketingCard(payload);
-      downloadMarketingCard(blob, payload.productName);
+      const result = await saveMarketingCard({ blob, productName: payload.productName });
       await recordAction(payload);
-      notifySuccess("Card salvo.");
+      notifySuccess(`Card salvo em ${result.locationLabel}.`);
     } catch (error) {
-      const message = notifyCardGenerationError(error, "Não foi possível salvar o card.");
-      logError("ad_history_download_failed", message, { context: { entryAction: entry.action } });
+      const failure = reportMarketingActionError(error, "download");
+      logError("ad_history_download_failed", failure.message, { context: { stage: failure.code, entryAction: entry.action } });
     }
   };
 
@@ -680,7 +756,12 @@ export default function Marketing() {
                       Editando anúncio salvo. Troque tema ou texto à vontade; o histórico só será substituído quando você confirmar.
                     </div>
                   )}
-                  <MarketingAdCanvas config={currentAdConfig} onCtaClick={handleCardCtaClick} onImageError={handlePreviewImageError} onImageLoad={handlePreviewImageLoad} />
+                  <MarketingAdCanvas
+                    config={currentAdConfig}
+                    onCtaClick={handleCardCtaClick}
+                    resolvedImage={currentResolvedImage}
+                    imageStatus={currentImageState.status}
+                  />
                   {showWhatsappSetupNotice && !storeWhatsappNumber && (
                     <div className="mk35" role="status">
                       <p>{WHATSAPP_SETUP_MESSAGE}</p>
@@ -715,19 +796,21 @@ export default function Marketing() {
 
                   <button
                     onClick={handleShare}
-                    className="mk51 mk0"
+                    disabled={cardActionsBlocked}
+                    className="mk51 mk0 disabled:cursor-wait disabled:opacity-60"
                     data-testid="button-share-whatsapp-ad"
                   >
-                    <MessageSquare className="w-4 h-4" /> Compartilhar no WhatsApp
+                    <MessageSquare className="w-4 h-4" /> {cardAction === "share" ? "Preparando compartilhamento..." : currentImageState.status === "resolving" ? "Preparando foto..." : "Compartilhar no WhatsApp"}
                   </button>
 
-                  {imageError && <p className="mk72">{imageError}</p>}
+                  {cardError && <p className="mk72" role="alert">{cardError}</p>}
                   <button
                     onClick={handleDownloadImage}
-                    className="mk51 mk1"
+                    disabled={cardActionsBlocked}
+                    className="mk51 mk1 disabled:cursor-wait disabled:opacity-60"
                     data-testid="button-download-ad-image"
                   >
-                    <ImageIcon className="w-4 h-4" /> Baixar Card
+                    <ImageIcon className="w-4 h-4" /> {cardAction === "download" ? "Salvando card..." : currentImageState.status === "resolving" ? "Preparando foto..." : "Baixar Card"}
                   </button>
                 </div>
               ) : (
@@ -746,7 +829,6 @@ export default function Marketing() {
           ) : (
             <MarketingHistoryPanel entries={historyEntries} loading={historyLoading} onCopy={repeatCopy} onShare={repeatShare} onDownload={repeatDownload} onRemove={removeEntry} onClear={clearHistory} onCreate={() => setActiveTab("generator")} onEdit={(entry) => applyEntryToEditor(entry, "edit")} onTheme={(entry) => applyEntryToEditor(entry, "theme")} onDuplicate={handleDuplicateEntry} />
           )}
-          <p className="mk-build-marker" aria-label="Versão da tela de Marketing">Marketing build b19f1e3-fix1</p>
         </div>
       </div>
     </Layout>

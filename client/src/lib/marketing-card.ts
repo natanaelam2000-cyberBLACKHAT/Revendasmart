@@ -1,13 +1,27 @@
-import { buildMarketingAdVisualModel, getMarketingAdImageCandidates, type MarketingAdConfig, type MarketingAdInput } from "@/lib/marketing-ad";
+import { buildMarketingAdVisualModel, getMarketingAdImageCandidates, normalizeMarketingAdConfig, type MarketingAdConfig, type MarketingAdInput } from "@/lib/marketing-ad";
+import { MARKETING_IMAGE_ERROR_MESSAGE, MarketingImageResolutionError, resolveMarketingImageCandidates, resolveMarketingProductImage, type ResolvedMarketingImage } from "@/lib/marketing-image";
 
 const S = 1080;
 const FONT = "Arial";
-export const MARKETING_CARD_IMAGE_ERROR_MESSAGE = "Não foi possível carregar a foto deste produto. Verifique a imagem e tente novamente para gerar o card com qualidade.";
+export const MARKETING_CARD_IMAGE_ERROR_MESSAGE = MARKETING_IMAGE_ERROR_MESSAGE;
+export const MARKETING_CARD_RENDER_ERROR_MESSAGE = "Não foi possível finalizar o PNG do card. Tente novamente.";
 
 export class MarketingCardImageError extends Error {
+  readonly code = "marketing-image-decode-failed";
+
   constructor() {
     super(MARKETING_CARD_IMAGE_ERROR_MESSAGE);
     this.name = "MarketingCardImageError";
+  }
+}
+
+export class MarketingCardRenderError extends Error {
+  readonly code: "canvas-context" | "canvas-encode";
+
+  constructor(code: "canvas-context" | "canvas-encode", cause?: unknown) {
+    super(MARKETING_CARD_RENDER_ERROR_MESSAGE, { cause });
+    this.name = "MarketingCardRenderError";
+    this.code = code;
   }
 }
 
@@ -19,30 +33,25 @@ const loadImg = (src: string) => new Promise<HTMLImageElement | null>((resolve) 
   img.src = src;
 });
 
-async function loadExportableImage(src: string) {
-  if (!src.startsWith("http")) return loadImg(src);
+async function loadOptionalVisualAsset(src: string) {
+  if (!src) return null;
   try {
-    const response = await fetch(src, { mode: "cors", credentials: "omit" });
-    if (!response.ok) return null;
-    const blob = await response.blob();
-    if (!blob.size) return null;
-    const objectUrl = URL.createObjectURL(blob);
-    const img = await loadImg(objectUrl);
-    URL.revokeObjectURL(objectUrl);
-    return img;
+    const resolved = await resolveMarketingImageCandidates([src]);
+    return resolved ? loadImg(resolved.safeSrc) : null;
   } catch {
     return null;
   }
 }
 
-async function resolveProductImage(config: MarketingAdConfig) {
+async function resolveProductImage(config: MarketingAdConfig, supplied?: ResolvedMarketingImage | null) {
   const candidates = getMarketingAdImageCandidates(config);
   if (!candidates.length) return null;
-  for (const src of candidates) {
-    const img = await loadExportableImage(src);
-    if (img) return img;
-  }
-  throw new MarketingCardImageError();
+  if (supplied && !candidates.includes(supplied.sourceUrl)) throw new MarketingImageResolutionError(candidates.length);
+  const resolved = supplied || await resolveMarketingProductImage(config);
+  if (!resolved) throw new MarketingImageResolutionError(candidates.length);
+  const image = await loadImg(resolved.safeSrc);
+  if (!image) throw new MarketingCardImageError();
+  return { image, resolved };
 }
 
 const font = (ctx: CanvasRenderingContext2D, size: number, weight = 900) => { ctx.font = `${weight} ${size}px ${FONT}`; };
@@ -86,16 +95,25 @@ function circleIcon(ctx: CanvasRenderingContext2D, x: number, y: number, text: s
   ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; font(ctx, 20, 900); ctx.fillText(text, x, y + 1);
 }
 
-export async function createMarketingCard(payload: MarketingAdInput): Promise<Blob> {
-  const model = buildMarketingAdVisualModel(payload), { config, theme, features, ctaText, description, badgeText } = model;
-  const [logo, product, signatureLogo] = await Promise.all([
-    config.storeLogoUrl ? loadExportableImage(config.storeLogoUrl) : Promise.resolve(null),
-    resolveProductImage(config),
-    loadExportableImage("/logo-revenda-smart-symbol.png"),
+export type CreateMarketingCardOptions = {
+  resolvedProductImage?: ResolvedMarketingImage | null;
+};
+
+export async function createMarketingCard(payload: MarketingAdInput, options: CreateMarketingCardOptions = {}): Promise<Blob> {
+  const normalizedConfig = normalizeMarketingAdConfig(payload);
+  const [logo, productResult, signatureLogo] = await Promise.all([
+    loadOptionalVisualAsset(normalizedConfig.storeLogoUrl || ""),
+    resolveProductImage(normalizedConfig, options.resolvedProductImage),
+    loadOptionalVisualAsset("/logo-revenda-smart-symbol.png"),
   ]);
-  const canvas = document.createElement("canvas"), ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Falha no PNG");
+  const resolvedProductImage = productResult?.resolved || null;
+  const product = productResult?.image || null;
+  const model = buildMarketingAdVisualModel(normalizedConfig, { resolvedImageSrc: resolvedProductImage?.safeSrc || "" });
+  const { config, theme, features, ctaText, description, badgeText } = model;
+  const canvas = document.createElement("canvas");
   canvas.width = canvas.height = S;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new MarketingCardRenderError("canvas-context");
 
   const grad = ctx.createLinearGradient(0, 0, S, S);
   grad.addColorStop(0, "#ffffff"); grad.addColorStop(.55, "#f8fbff"); grad.addColorStop(1, "#eaf3ff");
@@ -145,10 +163,15 @@ export async function createMarketingCard(payload: MarketingAdInput): Promise<Bl
   ctx.fillText("Criado com Revenda Smart", 990, 976);
   if (signatureLogo) fit(ctx, signatureLogo, 738, 958, 30, 30);
 
-  return new Promise((resolve, reject) => { try { canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("Falha no PNG")), "image/png", .95); } catch { reject(new Error("Falha no PNG")); } });
+  return canvasToPngBlob(canvas);
 }
 
-export function downloadMarketingCard(blob: Blob, productName: string) {
-  const url = URL.createObjectURL(blob), link = document.createElement("a");
-  link.download = `anuncio-${productName.toLowerCase().replace(/[^a-z0-9]+/gi, "-")}.png`; link.href = url; document.body.appendChild(link); link.click(); link.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 3000);
+export function canvasToPngBlob(canvas: Pick<HTMLCanvasElement, "toBlob">): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    try {
+      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new MarketingCardRenderError("canvas-encode")), "image/png", 0.95);
+    } catch (error) {
+      reject(new MarketingCardRenderError("canvas-encode", error));
+    }
+  });
 }

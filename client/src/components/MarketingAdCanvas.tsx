@@ -1,43 +1,21 @@
-import { useEffect, useState } from "react";
 import { buildMarketingAdVisualModel, getMarketingAdImageCandidates, type MarketingAdConfig } from "@/lib/marketing-ad";
+import type { ResolvedMarketingImage } from "@/lib/marketing-image";
 
 type MarketingAdCanvasProps = {
   config: MarketingAdConfig;
   compact?: boolean;
   onCtaClick?: () => void;
-  onImageError?: () => void;
-  onImageLoad?: () => void;
+  resolvedImage?: ResolvedMarketingImage | null;
+  imageStatus?: "idle" | "resolving" | "ready" | "error";
 };
 
-export function MarketingAdCanvas({ config, compact = false, onCtaClick, onImageError, onImageLoad }: MarketingAdCanvasProps) {
-  const model = buildMarketingAdVisualModel(config);
+export function MarketingAdCanvas({ config, compact = false, onCtaClick, resolvedImage = null, imageStatus = "idle" }: MarketingAdCanvasProps) {
+  const model = buildMarketingAdVisualModel(config, { resolvedImageSrc: resolvedImage?.safeSrc || "" });
   const { theme, logoSrc, storeInitial, features, ctaText, description, badgeText } = model;
   const imageCandidates = getMarketingAdImageCandidates(model.config);
-  const imageKey = imageCandidates.join("|");
-  const [imageCandidateIndex, setImageCandidateIndex] = useState(0);
-  const [imageFailed, setImageFailed] = useState(false);
-  const imageSrc = imageFailed ? "" : imageCandidates[imageCandidateIndex] || "";
+  const imageSrc = model.imageSrc;
   const hasConfiguredImage = imageCandidates.length > 0;
   const canClickCta = Boolean(onCtaClick && ctaText);
-
-  useEffect(() => {
-    setImageCandidateIndex(0);
-    setImageFailed(false);
-  }, [imageKey]);
-
-  const handleImageError = () => {
-    if (imageCandidateIndex + 1 < imageCandidates.length) {
-      setImageCandidateIndex((current) => current + 1);
-      return;
-    }
-    setImageFailed(true);
-    onImageError?.();
-  };
-
-  const handleImageLoad = () => {
-    setImageFailed(false);
-    onImageLoad?.();
-  };
 
   return (
     <article
@@ -45,6 +23,7 @@ export function MarketingAdCanvas({ config, compact = false, onCtaClick, onImage
       className={`ma24${compact ? " ma12" : ""}`}
       style={{ borderColor: theme.ring, color: theme.foreground }}
       aria-label={`Preview do anúncio ${config.productName}`}
+      data-image-status={imageStatus}
     >
       <div className="ma17">
         <header className="ma14">
@@ -90,7 +69,9 @@ export function MarketingAdCanvas({ config, compact = false, onCtaClick, onImage
 
           <div className="ma4" style={{ borderColor: theme.ring }}>
             {imageSrc ? (
-              <img src={imageSrc} alt={config.productName} loading="lazy" decoding="async" onLoad={handleImageLoad} onError={handleImageError} />
+              <img src={imageSrc} alt={config.productName} loading="lazy" decoding="async" />
+            ) : hasConfiguredImage && imageStatus === "resolving" ? (
+              <div className="ma2" style={{ color: theme.muted }} role="status">Preparando foto...</div>
             ) : hasConfiguredImage ? (
               <div className="ma2 ma2-failed" aria-hidden="true" />
             ) : (

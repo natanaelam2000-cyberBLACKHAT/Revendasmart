@@ -37,11 +37,13 @@ export function buildMarketingFeatureRows(config: MarketingAdConfig) {
     config.showVolume && config.productVolume ? { icon: "•", text: config.productVolume, highlight: false } : null,
   ].filter((item): item is { icon: string; text: string; highlight: boolean } => Boolean(item)).slice(0, 3);
 }
-export function buildMarketingAdVisualModel(input: MarketingAdInput) {
+export function buildMarketingAdVisualModel(input: MarketingAdInput, options: { resolvedImageSrc?: string | null } = {}) {
   const config = normalizeMarketingAdConfig(input), theme = resolveMarketingAdTheme(config.themeId, config.primaryColor), template = resolveMarketingTemplate(config.templateId);
   const features = buildMarketingFeatureRows(config);
   const chips = features.map((feature) => [feature.text, feature.highlight] as const);
-  const imageSrc = getMarketingAdImageCandidates(config)[0] || "";
+  const imageSrc = Object.prototype.hasOwnProperty.call(options, "resolvedImageSrc")
+    ? options.resolvedImageSrc || ""
+    : getMarketingAdImageCandidates(config)[0] || "";
   const ctaText = config.showWhatsAppCta ? config.ctaText || "Chamar no WhatsApp" : "";
   const description = config.note || "";
   const badgeText = template.id === "new" ? "Lançamento" : template.label;

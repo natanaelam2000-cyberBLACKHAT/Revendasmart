@@ -7,7 +7,9 @@ import { buildStoreIntelligence } from "../client/src/lib/store-health";
 import { defaultSettings } from "../client/src/lib/mock-data";
 import { buildProductCreatePayload } from "../client/src/lib/product-payload";
 import { MARKETING_AD_THEME_IDS, buildMarketingAdConfig, buildMarketingAdMessage, buildMarketingAdVisualModel, buildMarketingWhatsappUrl, formatMarketingPrice, normalizeMarketingAdConfig, normalizeMarketingCtaText, normalizeMarketingGeneratedText, sanitizeMarketingHistoryPayload } from "../client/src/lib/marketing-ad";
-import { sanitizeMarketingFileName } from "../client/src/lib/marketing-share";
+import { canvasToPngBlob, MarketingCardRenderError } from "../client/src/lib/marketing-card";
+import { MarketingFileOperationError, blobToBase64Data, createUniqueMarketingFileName, sanitizeMarketingFileName, saveMarketingCard, shareMarketingCard } from "../client/src/lib/marketing-share";
+import { MarketingImageResolutionError, isSafeMarketingImageDataUrl, resolveMarketingImageCandidates } from "../client/src/lib/marketing-image";
 import { buildPublicCatalogUrl, normalizePublicAppBaseUrl, resolvePublicAppBaseUrl } from "../client/src/lib/public-url";
 import { HOME_SUMMARY_KPI_IDS, buildHomeDashboardViewModel } from "../client/src/lib/home-dashboard-view-model";
 import { validateMercadoPagoAccessTokenForEnvironment } from "../server/mercadopago-environment";
@@ -37,6 +39,7 @@ const marketing = read("client/src/pages/marketing.tsx");
 const marketingAd = read("client/src/lib/marketing-ad.ts");
 const marketingCard = read("client/src/lib/marketing-card.ts");
 const marketingShare = read("client/src/lib/marketing-share.ts");
+const marketingImage = read("client/src/lib/marketing-image.ts");
 const publicUrl = read("client/src/lib/public-url.ts");
 const marketingCanvas = read("client/src/components/MarketingAdCanvas.tsx");
 const marketingHistoryHook = read("client/src/hooks/useMarketingHistory.ts");
@@ -595,14 +598,14 @@ assert.match(marketing, /handleDuplicateEntry/);
 assert.match(marketing, /formatMarketingPrice/);
 assert.doesNotMatch(marketing, /salePrice\.toFixed\(2\)/);
 assert.match(marketingCard, /buildMarketingAdVisualModel/);
-assert.match(marketingCard, /fetch\(src, \{ mode: "cors", credentials: "omit" \}\)/);
-assert.match(marketingCard, /URL\.createObjectURL/);
-assert.match(marketingCard, /URL\.revokeObjectURL/);
 assert.match(marketingCard, /crossOrigin = "anonymous"/);
 assert.match(marketingCard, /MarketingCardImageError/);
 assert.match(marketingCard, /MARKETING_CARD_IMAGE_ERROR_MESSAGE/);
+assert.match(marketingCard, /resolvedProductImage/);
+assert.match(marketingCard, /resolveMarketingProductImage/);
+assert.doesNotMatch(marketingCard, /fetch\(src/);
 assert.doesNotMatch(marketingCard, /onImageFallback/);
-assert.match(marketingCard, /try \{ canvas\.toBlob/);
+assert.match(marketingCard, /canvasToPngBlob/);
 assert.match(marketingCard, /config\.priceText/);
 assert.match(marketingCard, /ctaText/);
 assert.match(marketingCard, /fitFontForLines\(ctx, config\.productName/);
@@ -614,6 +617,9 @@ assert.doesNotMatch(marketing, /navigator\.clipboard\.writeText\(entry\.generate
 assert.doesNotMatch(marketing, /downloadEntryCard\(entry\)/);
 assert.match(marketing, /repeatPayload\(entry, "downloaded"\)/);
 assert.match(marketing, /createMarketingCard\(payload\)/);
+assert.match(marketing, /resolvedProductImage: currentResolvedImage/);
+assert.match(marketing, /saveMarketingCard/);
+assert.match(marketing, /cardActionsBlocked/);
 assert.match(marketing, /shareMarketingCard/);
 assert.match(marketing, /handleCardCtaClick/);
 assert.match(marketing, /buildPublicCatalogUrl\(catalogSlug\)/);
@@ -622,9 +628,12 @@ assert.match(marketingShare, /@capacitor\/share/);
 assert.match(marketingShare, /@capacitor\/filesystem/);
 assert.match(marketingShare, /Capacitor\.isNativePlatform\(\)/);
 assert.match(marketingShare, /Directory\.Cache/);
+assert.match(marketingShare, /Directory\.Documents/);
 assert.match(marketingShare, /MarketingShareCancelledError/);
+assert.match(marketingShare, /MarketingFileOperationError/);
 assert.match(marketing, /Compartilhamento cancelado/);
 assert.match(marketingShare, /Filesystem\.writeFile/);
+assert.match(marketingShare, /Filesystem\.deleteFile/);
 assert.match(marketingShare, /Share\.share/);
 assert.match(marketingShare, /files:\s*\[savedFile\.uri\]/);
 assert.match(marketingShare, /navigator/);
@@ -632,6 +641,151 @@ assert.match(marketingShare, /canShare\(\{ files: \[file\] \}\)/);
 assert.match(marketingShare, /onWebDownloadFallback/);
 assert.doesNotMatch(marketingShare, /wa\.me/);
 assert.equal(sanitizeMarketingFileName("Perfume 100ml Áurea"), "anuncio-perfume-100ml-aurea.png");
+assert.equal(createUniqueMarketingFileName("Perfume Áurea", new Date("2026-08-01T12:34:56.789Z")), "anuncio-perfume-aurea-20260801123456789.png");
+
+const safeMarketingPng = "data:image/png;base64,iVBORw0KGgo=";
+const marketingImageAttempts: string[] = [];
+const fallbackMarketingImage = await resolveMarketingImageCandidates(
+  ["https://cdn.example/first.png", "https://cdn.example/second.png", "https://cdn.example/second.png"],
+  {
+    browserLoader: async (sourceUrl) => {
+      marketingImageAttempts.push(sourceUrl);
+      return sourceUrl.endsWith("second.png")
+        ? { safeSrc: safeMarketingPng, mimeType: "image/png", transport: "web-fetch" }
+        : null;
+    },
+    nativeLoader: async () => null,
+    decodeDataUrl: async () => ({ width: 800, height: 800 }),
+  },
+);
+assert.deepEqual(marketingImageAttempts, ["https://cdn.example/first.png", "https://cdn.example/second.png"]);
+assert.equal(fallbackMarketingImage?.sourceUrl, "https://cdn.example/second.png");
+assert.equal(fallbackMarketingImage?.candidateIndex, 1);
+assert.equal(fallbackMarketingImage?.safeSrc, safeMarketingPng);
+assert.equal(buildMarketingAdVisualModel(marketingAdFixture, { resolvedImageSrc: fallbackMarketingImage?.safeSrc }).imageSrc, safeMarketingPng);
+assert.equal(isSafeMarketingImageDataUrl(safeMarketingPng), true);
+
+const nativeMarketingImage = await resolveMarketingImageCandidates(["https://cdn.example/native.jpg"], {
+  browserLoader: async () => { throw new TypeError("cors-blocked"); },
+  nativeLoader: async () => ({ safeSrc: "data:image/jpeg;base64,/9j/2Q==", mimeType: "image/jpeg", transport: "capacitor-http" }),
+  decodeDataUrl: async () => ({ width: 640, height: 960 }),
+});
+assert.equal(nativeMarketingImage?.transport, "capacitor-http");
+await assert.rejects(
+  resolveMarketingImageCandidates(["https://cdn.example/unreadable.png"], {
+    browserLoader: async () => null,
+    nativeLoader: async () => null,
+    decodeDataUrl: async () => null,
+  }),
+  (error: unknown) => error instanceof MarketingImageResolutionError && error.candidateCount === 1,
+);
+
+await assert.rejects(
+  canvasToPngBlob({ toBlob: (callback) => callback(null) }),
+  (error: unknown) => error instanceof MarketingCardRenderError && error.code === "canvas-encode",
+);
+assert.equal(
+  await blobToBase64Data(new Blob(["png"], { type: "image/png" }), async () => "data:image/png;base64,UE5H"),
+  "UE5H",
+);
+
+let cacheWriteData = "";
+let cacheWritePath = "";
+let nativeShareRequest: { text: string; files: string[] } | null = null;
+let scheduledCleanup: (() => void) | null = null;
+let cleanedCachePath = "";
+let documentsWriteData = "";
+const fakeMarketingNativeBridge = {
+  writeCacheFile: async (path: string, data: string) => {
+    cacheWritePath = path;
+    cacheWriteData = data;
+    return { uri: "content://revendasmart/cache/card.png" };
+  },
+  writeDocumentFile: async (_path: string, data: string) => {
+    documentsWriteData = data;
+    return { uri: "content://revendasmart/documents/card.png" };
+  },
+  deleteCacheFile: async (path: string) => { cleanedCachePath = path; },
+  share: async (request: { text: string; files: string[] }) => { nativeShareRequest = request; },
+};
+const nativeShareResult = await shareMarketingCard(
+  { blob: new Blob(["png"], { type: "image/png" }), productName: "Produto Teste", text: "Mensagem comercial" },
+  {
+    getNativeBridge: async () => fakeMarketingNativeBridge,
+    readBlobDataUrl: async () => "data:image/png;base64,UE5H",
+    now: () => new Date("2026-08-01T12:34:56.789Z"),
+    scheduleCleanup: (task) => { scheduledCleanup = task; },
+  },
+);
+assert.equal(nativeShareResult.method, "native-file");
+assert.equal(cacheWriteData, "UE5H");
+assert.doesNotMatch(cacheWriteData, /^data:image/);
+assert.equal(nativeShareRequest?.text, "Mensagem comercial");
+assert.deepEqual(nativeShareRequest?.files, ["content://revendasmart/cache/card.png"]);
+assert.ok(cacheWritePath.includes("revenda-smart-marketing/"));
+scheduledCleanup?.();
+await new Promise((resolve) => setTimeout(resolve, 0));
+assert.equal(cleanedCachePath, cacheWritePath);
+
+const nativeSaveResult = await saveMarketingCard(
+  { blob: new Blob(["png"], { type: "image/png" }), productName: "Produto Teste" },
+  {
+    getNativeBridge: async () => fakeMarketingNativeBridge,
+    readBlobDataUrl: async () => "data:image/png;base64,UE5H",
+    now: () => new Date("2026-08-01T12:34:56.790Z"),
+  },
+);
+assert.equal(nativeSaveResult.method, "native-documents");
+assert.equal(nativeSaveResult.locationLabel, "Documentos/Revenda Smart");
+assert.equal(documentsWriteData, "UE5H");
+assert.notEqual(nativeShareResult.fileName, nativeSaveResult.fileName);
+
+await assert.rejects(
+  shareMarketingCard(
+    { blob: new Blob(["png"], { type: "image/png" }), productName: "Falha", text: "Mensagem" },
+    {
+      getNativeBridge: async () => ({
+        ...fakeMarketingNativeBridge,
+        writeCacheFile: async () => { throw new Error("filesystem-private-error"); },
+      }),
+      readBlobDataUrl: async () => "data:image/png;base64,UE5H",
+    },
+  ),
+  (error: unknown) => error instanceof MarketingFileOperationError && error.code === "cache-write" && !/foto/i.test(error.message),
+);
+
+let webSharedFiles = 0;
+await shareMarketingCard(
+  { blob: new Blob(["png"], { type: "image/png" }), productName: "Web", text: "Mensagem web" },
+  {
+    getNativeBridge: async () => null,
+    now: () => new Date("2026-08-01T12:34:56.791Z"),
+    webNavigator: {
+      canShare: (data) => Boolean(data.files?.length),
+      share: async (data) => { webSharedFiles = data.files?.length || 0; },
+    } as Navigator & { canShare: (data: ShareData & { files?: File[] }) => boolean; share: (data: ShareData & { files?: File[] }) => Promise<void> },
+  },
+);
+assert.equal(webSharedFiles, 1);
+
+let webFallbackDownloaded = false;
+let webFallbackText = "";
+const webFallbackResult = await shareMarketingCard(
+  { blob: new Blob(["png"], { type: "image/png" }), productName: "Web", text: "Texto fallback", onTextFallback: async (text) => { webFallbackText = text; } },
+  {
+    getNativeBridge: async () => null,
+    webNavigator: { canShare: () => false } as Navigator & { canShare: () => boolean },
+    triggerWebDownload: () => { webFallbackDownloaded = true; },
+  },
+);
+assert.equal(webFallbackResult.method, "web-download-fallback");
+assert.equal(webFallbackDownloaded, true);
+assert.equal(webFallbackText, "Texto fallback");
+assert.match(marketingImage, /CapacitorHttp\.get/);
+assert.match(marketingImage, /responseType: "arraybuffer"/);
+assert.match(marketingImage, /resolvedImageCache/);
+assert.match(marketingCanvas, /resolvedImage\?\.safeSrc/);
+assert.doesNotMatch(marketingCanvas, /setImageCandidateIndex|handleImageError/);
 assert.equal(buildPublicCatalogUrl("adriana-perfumes", "https://revendasmart.vercel.app"), "https://revendasmart.vercel.app/u/adriana-perfumes");
 assert.equal(resolvePublicAppBaseUrl("https://revendasmart.vercel.app/", "https://localhost"), "https://revendasmart.vercel.app");
 assert.equal(normalizePublicAppBaseUrl("https://revendasmart.vercel.app/app/ignored"), "https://revendasmart.vercel.app");
@@ -1650,7 +1804,7 @@ if (process.env.RUN_LIVE_PUBLIC_CATALOG_SMOKE === "1") {
 
 assert.match(marketingCard, /toBlob/);
 assert.match(marketingCard, /Produto sem imagem/);
-assert.match(marketingCard, /N.{1}o foi poss.{1}vel carregar a foto deste produto/);
+assert.match(marketingImage, /N.{1}o foi poss.{1}vel preparar a foto deste produto/);
 assert.doesNotMatch(marketingCard, /REVENDA SMART/);
 assert.match(marketingCard, /#2563eb/);
 assert.match(marketingCard, /badgeText/);
@@ -1711,7 +1865,7 @@ assert.match(clientsPage, /buildPublicCatalogUrl\(slug\)/);
 assert.doesNotMatch(settings, /window\.location\.origin[^\n]+\/u\//);
 assert.doesNotMatch(clientsPage, /window\.location\.origin[^\n]+\/u\//);
 assert.doesNotMatch(marketingShare, /wa\.me/);
-assert.match(marketingShare, /Share\.share\(\{[\s\S]*files: \[savedFile\.uri\]/);
+assert.match(marketingShare, /bridge\.share\(\{[\s\S]*files: \[savedFile\.uri\]/);
 assert.match(marketingShare, /Filesystem\.writeFile/);
 assert.match(marketingShare, /Directory\.Cache/);
 assert.match(marketingShare, /MarketingShareCancelledError/);
@@ -1774,6 +1928,8 @@ assert.match(homeDashboardViewModel, /cliente ativo/i);
 assert.doesNotMatch(homeDashboardViewModel, /onSnapshot|getDocs|collection\(/);
 assert.match(dashboard, /buildHomeDashboardViewModel/);
 assert.match(dashboard, /Visão geral/);
+assert.match(dashboard, /Visão geral<\/p>[\s\S]*<h1[^>]+>\{home\.store\.name\}<\/h1>/);
+assert.match(dashboard, /line-clamp-2 break-words/);
 assert.match(dashboard, /Resumo do período/);
 assert.match(dashboard, /O que precisa da sua atenção/);
 assert.match(dashboard, /Meta mensal/);

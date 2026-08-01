@@ -160,10 +160,10 @@ export default function Dashboard() {
       <div className="min-h-full bg-slate-50 pb-28 lg:pb-8">
         <header className="border-b border-primary/10 bg-gradient-to-br from-primary/8 via-white to-amber-50/60 px-4 py-5 sm:px-6 lg:px-8">
           <div className="mx-auto flex max-w-4xl items-center justify-between gap-4">
-            <div className="min-w-0">
-              <p className="truncate text-sm font-black text-primary">{home.store.name}</p>
-              <h1 className="mt-1 text-xl font-black tracking-tight text-foreground">Visão geral</h1>
-              <p className="mt-0.5 text-xs font-semibold capitalize text-muted-foreground">{home.store.periodLabel}</p>
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-black uppercase tracking-[0.14em] text-primary">Visão geral</p>
+              <h1 className="mt-1 line-clamp-2 break-words text-xl font-black tracking-tight text-foreground sm:text-2xl">{home.store.name}</h1>
+              <p className="mt-1 text-xs font-semibold capitalize text-muted-foreground">{home.store.periodLabel}</p>
             </div>
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white text-primary shadow-sm" aria-hidden="true">
               <LineChart className="h-5 w-5" />
