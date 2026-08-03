@@ -250,15 +250,11 @@ export function buildPublicCatalogPayload(input: BuildPublicCatalogPayloadInput)
   for (const niche of experience.niches) {
     for (const product of niche.products) nicheIdByProductId.set(product.id, niche.id);
   }
-  const orphanedIds = new Set(experience.orphanedProducts.map((product) => product.id));
   const products = baseProducts.map((product) => ({
     ...product,
     ...(nicheIdByProductId.get(product.id)
       ? { nicheId: nicheIdByProductId.get(product.id) }
-      : cleanText(product.productType, 160)
-        ? { nicheId: cleanText(product.productType, 160) }
-        : {}),
-    ...(orphanedIds.has(product.id) ? { orphaned: true } : {}),
+      : {}),
   }));
   const productById = new Map(products.map((product) => [product.id, product]));
 
@@ -267,16 +263,19 @@ export function buildPublicCatalogPayload(input: BuildPublicCatalogPayloadInput)
     const product = productById.get(hero.product.id);
     return product ? { product, reason: hero.reason } : undefined;
   };
-  const mapCollection = (collection: typeof experience.quickCollections[number]): PublicCatalogCollection => ({
-    id: collection.id,
-    products: collection.products
-      .map((product) => productById.get(product.id))
-      .filter((product): product is PublicCatalogProduct => Boolean(product))
-      .slice(0, 8),
-  });
-  const productsForIds = (ids: readonly string[]) => ids
-    .map((id) => productById.get(id))
-    .filter((product): product is PublicCatalogProduct => Boolean(product));
+  const mapCollection = (collection: typeof experience.quickCollections[number]): PublicCatalogCollection | undefined => {
+    if (collection.id === "uncategorized") return undefined;
+    return {
+      id: collection.id,
+      products: collection.products
+        .map((product) => productById.get(product.id))
+        .filter((product): product is PublicCatalogProduct => Boolean(product))
+        .slice(0, 8),
+    };
+  };
+  const mapCollections = (collections: typeof experience.quickCollections): PublicCatalogCollection[] => collections
+    .map(mapCollection)
+    .filter((collection): collection is PublicCatalogCollection => Boolean(collection));
 
   const presentation: PublicCatalogPresentation = {
     mode: experience.mode,
@@ -292,21 +291,17 @@ export function buildPublicCatalogPayload(input: BuildPublicCatalogPayloadInput)
       outOfStockProductCount: niche.outOfStockProducts.length,
       lowStockProductCount: niche.lowStockProducts.length,
       hero: mapHero(niche.hero),
-      quickCollections: niche.quickCollections.map(mapCollection),
+      quickCollections: mapCollections(niche.quickCollections),
     })),
     hero: mapHero(experience.hero),
     topCategories: experience.topCategories.map(mapCategory),
-    quickCollections: experience.quickCollections.map(mapCollection),
+    quickCollections: mapCollections(experience.quickCollections),
     inventorySummary: {
       totalProducts: experience.inventorySummary.totalProducts,
       availableProducts: experience.inventorySummary.availableProducts,
       outOfStockProducts: experience.inventorySummary.outOfStockProducts,
       activeNiches: experience.inventorySummary.activeNiches,
-      orphanedProducts: experience.inventorySummary.orphanedProducts,
-      uncategorizedProducts: experience.inventorySummary.uncategorizedProducts,
     },
-    orphanedProducts: productsForIds(experience.orphanedProducts.map((product) => product.id)),
-    uncategorizedProducts: productsForIds(experience.uncategorizedProducts.map((product) => product.id)),
     emptyReason: experience.emptyReason,
   };
 

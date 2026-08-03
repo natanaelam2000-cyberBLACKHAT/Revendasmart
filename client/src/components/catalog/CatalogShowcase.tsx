@@ -399,7 +399,8 @@ export function CatalogShowcase({
       : activeNiche.products
     : products;
   const hero = activeNiche?.hero ?? experience.hero;
-  const collections = activeNiche?.quickCollections ?? experience.quickCollections;
+  const collections = (activeNiche?.quickCollections ?? experience.quickCollections)
+    .filter((collection) => context === "seller" || collection.id !== "uncategorized");
   const categoryOptions = useMemo(() => getCategoryOptions(scopedProducts), [scopedProducts]);
   const effectiveCategory = selectedCategory === "todos" || categoryOptions.includes(selectedCategory) ? selectedCategory : "todos";
   const normalizedSearch = useMemo(() => normalizeProductSearchText(searchTerm), [searchTerm]);
@@ -426,7 +427,7 @@ export function CatalogShowcase({
   const inventory = experience.inventorySummary;
   const storeName = store.name || "Minha Loja";
   const topCategories = activeNiche?.usedCategories ?? experience.topCategories;
-  const showSeparatedOrphans = experience.mode !== "general" && experience.orphanedProducts.length > 0;
+  const showSeparatedOrphans = context === "seller" && experience.mode !== "general" && experience.orphanedProducts.length > 0;
   const nicheProductIds = useMemo(
     () => {
       const productIds = new Set(experience.niches.flatMap((niche) => niche.products.map((product) => product.id)));
@@ -650,7 +651,7 @@ export function CatalogShowcase({
           </section>
         )}
 
-        {unplacedUncategorized.length > 0 && experience.mode !== "general" && (
+        {context === "seller" && unplacedUncategorized.length > 0 && experience.mode !== "general" && (
           <section className="space-y-4 rounded-[2rem] border border-slate-200 bg-slate-100/70 p-4 sm:p-5" data-catalog-uncategorized-products>
             <div>
               <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Sem categoria</p>

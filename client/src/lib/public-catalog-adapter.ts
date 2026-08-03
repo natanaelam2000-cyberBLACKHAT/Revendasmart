@@ -105,11 +105,11 @@ export function toCatalogExperience(presentation: PublicCatalogPresentation): Ca
       productsWithImage: 0,
       productsWithoutImage: 0,
       activeNiches: presentation.inventorySummary.activeNiches,
-      orphanedProducts: presentation.inventorySummary.orphanedProducts,
-      uncategorizedProducts: presentation.inventorySummary.uncategorizedProducts,
+      orphanedProducts: 0,
+      uncategorizedProducts: 0,
     },
-    orphanedProducts: presentation.orphanedProducts.map(toCatalogProduct),
-    uncategorizedProducts: presentation.uncategorizedProducts.map(toCatalogProduct),
+    orphanedProducts: [],
+    uncategorizedProducts: [],
     adCTA: {
       route: "/marketing",
       source: "catalog",
@@ -126,17 +126,26 @@ export function buildPublicProductNicheMap(
   pageProducts: readonly PublicCatalogProduct[],
 ): Map<string, string> {
   const result = new Map<string, string>();
+  const publicNicheIds = new Set(presentation.niches.map((niche) => niche.id));
+  const fallbackNicheId = presentation.activeNicheId && publicNicheIds.has(presentation.activeNicheId)
+    ? presentation.activeNicheId
+    : presentation.niches[0]?.id;
   const add = (product: PublicCatalogProduct) => {
-    if (product.nicheId) result.set(product.id, product.nicheId);
+    if (product.nicheId && publicNicheIds.has(product.nicheId)) result.set(product.id, product.nicheId);
   };
-  pageProducts.forEach(add);
+  const addPageProduct = (product: PublicCatalogProduct) => {
+    if (product.nicheId && publicNicheIds.has(product.nicheId)) {
+      result.set(product.id, product.nicheId);
+    } else if (fallbackNicheId) {
+      result.set(product.id, fallbackNicheId);
+    }
+  };
+  pageProducts.forEach(addPageProduct);
   if (presentation.hero) add(presentation.hero.product);
   presentation.quickCollections.forEach((collection) => collection.products.forEach(add));
   presentation.niches.forEach((niche) => {
     if (niche.hero) add(niche.hero.product);
     niche.quickCollections.forEach((collection) => collection.products.forEach(add));
   });
-  presentation.orphanedProducts.forEach(add);
-  presentation.uncategorizedProducts.forEach(add);
   return result;
 }

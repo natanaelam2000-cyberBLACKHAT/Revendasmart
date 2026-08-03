@@ -6,7 +6,7 @@ import { CATALOG_SERVER_SEARCH_ENABLED, PRODUCT_SEARCH_SCHEMA_VERSION, SERVER_SI
 import { buildStoreIntelligence } from "../client/src/lib/store-health";
 import { defaultSettings, type Product, type Sale } from "../client/src/lib/mock-data";
 import { resolveCatalogExperience, type ResolveCatalogExperienceInput } from "../client/src/lib/catalog-experience";
-import { toCatalogExperience } from "../client/src/lib/public-catalog-adapter";
+import { buildPublicProductNicheMap, toCatalogExperience } from "../client/src/lib/public-catalog-adapter";
 import { buildProductCreatePayload } from "../client/src/lib/product-payload";
 import { MARKETING_AD_THEME_IDS, buildMarketingAdConfig, buildMarketingAdMessage, buildMarketingAdVisualModel, buildMarketingWhatsappUrl, formatMarketingPrice, normalizeMarketingAdConfig, normalizeMarketingCtaText, normalizeMarketingGeneratedText, sanitizeMarketingHistoryPayload } from "../client/src/lib/marketing-ad";
 import { canvasToPngBlob, MarketingCardRenderError } from "../client/src/lib/marketing-card";
@@ -511,10 +511,13 @@ assert.match(catalogShowcase, /product\.productType/);
 assert.match(catalogShowcase, /data-catalog-mode="hub"/);
 assert.match(catalogShowcase, /data-catalog-mode=\{experience\.mode\}/);
 assert.match(catalogShowcase, /data-catalog-orphaned-products/);
-assert.match(catalogShowcase, /experience\.orphanedProducts/);
+assert.match(catalogShowcase, /const showSeparatedOrphans = context === "seller"/);
+assert.match(catalogShowcase, /context === "seller" && unplacedUncategorized\.length/);
+assert.match(catalogShowcase, /context === "seller" \|\| collection\.id !== "uncategorized"/);
 assert.match(catalogShowcase, /CatalogCollectionRail/);
 assert.match(catalogShowcase, /productNicheIds\.get\(product\.id\)/);
 assert.match(publicCatalogAdapter, /buildPublicProductNicheMap/);
+assert.match(publicCatalogAdapter, /orphanedProducts: \[\]/);
 assert.match(catalog, /\/marketing\?productId=/);
 assert.match(catalog, /buildPublicCatalogUrl\(catalogSlug\)/);
 assert.match(catalog, /api\/payments\/create-link/);
@@ -905,6 +908,9 @@ assert.doesNotMatch(publicCatalogRoutes, /settings:\s*\{\s*\.\.\.settings/);
 assert.doesNotMatch(publicCatalogRoutes, /\{\s*id:\s*doc\.id,\s*\.\.\.doc\.data\(\)/);
 for (const dtoType of ["PublicCatalogStore", "PublicCatalogProduct", "PublicCatalogPresentation", "PublicCatalogResponse", "PublicCatalogPagination"]) {
   assert.match(publicCatalogDto, new RegExp(`interface ${dtoType}`));
+}
+for (const administrativeKey of ["orphaned", "orphanedProducts", "orphanReason", "removedNiche", "invalidNiche", "uncategorizedProducts"]) {
+  assert.doesNotMatch(publicCatalogDto, new RegExp(`\\b${administrativeKey}\\b`));
 }
 assert.match(publicCatalogServer, /PUBLIC_ATTRIBUTE_KEYS/);
 assert.match(publicCatalogServer, /buildPublicCatalogStore/);
@@ -1908,8 +1914,58 @@ assert.deepEqual(
 assert.equal(toCatalogExperience(parityPayload.presentation).hero?.product.id, parityInternalExperience.hero?.product.id);
 assert.doesNotMatch(
   JSON.stringify(parityPayload),
-  /"(?:costPrice|storagePath|pixKey|bankName|paymentLink|templateReminder|notification_settings|marketing_settings|searchTokens|nameNormalized|uid)":|private\/29/,
+  /"(?:costPrice|storagePath|pixKey|bankName|paymentLink|templateReminder|notification_settings|marketing_settings|searchTokens|nameNormalized|uid|orphaned|orphanedProducts|orphanReason|removedNiche|invalidNiche|uncategorizedProducts)":|private\/29/,
 );
+
+const removedNichePublicPayload = buildPublicCatalogPayload({
+  slug: "loja-sem-linguagem-administrativa",
+  settings: {
+    storeName: "Loja Pública",
+    businessType: "Roupas",
+    businessTypes: ["Roupas"],
+    lowStockThreshold: 3,
+  },
+  products: [
+    {
+      id: "public-assigned",
+      data: { name: "Camiseta", category: "Camisetas", productType: "Roupas", salePrice: 49.9, stock: 5 },
+    },
+    {
+      id: "public-removed-niche",
+      data: { name: "Caderno", category: "Cadernos", productType: "Papelaria", salePrice: 19.9, stock: 4 },
+    },
+  ],
+  sales: [],
+  now: new Date("2026-08-03T00:00:00.000Z"),
+});
+assert.deepEqual(
+  removedNichePublicPayload.products.map((product) => product.id),
+  ["public-assigned", "public-removed-niche"],
+);
+assert.equal(new Set(removedNichePublicPayload.products.map((product) => product.id)).size, 2);
+const removedNichePublicProduct = removedNichePublicPayload.products.find((product) => product.id === "public-removed-niche");
+assert.ok(removedNichePublicProduct);
+assert.equal(removedNichePublicProduct.available, true);
+assert.equal(Object.prototype.hasOwnProperty.call(removedNichePublicProduct, "nicheId"), false);
+assert.equal(Object.prototype.hasOwnProperty.call(removedNichePublicProduct, "orphaned"), false);
+assert.doesNotMatch(
+  JSON.stringify(removedNichePublicPayload),
+  /"(?:orphaned|orphanedProducts|orphanReason|removedNiche|invalidNiche|uncategorizedProducts)":/,
+);
+assert.equal(
+  removedNichePublicPayload.presentation.quickCollections.some((collection) => collection.id === "uncategorized"),
+  false,
+);
+assert.equal(
+  removedNichePublicPayload.presentation.niches.some((niche) => niche.quickCollections.some((collection) => collection.id === "uncategorized")),
+  false,
+);
+const adaptedPublicExperience = toCatalogExperience(removedNichePublicPayload.presentation);
+assert.deepEqual(adaptedPublicExperience.orphanedProducts, []);
+assert.deepEqual(adaptedPublicExperience.uncategorizedProducts, []);
+const publicNicheMap = buildPublicProductNicheMap(removedNichePublicPayload.presentation, removedNichePublicPayload.products);
+assert.equal(publicNicheMap.get("public-assigned"), "Roupas");
+assert.equal(publicNicheMap.get("public-removed-niche"), "Roupas");
 for (const [nicheCount, expectedMode] of [[1, "focused"], [3, "segmented"], [5, "hub"]] as const) {
   const selectedBusinessTypes = parityBusinessTypes.slice(0, nicheCount);
   const publicMode = buildPublicCatalogPayload({

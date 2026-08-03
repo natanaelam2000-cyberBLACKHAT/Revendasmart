@@ -13,8 +13,7 @@ export type PublicCatalogCollectionId =
   | "best_sellers"
   | "kits"
   | "ready_to_deliver"
-  | "low_stock"
-  | "uncategorized";
+  | "low_stock";
 
 export type PublicCatalogEmptyReason =
   | "no_products"
@@ -53,7 +52,6 @@ export interface PublicCatalogProduct {
   imageUrl?: string;
   available: boolean;
   availableQuantity: number;
-  orphaned?: boolean;
   publicAttributes?: Record<string, unknown>;
 }
 
@@ -93,8 +91,6 @@ export interface PublicCatalogInventorySummary {
   availableProducts: number;
   outOfStockProducts: number;
   activeNiches: number;
-  orphanedProducts: number;
-  uncategorizedProducts: number;
 }
 
 export interface PublicCatalogPresentation {
@@ -105,8 +101,6 @@ export interface PublicCatalogPresentation {
   topCategories: PublicCatalogCategorySummary[];
   quickCollections: PublicCatalogCollection[];
   inventorySummary: PublicCatalogInventorySummary;
-  orphanedProducts: PublicCatalogProduct[];
-  uncategorizedProducts: PublicCatalogProduct[];
   emptyReason?: PublicCatalogEmptyReason;
 }
 
