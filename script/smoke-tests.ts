@@ -6,6 +6,7 @@ import { CATALOG_SERVER_SEARCH_ENABLED, PRODUCT_SEARCH_SCHEMA_VERSION, SERVER_SI
 import { buildStoreIntelligence } from "../client/src/lib/store-health";
 import { defaultSettings, type Product, type Sale } from "../client/src/lib/mock-data";
 import { resolveCatalogExperience, type ResolveCatalogExperienceInput } from "../client/src/lib/catalog-experience";
+import { toCatalogExperience } from "../client/src/lib/public-catalog-adapter";
 import { buildProductCreatePayload } from "../client/src/lib/product-payload";
 import { MARKETING_AD_THEME_IDS, buildMarketingAdConfig, buildMarketingAdMessage, buildMarketingAdVisualModel, buildMarketingWhatsappUrl, formatMarketingPrice, normalizeMarketingAdConfig, normalizeMarketingCtaText, normalizeMarketingGeneratedText, sanitizeMarketingHistoryPayload } from "../client/src/lib/marketing-ad";
 import { canvasToPngBlob, MarketingCardRenderError } from "../client/src/lib/marketing-card";
@@ -17,6 +18,7 @@ import { validateMercadoPagoAccessTokenForEnvironment } from "../server/mercadop
 import { buildHealthPayload, buildReadinessPayload, buildSafeErrorBody, classifySafeError, createRequestId, normalizeRequestId, requestIdMiddleware, sanitizeForLog } from "../server/logger";
 import { ApiError, apiRequest, buildApiErrorDisplayMessage, formatApiSupportCode } from "../client/src/lib/api-client";
 import { buildApiUrl, normalizeApiBaseUrl, resolveApiBaseUrl } from "../client/src/lib/api-config";
+import { buildPublicCatalogPayload, buildPublicCatalogStore, toPublicCatalogProduct } from "../server/public-catalog";
 
 const read = (path: string) => fs.readFileSync(path, "utf8");
 const routes = read("server/routes.ts");
@@ -30,6 +32,10 @@ const conciseOutputSkill = read(".codex/skills/concise-technical-output/SKILL.md
 const terminalOutputSkill = read(".codex/skills/terminal-output-efficiency/SKILL.md");
 const publicCatalog = read("client/src/pages/public-catalog.tsx");
 const catalog = read("client/src/pages/catalog.tsx");
+const catalogShowcase = read("client/src/components/catalog/CatalogShowcase.tsx");
+const publicCatalogAdapter = read("client/src/lib/public-catalog-adapter.ts");
+const publicCatalogDto = read("shared/public-catalog.ts");
+const publicCatalogServer = read("server/public-catalog.ts");
 const productsPage = read("client/src/pages/products.tsx");
 const clientsPage = read("client/src/pages/clients.tsx");
 const paginatedClientsHook = read("client/src/hooks/usePaginatedClientsData.ts");
@@ -491,11 +497,32 @@ assert.match(mockData, /nameNormalized\?: string/);
 assert.match(firestoreRules, /searchTokens/);
 assert.match(firestoreRules, /searchSchemaVersion/);
 assert.match(catalog, /useProductsData/);
-assert.match(catalog, /normalizeProductSearchText/);
-assert.match(catalog, /getProductSearchIndexField/);
+assert.match(catalog, /useSalesData/);
+assert.match(catalog, /resolveCatalogExperience/);
+assert.match(catalog, /CatalogShowcase/);
+assert.match(publicCatalog, /toCatalogExperience/);
+assert.match(publicCatalog, /PublicCatalogResponse/);
+assert.match(publicCatalog, /productNicheIds/);
+assert.match(publicCatalog, /CatalogShowcase/);
+assert.doesNotMatch(catalog, /function CatalogProductCard|renderProductCard|renderProductRail/);
+assert.doesNotMatch(publicCatalog, /function CatalogProductCard|renderProductCard|renderProductRail/);
+assert.match(catalogShowcase, /normalizeProductSearchText/);
+assert.match(catalogShowcase, /product\.productType/);
+assert.match(catalogShowcase, /data-catalog-mode="hub"/);
+assert.match(catalogShowcase, /data-catalog-mode=\{experience\.mode\}/);
+assert.match(catalogShowcase, /data-catalog-orphaned-products/);
+assert.match(catalogShowcase, /experience\.orphanedProducts/);
+assert.match(catalogShowcase, /CatalogCollectionRail/);
+assert.match(catalogShowcase, /productNicheIds\.get\(product\.id\)/);
+assert.match(publicCatalogAdapter, /buildPublicProductNicheMap/);
+assert.match(catalog, /\/marketing\?productId=/);
+assert.match(catalog, /buildPublicCatalogUrl\(catalogSlug\)/);
+assert.match(catalog, /api\/payments\/create-link/);
+assert.match(publicCatalog, /api\/public\/catalog/);
+assert.match(publicCatalog, /Enviar pedido no WhatsApp/);
 assert.match(productSearch, /getProductSearchIndexField/);
-assert.match(catalog, /barcode\.includes\(normalizedSearch\)/);
-assert.match(catalog, /category\.includes\(normalizedSearch\)/);
+assert.match(catalogShowcase, /searchable\.includes\(normalizedSearch\)/);
+assert.match(catalogShowcase, /effectiveCategory/);
 assert.doesNotMatch(catalog, /useCatalogProductsData/);
 assert.match(catalogProductsHook, /const CATALOG_PAGE_SIZE = 30/);
 assert.match(catalogProductsHook, /buildProductServerSearchPlan/);
@@ -869,7 +896,20 @@ assert.match(publicCatalogRoutes, /limit\(limit \+ 1\)/);
 assert.match(publicCatalogRoutes, /orderBy\("stock", "desc"\)/);
 assert.doesNotMatch(publicCatalogRoutes, /collection\("products"\)\.get\(\)/);
 assert.doesNotMatch(publicCatalogRoutes, /catalog\.products\.find/);
-assert.match(publicCatalog, /Carregar mais/);
+assert.match(publicCatalogRoutes, /PUBLIC_CATALOG_PRESENTATION_BATCH_SIZE/);
+assert.match(publicCatalogRoutes, /collection\("sales"\)/);
+assert.match(publicCatalogRoutes, /\.select\("products"\)/);
+assert.match(publicCatalogRoutes, /buildPublicCatalogPayload/);
+assert.match(publicCatalogRoutes, /satisfies PublicCatalogResponse/);
+assert.doesNotMatch(publicCatalogRoutes, /settings:\s*\{\s*\.\.\.settings/);
+assert.doesNotMatch(publicCatalogRoutes, /\{\s*id:\s*doc\.id,\s*\.\.\.doc\.data\(\)/);
+for (const dtoType of ["PublicCatalogStore", "PublicCatalogProduct", "PublicCatalogPresentation", "PublicCatalogResponse", "PublicCatalogPagination"]) {
+  assert.match(publicCatalogDto, new RegExp(`interface ${dtoType}`));
+}
+assert.match(publicCatalogServer, /PUBLIC_ATTRIBUTE_KEYS/);
+assert.match(publicCatalogServer, /buildPublicCatalogStore/);
+assert.match(publicCatalogServer, /toPublicCatalogProduct/);
+assert.match(catalogShowcase, /Carregar mais/);
 assert.match(productsPage, /usePaginatedProductsData/);
 assert.match(productsPage, /Carregar mais/);
 assert.match(paginatedProductsHook, /const PRODUCTS_PAGE_SIZE = 30/);
@@ -892,7 +932,7 @@ assert.match(routes, /status\(429\).*CATALOG_RATE_LIMITED/);
 assert.doesNotMatch(serverIndex, /capturedJsonResponse|JSON\.stringify\(capturedJsonResponse\)/);
 assert.match(serverIndex, /content-length/);
 assert.match(serverIndex, /responseBytes/);
-assert.match(publicCatalog, /catalogEnabled === false/);
+assert.match(publicCatalog, /!store \|\| !experience/);
 assert.match(images, /photoUrl/);
 assert.match(images, /onError/);
 assert.match(images, /Sem foto/);
@@ -993,9 +1033,9 @@ assert.match(marketing, /catalogCopyResetTimeoutRef/);
 assert.match(marketing, /window\.clearTimeout/);
 assert.match(marketing, /noopener,noreferrer/);
 assert.doesNotMatch(marketing, /useProductsData/);
-assert.match(publicCatalog, /activeFilterCount/);
-assert.match(publicCatalog, /Limpar \{activeFilterCount\}/);
-assert.match(publicCatalog, /Loja segura/);
+assert.match(catalogShowcase, /activeFilterCount/);
+assert.match(catalogShowcase, /Limpar \{activeFilterCount\}/);
+assert.match(catalogShowcase, /data-catalog-bento-hero/);
 assert.match(productPickerHook, /const PRODUCT_PICKER_PAGE_SIZE = 30/);
 assert.match(productPickerHook, /orderBy\("name"\)/);
 assert.match(productPickerHook, /limit\(PRODUCT_PICKER_PAGE_SIZE\)/);
@@ -1319,17 +1359,15 @@ assert.match(addProduct, /providers\/UserSettingsProvider/);
 assert.match(marketing, /providers\/UserSettingsProvider/);
 assert.match(billingsPage, /providers\/UserSettingsProvider/);
 assert.match(catalog, /providers\/UserSettingsProvider/);
-assert.match(catalog, /normalizedSearch/);
 assert.match(catalog, /productById/);
 assert.match(catalog, /copyResetTimeoutRef/);
 assert.doesNotMatch(addProduct, /hooks\/useUserSettings/);
 assert.doesNotMatch(marketing, /hooks\/useUserSettings/);
 assert.doesNotMatch(billingsPage, /hooks\/useUserSettings/);
 assert.doesNotMatch(catalog, /hooks\/useUserSettings/);
-assert.match(publicCatalog, /availableProducts/);
 assert.match(publicCatalog, /copyResetTimeoutRef/);
 assert.match(settings, /normalizeSettingsTab/);
-assert.match(publicCatalog, /onError=\{\(\) => setLogoFailed\(true\)\}/);
+assert.match(catalogShowcase, /onError=\{\(\) => setLogoFailed\(true\)\}/);
 assert.match(partialPaymentModal, /safe-area-inset-bottom/);
 assert.match(indexHtml, /content="width=device-width, initial-scale=1, viewport-fit=cover"/);
 assert.doesNotMatch(indexHtml, /user-scalable=no|maximum-scale/);
@@ -1751,6 +1789,143 @@ const referralFrontend = onboarding.slice(frontendTrackStart, frontendValidateSt
 assert.match(referralFrontend, /status === 401 \|\| .*status === 403/);
 assert.match(onboarding, /if \(!currentUser \|\| !uid\) return/);
 assert.match(onboarding, /if \(!refUID\) return/);
+
+const publicStoreFixture = buildPublicCatalogStore({
+  storeName: "Loja Segura",
+  storeDescription: "Catálogo público",
+  storeLogo: "https://cdn.example.com/logo.png",
+  storeBannerUrl: "https://cdn.example.com/banner.png",
+  whatsapp: "5511999999999",
+  showPrice: true,
+  showStock: false,
+  allowWhatsappOrders: true,
+  pixKey: "pix-secreto",
+  bankName: "banco-secreto",
+  paymentLink: "https://pagamento-interno.example.com",
+  templateReminder: "template-secreto",
+  notification_settings: { secret: true },
+  marketing_settings: { secret: true },
+}, "loja-segura");
+assert.deepEqual(Object.keys(publicStoreFixture).sort(), [
+  "allowWhatsappOrders",
+  "bannerUrl",
+  "description",
+  "logoUrl",
+  "name",
+  "showPrice",
+  "showStock",
+  "slug",
+  "whatsappNumber",
+].sort());
+assert.doesNotMatch(JSON.stringify(publicStoreFixture), /pix-secreto|banco-secreto|template-secreto|notification_settings|marketing_settings/);
+
+const publicProductFixture = toPublicCatalogProduct("produto-seguro", {
+  name: "Produto Seguro",
+  brand: "Marca",
+  category: "Perfumes",
+  productType: "Cosméticos & Perfumes",
+  description: "Descrição pública",
+  costPrice: 12,
+  salePrice: 29.9,
+  promotionalPrice: 24.9,
+  stock: 3,
+  imageUrl: "https://cdn.example.com/produto.png",
+  storagePath: "users/uid/private/original.png",
+  thumbnailStoragePath: "users/uid/private/thumb.png",
+  imageId: "indexed-db-secret",
+  nameNormalized: "produto seguro",
+  searchTokens: ["produto", "seguro"],
+  extras: { public_type: "Feminino", color: "Rosa", extra_notes: "segredo interno", secret: "não publicar" },
+});
+assert.ok(publicProductFixture);
+assert.deepEqual(publicProductFixture.publicAttributes, { public_type: "Feminino", color: "Rosa" });
+assert.doesNotMatch(JSON.stringify(publicProductFixture), /costPrice|storagePath|imageId|nameNormalized|searchTokens|extra_notes|segredo interno|não publicar/);
+
+const parityBusinessTypes = ["Cosméticos & Perfumes", "Roupas", "Acessórios", "Eletrônicos", "Doces"];
+const parityNicheFixtures = [
+  { productType: "Cosméticos & Perfumes", category: "Perfumes" },
+  { productType: "Roupas", category: "Vestidos" },
+  { productType: "Acessórios", category: "Bolsas" },
+  { productType: "Eletrônicos", category: "Áudio" },
+  { productType: "Doces", category: "Brigadeiros" },
+];
+const paritySourceProducts = Array.from({ length: 30 }, (_, index) => {
+  const niche = parityNicheFixtures[index % parityNicheFixtures.length];
+  return {
+    id: `parity-${String(index).padStart(2, "0")}`,
+    data: {
+      name: `Produto ${String(index).padStart(2, "0")}`,
+      brand: "Marca",
+      category: niche.category,
+      productType: niche.productType,
+      costPrice: 10 + index,
+      salePrice: 40 + index,
+      stock: 30 - index,
+      storagePath: `private/${index}`,
+    },
+  };
+});
+const paritySales = [{ products: [{ productId: "parity-29", quantity: 80, price: 69 }] }];
+const paritySettings = {
+  storeName: "Loja Paridade",
+  businessType: parityBusinessTypes[0],
+  businessTypes: parityBusinessTypes,
+  customCategoriesByNicho: { Roupas: ["Coleção exclusiva"] },
+  lowStockThreshold: 3,
+};
+const parityPayload = buildPublicCatalogPayload({
+  slug: "loja-paridade",
+  settings: paritySettings,
+  products: paritySourceProducts,
+  sales: paritySales,
+  now: new Date("2026-08-03T00:00:00.000Z"),
+});
+const parityInternalExperience = resolveCatalogExperience({
+  businessType: paritySettings.businessType,
+  businessTypes: paritySettings.businessTypes,
+  customCategoriesByNicho: paritySettings.customCategoriesByNicho,
+  products: paritySourceProducts.map(({ id, data }) => ({ id, ...data })) as Product[],
+  sales: paritySales as Sale[],
+  lowStockThreshold: paritySettings.lowStockThreshold,
+  now: new Date("2026-08-03T00:00:00.000Z"),
+});
+assert.equal(parityPayload.presentation.mode, "hub");
+assert.equal(parityPayload.presentation.hero?.product.id, "parity-29");
+assert.equal(parityPayload.products.slice(0, 24).some((product) => product.id === "parity-29"), false);
+assert.equal(parityPayload.presentation.hero?.product.id, parityInternalExperience.hero?.product.id);
+assert.deepEqual(
+  parityPayload.presentation.niches.map((niche) => [niche.id, niche.productCount]),
+  parityInternalExperience.niches.map((niche) => [niche.id, niche.productCount]),
+);
+assert.deepEqual(
+  parityPayload.presentation.quickCollections.map((collection) => collection.id),
+  parityInternalExperience.quickCollections.map((collection) => collection.id),
+);
+assert.deepEqual(
+  parityPayload.presentation.topCategories.map((category) => [category.label, category.productCount]),
+  parityInternalExperience.topCategories.map((category) => [category.label, category.productCount]),
+);
+assert.equal(toCatalogExperience(parityPayload.presentation).hero?.product.id, parityInternalExperience.hero?.product.id);
+assert.doesNotMatch(
+  JSON.stringify(parityPayload),
+  /"(?:costPrice|storagePath|pixKey|bankName|paymentLink|templateReminder|notification_settings|marketing_settings|searchTokens|nameNormalized|uid)":|private\/29/,
+);
+for (const [nicheCount, expectedMode] of [[1, "focused"], [3, "segmented"], [5, "hub"]] as const) {
+  const selectedBusinessTypes = parityBusinessTypes.slice(0, nicheCount);
+  const publicMode = buildPublicCatalogPayload({
+    slug: `mode-${nicheCount}`,
+    settings: {
+      ...paritySettings,
+      businessType: selectedBusinessTypes[0],
+      businessTypes: selectedBusinessTypes,
+    },
+    products: paritySourceProducts,
+    sales: paritySales,
+    now: new Date("2026-08-03T00:00:00.000Z"),
+  }).presentation.mode;
+  assert.equal(publicMode, expectedMode);
+}
+
 const { findPublicCatalogSettingsDoc, publicCatalogRateLimit, resetPublicCatalogRateLimitsForTests } = await import("../server/routes");
 const queriedFields: string[] = [];
 const fakeRef = {
@@ -1799,8 +1974,10 @@ if (process.env.RUN_LIVE_PUBLIC_CATALOG_SMOKE === "1") {
   const response = await fetch("https://revendasmart-backend-cc2743rkmq-uc.a.run.app/api/public/catalog/adriana-perfumes");
   assert.equal(response.status, 200);
   const catalog = await response.json() as any;
-  assert.ok(catalog.settings?.storeName);
+  assert.ok(catalog.store?.name);
+  assert.ok(catalog.presentation?.mode);
   assert.ok(Array.isArray(catalog.products));
+  assert.equal(typeof catalog.pagination?.hasMore, "boolean");
 }
 
 assert.match(marketingCard, /toBlob/);

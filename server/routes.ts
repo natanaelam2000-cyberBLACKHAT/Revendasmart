@@ -9,6 +9,18 @@ import { registerSubscriptionRoutes } from "./subscriptions";
 import { getGlobalConfig, setGlobalConfig } from "./subscriptions";
 import { validateFirebaseStorageSetup } from "./firebase-storage-migration";
 import { logError, logInfo, logWarn } from "./logger";
+import {
+  buildPublicCatalogPayload,
+  buildPublicCatalogProductPage,
+  buildPublicCatalogStore,
+  type PublicCatalogSourceProduct,
+} from "./public-catalog";
+import type {
+  PublicCatalogPageResponse,
+  PublicCatalogPagination,
+  PublicCatalogProduct,
+  PublicCatalogResponse,
+} from "../shared/public-catalog";
  import crypto from "crypto";
 
 function normalizeCatalogSlug(value: unknown): string {
@@ -43,6 +55,7 @@ function routeLogError(message: string, ...details: unknown[]): void {
 
 const PUBLIC_CATALOG_DEFAULT_LIMIT = 24;
 const PUBLIC_CATALOG_MAX_LIMIT = 48;
+const PUBLIC_CATALOG_PRESENTATION_BATCH_SIZE = 250;
 
 type PublicCatalogCursor = {
   stock: number;
@@ -575,17 +588,88 @@ export async function registerRoutes(
     return {
       uid,
       slug,
-      settings: { ...settings, uid, catalogSlug: slug, catalog_slug: slug, userSlug: slug, enablePublicCatalog: catalogEnabled },
+      settings,
+      store: buildPublicCatalogStore(settings, slug),
+    };
+  };
+
+  const loadPublicCatalogPresentationInputs = async (uid: string) => {
+    const admin = getFirebaseAdmin();
+    const db = admin.firestore();
+    const documentId = admin.firestore.FieldPath.documentId();
+    const products: PublicCatalogSourceProduct[] = [];
+    const sales: Record<string, unknown>[] = [];
+
+    let lastProductDoc: any = null;
+    do {
+      let query: any = db.collection("users").doc(uid).collection("products")
+        .orderBy(documentId)
+        .limit(PUBLIC_CATALOG_PRESENTATION_BATCH_SIZE);
+      if (lastProductDoc) query = query.startAfter(lastProductDoc.id);
+      const snapshot = await query.get();
+      for (const doc of snapshot.docs) products.push({ id: doc.id, data: doc.data() ?? {} });
+      lastProductDoc = snapshot.docs.length === PUBLIC_CATALOG_PRESENTATION_BATCH_SIZE
+        ? snapshot.docs[snapshot.docs.length - 1]
+        : null;
+    } while (lastProductDoc);
+
+    let lastSaleDoc: any = null;
+    do {
+      let query: any = db.collection("users").doc(uid).collection("sales")
+        .select("products")
+        .orderBy(documentId)
+        .limit(PUBLIC_CATALOG_PRESENTATION_BATCH_SIZE);
+      if (lastSaleDoc) query = query.startAfter(lastSaleDoc.id);
+      const snapshot = await query.get();
+      for (const doc of snapshot.docs) sales.push(doc.data() ?? {});
+      lastSaleDoc = snapshot.docs.length === PUBLIC_CATALOG_PRESENTATION_BATCH_SIZE
+        ? snapshot.docs[snapshot.docs.length - 1]
+        : null;
+    } while (lastSaleDoc);
+
+    return { products, sales };
+  };
+
+  const paginatePublicCatalogProducts = ({
+    products,
+    limit,
+    gender,
+  }: {
+    products: readonly PublicCatalogProduct[];
+    limit: number;
+    gender?: string;
+  }): { products: PublicCatalogProduct[]; pagination: PublicCatalogPagination } => {
+    const sorted = [...products].sort((left, right) =>
+      right.availableQuantity - left.availableQuantity
+      || left.id.localeCompare(right.id),
+    );
+    const filtered = gender
+      ? sorted.filter((product) => String(product.gender || "").trim().toLowerCase() === gender)
+      : sorted;
+    const pageProducts = filtered.slice(0, limit);
+    const lastProduct = pageProducts[pageProducts.length - 1];
+    const hasMore = filtered.length > limit;
+    return {
+      products: pageProducts,
+      pagination: {
+        nextCursor: hasMore && lastProduct
+          ? encodePublicCatalogCursor({ stock: lastProduct.availableQuantity, id: lastProduct.id })
+          : null,
+        hasMore,
+        limit,
+      },
     };
   };
 
   const loadPublicCatalogProductsPage = async ({
     uid,
+    settings,
     cursor,
     gender,
     limit,
   }: {
     uid: string;
+    settings: Record<string, unknown>;
     cursor?: PublicCatalogCursor | null;
     gender?: string;
     limit: number;
@@ -600,14 +684,22 @@ export async function registerRoutes(
 
     const snapshot = await productsQuery.get();
     const docs = snapshot.docs.slice(0, limit);
-    const products = docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+    const products = buildPublicCatalogProductPage({
+      slug: "",
+      settings,
+      products: docs.map((doc: any) => ({ id: doc.id, data: doc.data() ?? {} })),
+      now: new Date(),
+    });
     const lastDoc = docs[docs.length - 1];
     const hasMore = snapshot.docs.length > limit;
     const nextCursor = hasMore && lastDoc
       ? encodePublicCatalogCursor({ stock: Number(lastDoc.get("stock") || 0), id: lastDoc.id })
       : null;
 
-    return { products, nextCursor, hasMore };
+    return {
+      products,
+      pagination: { nextCursor, hasMore, limit },
+    } satisfies PublicCatalogPageResponse;
   };
 
   const loadPublicCatalogOgImage = async (uid: string) => {
@@ -617,16 +709,28 @@ export async function registerRoutes(
     return getPublicCatalogProductImage(product) || "https://revendasmart.vercel.app/favicon.png";
   };
 
-  const loadPublicCatalog = async (rawSlug: string, options: { cursor?: PublicCatalogCursor | null; gender?: string; limit?: number } = {}) => {
+  const loadPublicCatalog = async (rawSlug: string, options: { gender?: string; limit?: number } = {}) => {
     const catalogSettings = await loadPublicCatalogSettings(rawSlug);
     if (!catalogSettings) return null;
-    const page = await loadPublicCatalogProductsPage({
-      uid: catalogSettings.uid,
-      cursor: options.cursor,
+    const input = await loadPublicCatalogPresentationInputs(catalogSettings.uid);
+    const payload = buildPublicCatalogPayload({
+      slug: catalogSettings.slug,
+      settings: catalogSettings.settings,
+      products: input.products,
+      sales: input.sales,
+      now: new Date(),
+    });
+    const page = paginatePublicCatalogProducts({
+      products: payload.products,
       gender: options.gender,
       limit: options.limit ?? PUBLIC_CATALOG_DEFAULT_LIMIT,
     });
-    return { ...catalogSettings, ...page };
+    return {
+      store: payload.store,
+      presentation: payload.presentation,
+      products: page.products,
+      pagination: page.pagination,
+    } satisfies PublicCatalogResponse;
   };
 
   app.get("/api/public/catalog/:storeSlug", publicCatalogRateLimit, async (req, res) => {
@@ -649,7 +753,13 @@ export async function registerRoutes(
       const limit = parsePublicCatalogLimit(req.query.limit);
       const cursor = decodePublicCatalogCursor(req.query.cursor);
       const gender = normalizePublicCatalogGender(req.query.gender);
-      const page = await loadPublicCatalogProductsPage({ uid: catalogSettings.uid, cursor, gender, limit });
+      const page = await loadPublicCatalogProductsPage({
+        uid: catalogSettings.uid,
+        settings: catalogSettings.settings,
+        cursor,
+        gender,
+        limit,
+      });
       res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
       return res.json(page);
     } catch (error) {
@@ -664,8 +774,8 @@ export async function registerRoutes(
       const indexPath = [path.resolve(__dirname || ".", "public/index.html"), path.resolve(process.cwd(), "dist/public/index.html"), path.resolve(".", "dist/public/index.html")]
         .find((candidate) => fs.existsSync(candidate));
       if (!indexPath) return next();
-      const storeName = catalog.settings.storeName || "Minha Loja";
-      const description = catalog.settings.catalogDescription || `Confira os produtos disponíveis no catálogo de ${storeName}.`;
+      const storeName = catalog.store.name;
+      const description = catalog.store.description || `Confira os produtos disponíveis no catálogo de ${storeName}.`;
       const image = await loadPublicCatalogOgImage(catalog.uid);
       const url = `https://revendasmart.vercel.app/u/${catalog.slug}`;
       const meta = `<title>${escapeHtml(storeName)} | Catálogo</title>

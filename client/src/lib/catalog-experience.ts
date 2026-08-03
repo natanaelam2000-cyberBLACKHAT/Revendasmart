@@ -4,7 +4,7 @@ import {
   inferNichoFromCategory,
   type NichoId,
 } from "@/lib/nicho-config";
-import { getProductImage, type AppSettings, type Product, type Sale } from "@/lib/mock-data";
+import type { AppSettings, Product, Sale } from "@/lib/mock-data";
 import { normalizeProductSearchText } from "@/lib/product-search";
 
 export type CatalogExperienceMode = "general" | "focused" | "segmented" | "hub";
@@ -202,6 +202,20 @@ function normalizeStock(value: unknown): number {
 
 function normalizeThreshold(value: unknown): number {
   return Math.max(0, toFiniteNumber(value));
+}
+
+function hasProductImage(product: Product): boolean {
+  const runtimeProduct = product as Product & {
+    photoUrl?: unknown;
+    image?: unknown;
+    photo?: unknown;
+  };
+  const image = product.imageUrl
+    || runtimeProduct.photoUrl
+    || runtimeProduct.image
+    || runtimeProduct.photo
+    || product.thumbnailUrl;
+  return typeof image === "string" && image.trim().length > 0;
 }
 
 function buildUnitsSoldByProduct(sales: readonly Sale[]): Map<string, number> {
@@ -418,7 +432,7 @@ function createProductFacts(
     product,
     stock: normalizeStock(product.stock),
     unitsSold: unitsSoldByProduct.get(String(product.id)) ?? 0,
-    hasImage: Boolean(getProductImage(product)),
+    hasImage: hasProductImage(product),
     category,
     categoryKey: normalizeCategoryKey(category),
     normalizedName: normalizeProductSearchText(product.name),
