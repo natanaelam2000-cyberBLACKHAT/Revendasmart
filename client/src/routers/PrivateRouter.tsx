@@ -28,8 +28,18 @@ const Admin = lazy(() => import("@/pages/admin"));
 const Subscribe = lazy(() => import("@/pages/subscribe"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 
+function LegacyMarketingRedirect() {
+  const [, setLocation] = useLocation();
+
+  useEffect(() => {
+    setLocation("/marketing?source=legacy-social", { replace: true });
+  }, [setLocation]);
+
+  return null;
+}
+
 function PrivateRoutes() {
-  const [location, setLocation] = useLocation();
+  const [, setLocation] = useLocation();
   const [authState, setAuthState] = useState<{ uid: string | null; loading: boolean }>({ uid: null, loading: true });
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -115,7 +125,7 @@ function PrivateRoutes() {
         <Route path="/marketing" component={Marketing} />
         <Route path="/monthly-sales" component={MonthlySales} />
         <Route path="/products-sold" component={ProductsSold} />
-        <Route path="/social" component={Marketing} />
+        <Route path="/social" component={LegacyMarketingRedirect} />
         <Route path="/reports" component={Reports} />
         <Route path="/settings" component={Settings} />
         <Route path="/settings/mercadopago" component={SettingsMercadoPago} />

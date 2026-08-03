@@ -12,6 +12,7 @@ import { MARKETING_AD_THEME_IDS, buildMarketingAdConfig, buildMarketingAdMessage
 import { canvasToPngBlob, MarketingCardRenderError } from "../client/src/lib/marketing-card";
 import { MarketingFileOperationError, blobToBase64Data, createUniqueMarketingFileName, sanitizeMarketingFileName, saveMarketingCard, shareMarketingCard } from "../client/src/lib/marketing-share";
 import { MarketingImageResolutionError, isSafeMarketingImageDataUrl, resolveMarketingImageCandidates } from "../client/src/lib/marketing-image";
+import { MARKETING_MANUAL_CAPABILITIES, isMarketingKitProduct, readMarketingLaunchRequest } from "../client/src/lib/marketing-flow";
 import { buildPublicCatalogUrl, normalizePublicAppBaseUrl, resolvePublicAppBaseUrl } from "../client/src/lib/public-url";
 import { HOME_SUMMARY_KPI_IDS, buildHomeDashboardViewModel } from "../client/src/lib/home-dashboard-view-model";
 import { validateMercadoPagoAccessTokenForEnvironment } from "../server/mercadopago-environment";
@@ -42,7 +43,17 @@ const paginatedClientsHook = read("client/src/hooks/usePaginatedClientsData.ts")
 const paginatedProductsHook = read("client/src/hooks/usePaginatedProductsData.ts");
 const productPickerHook = read("client/src/hooks/useProductPickerData.ts");
 const clientPickerHook = read("client/src/hooks/useClientPickerData.ts");
-const marketing = read("client/src/pages/marketing.tsx");
+const marketingPage = read("client/src/pages/marketing.tsx");
+const marketingHub = read("client/src/components/marketing/MarketingHub.tsx");
+const marketingWorkspaceNav = read("client/src/components/marketing/MarketingWorkspaceNav.tsx");
+const marketingProductSelector = read("client/src/components/marketing/MarketingProductSelector.tsx");
+const marketingTemplateSelector = read("client/src/components/marketing/MarketingTemplateSelector.tsx");
+const marketingEditor = read("client/src/components/marketing/MarketingEditor.tsx");
+const marketingPreview = read("client/src/components/marketing/MarketingPreview.tsx");
+const marketingCopyPanel = read("client/src/components/marketing/MarketingCopyPanel.tsx");
+const marketingExportActions = read("client/src/components/marketing/MarketingExportActions.tsx");
+const marketingFlow = read("client/src/lib/marketing-flow.ts");
+const marketing = [marketingPage, marketingHub, marketingWorkspaceNav, marketingProductSelector, marketingTemplateSelector, marketingEditor, marketingPreview, marketingCopyPanel, marketingExportActions].join("\n");
 const marketingAd = read("client/src/lib/marketing-ad.ts");
 const marketingCard = read("client/src/lib/marketing-card.ts");
 const marketingShare = read("client/src/lib/marketing-share.ts");
@@ -615,6 +626,7 @@ assert.equal(marketingAdFixture.stockStatus, "Pronta entrega");
 assert.match(buildMarketingAdMessage(marketingAdFixture), /Por apenas R\$ 230,00/);
 assert.match(buildMarketingAdMessage(marketingAdFixture), /Marca: Marca A/);
 assert.match(buildMarketingAdMessage(marketingAdFixture), /Volume: 100ml/);
+assert.doesNotMatch(buildMarketingAdMessage(marketingAdFixture), /undefined|NaN/);
 assert.equal(normalizeMarketingAdConfig({ ...marketingAdFixture, template: "legacy-missing", themeId: "missing" }).templateId, "promo");
 assert.equal(normalizeMarketingAdConfig({ ...marketingAdFixture, themeId: "missing" }).themeId, "brand");
 const sanitizedMarketing = sanitizeMarketingHistoryPayload({ productId: "p1", imageUrl: "data:image/png;base64,AAA", storeLogoUrl: "data:image/png;base64,BBB", photoUrl: "https://cdn.example/photo.webp", generatedText: "ok" });
@@ -622,8 +634,56 @@ assert.equal(sanitizedMarketing.imageUrl, undefined);
 assert.equal(sanitizedMarketing.storeLogoUrl, undefined);
 assert.equal(sanitizedMarketing.photoUrl, "https://cdn.example/photo.webp");
 assert.ok(MARKETING_AD_THEME_IDS.includes("black"));
+assert.equal(isMarketingKitProduct({ category: "Kit" }), true);
+assert.equal(isMarketingKitProduct({ category: "Kits" }), true);
+assert.equal(isMarketingKitProduct({ category: "kits" }), true);
+assert.equal(isMarketingKitProduct({ category: "Perfumes" }), false);
+assert.deepEqual(
+  readMarketingLaunchRequest("?productId=produto-42&source=catalog&template=kit"),
+  { productId: "produto-42", invalidProductId: false, source: "catalog", templateId: "kit" },
+);
+assert.deepEqual(
+  readMarketingLaunchRequest("?source=unknown&template=unknown"),
+  { productId: "", invalidProductId: false, source: "hub", templateId: undefined },
+);
+assert.deepEqual(
+  readMarketingLaunchRequest("?productId=outro%2Fproduto&source=catalog"),
+  { productId: "", invalidProductId: true, source: "catalog", templateId: undefined },
+);
+for (const capability of ["product", "kit", "template", "theme", "price", "note", "cta", "payment", "preview", "copy", "download", "share", "history"]) {
+  assert.ok(MARKETING_MANUAL_CAPABILITIES.includes(capability as typeof MARKETING_MANUAL_CAPABILITIES[number]));
+}
+assert.match(marketingPage, /preferredProductId: launchRequest\.productId/);
+assert.match(productPickerHook, /loadRecentProductDocs\(user\.uid, pageProducts, preferredProductId\)/);
+assert.match(productPickerHook, /doc\(firestore, "users", uid, "products", productId\)/);
+assert.match(productPickerHook, /preferredProductStatus/);
+assert.match(productPickerHook, /mergeProducts\(current, recentProducts\)/);
+assert.match(marketingProductSelector, /Não encontramos esse produto na sua conta/);
+assert.match(marketingProductSelector, /O link do produto é inválido/);
+assert.match(marketingPage, /source: launchRequest\.source === "catalog" \? "catalog" : "manual"/);
+assert.match(privateRouter, /LegacyMarketingRedirect/);
+assert.match(privateRouter, /\/marketing\?source=legacy-social/);
+assert.match(marketingFlow, /value === "kit" \|\| value === "kits"/);
+assert.match(marketingHub, /Criação manual disponível para todos/);
+assert.match(marketingEditor, /plano gratuito/);
+assert.doesNotMatch(marketingPage, /usePlan|canUseFeature|PremiumGate|UpgradeGate/);
+assert.doesNotMatch(marketingPage, /createdWithAI\s*:\s*true/);
+assert.doesNotMatch(marketing + marketingFlow, /from ["'](?:openai|@ai-sdk|ai)["']/);
+assert.match(marketingPage, /MarketingHub/);
+assert.match(marketingPage, /MarketingProductSelector/);
+assert.match(marketingPage, /MarketingTemplateSelector/);
+assert.match(marketingPage, /MarketingEditor/);
+assert.match(marketingPage, /MarketingPreview/);
+assert.match(marketingPage, /MarketingExportActions/);
 assert.match(marketingAd, /MARKETING_AD_THEMES/);
 assert.match(marketing, /MarketingAdCanvas/);
+assert.match(marketingCanvas, /buildMarketingAdVisualModel/);
+assert.match(marketingCard, /buildMarketingAdVisualModel/);
+assert.match(marketingCopyPanel, /<textarea/);
+assert.match(marketingCopyPanel, /onTextChange/);
+assert.match(marketingProductSelector, /aria-pressed/);
+assert.match(marketingTemplateSelector, /aria-pressed/);
+assert.match(marketingWorkspaceNav, /focus-visible:ring-2/);
 assert.match(marketing, /handleSaveEditedEntry/);
 assert.match(marketing, /handleDuplicateEntry/);
 assert.match(marketing, /formatMarketingPrice/);
