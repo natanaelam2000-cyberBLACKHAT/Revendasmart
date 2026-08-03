@@ -4,7 +4,8 @@ import { APP_THEME_IDS, APP_THEMES, DEFAULT_APP_THEME_ID, DESIGN_TOKEN_NAMES, bu
 import { NICHO_CONFIG, ONBOARDING_NICHO_IDS, getNichoConfig, getProductCategoriesForNicho } from "../client/src/lib/nicho-config";
 import { CATALOG_SERVER_SEARCH_ENABLED, PRODUCT_SEARCH_SCHEMA_VERSION, SERVER_SIDE_CLIENT_SEARCH_ENABLED, SERVER_SIDE_PRODUCT_SEARCH_ENABLED, buildProductSearchBackfillPatch, buildProductSearchFields, buildProductServerSearchPlan, buildProductServerSearchQuerySpec, canUseCatalogServerSearch, getProductSearchIndexStatus, isLikelyBarcodeSearchTerm, isProductSearchIndexed, normalizeProductBarcode, normalizeProductSearchText, productMatchesLocalSearch, sanitizeProductSearchPageSize } from "../client/src/lib/product-search";
 import { buildStoreIntelligence } from "../client/src/lib/store-health";
-import { defaultSettings } from "../client/src/lib/mock-data";
+import { defaultSettings, type Product, type Sale } from "../client/src/lib/mock-data";
+import { resolveCatalogExperience, type ResolveCatalogExperienceInput } from "../client/src/lib/catalog-experience";
 import { buildProductCreatePayload } from "../client/src/lib/product-payload";
 import { MARKETING_AD_THEME_IDS, buildMarketingAdConfig, buildMarketingAdMessage, buildMarketingAdVisualModel, buildMarketingWhatsappUrl, formatMarketingPrice, normalizeMarketingAdConfig, normalizeMarketingCtaText, normalizeMarketingGeneratedText, sanitizeMarketingHistoryPayload } from "../client/src/lib/marketing-ad";
 import { canvasToPngBlob, MarketingCardRenderError } from "../client/src/lib/marketing-card";
@@ -2020,5 +2021,363 @@ assert.match(androidSkill, /Não fazer commit/);
 assert.match(androidSkill, /android:sync/);
 assert.match(androidSkill, /SHA-256/);
 assert.ok(skillIndex.skills.some((skill: { name: string }) => skill.name === "revendasmart-android-release"));
+
+// Adaptive catalog foundation: pure, deterministic and independent from the UI.
+const catalogReferenceNow = new Date("2026-07-15T12:00:00.000Z");
+
+function catalogProduct(id: string, overrides: Partial<Product> = {}): Product {
+  return {
+    id,
+    name: `Produto ${id}`,
+    brand: "Marca",
+    category: "Perfumes",
+    productType: "Cosméticos & Perfumes",
+    costPrice: 10,
+    salePrice: 20,
+    stock: 5,
+    ...overrides,
+  };
+}
+
+function catalogSale(id: string, products: Sale["products"]): Sale {
+  return {
+    id,
+    clientId: `client-${id}`,
+    products,
+    totalPrice: products.reduce((total, product) => total + product.price * product.quantity, 0),
+    paymentType: "cash",
+    date: "2026-07-10T10:00:00.000Z",
+  };
+}
+
+function catalogExperience(overrides: Partial<ResolveCatalogExperienceInput> = {}) {
+  return resolveCatalogExperience({
+    businessType: undefined,
+    businessTypes: undefined,
+    customCategoriesByNicho: undefined,
+    products: [],
+    sales: [],
+    lowStockThreshold: 3,
+    now: catalogReferenceNow,
+    ...overrides,
+  });
+}
+
+const zeroNichesCatalog = catalogExperience();
+assert.equal(zeroNichesCatalog.mode, "general");
+assert.equal(zeroNichesCatalog.activeNicheId, undefined);
+assert.equal(zeroNichesCatalog.emptyReason, "no_products_and_no_niches");
+
+const explicitGeneralCatalog = catalogExperience({ businessType: "Geral", businessTypes: ["Geral"] });
+assert.equal(explicitGeneralCatalog.mode, "focused");
+assert.equal(explicitGeneralCatalog.activeNicheId, "Geral");
+
+assert.equal(catalogExperience({ businessTypes: ["Roupas"] }).mode, "focused");
+assert.equal(catalogExperience({ businessTypes: ["Roupas", "Acessórios"] }).mode, "segmented");
+assert.equal(catalogExperience({ businessTypes: ["Roupas", "Acessórios", "Papelaria"] }).mode, "segmented");
+assert.equal(catalogExperience({ businessTypes: ["Roupas", "Acessórios", "Papelaria", "Utilidades"] }).mode, "hub");
+assert.equal(catalogExperience({ businessTypes: ["Roupas", "Acessórios", "Papelaria", "Utilidades", "Doces"] }).mode, "hub");
+
+const dedupedNichesCatalog = catalogExperience({
+  businessTypes: ["Roupas", "Roupas", "Alimentos/Doces", "Doces"],
+});
+assert.deepEqual(dedupedNichesCatalog.niches.map((niche) => niche.id), ["Roupas", "Doces"]);
+assert.equal(dedupedNichesCatalog.mode, "segmented");
+
+const legacyNicheCatalog = catalogExperience({ businessType: "Alimentos/Doces" });
+assert.equal(legacyNicheCatalog.mode, "focused");
+assert.equal(legacyNicheCatalog.activeNicheId, "Doces");
+assert.deepEqual(legacyNicheCatalog.niches.map((niche) => niche.id), ["Doces"]);
+
+const invalidBusinessTypeCatalog = catalogExperience({ businessType: "Nicho inexistente" });
+assert.equal(invalidBusinessTypeCatalog.mode, "general");
+assert.equal(invalidBusinessTypeCatalog.activeNicheId, undefined);
+
+const primaryOutsideSelectionCatalog = catalogExperience({
+  businessType: "Roupas",
+  businessTypes: ["Cosméticos & Perfumes", "Doces"],
+});
+assert.equal(primaryOutsideSelectionCatalog.activeNicheId, "Cosméticos & Perfumes");
+const selectedPrimaryCatalog = catalogExperience({
+  businessType: "Roupas",
+  businessTypes: ["Cosméticos & Perfumes", "Roupas"],
+});
+assert.equal(selectedPrimaryCatalog.activeNicheId, "Roupas");
+assert.equal(selectedPrimaryCatalog.niches.find((niche) => niche.id === "Roupas")?.isPrimary, true);
+
+const explicitProduct = catalogProduct("explicit");
+const explicitProductCatalog = catalogExperience({
+  businessTypes: ["Cosméticos & Perfumes"],
+  products: [explicitProduct],
+});
+assert.deepEqual(explicitProductCatalog.niches[0].products.map((product) => product.id), ["explicit"]);
+
+const inferredProduct = catalogProduct("inferred", { productType: undefined, category: "Perfumes" });
+const inferredProductCatalog = catalogExperience({
+  businessTypes: ["Cosméticos & Perfumes"],
+  products: [inferredProduct],
+});
+assert.deepEqual(inferredProductCatalog.niches[0].products.map((product) => product.id), ["inferred"]);
+
+const uncategorizedProduct = catalogProduct("uncategorized", {
+  productType: undefined,
+  category: "",
+});
+const uncategorizedCatalog = catalogExperience({
+  businessTypes: ["Geral"],
+  products: [uncategorizedProduct],
+});
+assert.deepEqual(uncategorizedCatalog.uncategorizedProducts.map((product) => product.id), ["uncategorized"]);
+assert.deepEqual(uncategorizedCatalog.niches[0].products.map((product) => product.id), ["uncategorized"]);
+
+const removedNicheProduct = catalogProduct("removed-niche", { productType: "Cosméticos & Perfumes" });
+const orphanedCatalog = catalogExperience({
+  businessTypes: ["Roupas"],
+  products: [removedNicheProduct],
+});
+assert.deepEqual(orphanedCatalog.orphanedProducts.map((product) => product.id), ["removed-niche"]);
+assert.equal(orphanedCatalog.inventorySummary.orphanedProducts, 1);
+
+const invalidProductType = catalogProduct("invalid-type", { productType: "Inválido", category: "Perfumes" });
+const invalidProductTypeCatalog = catalogExperience({
+  businessTypes: ["Cosméticos & Perfumes"],
+  products: [invalidProductType],
+});
+assert.deepEqual(invalidProductTypeCatalog.niches[0].products.map((product) => product.id), ["invalid-type"]);
+
+const invalidStockCatalog = catalogExperience({
+  businessTypes: ["Cosméticos & Perfumes"],
+  products: [
+    catalogProduct("out", { stock: 0 }),
+    catalogProduct("negative", { stock: -8 }),
+    catalogProduct("numeric-string", { stock: "2" as unknown as number }),
+  ],
+});
+assert.equal(invalidStockCatalog.inventorySummary.availableProducts, 1);
+assert.equal(invalidStockCatalog.inventorySummary.outOfStockProducts, 2);
+assert.equal(invalidStockCatalog.inventorySummary.lowStockProducts, 1);
+assert.equal(invalidStockCatalog.inventorySummary.totalUnits, 2);
+
+const imageCatalog = catalogExperience({
+  businessTypes: ["Cosméticos & Perfumes"],
+  products: [
+    catalogProduct("with-image", { imageUrl: "https://example.test/product.png" }),
+    catalogProduct("without-image", { imageUrl: "   " }),
+  ],
+});
+assert.equal(imageCatalog.inventorySummary.productsWithImage, 1);
+assert.equal(imageCatalog.inventorySummary.productsWithoutImage, 1);
+
+const emptyNicheCatalog = catalogExperience({ businessTypes: ["Papelaria"] });
+assert.equal(emptyNicheCatalog.niches[0].productCount, 0);
+assert.equal(emptyNicheCatalog.niches[0].hero, undefined);
+
+const singleProductCatalog = catalogExperience({
+  businessTypes: ["Cosméticos & Perfumes"],
+  products: [catalogProduct("only")],
+});
+assert.equal(singleProductCatalog.hero?.product.id, "only");
+assert.equal(singleProductCatalog.inventorySummary.totalProducts, 1);
+
+const fewProductsCatalog = catalogExperience({
+  businessTypes: ["Cosméticos & Perfumes"],
+  products: [catalogProduct("few-1"), catalogProduct("few-2"), catalogProduct("few-3")],
+});
+assert.equal(fewProductsCatalog.inventorySummary.totalProducts, 3);
+assert.equal(fewProductsCatalog.niches[0].productCount, 3);
+
+const manualFeatured = catalogProduct("manual", { isFeatured: true, stock: 1 });
+const promotion = catalogProduct("promotion", { isOnSale: true, discountPercent: 20, stock: 10 });
+const heroPriorityCatalog = catalogExperience({
+  businessTypes: ["Cosméticos & Perfumes"],
+  products: [promotion, manualFeatured],
+  sales: [catalogSale("hero-priority", [{ productId: "promotion", quantity: 99, price: 20 }])],
+});
+assert.equal(heroPriorityCatalog.hero?.product.id, "manual");
+assert.equal(heroPriorityCatalog.hero?.reason, "manual_featured");
+
+const bestSeller = catalogProduct("best-seller", { imageUrl: "https://example.test/best.png" });
+const promotionWinsCatalog = catalogExperience({
+  businessTypes: ["Cosméticos & Perfumes"],
+  products: [bestSeller, promotion],
+  sales: [catalogSale("promotion-wins", [{ productId: "best-seller", quantity: 500, price: 20 }])],
+});
+assert.equal(promotionWinsCatalog.hero?.product.id, "promotion");
+assert.equal(promotionWinsCatalog.hero?.reason, "active_promotion");
+
+const imageOnly = catalogProduct("image-only", { imageUrl: "https://example.test/image.png" });
+const bestsellerWinsCatalog = catalogExperience({
+  businessTypes: ["Cosméticos & Perfumes"],
+  products: [imageOnly, bestSeller],
+  sales: [catalogSale("seller-wins", [{ productId: "best-seller", quantity: 1, price: 20 }])],
+});
+assert.equal(bestsellerWinsCatalog.hero?.product.id, "best-seller");
+assert.equal(bestsellerWinsCatalog.hero?.reason, "top_seller");
+
+const stockTieBreakCatalog = catalogExperience({
+  businessTypes: ["Cosméticos & Perfumes"],
+  products: [
+    catalogProduct("lower-stock", { stock: 2 }),
+    catalogProduct("higher-stock", { stock: 8 }),
+  ],
+});
+assert.equal(stockTieBreakCatalog.hero?.product.id, "higher-stock");
+
+const nameTieBreakCatalog = catalogExperience({
+  businessTypes: ["Cosméticos & Perfumes"],
+  products: [
+    catalogProduct("beta-id", { name: "Beta", stock: 5 }),
+    catalogProduct("alpha-id", { name: "Álpha", stock: 5 }),
+  ],
+});
+assert.equal(nameTieBreakCatalog.hero?.product.id, "alpha-id");
+
+const idTieBreakCatalog = catalogExperience({
+  businessTypes: ["Cosméticos & Perfumes"],
+  products: [
+    catalogProduct("b-id", { name: "Mesmo nome", stock: 5 }),
+    catalogProduct("a-id", { name: "Mesmo nome", stock: 5 }),
+  ],
+});
+assert.equal(idTieBreakCatalog.hero?.product.id, "a-id");
+
+const availableBeatsSoldOutCatalog = catalogExperience({
+  businessTypes: ["Cosméticos & Perfumes"],
+  products: [
+    catalogProduct("sold-out-featured", { stock: 0, isFeatured: true, isOnSale: true }),
+    catalogProduct("available-plain", { stock: 1 }),
+  ],
+});
+assert.equal(availableBeatsSoldOutCatalog.hero?.product.id, "available-plain");
+
+const allSoldOutCatalog = catalogExperience({
+  businessTypes: ["Cosméticos & Perfumes"],
+  products: [catalogProduct("sold-out", { stock: 0, isFeatured: true, isOnSale: true })],
+});
+assert.equal(allSoldOutCatalog.hero, undefined);
+assert.equal(allSoldOutCatalog.emptyReason, "all_out_of_stock");
+assert.equal(allSoldOutCatalog.adCTA.productId, undefined);
+
+const noEmptyCollectionsCatalog = catalogExperience({
+  businessTypes: ["Cosméticos & Perfumes"],
+  products: [catalogProduct("plain")],
+});
+assert.ok(noEmptyCollectionsCatalog.quickCollections.every((collection) => collection.products.length > 0));
+assert.equal(noEmptyCollectionsCatalog.quickCollections.some((collection) => collection.id === "offers"), false);
+
+const kitsCatalog = catalogExperience({
+  businessTypes: ["Roupas"],
+  products: [
+    catalogProduct("kit", { productType: "Roupas", category: "Kit" }),
+    catalogProduct("kits", { productType: "Roupas", category: "Kits" }),
+  ],
+});
+assert.deepEqual(
+  kitsCatalog.quickCollections.find((collection) => collection.id === "kits")?.products.map((product) => product.id).sort(),
+  ["kit", "kits"],
+);
+
+const customCategoriesCatalog = catalogExperience({
+  businessTypes: ["Roupas", "Cosméticos & Perfumes"],
+  customCategoriesByNicho: {
+    Roupas: ["Sob medida", "SOB MEDIDA"],
+    "Cosméticos & Perfumes": ["Refil"],
+  },
+});
+const clothesNiche = customCategoriesCatalog.niches.find((niche) => niche.id === "Roupas")!;
+const cosmeticsNiche = customCategoriesCatalog.niches.find((niche) => niche.id === "Cosméticos & Perfumes")!;
+assert.deepEqual(clothesNiche.customCategories, ["Sob medida"]);
+assert.ok(clothesNiche.categories.includes("Sob medida"));
+assert.equal(clothesNiche.categories.includes("Refil"), false);
+assert.deepEqual(cosmeticsNiche.customCategories, ["Refil"]);
+assert.equal(cosmeticsNiche.categories.includes("Sob medida"), false);
+
+const noDuplicateNichesCatalog = catalogExperience({
+  businessTypes: ["Roupas", "Cosméticos & Perfumes", "Papelaria"],
+  products: [
+    catalogProduct("clothes", { productType: "Roupas", category: "Camisetas" }),
+    catalogProduct("cosmetics", { productType: "Cosméticos & Perfumes", category: "Perfumes" }),
+    catalogProduct("paper", { productType: "Papelaria", category: "Cadernos" }),
+  ],
+});
+const nicheOccurrences = noDuplicateNichesCatalog.niches
+  .flatMap((niche) => niche.products)
+  .reduce((counts, product) => counts.set(product.id, (counts.get(product.id) ?? 0) + 1), new Map<string, number>());
+assert.ok([...nicheOccurrences.values()].every((count) => count === 1));
+
+const preservedProducts = [
+  catalogProduct("assigned", { productType: "Roupas", category: "Camisetas" }),
+  catalogProduct("orphan", { productType: "Papelaria", category: "Cadernos" }),
+  catalogProduct("no-category", { productType: undefined, category: "" }),
+];
+const preservationCatalog = catalogExperience({ businessTypes: ["Roupas"], products: preservedProducts });
+const preservedIds = new Set([
+  ...preservationCatalog.niches.flatMap((niche) => niche.products.map((product) => product.id)),
+  ...preservationCatalog.orphanedProducts.map((product) => product.id),
+  ...preservationCatalog.uncategorizedProducts.map((product) => product.id),
+]);
+assert.deepEqual([...preservedIds].sort(), preservedProducts.map((product) => product.id).sort());
+
+const orderProducts = [
+  catalogProduct("order-b", { name: "Beta", category: "Perfumes" }),
+  catalogProduct("order-a", { name: "Alpha", category: "Perfumes" }),
+  catalogProduct("order-c", { name: "Gamma", category: "Kits", isOnSale: true }),
+];
+const orderSales = [
+  catalogSale("order-1", [{ productId: "order-a", quantity: 2, price: 20 }]),
+  catalogSale("order-2", [{ productId: "order-b", quantity: 2, price: 20 }]),
+];
+const orderInput = {
+  businessTypes: ["Cosméticos & Perfumes"],
+  products: orderProducts,
+  sales: orderSales,
+};
+assert.deepEqual(
+  catalogExperience(orderInput),
+  catalogExperience({ ...orderInput, products: [...orderProducts].reverse(), sales: [...orderSales].reverse() }),
+);
+
+const immutableProducts = [catalogProduct("immutable", { stock: -1 })];
+const immutableSales = [catalogSale("immutable", [{ productId: "immutable", quantity: 2, price: 20 }])];
+const immutableBusinessTypes = ["Cosméticos & Perfumes", "Roupas"];
+const immutableCustomCategories = { Roupas: ["Sob medida"] };
+const immutableSnapshot = structuredClone({
+  products: immutableProducts,
+  sales: immutableSales,
+  businessTypes: immutableBusinessTypes,
+  customCategoriesByNicho: immutableCustomCategories,
+});
+catalogExperience({
+  products: immutableProducts,
+  sales: immutableSales,
+  businessTypes: immutableBusinessTypes,
+  customCategoriesByNicho: immutableCustomCategories,
+});
+assert.deepEqual(
+  { products: immutableProducts, sales: immutableSales, businessTypes: immutableBusinessTypes, customCategoriesByNicho: immutableCustomCategories },
+  immutableSnapshot,
+);
+
+const largeCatalogProducts = Array.from({ length: 5_000 }, (_, index) => catalogProduct(`large-${index}`, {
+  name: `Produto grande ${String(index).padStart(5, "0")}`,
+  productType: index % 2 === 0 ? "Roupas" : "Cosméticos & Perfumes",
+  category: index % 2 === 0 ? "Camisetas" : "Perfumes",
+  stock: index % 9,
+}));
+const largeCatalog = catalogExperience({
+  businessTypes: ["Roupas", "Cosméticos & Perfumes"],
+  products: largeCatalogProducts,
+});
+assert.equal(largeCatalog.inventorySummary.totalProducts, 5_000);
+assert.equal(largeCatalog.niches.reduce((total, niche) => total + niche.productCount, 0), 5_000);
+
+const deterministicNowInput = {
+  businessTypes: ["Cosméticos & Perfumes"],
+  products: [catalogProduct("time-safe", { isOnSale: true })],
+};
+assert.deepEqual(
+  catalogExperience({ ...deterministicNowInput, now: new Date("2020-01-01T00:00:00.000Z") }),
+  catalogExperience({ ...deterministicNowInput, now: new Date("2030-01-01T00:00:00.000Z") }),
+);
 
 console.log("Smoke tests passed: catalog, images, navigation, modules, subscription and ranking.");
