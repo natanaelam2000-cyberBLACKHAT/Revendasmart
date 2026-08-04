@@ -13,6 +13,8 @@ import { canvasToPngBlob, MarketingCardRenderError } from "../client/src/lib/mar
 import { MarketingFileOperationError, blobToBase64Data, createUniqueMarketingFileName, sanitizeMarketingFileName, saveMarketingCard, shareMarketingCard } from "../client/src/lib/marketing-share";
 import { MarketingImageResolutionError, isSafeMarketingImageDataUrl, resolveMarketingImageCandidates } from "../client/src/lib/marketing-image";
 import { MARKETING_MANUAL_CAPABILITIES, isMarketingKitProduct, readMarketingLaunchRequest } from "../client/src/lib/marketing-flow";
+import { mergeMarketingHistory } from "../client/src/lib/marketing-history";
+import type { MarketingHistoryEntry } from "../client/src/hooks/useMarketingHistory";
 import { buildPublicCatalogUrl, normalizePublicAppBaseUrl, resolvePublicAppBaseUrl } from "../client/src/lib/public-url";
 import { HOME_SUMMARY_KPI_IDS, buildHomeDashboardViewModel } from "../client/src/lib/home-dashboard-view-model";
 import { validateMercadoPagoAccessTokenForEnvironment } from "../server/mercadopago-environment";
@@ -668,6 +670,41 @@ assert.match(marketingHub, /Criação manual disponível para todos/);
 assert.match(marketingEditor, /plano gratuito/);
 assert.doesNotMatch(marketingPage, /usePlan|canUseFeature|PremiumGate|UpgradeGate/);
 assert.doesNotMatch(marketingPage, /createdWithAI\s*:\s*true/);
+assert.doesNotMatch(marketing, /Ãƒ|Ã‚|ediÃ|alteraÃ|aÃ|opÃ|configuraÃ|histÃ|anÃ/);
+assert.match(marketingPage, /Cancelar edição/);
+assert.match(marketingPage, /Salvar alterações/);
+
+const marketingHistoryEntry = (id: string, values: Partial<MarketingHistoryEntry> = {}): MarketingHistoryEntry => ({
+  id,
+  action: "generated",
+  productId: values.productId || "product-" + id,
+  productName: values.productName || "Produto " + id,
+  generatedText: values.generatedText || "Texto do anúncio",
+  template: values.template || "promo",
+  price: values.price || "R$ 10,00",
+  headline: values.headline || "Oferta",
+  storeName: values.storeName || "Loja Teste",
+  primaryColor: values.primaryColor || "#4c1d95",
+  createdAtISO: values.createdAtISO || "2026-08-01T10:00:00.000Z",
+  ...values,
+});
+const localOnlyHistory = marketingHistoryEntry("local-only", { createdAtISO: "2026-08-01T12:00:00.000Z" });
+const remoteOnlyHistory = marketingHistoryEntry("remote-only", { createdAtISO: "2026-08-01T11:00:00.000Z" });
+assert.deepEqual(mergeMarketingHistory([localOnlyHistory], []).map((entry) => entry.id), ["local-only"]);
+assert.deepEqual(mergeMarketingHistory([localOnlyHistory], [remoteOnlyHistory]).map((entry) => entry.id), ["local-only", "remote-only"]);
+assert.equal(mergeMarketingHistory([localOnlyHistory], [remoteOnlyHistory]).some((entry) => entry.id === "local-only"), true);
+const olderLocalHistory = marketingHistoryEntry("same-id", { headline: "Local antigo", updatedAtISO: "2026-08-01T10:00:00.000Z" });
+const newerRemoteHistory = marketingHistoryEntry("same-id", { headline: "Remoto novo", updatedAtISO: "2026-08-01T12:00:00.000Z" });
+assert.equal(mergeMarketingHistory([olderLocalHistory], [newerRemoteHistory])[0]?.headline, "Remoto novo");
+const localWithoutUpdate = marketingHistoryEntry("legacy-id", { headline: "Local legado", createdAtISO: "2026-08-01T09:00:00.000Z" });
+const remoteWithoutUpdate = marketingHistoryEntry("legacy-id", { headline: "Remoto legado", createdAtISO: "2026-08-01T12:00:00.000Z" });
+assert.equal(mergeMarketingHistory([localWithoutUpdate], [remoteWithoutUpdate])[0]?.headline, "Local legado");
+assert.deepEqual(mergeMarketingHistory([localOnlyHistory], [remoteOnlyHistory], { "local-only": "2026-08-01T13:00:00.000Z" }).map((entry) => entry.id), ["remote-only"]);
+assert.match(marketingHistoryHook, /readLocal\(user\.uid\)/);
+assert.match(marketingHistoryHook, /mergeMarketingHistory\(readLocal\(user\.uid\), remote, readDeletedIds\(user\.uid\)\)/);
+assert.match(marketingHistoryHook, /catch \{ \/\* Firestore rules may deny this optional history; local history remains available\. \*\/ \}/);
+assert.match(marketingHistoryHook, /rs:marketing-history-deleted/);
+assert.doesNotMatch(marketingHistoryHook, /createdWithAI\s*:\s*true/);
 assert.doesNotMatch(marketing + marketingFlow, /from ["'](?:openai|@ai-sdk|ai)["']/);
 assert.match(marketingPage, /MarketingHub/);
 assert.match(marketingPage, /MarketingProductSelector/);
@@ -2148,7 +2185,7 @@ assert.doesNotMatch(loginCss, /aspect-ratio:\s*9 \/ 16/);
 assert.doesNotMatch(loginCss, /rs-login-email-field|rs-login-password-field/);
 assert.doesNotMatch(loginPage, /aparência de negócio grande/);
 assert.doesNotMatch(loginPage, /Gestão, vendas e catálogo em um só lugar/);
-assert.doesNotMatch(loginPage, /bg-\[\#160b2e\]/);
+assert.doesNotMatch(loginPage, /bg-\[#160b2e\]/);
 assert.doesNotMatch(loginPage, /rs-login-person-illustration/);
 assert.doesNotMatch(loginPage, />A<|rs-login-avatar/);
 

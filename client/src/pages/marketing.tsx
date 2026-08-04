@@ -620,8 +620,8 @@ export default function MarketingPage() {
 
                 {editingEntryId && (
                   <div className="grid gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 sm:grid-cols-2">
-                    <button type="button" onClick={handleCancelEditing} className="min-h-11 rounded-xl border border-amber-300 bg-white px-4 text-xs font-bold text-amber-900">Cancelar ediÃ§Ã£o</button>
-                    <button type="button" onClick={handleSaveEditedEntry} className="min-h-11 rounded-xl bg-primary px-4 text-xs font-bold text-white">Salvar alteraÃ§Ãµes</button>
+                    <button type="button" onClick={handleCancelEditing} className="min-h-11 rounded-xl border border-amber-300 bg-white px-4 text-xs font-bold text-amber-900">Cancelar edição</button>
+                    <button type="button" onClick={handleSaveEditedEntry} className="min-h-11 rounded-xl bg-primary px-4 text-xs font-bold text-white">Salvar alterações</button>
                   </div>
                 )}
               </div>

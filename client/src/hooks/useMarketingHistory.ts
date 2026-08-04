@@ -3,6 +3,7 @@ import { getFirestore, addDoc, collection, deleteDoc, doc, limit, onSnapshot, or
 import { onAuthStateChanged } from "firebase/auth";
 import { getFirebaseAuth } from "@/lib/firebase";
 import { sanitizeMarketingHistoryPayload, type MarketingAdThemeId, type MarketingBackgroundStyle, type MarketingTemplateId } from "@/lib/marketing-ad";
+import { mergeMarketingHistory } from "@/lib/marketing-history";
 
 export type MarketingAction = "generated" | "downloaded" | "copied" | "shared" | "edited" | "duplicated";
 export interface MarketingHistoryEntry {
@@ -43,9 +44,12 @@ export interface MarketingHistoryEntry {
 }
 export type NewMarketingEntry = Omit<MarketingHistoryEntry, "id" | "createdAt" | "createdAtISO" | "updatedAt">;
 const storageKey = (uid: string) => `rs:marketing-history:${uid}`;
+const deletedStorageKey = (uid: string) => `rs:marketing-history-deleted:${uid}`;
 const cleanEntry = <T extends Record<string, unknown>>(entry: T) => sanitizeMarketingHistoryPayload(entry);
 const readLocal = (uid: string): MarketingHistoryEntry[] => { try { const entries = JSON.parse(localStorage.getItem(storageKey(uid)) || "[]"); return Array.isArray(entries) ? entries.map(entry => cleanEntry(entry as Record<string, unknown>) as unknown as MarketingHistoryEntry) : []; } catch { return []; } };
 const saveLocal = (uid: string, entries: MarketingHistoryEntry[]) => { try { localStorage.setItem(storageKey(uid), JSON.stringify(entries.slice(0, 200).map(entry => cleanEntry(entry as unknown as Record<string, unknown>)))); } catch { /* storage unavailable */ } };
+const readDeletedIds = (uid: string): Record<string, string> => { try { const value = JSON.parse(localStorage.getItem(deletedStorageKey(uid)) || "{}"); return value && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).filter(([id, deletedAt]) => typeof id === "string" && typeof deletedAt === "string")) as Record<string, string> : {}; } catch { return {}; } };
+const saveDeletedIds = (uid: string, deletedIds: Record<string, string>) => { try { localStorage.setItem(deletedStorageKey(uid), JSON.stringify(deletedIds)); } catch { /* storage unavailable */ } };
 
 export function useMarketingHistory() {
   const [entries, setEntries] = useState<MarketingHistoryEntry[]>([]);
@@ -60,7 +64,8 @@ export function useMarketingHistory() {
       const historyQuery = query(collection(getFirestore(), "users", user.uid, "marketingHistory"), orderBy("createdAt", "desc"), limit(200));
       unsubscribeSnapshot = onSnapshot(historyQuery, snapshot => {
         const remote = snapshot.docs.map(item => ({ id: item.id, ...cleanEntry(item.data() as Record<string, unknown>) } as MarketingHistoryEntry));
-        if (remote.length) { setEntries(remote); saveLocal(user.uid, remote); } setLoading(false);
+        const merged = mergeMarketingHistory(readLocal(user.uid), remote, readDeletedIds(user.uid));
+        setEntries(merged); saveLocal(user.uid, merged); setLoading(false);
       }, () => setLoading(false));
     });
     return () => { unsubscribeSnapshot?.(); unsubscribeAuth(); };
@@ -85,12 +90,13 @@ export function useMarketingHistory() {
   }, []);
   const removeEntry = useCallback(async (id: string) => {
     const user = getFirebaseAuth()?.currentUser; if (!user || !id) return;
+    const deletedIds = { ...readDeletedIds(user.uid), [id]: new Date().toISOString() }; saveDeletedIds(user.uid, deletedIds);
     setEntries(current => { const next = current.filter(entry => entry.id !== id); saveLocal(user.uid, next); return next; });
     if (!id.startsWith("local-")) { try { await deleteDoc(doc(getFirestore(), "users", user.uid, "marketingHistory", id)); } catch { /* local removal remains */ } }
   }, []);
   const clearHistory = useCallback(async () => {
     const user = getFirebaseAuth()?.currentUser; if (!user) return;
-    const current = entries; setEntries([]); saveLocal(user.uid, []);
+    const current = entries; const deletedIds = { ...readDeletedIds(user.uid) }; for (const entry of current) deletedIds[entry.id] = new Date().toISOString(); saveDeletedIds(user.uid, deletedIds); setEntries([]); saveLocal(user.uid, []);
     await Promise.allSettled(current.filter(entry => !entry.id.startsWith("local-")).map(entry => deleteDoc(doc(getFirestore(), "users", user.uid, "marketingHistory", entry.id))));
   }, [entries]);
   return { entries, loading, recordAction, updateEntry, removeEntry, clearHistory };
