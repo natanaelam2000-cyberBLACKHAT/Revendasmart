@@ -47,10 +47,13 @@ steps:
       - '--min-instances=0'
       - '--max-instances=10'
       - '--timeout=300s'
-      # Secrets from Secret Manager (format: ENV_VAR=secret-name:latest)
-      - '--set-secrets=MERCADOPAGO_ACCESS_TOKEN=MERCADOPAGO_ACCESS_TOKEN:latest,MERCADOPAGO_CLIENT_ID=MERCADOPAGO_CLIENT_ID:latest,MERCADOPAGO_CLIENT_SECRET=MERCADOPAGO_CLIENT_SECRET:latest,MERCADOPAGO_TOKEN_ENCRYPTION_KEY=MERCADOPAGO_TOKEN_ENCRYPTION_KEY:latest,MERCADOPAGO_WEBHOOK_SECRET=MERCADOPAGO_WEBHOOK_SECRET:latest,FIREBASE_PROJECT_ID=FIREBASE_PROJECT_ID:latest,FIREBASE_CLIENT_EMAIL=FIREBASE_CLIENT_EMAIL:latest,FIREBASE_PRIVATE_KEY=FIREBASE_PRIVATE_KEY:latest'
-      # Non-sensitive env vars (can be plain text)
-      - '--set-env-vars=NODE_ENV=production,PORT=8080,FRONTEND_URL=https://revendasmart.vercel.app,PREMIUM_PRICE_BRL=19.9'
+      # Secrets from Secret Manager (format: ENV_VAR=secret-name:latest). Nomes reais no Secret Manager
+      # usam o prefixo `revendasmart-` em kebab-case (confirmado via `gcloud secrets list` — os nomes
+      # bare uppercase antigos aqui não existiam, o deploy manual falhava com NOT_FOUND/permission denied).
+      - '--set-secrets=MERCADOPAGO_ACCESS_TOKEN=revendasmart-mercadopago-access-token:latest,MERCADOPAGO_CLIENT_ID=revendasmart-mercadopago-client-id:latest,MERCADOPAGO_CLIENT_SECRET=revendasmart-mercadopago-client-secret:latest,MERCADOPAGO_TOKEN_ENCRYPTION_KEY=revendasmart-mercadopago-token-encryption-key:latest,MERCADOPAGO_WEBHOOK_SECRET=revendasmart-mercadopago-webhook-secret:latest,FIREBASE_PROJECT_ID=revendasmart-firebase-project-id:latest,FIREBASE_CLIENT_EMAIL=revendasmart-firebase-client-email:latest,FIREBASE_PRIVATE_KEY=revendasmart-firebase-private-key:latest'
+      # Non-sensitive env vars (can be plain text). PORT é reservado pelo Cloud Run (setado
+      # automaticamente a partir de --port) — incluí-lo aqui faz o deploy falhar.
+      - '--set-env-vars=NODE_ENV=production,FRONTEND_URL=https://revendasmart.vercel.app,PREMIUM_PRICE_BRL=19.9'
       # APP_BASE_URL and MERCADOPAGO_REDIRECT_URI must be updated after first deploy
       # Use a second deploy step or update manually in Cloud Run console
     id: 'deploy-cloud-run'
