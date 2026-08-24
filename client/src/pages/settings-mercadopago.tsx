@@ -9,13 +9,8 @@ import {
   ExternalLink, Shield, Clock, Star, Trash2, ChevronLeft
 } from "lucide-react";
 import { format, formatDistanceToNow, parseISO, ptBR } from "@/lib/date-utils";
-import {
-  useMPConnections,
-  startMPOAuth,
-  revokeMPConnection,
-  setDefaultMPConnection,
-  type MPConnectionSafeView,
-} from "@/hooks/useMPConnections";
+import { useMPConnections, type MPConnectionSafeView } from "@/hooks/useMPConnections";
+import { startMPOAuth, revokeMPConnection, setDefaultMPConnection } from "@/lib/mercadopago-connection-actions";
 
 const STATUS_LABELS: Record<string, string> = {
   active:  "Ativa",
@@ -106,13 +101,13 @@ export default function SettingsMercadoPago() {
     return expiresAt - Date.now() < 60 * 60 * 1000; // Less than 1 hour
   };
 
+  // P1-04: `useMPConnections` lê uma coleção do Firestore antes do primeiro render (espera de rede real,
+  // não instantânea) — trocado o spinner genérico pelo mesmo `PageSkeleton` usado no resto das telas de
+  // configurações, para não ser a única tela billing-adjacent com um loading visualmente diferente.
   if (loading) {
     return (
       <Layout title="Mercado Pago">
-        <div className="flex flex-col items-center justify-center py-12">
-          <div className="w-12 h-12 rounded-full border-4 border-primary/20 border-t-primary animate-spin" />
-          <p className="text-muted-foreground mt-4 text-sm">Carregando conexões...</p>
-        </div>
+        <PageSkeleton variant="settings" />
       </Layout>
     );
   }

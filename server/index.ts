@@ -266,7 +266,7 @@ app.get("/api/readiness", async (req, res) => {
       getFirebaseAdmin();
       checks.firebaseAdmin = "ok";
     }, 500);
-  } catch (error) {
+  } catch {
     logWarn("http.readiness_check_failed", {
       requestId: req.requestId,
       dependency: "firebaseAdmin",
@@ -336,7 +336,13 @@ export const serverReady = (async () => {
     logInfo("server.routes_registered");
 
     app.use("/api", sendApiNotFound);
-    registerErrorHandler();
+
+    // Keep the production/serverless middleware order unchanged. In development,
+    // the error handler must be registered after Vite so transform errors can be
+    // forwarded with next(error) instead of terminating the whole process.
+    if (IS_PRODUCTION || IS_SERVERLESS) {
+      registerErrorHandler();
+    }
 
     if (!IS_SERVERLESS) {
       if (process.env.NODE_ENV === "production") {
@@ -345,6 +351,7 @@ export const serverReady = (async () => {
       } else {
         const { setupVite } = await import("./vite");
         await setupVite(httpServer, app);
+        registerErrorHandler();
         logInfo("server.vite_configured");
       }
 

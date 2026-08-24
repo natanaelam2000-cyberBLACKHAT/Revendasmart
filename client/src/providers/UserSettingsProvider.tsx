@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, type ReactNode } from "react";
+import { useTheme } from "next-themes";
 import { defaultSettings, type AppSettings } from "@/lib/mock-data";
 import { applyAppTheme } from "@/lib/app-themes";
 import {
@@ -19,10 +20,15 @@ const UserSettingsContext = createContext<UserSettingsContextValue | null>(null)
 export function UserSettingsProvider({ children }: { children: ReactNode }) {
   const { settings, loading, error, onboarding_completed } = useUserSettingsSource();
   const resolvedSettings = settings || defaultSettings;
+  // RELEASE-QUALITY-04 §1: applyAppTheme decide o que aplicar olhando pra classe .dark no <html> — mas
+  // só reage a ELA sozinha se algo disparar o efeito de novo. `resolvedTheme` do next-themes garante
+  // que alternar claro/escuro/sistema (sem recarregar nem trocar nenhuma configuração) reaplica o tema
+  // de marca corretamente para o modo novo, em vez de deixar valores inline do modo anterior presos.
+  const { resolvedTheme } = useTheme();
 
   useEffect(() => {
     applyAppTheme(resolvedSettings);
-  }, [resolvedSettings]);
+  }, [resolvedSettings, resolvedTheme]);
 
   const refresh = useCallback(() => {
     invalidateUserSettings();

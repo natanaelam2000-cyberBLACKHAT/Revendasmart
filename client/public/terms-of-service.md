@@ -1,6 +1,6 @@
 # Termos de Serviço — RevendaSmart
 
-**Última atualização:** 31 de março de 2026
+**Última atualização:** 20 de agosto de 2026
 
 ---
 
@@ -23,6 +23,7 @@ RevendaSmart é uma **ferramenta de gerenciamento de catálogo** para revendedor
 - ✅ Cadastrar e gerenciar produtos por tipo de negócio
 - ✅ Compartilhar catálogo público com clientes
 - ✅ Gerar links de pagamento via MercadoPago
+- ✅ Assinar recursos digitais Premium no Android via Google Play
 - ✅ Acompanhar vendas e histórico de clientes
 - ✅ Análise básica de vendas por período
 
@@ -57,7 +58,7 @@ RevendaSmart é uma **ferramenta de gerenciamento de catálogo** para revendedor
 ### 4.1 Conta e Segurança
 - Você é **totalmente responsável** por sua senha e email
 - Não compartilhe suas credenciais
-- Notifique imediatamente qualquer acesso não autorizado: **[support@revendasmart.com]**
+- Notifique imediatamente qualquer acesso não autorizado: **revendasmart.suporte@gmail.com**
 - Você **autoriza qualquer ação feita em sua conta**
 
 ### 4.2 Conteúdo que Você Publica
@@ -208,6 +209,11 @@ RevendaSmart é fornecido "AS IS" (como está), **SEM GARANTIAS DE QUALQUER TIPO
 - Gerenciar saque e extrato de fundos
 - Reportar fraude ao MercadoPago
 
+### Assinaturas Digitais no Android
+- No aplicativo Android distribuído pela Google Play, a assinatura de recursos digitais Premium é processada pela **Google Play**.
+- No web/PWA, cobranças e fluxos compatíveis com pagamento podem usar **Mercado Pago** quando o usuário escolher esse serviço.
+- O cancelamento da renovação de assinatura digital no Android é gerenciado pela própria Google Play.
+
 ---
 
 ## 11. Política de Modificações
@@ -226,29 +232,28 @@ RevendaSmart é fornecido "AS IS" (como está), **SEM GARANTIAS DE QUALQUER TIPO
 
 ## 12. Cancelamento e Exclusão
 
-### Você Pode Deletar Sua Conta A Qualquer Tempo
-1. Abra **Configurações** → **Perfil**
-2. Clique em **Deletar Conta**
-3. Confirme sua senha
-4. **Seus dados serão permanentemente deletados em até 30 dias**
+### Você Pode Solicitar a Exclusão da Conta
+1. Acesse **`/account-deletion`** no aplicativo ou em `https://revendasmart.vercel.app/account-deletion`
+2. Com login ativo, confirme explicitamente a exclusão
+3. Cancele assinaturas que ainda gerem cobranças futuras e desconecte o Mercado Pago, caso o fluxo indique esses bloqueios
+4. Sem acesso à conta, use o contato de suporte; a identidade será verificada antes da exclusão
 
 ### O Que Acontece:
 - ✓ Catálogo fica inacessível
 - ✓ Produtos são removidos
 - ✓ Histórico de clientes/vendas é deletado
-- ✓ Sua conta não pode ser recuperada
+- ✓ Sua conta não pode ser recuperada após a conclusão da exclusão
+- Registros mínimos de segurança e registros mantidos diretamente por provedores podem seguir retenção própria, conforme descrito na Política de Privacidade
 
 ---
 
 ## 13. Suporte & Contato
 
 ### Para Suporte
-E-mail: **[support@revendasmart.com]**  
-Tempo de resposta: 24-72 horas (melhor esforço)
+E-mail: **revendasmart.suporte@gmail.com**
 
 ### Para Relatar Abuso ou Ilegalidade
-E-mail: **[support@revendasmart.com]** com subject: "ABUSO RELATADO"  
-Responderemos em até 24 horas.
+E-mail: **revendasmart.suporte@gmail.com** com assunto: "ABUSO RELATADO"
 
 ---
 
@@ -284,7 +289,7 @@ Verificamos estes termos regularmente. Você é responsável por ficar atualizad
 
 ### Contato
 Para qualquer questão legal ou términos de serviço, envie para:
-**[support@revendasmart.com]**
+**revendasmart.suporte@gmail.com**
 
 ---
 
@@ -298,7 +303,7 @@ Para qualquer questão legal ou términos de serviço, envie para:
 ### 🇧🇷 Brasil (LGPD)
 - Você tem direito a acessar, corrigir, deletar, portar seus dados
 - Pode optar por não receber comunicações automatizadas
-- Contato de DPO: [support@revendasmart.com]
+- Contato de privacidade: revendasmart.suporte@gmail.com
 
 ### 🇪🇺 Europa (GDPR)
 - Direitos aumentados: acesso, retificação, esquecimento, portabilidade, oposição

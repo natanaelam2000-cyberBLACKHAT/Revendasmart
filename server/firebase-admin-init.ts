@@ -10,21 +10,28 @@ export function initializeFirebaseAdmin() {
   const projectId = process.env.FIREBASE_PROJECT_ID;
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
   const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n");
+  const localEmulatorMode = Boolean(
+    projectId?.startsWith("demo-") &&
+    process.env.FIRESTORE_EMULATOR_HOST &&
+    process.env.FIREBASE_AUTH_EMULATOR_HOST
+  );
 
-  if (!projectId || !clientEmail || !privateKey) {
+  if (!projectId || (!localEmulatorMode && (!clientEmail || !privateKey))) {
     throw new Error("Missing Firebase Admin credentials in environment");
   }
 
   try {
     if (!admin.apps.length) {
-      admin.initializeApp({
-        credential: admin.credential.cert({
-          projectId,
-          clientEmail,
-          privateKey,
-        }),
-        projectId,
-      });
+      admin.initializeApp(localEmulatorMode
+        ? { projectId }
+        : {
+            credential: admin.credential.cert({
+              projectId,
+              clientEmail: clientEmail!,
+              privateKey: privateKey!,
+            }),
+            projectId,
+          });
     }
 
     firebaseAdmin = admin;

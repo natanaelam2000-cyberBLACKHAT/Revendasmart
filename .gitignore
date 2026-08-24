@@ -42,3 +42,17 @@ firebase-service-account*.json
 !scripts/security/update-secret-version.sh
 test-results/
 playwright-report/
+
+# Local-only scratch output (never committed) — e.g. script/marketing-pro-provider-benchmark.ts
+.tmp/
+
+# RELEASE-19: worktree consolidation — local-only artifacts that kept showing up as untracked noise.
+# Claude Code harness config (tool permissions, dev-server launch config) — machine/session-local, not
+# product source.
+.claude/
+# Firestore Emulator writes this at the repo root on every local `emulators:exec` run (test:firebase,
+# test:play-billing, etc.) — never product data, never meant to be committed.
+firestore-debug.log
+# script/product-cutout-smoke: local $-budget ledger for real Photoroom API spend during manual testing
+# (script/product-cutout-smoke/ledger.ts) — accumulates per-machine, not deterministic/shareable state.
+script/product-cutout-smoke/spend-ledger.json

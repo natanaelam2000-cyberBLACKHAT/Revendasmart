@@ -1,30 +1,39 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    function isOwner(uid) {
-      return request.auth != null && request.auth.uid == uid;
+    // RELEASE-18 — todos os três paths abaixo (product images, branding, approved cutout) são
+    // SERVER_WRITE_ONLY: `server/uploads.ts` valida magic bytes/dimensões/quota reais (coisa que Storage
+    // Rules nunca conseguem ver — só metadata declarada) e grava via Admin SDK, que ignora estas Rules
+    // por completo. As Rules aqui só precisam garantir que NENHUM client autenticado consiga gravar
+    // direto (create/update/delete) por fora desse caminho — nunca tentar reimplementar magic-byte/quota
+    // aqui. Leitura continua pública nos três: é o mesmo formato de URL que o endpoint devolve
+    // (`buildPublicDownloadUrl`) e o que o catálogo público / Marketing Pro consomem sem token.
+    //
+    // PRO-07K — cutout aprovado tem path canônico próprio, deliberadamente FORA de products/**: Storage
+    // Rules avaliam TODOS os match que casam com um path e permitem se QUALQUER UM permitir (união, não
+    // "o mais específico vence") — um match dentro de products/** herdaria qualquer permissão mais larga
+    // declarada ali, mesmo com uma regra própria mais restrita também presente.
+    match /users/{uid}/product-cutouts/{productId}/cutout-v1.png {
+      allow read: if true;
+      allow write: if false;
     }
 
-    function isValidImageUpload() {
-      return request.resource != null
-        && request.resource.size < 5 * 1024 * 1024
-        && (
-          request.resource.contentType == 'image/jpeg'
-          || request.resource.contentType == 'image/png'
-          || request.resource.contentType == 'image/webp'
-        );
+    // PRO-08 — background gerado pelo provider real, path irmão dedicado (mesmo raciocínio do
+    // product-cutouts acima: nunca aninhar em products/**, que herdaria a regra mais larga por união).
+    // SERVER_WRITE_ONLY: só `server/marketing-pro-background-persistence.ts` grava aqui, via Admin SDK.
+    match /users/{uid}/marketing-pro-backgrounds/{generationId}/{fileName} {
+      allow read: if true;
+      allow write: if false;
     }
 
     match /users/{uid}/products/{allPaths=**} {
       allow read: if true;
-      allow create, update: if isOwner(uid) && isValidImageUpload();
-      allow delete: if isOwner(uid);
+      allow write: if false;
     }
 
     match /users/{uid}/branding/{allPaths=**} {
       allow read: if true;
-      allow create, update: if isOwner(uid) && isValidImageUpload();
-      allow delete: if isOwner(uid);
+      allow write: if false;
     }
 
     match /{allPaths=**} {

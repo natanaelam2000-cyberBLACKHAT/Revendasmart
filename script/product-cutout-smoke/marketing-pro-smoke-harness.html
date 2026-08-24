@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<title>PRO-07G — Premium smoke (Case B)</title>
+<style>
+  body { font-family: system-ui, sans-serif; padding: 16px; background: #111; color: #eee; }
+  pre { white-space: pre-wrap; background: #000; padding: 12px; border-radius: 8px; max-width: 900px; }
+  .canvases { display: flex; gap: 24px; align-items: flex-start; }
+  canvas { border: 1px solid #555; max-width: 320px; }
+  h2 { font-size: 13px; text-transform: uppercase; color: #999; }
+</style>
+</head>
+<body>
+<h1>PRO-07G — Compositor Premium com cutout aprovado (Case B, Coffee Unique)</h1>
+<pre id="log"></pre>
+<div class="canvases">
+  <div><h2>Preview</h2><canvas id="previewCanvas" width="1080" height="1350"></canvas></div>
+  <div><h2>PNG export (mesmo asset + transform)</h2><canvas id="exportCanvas" width="1080" height="1350"></canvas></div>
+</div>
+<script>
+const logEl = document.getElementById("log");
+function log(message) { logEl.textContent += message + "\n"; console.log(message); }
+
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("falha ao carregar " + url));
+    img.src = url;
+  });
+}
+
+/**
+ * §1/REGRAS P0: UMA função de desenho, chamada duas vezes (Preview e PNG) com o MESMO `transform` —
+ * nunca duas implementações. O produto (`cutoutImg`) é desenhado com `ctx.drawImage` usando EXATAMENTE
+ * translateX/translateY/targetWidth/targetHeight do ProductTransform — nunca um valor recalculado ou
+ * aproximado. O fundo é desenhado ANTES, em uma chamada separada — camadas nunca se fundem antes da
+ * composição (nada além do canvas 2D as compõe).
+ */
+function renderPremiumAd(ctx, transform, cutoutImg, overlay) {
+  const W = 1080, H = 1350;
+  ctx.clearRect(0, 0, W, H);
+
+  // Fundo — camada separada, desenhada primeiro (equivalente ao STYLE_VISUALS.luxury do compositor real).
+  const gradient = ctx.createLinearGradient(0, 0, W, H);
+  gradient.addColorStop(0, "#0d1022");
+  gradient.addColorStop(0.55, "#2c1b59");
+  gradient.addColorStop(1, "#090b18");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, W, H);
+
+  // Produto — camada separada, desenhada DEPOIS do fundo, na geometria EXATA do ProductTransform
+  // (uniform-contain, sem crop/stretch/rotate — garantia de tipo do PRO-07B).
+  ctx.drawImage(cutoutImg, transform.translateX, transform.translateY, transform.targetWidth, transform.targetHeight);
+
+  // Overlay comercial mínimo, só para o anúncio ficar "completo" para inspeção humana.
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "900 34px system-ui, sans-serif";
+  ctx.fillText(overlay.storeName, 86, 70);
+
+  ctx.font = "900 54px system-ui, sans-serif";
+  ctx.fillText(overlay.productName, 86, 960);
+  ctx.font = "600 30px system-ui, sans-serif";
+  ctx.fillStyle = "#ded8f4";
+  ctx.fillText(overlay.brand, 86, 1005);
+
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "900 60px system-ui, sans-serif";
+  ctx.fillText(overlay.priceText, 86, 1090);
+
+  ctx.fillStyle = "#f4d58d";
+  const ctaW = 380, ctaH = 90, ctaX = 626, ctaY = 1160;
+  ctx.beginPath();
+  ctx.roundRect(ctaX, ctaY, ctaW, ctaH, 45);
+  ctx.fill();
+  ctx.fillStyle = "#241a05";
+  ctx.font = "900 32px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(overlay.ctaLabel, ctaX + ctaW / 2, ctaY + ctaH / 2 + 11);
+  ctx.textAlign = "left";
+}
+
+async function main() {
+  log("Preparando asset + transform (servidor, Preservation Gate real)...");
+  const prepareResponse = await fetch("/marketing-pro-smoke/prepare", { method: "POST" });
+  const prepared = await prepareResponse.json();
+  if (!prepared.ok) {
+    log("REJEITADO (fail-closed): " + prepared.error);
+    return;
+  }
+  log("asset.assetId = " + prepared.asset.assetId);
+  log("transform = " + JSON.stringify(prepared.transform));
+
+  log("Carregando cutout.png (o MESMO artefato aprovado — nenhum caminho JPEG)...");
+  const cutoutImg = await loadImage("/cutout.png");
+  log(`cutout carregado: ${cutoutImg.naturalWidth}x${cutoutImg.naturalHeight}`);
+
+  const previewCanvas = document.getElementById("previewCanvas");
+  const exportCanvas = document.getElementById("exportCanvas");
+  const previewCtx = previewCanvas.getContext("2d");
+  const exportCtx = exportCanvas.getContext("2d");
+
+  // Preview e PNG: MESMA função, MESMO transform, MESMO asset — só o canvas de destino muda.
+  renderPremiumAd(previewCtx, prepared.transform, cutoutImg, prepared.overlay);
+  renderPremiumAd(exportCtx, prepared.transform, cutoutImg, prepared.overlay);
+  log("Preview e PNG renderizados com o mesmo asset+transform.");
+
+  const blob = await new Promise((resolve) => exportCanvas.toBlob(resolve, "image/png"));
+  log(`premium-ad.png codificado pelo browser: ${blob.size} bytes`);
+  await fetch("/marketing-pro-smoke/save-ad", { method: "POST", headers: { "Content-Type": "image/png" }, body: blob });
+  log("premium-ad.png salvo.");
+
+  await fetch("/marketing-pro-smoke/save-result", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      assetId: prepared.asset.assetId,
+      productId: prepared.asset.productId,
+      sourceWidth: prepared.asset.width,
+      sourceHeight: prepared.asset.height,
+      coordinateSpaceVersion: prepared.asset.coordinateSpaceVersion,
+      transform: prepared.transform,
+      previewUsedSameAssetTransform: true,
+      exportUsedSameAssetTransform: true,
+      backgroundDrawnSeparatelyFromProduct: true,
+      noJpegPathUsedForProduct: true,
+      providerCallsThisRun: 0,
+      outputPath: "premium-ad.png",
+    }),
+  });
+  log("marketing-pro-result.json salvo. DONE.");
+}
+
+main().catch((error) => log("ERRO: " + error.message));
+</script>
+</body>
+</html>

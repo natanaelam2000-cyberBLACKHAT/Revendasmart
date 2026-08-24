@@ -10,6 +10,8 @@
  * - Campos extras são específicos por nicho (sem "validade" em roupas, etc)
  */
 
+import { normalizeProductSearchText } from '@/lib/product-search';
+
 export const NICHO_IDS = [
   'Cosméticos & Perfumes',
   'Roupas',
@@ -477,14 +479,59 @@ export function getMergedCategories(nichoIds: string[]): string[] {
   return result;
 }
 
+function normalizeForNichoMatch(value: string): string {
+  return normalizeProductSearchText(value).replace(/\s+/g, '');
+}
+
+/**
+ * Alias explícito e seguro de categoria: valores legados (singular) que são o mesmo produto
+ * que a categoria canônica atual (plural) em NICHO_CONFIG. Não é uma regra genérica de
+ * singular/plural — só os pares conhecidos, para não afetar nenhuma outra categoria.
+ *
+ * RELEASE-26: "Hidratante" (visto em cadastros antigos) e "Hidratantes" (categoria canônica,
+ * nicho-config.ts) apareciam como dois chips de filtro distintos em Produtos — mesmo produto,
+ * dois rótulos. Nenhum dado é migrado/apagado: o valor salvo continua "Hidratante" no Firestore,
+ * só a leitura/exibição normaliza para o canônico.
+ */
+const CATEGORY_ALIASES: Record<string, string> = {
+  perfume: 'Perfumes',
+  hidratante: 'Hidratantes',
+};
+
+/**
+ * Normaliza um valor de categoria salvo em produto para o rótulo canônico atual.
+ * Usado em toda comparação/agrupamento/filtro por categoria, para que "Perfume" (legado)
+ * e "Perfumes" (canônico) sejam sempre tratados como o mesmo valor — sem exigir migração
+ * dos documentos já salvos no Firestore.
+ */
+export function normalizeProductCategory(category: unknown): string {
+  const trimmed = String(category ?? '').trim().replace(/\s+/g, ' ');
+  if (!trimmed) return trimmed;
+  const key = trimmed.toLocaleLowerCase('pt-BR');
+  return CATEGORY_ALIASES[key] ?? trimmed;
+}
+
 /**
  * Retorna o nicho mais provável com base na categoria do produto
- * Usado quando um produto existente não tem productType salvo
+ * Usado quando um produto existente não tem productType salvo.
+ *
+ * Comparação é normalizada (acentos/maiúsculas/espaços) e tolera singular/plural
+ * simples (ex: "Perfume" salvo antigamente casa com "Perfumes" da config atual),
+ * para não jogar produtos legados em "Geral" por causa de uma diferença trivial de texto.
  */
 export function inferNichoFromCategory(category: string): NichoId {
+  const target = normalizeForNichoMatch(category);
+  if (!target) return 'Geral';
   for (const [nichoId, config] of Object.entries(NICHO_CONFIG)) {
-    if (config.categories.includes(category)) {
-      return nichoId as NichoId;
+    for (const configCategory of config.categories) {
+      const normalizedConfigCategory = normalizeForNichoMatch(configCategory);
+      if (
+        normalizedConfigCategory === target ||
+        normalizedConfigCategory === `${target}s` ||
+        `${normalizedConfigCategory}s` === target
+      ) {
+        return nichoId as NichoId;
+      }
     }
   }
   return 'Geral';

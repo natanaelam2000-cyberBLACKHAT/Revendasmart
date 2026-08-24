@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<title>PRO-07F.4 — Phase 2 harness (Case B)</title>
+<style>
+  body { font-family: system-ui, sans-serif; padding: 16px; background: #111; color: #eee; }
+  pre { white-space: pre-wrap; background: #000; padding: 12px; border-radius: 8px; max-width: 900px; }
+  canvas { border: 1px solid #555; max-width: 320px; image-rendering: pixelated; }
+</style>
+</head>
+<body>
+<h1>PRO-07F.4 — Phase 2 (Case B, real)</h1>
+<p>Decode canônico local (html-image-element / new Image() + Canvas 2D) do source JPEG e da mask.png reais da Photoroom. Nenhuma rede externa — só localhost.</p>
+<pre id="log"></pre>
+<div id="preview"></div>
+<script>
+const logEl = document.getElementById("log");
+function log(message) {
+  logEl.textContent += message + "\n";
+  console.log(message);
+}
+
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("falha ao carregar " + url));
+    img.src = url;
+  });
+}
+
+function decodeToImageData(img) {
+  const canvas = document.createElement("canvas");
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0);
+  return ctx.getImageData(0, 0, canvas.width, canvas.height);
+}
+
+function toBase64(uint8) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < uint8.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, uint8.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function fetchBytes(url) {
+  const response = await fetch(url);
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+async function main() {
+  log("Carregando source.jpg (decode canônico: html-image-element)...");
+  const sourceImg = await loadImage("/source.jpg");
+  log(`source decodificado: ${sourceImg.naturalWidth}x${sourceImg.naturalHeight}`);
+  const sourceData = decodeToImageData(sourceImg); // ImageData.data = RGBA original canônico
+
+  log("Carregando mask.png...");
+  const maskBytes = await fetchBytes("/mask.png");
+  // Mesma lógica do decoder Node (script/product-cutout-smoke/png.ts): colorType 0 = grayscale (o
+  // valor do canal único É a máscara), colorType 6 = RGBA (o canal alpha É a máscara). Lido
+  // diretamente do byte fixo do IHDR (offset 25) — nunca inferido, nunca assumido.
+  const maskColorType = maskBytes[25];
+  const maskImg = await loadImage("/mask.png");
+  log(`mask decodificada: ${maskImg.naturalWidth}x${maskImg.naturalHeight}, colorType=${maskColorType}`);
+  const maskImageData = decodeToImageData(maskImg);
+  const pixelCount = maskImageData.width * maskImageData.height;
+  const maskAlpha = new Uint8ClampedArray(pixelCount);
+  for (let i = 0; i < pixelCount; i += 1) {
+    // colorType 0 (grayscale): sem canal alpha de verdade — R=G=B=valor, A sempre 255. Usa R.
+    // colorType 6 (RGBA): usa o canal alpha de verdade. Nunca usa R/G/B da máscara para o produto.
+    maskAlpha[i] = maskColorType === 0 ? maskImageData.data[i * 4] : maskImageData.data[i * 4 + 3];
+  }
+
+  log("Enviando para /phase2/compose (composeProductCutoutRgba + Pixel Gate reais, em Node)...");
+  const composeResponse = await fetch("/phase2/compose", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sourceWidth: sourceData.width,
+      sourceHeight: sourceData.height,
+      sourceRgbaBase64: toBase64(sourceData.data),
+      maskWidth: maskImageData.width,
+      maskHeight: maskImageData.height,
+      maskAlphaBase64: toBase64(maskAlpha),
+    }),
+  });
+  const composeResult = await composeResponse.json();
+  log("Resultado: " + JSON.stringify({ ...composeResult, cutoutRgbaBase64: composeResult.cutoutRgbaBase64 ? ("<omitido, " + composeResult.cutoutRgbaBase64.length + " chars>") : undefined }, null, 2));
+
+  if (!composeResult.composerAccepted || !composeResult.pixelGateAccepted || composeResult.rgbDifferentPixels !== 0) {
+    log("REJEITADO (fail-closed) — nenhum cutout.png será salvo.");
+    await fetch("/phase2/save-result", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        caseId: "B",
+        sourceWidth: sourceData.width,
+        sourceHeight: sourceData.height,
+        maskWidth: maskImageData.width,
+        maskHeight: maskImageData.height,
+        coordinateSpaceVersion: "product-image-coordinate-space-v1",
+        composerAccepted: composeResult.composerAccepted,
+        pixelGateAccepted: composeResult.pixelGateAccepted,
+        rgbDifferentPixels: composeResult.rgbDifferentPixels,
+        status: "rejected",
+      }),
+    });
+    return;
+  }
+
+  // RGBA final recebido do server (source RGB + alpha do provider) -> canvas -> encode PNG REAL com
+  // alpha via API nativa do browser (canvas.toBlob) — nenhum encoder PNG escrito à mão.
+  const cutoutBytes = Uint8Array.from(atob(composeResult.cutoutRgbaBase64), (c) => c.charCodeAt(0));
+  const cutoutCanvas = document.createElement("canvas");
+  cutoutCanvas.width = sourceData.width;
+  cutoutCanvas.height = sourceData.height;
+  const cutoutCtx = cutoutCanvas.getContext("2d");
+  const cutoutImageData = cutoutCtx.createImageData(sourceData.width, sourceData.height);
+  cutoutImageData.data.set(cutoutBytes);
+  cutoutCtx.putImageData(cutoutImageData, 0, 0);
+  document.getElementById("preview").appendChild(cutoutCanvas);
+
+  const blob = await new Promise((resolve) => cutoutCanvas.toBlob(resolve, "image/png"));
+  log(`cutout.png codificado pelo próprio browser: ${blob.size} bytes`);
+  await fetch("/phase2/save-cutout", { method: "POST", headers: { "Content-Type": "image/png" }, body: blob });
+  log("cutout.png salvo.");
+
+  await fetch("/phase2/save-result", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      caseId: "B",
+      sourceWidth: sourceData.width,
+      sourceHeight: sourceData.height,
+      maskWidth: maskImageData.width,
+      maskHeight: maskImageData.height,
+      coordinateSpaceVersion: "product-image-coordinate-space-v1",
+      composerAccepted: composeResult.composerAccepted,
+      pixelGateAccepted: composeResult.pixelGateAccepted,
+      rgbDifferentPixels: composeResult.rgbDifferentPixels,
+      status: "accepted",
+    }),
+  });
+  log("phase2-result.json salvo. DONE.");
+}
+
+main().catch((error) => log("ERRO: " + error.message));
+</script>
+</body>
+</html>

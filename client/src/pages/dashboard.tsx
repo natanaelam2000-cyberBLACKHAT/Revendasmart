@@ -157,8 +157,8 @@ export default function Dashboard() {
 
   return (
     <Layout>
-      <div className="min-h-full bg-slate-50 pb-28 lg:pb-8">
-        <header className="border-b border-primary/10 bg-gradient-to-br from-primary/8 via-white to-amber-50/60 px-4 py-5 sm:px-6 lg:px-8">
+      <div className="min-h-full bg-background pb-28 lg:pb-8">
+        <header className="border-b border-primary/10 bg-gradient-to-br from-primary/8 via-card to-amber-50/60 dark:to-primary/5 px-4 py-5 sm:px-6 lg:px-8">
           <div className="mx-auto flex max-w-4xl items-center justify-between gap-4">
             <div className="min-w-0 flex-1">
               <p className="text-[11px] font-black uppercase tracking-[0.14em] text-primary">Visão geral</p>
@@ -185,7 +185,7 @@ export default function Dashboard() {
             </section>
           )}
 
-          <SectionCard title="Resumo do período" eyebrow="Resumo executivo">
+          <SectionCard title="Resumo do período" eyebrow="Visão do negócio">
             {hasSales ? (
               <div className="grid grid-cols-2 gap-3" data-testid="home-summary-kpis">
                 <SummaryTile label="Faturamento do mês" value={formatHomeCurrency(home.summary.monthlyRevenue)} detail="Total vendido no mês atual" />
@@ -195,7 +195,7 @@ export default function Dashboard() {
               </div>
             ) : (
               <EmptyState>
-                Ainda não há vendas neste período. Assim que uma venda for registrada, o resumo executivo aparece aqui.
+                Ainda não há vendas neste período. Assim que uma venda for registrada, a visão do negócio aparece aqui.
               </EmptyState>
             )}
           </SectionCard>
@@ -215,8 +215,15 @@ export default function Dashboard() {
                     <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                   </button>
                 ))}
+                {/* RELEASE-26: "Ver tudo" ia para /reports, que não lista prioridades — CTA redundante
+                    com "Ver análise" (Insight principal, também /reports na maioria dos casos) e um
+                    beco sem saída (nenhuma visão de "todas as prioridades" existe lá). Removido em vez
+                    de criar uma página só para isso; o texto abaixo preserva a informação sem prometer
+                    uma navegação que não cumpre o prometido. */}
                 {home.hiddenPriorityCount > 0 && (
-                  <button type="button" onClick={() => setLocation("/reports")} className="mt-2 w-full rounded-2xl border border-primary/20 px-4 py-3 text-xs font-black text-primary">Ver tudo</button>
+                  <p className="mt-2 text-center text-[11px] font-semibold text-muted-foreground" data-testid="text-hidden-priority-count">
+                    +{home.hiddenPriorityCount} outra{home.hiddenPriorityCount === 1 ? "" : "s"} prioridade{home.hiddenPriorityCount === 1 ? "" : "s"}
+                  </p>
                 )}
               </div>
             ) : (

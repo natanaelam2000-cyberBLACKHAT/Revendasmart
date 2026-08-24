@@ -4,6 +4,7 @@ import type {
   ReportIndicators,
   ReportRankings,
 } from "@/lib/report-metrics";
+import { escapeHtmlText, escapeCsvCell } from "@/lib/export-security";
 
 export interface ReportExportPayload {
   storeName: string;
@@ -19,12 +20,6 @@ const currency = (value: number) =>
   value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 const number = (value: number) => value.toLocaleString("pt-BR", { maximumFractionDigits: 1 });
-
-function escapeCsv(value: string | number): string {
-  const text = String(value ?? "");
-  if (/[",\n\r;]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
-  return text;
-}
 
 function downloadTextFile(filename: string, content: string, mimeType: string) {
   const blob = new Blob([content], { type: mimeType });
@@ -60,7 +55,7 @@ function rankingTable(title: string, rows: ReportExportPayload["rankings"]["topS
     ? rows.map((item, index) => `
       <tr>
         <td>${index + 1}</td>
-        <td>${item.label}</td>
+        <td>${escapeHtmlText(item.label)}</td>
         <td>${number(item.quantity)}</td>
         <td>${currency(item.revenue)}</td>
         <td>${currency(item.profit)}</td>
@@ -70,7 +65,7 @@ function rankingTable(title: string, rows: ReportExportPayload["rankings"]["topS
 
   return `
     <section>
-      <h2>${title}</h2>
+      <h2>${escapeHtmlText(title)}</h2>
       <table>
         <thead><tr><th>#</th><th>Nome</th><th>Qtd.</th><th>Receita</th><th>Lucro</th></tr></thead>
         <tbody>${body}</tbody>
@@ -79,7 +74,8 @@ function rankingTable(title: string, rows: ReportExportPayload["rankings"]["topS
   `;
 }
 
-function buildPrintableHtml(payload: ReportExportPayload): string {
+/** Puro (sem DOM) de propósito — permite testar a geração do HTML diretamente, sem `window`/`document`. */
+export function buildPrintableHtml(payload: ReportExportPayload): string {
   const generatedAt = payload.generatedAt.toLocaleString("pt-BR");
   const rows = metricRows(payload).map(([label, value]) => `<tr><td>${label}</td><td>${value}</td></tr>`).join("");
   return `<!doctype html>
@@ -104,9 +100,9 @@ function buildPrintableHtml(payload: ReportExportPayload): string {
     </head>
     <body>
       <header>
-        <h1>${payload.storeName}</h1>
+        <h1>${escapeHtmlText(payload.storeName)}</h1>
         <p>Relatório executivo Revenda Smart</p>
-        <p>Período: ${payload.periodLabel} · Gerado em ${generatedAt}</p>
+        <p>Período: ${escapeHtmlText(payload.periodLabel)} · Gerado em ${escapeHtmlText(generatedAt)}</p>
       </header>
       <section>
         <h2>Resumo financeiro</h2>
@@ -151,31 +147,36 @@ export function printReport(payload: ReportExportPayload): boolean {
   return openPrintableWindow(payload, true);
 }
 
-export function exportReportToExcel(payload: ReportExportPayload): void {
+/** Puro (sem DOM) de propósito — permite testar o conteúdo do CSV diretamente, sem `window`/`document`. */
+export function buildExcelCsvContent(payload: ReportExportPayload): string {
   const lines: string[] = [];
-  lines.push(["Revenda Smart - Relatório Executivo"].map(escapeCsv).join(";"));
-  lines.push(["Loja", payload.storeName].map(escapeCsv).join(";"));
-  lines.push(["Período", payload.periodLabel].map(escapeCsv).join(";"));
-  lines.push(["Gerado em", payload.generatedAt.toLocaleString("pt-BR")].map(escapeCsv).join(";"));
+  lines.push(["Revenda Smart - Relatório Executivo"].map(escapeCsvCell).join(";"));
+  lines.push(["Loja", payload.storeName].map(escapeCsvCell).join(";"));
+  lines.push(["Período", payload.periodLabel].map(escapeCsvCell).join(";"));
+  lines.push(["Gerado em", payload.generatedAt.toLocaleString("pt-BR")].map(escapeCsvCell).join(";"));
   lines.push("");
-  lines.push(["Resumo financeiro"].map(escapeCsv).join(";"));
-  lines.push(["Indicador", "Valor"].map(escapeCsv).join(";"));
-  for (const row of metricRows(payload)) lines.push(row.map(escapeCsv).join(";"));
+  lines.push(["Resumo financeiro"].map(escapeCsvCell).join(";"));
+  lines.push(["Indicador", "Valor"].map(escapeCsvCell).join(";"));
+  for (const row of metricRows(payload)) lines.push(row.map(escapeCsvCell).join(";"));
   lines.push("");
-  lines.push(["Ranking", "Posição", "Nome", "Quantidade", "Receita", "Lucro"].map(escapeCsv).join(";"));
+  lines.push(["Ranking", "Posição", "Nome", "Quantidade", "Receita", "Lucro"].map(escapeCsvCell).join(";"));
   const addRanking = (title: string, rows: ReportExportPayload["rankings"]["topSellingProducts"]) => {
     rows.forEach((item, index) => {
-      lines.push([title, index + 1, item.label, item.quantity, currency(item.revenue), currency(item.profit)].map(escapeCsv).join(";"));
+      lines.push([title, index + 1, item.label, item.quantity, currency(item.revenue), currency(item.profit)].map(escapeCsvCell).join(";"));
     });
   };
   addRanking("Produtos mais vendidos", payload.rankings.topSellingProducts);
   addRanking("Produtos mais lucrativos", payload.rankings.mostProfitableProducts);
   addRanking("Clientes que mais gastaram", payload.rankings.clientsByRevenue);
   lines.push("");
-  lines.push(["Indicadores", "Valor"].map(escapeCsv).join(";"));
-  lines.push(["Quantidade média por venda", number(payload.indicators.averageQuantityPerSale)].map(escapeCsv).join(";"));
-  lines.push(["Valor médio do estoque", currency(payload.indicators.averageInventoryValue)].map(escapeCsv).join(";"));
-  lines.push(["Produtos sem giro", payload.indicators.productsWithoutTurnover.length].map(escapeCsv).join(";"));
-  lines.push(["Produtos críticos", payload.indicators.criticalProducts.length].map(escapeCsv).join(";"));
-  downloadTextFile("relatorio-revendasmart.csv", `\uFEFF${lines.join("\n")}`, "text/csv;charset=utf-8");
+  lines.push(["Indicadores", "Valor"].map(escapeCsvCell).join(";"));
+  lines.push(["Quantidade média por venda", number(payload.indicators.averageQuantityPerSale)].map(escapeCsvCell).join(";"));
+  lines.push(["Valor médio do estoque", currency(payload.indicators.averageInventoryValue)].map(escapeCsvCell).join(";"));
+  lines.push(["Produtos sem giro", payload.indicators.productsWithoutTurnover.length].map(escapeCsvCell).join(";"));
+  lines.push(["Produtos críticos", payload.indicators.criticalProducts.length].map(escapeCsvCell).join(";"));
+  return lines.join("\n");
+}
+
+export function exportReportToExcel(payload: ReportExportPayload): void {
+  downloadTextFile("relatorio-revendasmart.csv", `\uFEFF${buildExcelCsvContent(payload)}`, "text/csv;charset=utf-8");
 }

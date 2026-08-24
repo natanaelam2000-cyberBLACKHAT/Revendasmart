@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
-import { getFirebaseAuth } from "@/lib/firebase";
-import { getFirestore, collection, onSnapshot } from "firebase/firestore";
-import { onAuthStateChanged } from "firebase/auth";
-import { Product } from "@/lib/mock-data";
+import { useProductsData } from "./useProductsData";
+import { useSalesData } from "./useSalesData";
+import { useClientsLiteData } from "./useClientsLiteData";
+import type { Product } from "@/lib/mock-data";
 
 interface DashboardData {
   products: Product[];
@@ -13,105 +12,23 @@ interface DashboardData {
 }
 
 /**
- * Hook to fetch dashboard data directly from Firestore
- * Reads: users/{uid}/products, users/{uid}/sales, users/{uid}/clients
- * Uses onSnapshot for real-time updates
+ * RELEASE-QUALITY-02 §1 — antes deste fix, este hook abria 3 listeners `onSnapshot` próprios
+ * (products/sales/clients), independentes dos que `useProductsData`/`useSalesData`/`useClientsLiteData`
+ * já abrem em outras telas (dashboard, catalog, reports...). Como só o `/admin` usa este hook, isso
+ * significava 3 listeners inteiramente redundantes sempre que o admin estava aberto. Agora ele só
+ * compõe os mesmos hooks compartilhados — se o admin estiver aberto ao mesmo tempo que o dashboard, os
+ * dois reaproveitam a MESMA subscription real por baixo (ver `client/src/lib/shared-subscription.ts`).
  */
 export function useDashboardData(): DashboardData {
-  const [data, setData] = useState<DashboardData>({
-    products: [],
-    sales: [],
-    clients: [],
-    loading: true,
-  });
+  const { products, loading: productsLoading, error: productsError } = useProductsData();
+  const { sales, loading: salesLoading, error: salesError } = useSalesData();
+  const { clients, loading: clientsLoading, error: clientsError } = useClientsLiteData();
 
-  useEffect(() => {
-    const auth = getFirebaseAuth();
-    if (!auth) {
-      setData(prev => ({
-        ...prev,
-        loading: false,
-        error: "Firebase not initialized"
-      }));
-      return;
-    }
-
-    let unsubscribeProducts: (() => void) | undefined;
-    let unsubscribeSales: (() => void) | undefined;
-    let unsubscribeClients: (() => void) | undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-      unsubscribeProducts?.(); unsubscribeSales?.(); unsubscribeClients?.();
-      if (timer) clearTimeout(timer);
-      if (!user) {
-        setData(prev => ({
-          ...prev,
-          products: [],
-          sales: [],
-          clients: [],
-          loading: false,
-          error: "Not authenticated"
-        }));
-        return;
-      }
-
-      const firestore = getFirestore();
-      const uid = user.uid;
-
-      // Subscribe to products
-      unsubscribeProducts = onSnapshot(
-        collection(firestore, "users", uid, "products"),
-        (snapshot) => {
-          const prods = snapshot.docs.map(doc => ({
-            ...doc.data(),
-            id: doc.id
-          } as Product));
-          setData(prev => ({ ...prev, products: prods }));
-        },
-        (err) => {
-          console.error("[useDashboardData] Products error:", err);
-          setData(prev => ({ ...prev, error: "Failed to load products" }));
-        }
-      );
-
-      // Subscribe to sales
-      unsubscribeSales = onSnapshot(
-        collection(firestore, "users", uid, "sales"),
-        (snapshot) => {
-          const salesData = snapshot.docs.map(d => d.data());
-          setData(prev => ({ ...prev, sales: salesData }));
-        },
-        (err) => {
-          console.error("[useDashboardData] Sales error:", err);
-        }
-      );
-
-      // Subscribe to clients
-      unsubscribeClients = onSnapshot(
-        collection(firestore, "users", uid, "clients"),
-        (snapshot) => {
-          const clientsData = snapshot.docs.map(d => d.data());
-          setData(prev => ({ ...prev, clients: clientsData }));
-        },
-        (err) => {
-          console.error("[useDashboardData] Clients error:", err);
-        }
-      );
-
-      // Set loading to false once first batch loaded
-      timer = setTimeout(() => {
-        setData(prev => ({ ...prev, loading: false }));
-      }, 500);
-
-      // Debug logging
-
-    });
-
-    return () => {
-      if (timer) clearTimeout(timer);
-      unsubscribeProducts?.(); unsubscribeSales?.(); unsubscribeClients?.(); unsubscribeAuth();
-    };
-  }, []);
-
-  return data;
+  return {
+    products,
+    sales,
+    clients,
+    loading: productsLoading || salesLoading || clientsLoading,
+    error: productsError || salesError || clientsError,
+  };
 }

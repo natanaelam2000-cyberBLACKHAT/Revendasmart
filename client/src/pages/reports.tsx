@@ -49,6 +49,18 @@ import { notifyError, notifySuccess } from "@/lib/notify";
 
 const COLORS = ["#ec4899", "#f43f5e", "#fb7185", "#fda4af", "#be5363", "#9f4150"];
 
+// RC-04 P0/P1-01 — o tooltip padrão do Recharts usa background branco fixo via inline style da própria
+// lib (não é classe Tailwind, então a regra global `.dark .bg-white` não alcança). `contentStyle` vira
+// inline style de verdade, então usar var(--x) aqui resolve contra o token ativo no momento do hover —
+// acompanha claro/escuro sem precisar recriar o objeto quando o tema muda.
+const RECHARTS_TOOLTIP_STYLE = {
+  backgroundColor: "hsl(var(--card))",
+  borderColor: "hsl(var(--border))",
+  borderRadius: "0.75rem",
+  color: "hsl(var(--foreground))",
+  fontSize: "12px",
+} as const;
+
 const formatCurrency = (value: number) =>
   value.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
 
@@ -124,10 +136,11 @@ function RankingList({ title, icon: Icon, items, valueType }: { title: string; i
 }
 
 export default function Reports() {
-  const { products, loading: productsLoading } = useProductsData();
-  const { sales, loading: salesLoading } = useSalesData();
-  const { clients, loading: clientsLoading } = useClientsLiteData();
+  const { products, loading: productsLoading, error: productsError } = useProductsData();
+  const { sales, loading: salesLoading, error: salesError } = useSalesData();
+  const { clients, loading: clientsLoading, error: clientsError } = useClientsLiteData();
   const loading = productsLoading || salesLoading || clientsLoading;
+  const dataError = productsError || salesError || clientsError;
 
   const summary = useMemo(() => calculateFinancialSummary(sales, products), [sales, products]);
   const rankings = useMemo(() => calculateRanking(sales, products, clients), [sales, products, clients]);
@@ -171,10 +184,24 @@ export default function Reports() {
     );
   }
 
+  // P1-03: antes, uma falha de leitura renderizava os gráficos vazios em silêncio — indistinguível de
+  // "sem dados ainda". Mesmo padrão de erro+retry já usado em dashboard.tsx.
+  if (dataError) {
+    return (
+      <Layout title="Relatórios">
+        <div className="mx-auto max-w-3xl px-4 py-8 text-center">
+          <p className="mb-2 font-bold text-destructive">Ocorreu um erro temporário.</p>
+          <p className="mb-4 text-sm text-muted-foreground">Não foi possível carregar seus relatórios.</p>
+          <button type="button" onClick={() => window.location.reload()} className="rounded-xl bg-primary px-5 py-3 text-sm font-bold text-white">Tentar novamente</button>
+        </div>
+      </Layout>
+    );
+  }
+
   return (
     <Layout title="Relatórios">
       <div className="px-4 sm:px-6 lg:px-8 py-6 pb-32 max-w-7xl mx-auto space-y-6">
-        <section className="rounded-[2rem] border border-primary/10 bg-gradient-to-br from-primary/12 via-white to-rose-50 p-5 sm:p-7 shadow-sm">
+        <section className="rounded-[2rem] border border-primary/10 bg-gradient-to-br from-primary/12 via-card to-rose-50 dark:to-primary/5 p-5 sm:p-7 shadow-sm">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-primary shadow-sm">
@@ -204,7 +231,7 @@ export default function Reports() {
         )}
 
         <section className="space-y-3">
-          <h2 className="text-lg font-black text-foreground">Resumo executivo</h2>
+          <h2 className="text-lg font-black text-foreground">Visão do negócio</h2>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-6">
             <SummaryCard title="Receita hoje" value={formatCurrency(summary.today.revenue)} />
             <SummaryCard title="Receita semana" value={formatCurrency(summary.week.revenue)} />
@@ -253,7 +280,7 @@ export default function Reports() {
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                   <XAxis dataKey="label" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                  <Tooltip formatter={(value: number) => formatCurrency(value)} contentStyle={RECHARTS_TOOLTIP_STYLE} />
                   <Area type="monotone" dataKey="revenue" name="Receita" stroke="#ec4899" fill="url(#revenueGradient)" strokeWidth={3} />
                   <Area type="monotone" dataKey="profit" name="Lucro" stroke="#10b981" fill="url(#profitGradient)" strokeWidth={3} />
                 </AreaChart>
@@ -272,7 +299,7 @@ export default function Reports() {
                   <Pie data={charts.salesByCategory} dataKey="revenue" nameKey="name" innerRadius={46} outerRadius={74} paddingAngle={4}>
                     {charts.salesByCategory.map((entry, index) => <Cell key={entry.name} fill={COLORS[index % COLORS.length]} />)}
                   </Pie>
-                  <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                  <Tooltip formatter={(value: number) => formatCurrency(value)} contentStyle={RECHARTS_TOOLTIP_STYLE} />
                 </PieChart>
               </ResponsiveContainer>
             </div>
@@ -300,7 +327,7 @@ export default function Reports() {
                   <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
                   <XAxis type="number" hide />
                   <YAxis dataKey="name" type="category" width={124} tick={{ fontSize: 10 }} tickFormatter={(value) => String(value).length > 20 ? `${String(value).slice(0, 20)}?` : String(value)} />
-                  <Tooltip formatter={(value: number) => formatCurrency(value)} labelFormatter={(label) => String(label)} />
+                  <Tooltip formatter={(value: number) => formatCurrency(value)} labelFormatter={(label) => String(label)} contentStyle={RECHARTS_TOOLTIP_STYLE} />
                   <Bar dataKey="revenue" name="Receita" fill="#ec4899" radius={[0, 10, 10, 0]} />
                 </BarChart>
               </ResponsiveContainer>

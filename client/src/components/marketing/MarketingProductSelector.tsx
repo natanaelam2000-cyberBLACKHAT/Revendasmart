@@ -46,10 +46,8 @@ export function MarketingProductSelector({
   }[catalogLaunchState];
 
   return (
-    <section className="grid gap-4 rounded-[1.75rem] border border-border/60 bg-white p-4 shadow-sm sm:p-5" data-testid="marketing-product-selector">
+    <section className="grid gap-3" data-testid="marketing-product-selector">
       <div>
-        <p className="text-[10px] font-black uppercase tracking-[.18em] text-primary">1. Escolha o item</p>
-        <h2 className="mt-1 text-base font-black">Produto ou kit</h2>
         <p className="mt-1 text-xs leading-5 text-muted-foreground" role="status" aria-live="polite">
           {catalogMessage}
         </p>

@@ -6,6 +6,12 @@
  */
 
 import { initializeFirebaseAdmin } from "./firebase-admin-init";
+import { maskEmail } from "./logger";
+
+// LGPD §11 (REVENDASMART-LGPD-ANPD-REMEDIATION-01): e-mail e nome de exibição mascarados no stdout —
+// este script imprime no terminal de quem o roda (scrollback/log de CI), nunca deve conter PII crua.
+// UIDs continuam impressos por inteiro de propósito: são o dado que este script existe para produzir
+// (o comando de migração sugerido no final precisa deles completos para funcionar).
 
 const TARGET_EMAIL = "natanaelam2000@gmail.com";
 
@@ -24,7 +30,7 @@ async function auditAllUids(): Promise<void> {
   console.log("\n========================================");
   console.log("  REVENDASMART — UID AUDIT TOOL");
   console.log("========================================");
-  console.log(`Target email: ${TARGET_EMAIL}\n`);
+  console.log(`Target email: ${maskEmail(TARGET_EMAIL)}\n`);
 
   const admin = await initializeFirebaseAdmin();
   const auth = admin.auth();
@@ -38,7 +44,7 @@ async function auditAllUids(): Promise<void> {
     authUid = userRecord.uid;
     console.log(`  ✓ Firebase Auth UID:       ${authUid}`);
     console.log(`  ✓ Email verified:          ${userRecord.emailVerified}`);
-    console.log(`  ✓ Display name:            ${userRecord.displayName || "(none)"}`);
+    console.log(`  ✓ Display name set:        ${userRecord.displayName ? "yes" : "no"}`);
     console.log(`  ✓ Created at:              ${userRecord.metadata.creationTime}`);
     console.log(`  ✓ Last sign-in:            ${userRecord.metadata.lastSignInTime}`);
     console.log(`  ✓ Disabled:                ${userRecord.disabled}`);
@@ -148,7 +154,7 @@ async function auditAllUids(): Promise<void> {
         const snap = await settingsDocRef.get();
         const data = snap.data();
         console.log(`    businessName: ${data?.businessName || "(none)"}`);
-        console.log(`    email in settings: ${data?.email || "(none)"}`);
+        console.log(`    email in settings: ${data?.email ? maskEmail(data.email) : "(none)"}`);
         reports.push({
           uid,
           source: "user_settings only",

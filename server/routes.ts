@@ -3,9 +3,23 @@ import path from "path";
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import { initializeFirebaseAdmin, getFirebaseAdmin } from "./firebase-admin-init";
-import { registerPaymentRoutes } from "./payments";
+import { registerPaymentRoutes, createOrderMercadoPagoCharge, MercadoPagoOrderChargeError } from "./payments";
+import { reserveOrderCharge, releaseOrderChargeReservation, finalizeOrderChargeReservation } from "./public-catalog-order-payment-idempotency";
+import type { Charge } from "../shared/charges";
 import { registerConnectionRoutes } from "./mercadopago-connections";
+import { registerUploadRoutes } from "./uploads";
+import { registerGooglePlayBillingRoutes } from "./google-play-billing";
 import { registerSubscriptionRoutes } from "./subscriptions";
+import { registerMarketingProRoutes, MARKETING_PRO_DEFAULT_PROVIDER_TIMEOUT_MS } from "./marketing-pro";
+import { registerCreativeProfileRoutes } from "./marketing-pro-creative-profile";
+import { registerProductUnderstandingRoutes } from "./marketing-pro-product-understanding";
+import { registerProductCutoutPhotoroomRoutes } from "./product-cutout-photoroom";
+import { registerProductPhotoEnhancementRoutes } from "./product-photo-enhancement-routes";
+import { isMarketingProRealBackgroundEnabled } from "./marketing-pro-flags";
+import { createGoogleMarketingProBackgroundProvider, isGoogleMarketingProCredentialConfigured } from "./marketing-pro-provider-google";
+import { registerAccountDeletionRoutes } from "./account-deletion";
+import { requireAdmin } from "./admin-auth";
+import { registerAdminGrantRoutes, resolveUserEntitlements } from "./admin-grants";
 import { getGlobalConfig, setGlobalConfig } from "./subscriptions";
 import { validateFirebaseStorageSetup } from "./firebase-storage-migration";
 import { logError, logInfo, logWarn } from "./logger";
@@ -13,20 +27,42 @@ import {
   buildPublicCatalogPayload,
   buildPublicCatalogProductPage,
   buildPublicCatalogStore,
+  resolvePublicCatalogPixKey,
+  toPublicCatalogProduct,
   type PublicCatalogSourceProduct,
 } from "./public-catalog";
+import { checkDistributedRateLimit } from "./public-rate-limit-firestore";
+import { finalizeSaleTransaction } from "./sale-finalize-transaction";
+import {
+  calculateOrderTotal,
+  normalizeOrderPhone,
+  resolveOrderPaymentMethod,
+  type Order,
+  type OrderItem,
+  type OrderPaymentProvider,
+  type OrderPaymentStatus,
+} from "../client/src/lib/orders";
+import { finalizeOrderReservation, releaseOrderReservation, reserveOrderCreation } from "./public-catalog-order-idempotency";
 import type {
   PublicCatalogPageResponse,
   PublicCatalogPagination,
   PublicCatalogProduct,
   PublicCatalogResponse,
 } from "../shared/public-catalog";
+import { resolveEffectiveProductPrice } from "../shared/product-pricing";
+import { REFERRAL_REWARD_LIMIT, isReferralCodeFormat } from "../shared/monetization";
+import {
+  CatalogSlugConflictError,
+  InvalidCatalogSlugError,
+  normalizeCatalogSlug,
+  persistUserSettingsWithCatalogOwnership,
+  resolvePublicCatalogSettingsDoc,
+  sanitizePublicSettingsPayload,
+} from "./public-catalog-ownership";
  import crypto from "crypto";
 
-function normalizeCatalogSlug(value: unknown): string {
-  return String(value ?? "").trim().toLowerCase().normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-}
+const LEGACY_REFERRAL_UID_FORMAT = /^[a-zA-Z0-9_-]{10,128}$/;
+
 function escapeHtml(value: unknown): string {
   return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;")
     .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
@@ -51,6 +87,46 @@ function routeWarn(message: string, ...details: unknown[]): void {
 
 function routeLogError(message: string, ...details: unknown[]): void {
   logError("routes.log", undefined, { message, details: normalizeRouteDetails(details) });
+}
+
+function isValidReferralUid(value: unknown): value is string {
+  return typeof value === "string" && LEGACY_REFERRAL_UID_FORMAT.test(value);
+}
+
+type ResolvedReferralSource = {
+  referrerUid: string;
+  via: "code";
+};
+
+async function resolveReferralSource(
+  db: FirebaseFirestore.Firestore,
+  referralSource: unknown,
+  currentUserId: string,
+): Promise<ResolvedReferralSource | { error: "invalid_format" | "self_referral" | "referrer_not_found" }> {
+  if (!isReferralCodeFormat(referralSource)) {
+    return { error: "invalid_format" };
+  }
+
+  const codeDoc = await db.collection("referralCodes").doc(referralSource).get();
+  const referrerUid = codeDoc.exists ? codeDoc.data()?.uid : null;
+  if (!isValidReferralUid(referrerUid)) {
+    return { error: "referrer_not_found" };
+  }
+  if (referrerUid === currentUserId) {
+    return { error: "self_referral" };
+  }
+
+  const [settingsDoc, authUser] = await Promise.allSettled([
+    db.collection("user_settings").doc(referrerUid).get(),
+    getFirebaseAdmin().auth().getUser(referrerUid),
+  ]);
+  const settingsExists = settingsDoc.status === "fulfilled" && settingsDoc.value.exists;
+  const authExists = authUser.status === "fulfilled" && authUser.value.uid === referrerUid;
+  if (!settingsExists && !authExists) {
+    return { error: "referrer_not_found" };
+  }
+
+  return { referrerUid, via: "code" };
 }
 
 const PUBLIC_CATALOG_DEFAULT_LIMIT = 24;
@@ -218,14 +294,16 @@ export function publicCatalogRateLimit(req: Request, res: Response, next: NextFu
 export async function findPublicCatalogSettingsDoc(ref: any, rawSlug: string) {
   const slug = normalizeCatalogSlug(rawSlug);
   if (!slug) return null;
+  const matches = new Map<string, any>();
   const candidates = Array.from(new Set([rawSlug.trim(), slug].filter(Boolean)));
   for (const field of ["catalogSlug", "catalog_slug", "userSlug", "slug"]) {
     for (const candidate of candidates) {
-      const snapshot = await ref.where(field, "==", candidate).limit(1).get();
-      if (!snapshot.empty) return snapshot.docs[0];
+      const snapshot = await ref.where(field, "==", candidate).limit(2).get();
+      for (const doc of snapshot.docs) matches.set(doc.id, doc);
+      if (matches.size > 1) return null;
     }
   }
-  return null;
+  return matches.size === 1 ? matches.values().next().value : null;
 }
 
 // Helper: Structured error response with audit context
@@ -266,7 +344,14 @@ async function requireAuth(req: Request, res: Response, next: NextFunction) {
     }
     const token = authHeader.slice(7);
     const admin = getFirebaseAdmin();
-    const decoded = await admin.auth().verifyIdToken(token);
+    // checkRevoked=true makes disabled/deleted account tokens fail immediately on server APIs.
+    // Firestore/Storage Rules independently consult the deletion tombstone for direct SDK access.
+    const decoded = await admin.auth().verifyIdToken(token, true);
+    const deletionRequest = await admin.firestore().collection("account_deletion_requests").doc(decoded.uid).get();
+    const isDeletionRetry = req.method === "DELETE" && req.path === "/api/account";
+    if (deletionRequest.exists && !isDeletionRetry) {
+      return res.status(403).json({ error: "Forbidden: account deletion is in progress" });
+    }
     (req as any).firebaseUid = decoded.uid;
     next();
   } catch (e) {
@@ -288,43 +373,8 @@ function requireOwnership(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-// Middleware: verify admin role via Firebase custom claims (primary) + fallback for migration
-async function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  const firebaseUid = (req as any).firebaseUid;
-  
-  // MIGRATION: Temporary fallback list (will be removed once all admins have custom claims set)
-  // Set via: firebase auth:set:custom-claims uid --custom-claims '{"admin": true}'
-  const ADMIN_UIDS_LEGACY = new Set([
-    "natanaelam2000@gmail.com",
-  ]);
-  
-  try {
-    const admin = getFirebaseAdmin();
-    
-    // PRIMARY: Check Firebase custom claim (source of truth)
-    const userRecord = await admin.auth().getUser(firebaseUid);
-    const isAdminClaim = userRecord.customClaims?.['admin'] === true;
-    
-    if (isAdminClaim) {
-      routeInfo("[requireAdmin] Access granted via custom claim");
-      next();
-      return;
-    }
-    
-    // FALLBACK: Legacy email check (deprecated, for transition period only)
-    if (ADMIN_UIDS_LEGACY.has(userRecord.email || "")) {
-      routeWarn("[requireAdmin] MIGRATION: Using legacy email check (deprecated) — set custom claim to remove fallback");
-      next();
-      return;
-    }
-    
-    routeWarn("[requireAdmin] Access denied for non-admin user");
-    return res.status(403).json({ error: "Forbidden: admin access required" });
-  } catch (e) {
-    routeLogError("[requireAdmin] Error checking admin status:", e);
-    return res.status(401).json({ error: "Unauthorized: could not verify admin status" });
-  }
-}
+// RELEASE V1 §4.1: `requireAdmin` foi extraído para server/admin-auth.ts — reaproveitado também por
+// marketing-pro.ts (gate de Anúncios Pro) sem criar um segundo mecanismo de admin nem import circular.
 
 // Rate limit map: tracks grant requests per admin (simple in-memory, for production use Redis)
 const grantRateLimitMap = new Map<string, { count: number; resetAt: number }>();
@@ -348,7 +398,6 @@ function checkGrantRateLimit(adminUid: string): boolean {
 }
 
 
-const REFERRAL_REWARD_LIMIT = 3;
 const REFERRAL_RATE_LIMIT_WINDOW_MS = 60_000;
 const REFERRAL_RATE_LIMIT_MAX = 10;
 const referralRateLimitMap = new Map<string, { count: number; resetAt: number }>();
@@ -366,13 +415,30 @@ function checkReferralRateLimit(uid: string, action: "track" | "validate"): bool
   return true;
 }
 
-function isValidReferralUid(value: unknown): value is string {
-  return typeof value === "string" && /^[a-zA-Z0-9_-]{10,128}$/.test(value);
-}
-
 function referralEventId(referrerUid: string, referredUid: string): string {
   return crypto.createHash("sha256").update(`${referrerUid}:${referredUid}`).digest("hex");
 }
+
+// RELEASE-02 — `user_settings.onboarding_completed` continua um booleano que o PRÓPRIO usuário grava
+// (é estado de UX legítimo: qual tela mostrar), e por isso não pode ser, sozinho, o critério que decide
+// se um referral concede Premium — qualquer um pode criar uma conta descartável e fazer um POST direto
+// setando esse campo, sem nunca ter usado o app de verdade ("três UIDs descartáveis podem conceder
+// Premium por referral"). `admin.auth().getUser(uid).metadata.creationTime` é a peça que falta: vem
+// inteiramente do Firebase Auth (o servidor), nunca do body do cliente, e só cresce com o tempo — não
+// tem como um script forjar uma conta "já antiga" na hora em que a cria. Exigir uma idade mínima aqui
+// fecha o cenário determinístico do exploit (farm de N contas descartáveis, tudo em uma única execução
+// de script) sem inventar heurística/anti-fraude: nenhuma pontuação, nenhum sinal comportamental — só
+// uma comparação de timestamp que o cliente não controla. Um atacante paciente disposto a esperar entre
+// cada conta ainda poderia insistir; isso é fricção deliberadamente mínima, não uma solução completa.
+export const MIN_REFERRAL_ACCOUNT_AGE_MS = 30_000;
+
+export function isReferralAccountOldEnough(creationTime: string | undefined | null, now: () => Date = () => new Date()): boolean {
+  if (!creationTime) return false;
+  const createdAtMs = new Date(creationTime).getTime();
+  if (!Number.isFinite(createdAtMs)) return false;
+  return now().getTime() - createdAtMs >= MIN_REFERRAL_ACCOUNT_AGE_MS;
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -385,9 +451,41 @@ export async function registerRoutes(
 
   // Register Mercado Pago connection routes (Caminho B: per-revendedor OAuth)
   registerConnectionRoutes(app, requireAuth);
+  registerUploadRoutes(app, requireAuth);
 
   // Register App Subscription routes (Premium plan billing — isolated from revendedor payments)
   registerSubscriptionRoutes(app, requireAuth);
+
+  // RELEASE-07: Google Play Billing (Android) — entitlement server-owned, mesmo planData/main
+  registerGooglePlayBillingRoutes(app, requireAuth);
+
+  // Register Anúncios Pro routes (PRO-06A: contract + entitlement + idempotência; PRO-08: provider real
+  // de background atrás de flag+credencial; PRO-09: flag também trava em código enquanto o gate
+  // semântico não existir — ver isMarketingProRealBackgroundEnabled). Flag OFF, credencial ausente, ou
+  // gate semântico indisponível mantêm o mock local/seguro.
+  const marketingProRealBackgroundEnabled = isMarketingProRealBackgroundEnabled() && isGoogleMarketingProCredentialConfigured();
+  registerMarketingProRoutes(app, requireAuth, marketingProRealBackgroundEnabled
+    ? { provider: createGoogleMarketingProBackgroundProvider(MARKETING_PRO_DEFAULT_PROVIDER_TIMEOUT_MS), requireCostReservation: true }
+    : {});
+
+  // PRO-10B — Perfil Criativo (SellerCreativeProfile), item 4/4 (o mais fraco) da hierarquia de decisão
+  // do Creative Intelligence — nunca autoridade final, só um insumo a mais para o Creative Director.
+  registerCreativeProfileRoutes(app, requireAuth);
+
+  // PRO-11B — análise visual Gemini opt-in; entitlement e ownership são revalidados na própria rota.
+  registerProductUnderstandingRoutes(app, requireAuth);
+
+  // RELEASE V1 §6 — recorte PhotoRoom real (Premium/admin); entitlement e ownership revalidados na rota.
+  registerProductCutoutPhotoroomRoutes(app, requireAuth);
+
+  // REVENDASMART-OWNER-ACCESS-02 — concessões internas (Tester/Premium+), sempre atrás de requireAdmin.
+  registerAdminGrantRoutes(app, requireAuth);
+
+  // RELEASE V1 §7 — melhoria real de foto (Premium/admin); entitlement e ownership revalidados na rota.
+  registerProductPhotoEnhancementRoutes(app, requireAuth);
+
+  // RELEASE-03: UID is derived exclusively by requireAuth; request bodies never control ownership.
+  registerAccountDeletionRoutes(app, requireAuth);
   // Finalize a manual sale atomically: sale + stock + installment schedule.
   app.post("/api/sales/finalize", requireAuth, async (req, res) => {
     const uid = (req as any).firebaseUid as string;
@@ -429,128 +527,19 @@ export async function registerRoutes(
 
       const admin = getFirebaseAdmin();
       const db = admin.firestore();
-      const userRef = db.collection("users").doc(uid);
-      const saleRef = userRef.collection("sales").doc(saleId);
-      const clientRef = userRef.collection("clients").doc(clientId);
-      const productEntries = Array.from(requestedProducts.entries()).map(([productId, quantity]) => ({
-        productId,
-        quantity,
-        ref: userRef.collection("products").doc(productId),
-      }));
 
-      const result = await db.runTransaction(async (transaction) => {
-        const snapshots = await transaction.getAll(saleRef, clientRef, ...productEntries.map((item) => item.ref));
-        const saleSnapshot = snapshots[0];
-        const clientSnapshot = snapshots[1];
-        const productSnapshots = snapshots.slice(2);
-
-        if (saleSnapshot.exists) throw new Error("SALE_ALREADY_EXISTS");
-        if (!clientSnapshot.exists) throw new Error("CLIENT_NOT_FOUND");
-
-        let subtotalCents = 0;
-        const saleProducts = productEntries.map((item, index) => {
-          const snapshot = productSnapshots[index];
-          if (!snapshot.exists) throw new Error(`PRODUCT_NOT_FOUND:${item.productId}`);
-          const product = snapshot.data() ?? {};
-          const stock = Number(product.stock);
-          const price = Number(product.salePrice);
-          if (!Number.isFinite(stock) || stock < item.quantity) {
-            throw new Error(`INSUFFICIENT_STOCK:${String(product.name ?? item.productId)}`);
-          }
-          if (!Number.isFinite(price) || price < 0) throw new Error(`INVALID_PRODUCT_PRICE:${item.productId}`);
-          const priceCents = Math.round(price * 100);
-          subtotalCents += priceCents * item.quantity;
-          return { productId: item.productId, quantity: item.quantity, price: priceCents / 100, stock };
-        });
-
-        const requestedDiscountCents = discountType === "percent"
-          ? Math.round(subtotalCents * discountValue / 100)
-          : Math.round(discountValue * 100);
-        const discountCents = Math.min(subtotalCents, requestedDiscountCents);
-        const totalCents = subtotalCents - discountCents;
-        const downPaymentCents = Math.round(downPayment * 100);
-        if (downPaymentCents > totalCents) throw new Error("DOWN_PAYMENT_EXCEEDS_TOTAL");
-        const remainingCents = paymentType === "prazo" ? totalCents - downPaymentCents : 0;
-        const now = new Date();
-        const date = now.toISOString();
-
-        const sale = {
-          id: saleId,
-          clientId,
-          products: saleProducts.map((product) => ({
-            productId: product.productId,
-            quantity: product.quantity,
-            price: product.price,
-          })),
-          subtotal: subtotalCents / 100,
-          discountType,
-          discountValue,
-          discountAmount: discountCents / 100,
-          total: totalCents / 100,
-          totalPrice: totalCents / 100,
-          paymentType,
-          legacyPaymentType: paymentType === "avista" ? "cash" : "installments",
-          paymentMethod: paymentType === "avista" ? body.paymentMethod ?? null : null,
-          downPayment: paymentType === "prazo" ? downPaymentCents / 100 : 0,
-          downPaymentMethod: paymentType === "prazo" && downPaymentCents > 0 ? body.downPaymentMethod ?? null : null,
-          installments: paymentType === "prazo" ? installmentCount : 0,
-          date,
-        };
-        transaction.create(saleRef, sale);
-
-        for (let index = 0; index < productEntries.length; index += 1) {
-          const item = productEntries[index];
-          const saleProduct = saleProducts[index];
-          transaction.update(item.ref, {
-            stock: saleProduct.stock - item.quantity,
-            lastSoldDate: date,
-          });
-        }
-
-        const installmentIds = [];
-        if (remainingCents > 0) {
-          const baseAmountCents = Math.floor(remainingCents / installmentCount);
-          let allocatedCents = 0;
-          for (let index = 0; index < installmentCount; index += 1) {
-            const amountCents = index === installmentCount - 1
-              ? remainingCents - allocatedCents
-              : baseAmountCents;
-            allocatedCents += amountCents;
-            const installmentId = `${saleId}-${String(index + 1).padStart(2, "0")}`;
-            const dueDate = new Date(now);
-            const dueDay = dueDate.getUTCDate();
-            dueDate.setUTCDate(1);
-            dueDate.setUTCMonth(dueDate.getUTCMonth() + index + 1);
-            const lastDayOfMonth = new Date(Date.UTC(
-              dueDate.getUTCFullYear(), dueDate.getUTCMonth() + 1, 0,
-            )).getUTCDate();
-            dueDate.setUTCDate(Math.min(dueDay, lastDayOfMonth));
-            transaction.create(userRef.collection("installments").doc(installmentId), {
-              id: installmentId,
-              saleId,
-              clientId,
-              amount: amountCents / 100,
-              dueDate: dueDate.toISOString(),
-              status: "pending",
-              paidAmount: 0,
-              installmentNumber: index + 1,
-              totalInstallments: installmentCount,
-              createdAt: date,
-            });
-            installmentIds.push(installmentId);
-          }
-        }
-
-        return {
-          saleId,
-          subtotal: subtotalCents / 100,
-          total: totalCents / 100,
-          remainingBalance: remainingCents / 100,
-          installmentIds,
-          depletedProductIds: saleProducts
-            .filter((product, index) => product.stock - productEntries[index].quantity === 0)
-            .map((product) => product.productId),
-        };
+      const result = await finalizeSaleTransaction(db, {
+        uid,
+        saleId,
+        clientId,
+        products: Array.from(requestedProducts.entries()).map(([productId, quantity]) => ({ productId, quantity })),
+        paymentType,
+        discountType,
+        discountValue,
+        downPayment,
+        installmentCount,
+        paymentMethod: body.paymentMethod,
+        downPaymentMethod: body.downPaymentMethod,
       });
 
       return res.status(201).json(result);
@@ -575,21 +564,34 @@ export async function registerRoutes(
     }
   });
 
+  // Catálogo público mostra "Cartão" só quando o lojista tem Mercado Pago realmente ativo — nunca
+  // expõe qual/quantas conexões existem, só o booleano derivado (mesmo padrão de
+  // settings-mercadopago.tsx: connections.filter(c => c.status === "active")).
+  const hasActiveMercadoPagoConnection = async (db: FirebaseFirestore.Firestore, uid: string): Promise<boolean> => {
+    const snapshot = await db
+      .collection("users").doc(uid)
+      .collection("mercadopago_connections")
+      .where("status", "==", "active")
+      .limit(1)
+      .get();
+    return !snapshot.empty;
+  };
+
   const loadPublicCatalogSettings = async (rawSlug: string) => {
     const db = getFirebaseAdmin().firestore();
     const slug = normalizeCatalogSlug(rawSlug);
     if (!slug) return null;
-    const settingsDoc = await findPublicCatalogSettingsDoc(db.collection("user_settings"), rawSlug);
+    const settingsDoc = await resolvePublicCatalogSettingsDoc(db, rawSlug);
     if (!settingsDoc) return null;
     const settings = settingsDoc.data() ?? {};
     const catalogEnabled = settings.enablePublicCatalog ?? settings.catalogEnabled ?? settings.catalog_enabled ?? true;
     if (catalogEnabled === false || settings.disablePublicCatalog === true) return null;
-    const uid = settings.uid || settingsDoc.id;
+    const cardAvailable = await hasActiveMercadoPagoConnection(db, settingsDoc.id);
     return {
-      uid,
+      uid: settingsDoc.id,
       slug,
       settings,
-      store: buildPublicCatalogStore(settings, slug),
+      store: buildPublicCatalogStore(settings, slug, cardAvailable),
     };
   };
 
@@ -719,6 +721,7 @@ export async function registerRoutes(
       products: input.products,
       sales: input.sales,
       now: new Date(),
+      cardAvailable: catalogSettings.store.cardAvailable,
     });
     const page = paginatePublicCatalogProducts({
       products: payload.products,
@@ -764,6 +767,382 @@ export async function registerRoutes(
       return res.json(page);
     } catch (error) {
       return errorResponse(res, 503, "CATALOG_PRODUCTS_TEMPORARILY_UNAVAILABLE", error instanceof Error ? error.message : "Unknown error");
+    }
+  });
+
+  // LGPD §7 (REVENDASMART-LGPD-ANPD-REMEDIATION-01): a chave Pix do lojista (frequentemente um
+  // CPF/telefone/e-mail) não vai mais na carga inicial do catálogo, que qualquer visitante recebe só
+  // de abrir a URL. Fica atrás deste endpoint dedicado, chamado pelo cliente só quando o comprador
+  // efetivamente abre a etapa de pagamento por Pix — reduz a exposição sem remover a funcionalidade.
+  app.get("/api/public/catalog/:storeSlug/pix-key", publicCatalogRateLimit, async (req, res) => {
+    try {
+      const catalogSettings = await loadPublicCatalogSettings(getRouteParam(req, "storeSlug"));
+      if (!catalogSettings) return res.status(404).json({ error: "CATALOG_NOT_FOUND" });
+      const pixKey = resolvePublicCatalogPixKey(catalogSettings.settings);
+      if (!pixKey) return res.status(404).json({ error: "PIX_KEY_NOT_CONFIGURED" });
+      res.setHeader("Cache-Control", "no-store");
+      return res.json({ pixKey });
+    } catch (error) {
+      return errorResponse(res, 503, "CATALOG_PIX_KEY_TEMPORARILY_UNAVAILABLE", error instanceof Error ? error.message : "Unknown error");
+    }
+  });
+
+  const PUBLIC_ORDER_MAX_ITEMS = 50;
+  const PUBLIC_ORDER_MAX_QUANTITY_PER_ITEM = 999;
+  // Só o charset seguro para virar ID de documento Firestore — o cliente gera este valor
+  // (crypto.randomUUID() ou um fallback com timestamp), nunca deve ser confiado sem validar.
+  const PUBLIC_ORDER_CLIENT_ORDER_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
+  interface CreatePublicOrderBody {
+    clientOrderId?: unknown;
+    clientName?: unknown;
+    clientPhone?: unknown;
+    paymentMethod?: unknown;
+    items?: unknown;
+  }
+
+  // POST /api/public/catalog/:storeSlug/orders — cria o pedido no servidor a partir do fechamento do
+  // carrinho público. Não autenticado (o visitante não tem conta), mas toda escrita usa o Admin SDK —
+  // nenhum dado do carrinho é gravado direto pelo cliente, e preço/estoque são sempre recalculados
+  // aqui a partir do catálogo real, nunca aceitos do corpo da requisição.
+  app.post("/api/public/catalog/:storeSlug/orders", publicCatalogRateLimit, async (req, res) => {
+    try {
+      // LGPD/segurança (REVENDASMART-LGPD-ANPD-REMEDIATION-01, Fase 10): camada extra Firestore-backed,
+      // distribuída de verdade entre instâncias do Cloud Run — não substitui o middleware acima (que
+      // continua barato/rápido para o caso comum), mas garante um teto real de abuso financeiro mesmo
+      // sob escala horizontal, já que criar pedido é uma escrita com efeito de negócio, não uma leitura
+      // cacheada pela CDN.
+      const distributedKey = `order:${getPublicCatalogClientKey(req)}:${getRouteParam(req, "storeSlug")}`;
+      const distributedDecision = await checkDistributedRateLimit(
+        getFirebaseAdmin().firestore(),
+        distributedKey,
+        { windowMs: 60_000, max: 20 },
+      );
+      if (!distributedDecision.allowed) {
+        res.setHeader("Retry-After", String(distributedDecision.retryAfterSeconds));
+        return res.status(429).json({ error: "CATALOG_RATE_LIMITED" });
+      }
+
+      const catalogSettings = await loadPublicCatalogSettings(getRouteParam(req, "storeSlug"));
+      if (!catalogSettings) return res.status(404).json({ error: "CATALOG_NOT_FOUND" });
+      if (catalogSettings.store.allowWhatsappOrders === false) {
+        return errorResponse(res, 403, "ORDERS_DISABLED", "Esta loja não está recebendo pedidos no momento.");
+      }
+
+      const body = (req.body ?? {}) as CreatePublicOrderBody;
+      const clientOrderId = typeof body.clientOrderId === "string" ? body.clientOrderId.trim().slice(0, 128) : "";
+      if (!clientOrderId || !PUBLIC_ORDER_CLIENT_ORDER_ID_PATTERN.test(clientOrderId)) {
+        return errorResponse(res, 400, "INVALID_CLIENT_ORDER_ID", "clientOrderId é obrigatório e precisa ser um identificador simples (letras, números, - e _).");
+      }
+
+      const paymentMethod = resolveOrderPaymentMethod(body.paymentMethod);
+      if (!paymentMethod) return errorResponse(res, 400, "INVALID_PAYMENT_METHOD", "Forma de pagamento inválida.");
+      if (paymentMethod === "pix" && !catalogSettings.store.pixAvailable) {
+        return errorResponse(res, 400, "PIX_NOT_CONFIGURED", "Esta loja não tem chave Pix cadastrada.");
+      }
+      if (paymentMethod === "card" && !catalogSettings.store.cardAvailable) {
+        return errorResponse(res, 400, "CARD_NOT_AVAILABLE", "Pagamento por cartão indisponível para esta loja.");
+      }
+
+      const rawItems = Array.isArray(body.items) ? body.items : [];
+      if (rawItems.length === 0 || rawItems.length > PUBLIC_ORDER_MAX_ITEMS) {
+        return errorResponse(res, 400, "INVALID_ITEMS", "O pedido precisa ter entre 1 e 50 itens.");
+      }
+      const requestedItems: { productId: string; quantity: number }[] = [];
+      for (const raw of rawItems) {
+        const item = (raw ?? {}) as { productId?: unknown; quantity?: unknown };
+        const productId = typeof item.productId === "string" ? item.productId.trim() : "";
+        const quantity = Number(item.quantity);
+        if (!productId || !Number.isInteger(quantity) || quantity <= 0 || quantity > PUBLIC_ORDER_MAX_QUANTITY_PER_ITEM) {
+          return errorResponse(res, 400, "INVALID_ITEM", "Um item do pedido é inválido.");
+        }
+        requestedItems.push({ productId, quantity });
+      }
+
+      const uid = catalogSettings.uid;
+      const db = getFirebaseAdmin().firestore();
+      const ordersRef = db.collection("users").doc(uid).collection("orders");
+      // RELEASE-CHECKOUT-02 §1: query→write tinha uma janela de corrida (duas requisições concorrentes
+      // podiam ambas ver "não existe" e criar dois pedidos). `reserveOrderCreation` usa uma Firestore
+      // transaction (mesmo padrão de `reserveGeneration` em product-cutout-photoroom.ts): só uma das
+      // requisições concorrentes consegue criar o documento de reserva; a outra vê `alreadyExisted` e
+      // devolve o pedido já reservado/criado em vez de duplicar.
+      const reservation = await reserveOrderCreation(db, uid, clientOrderId);
+      const orderRef = ordersRef.doc(reservation.orderId);
+      const nowIso = new Date().toISOString();
+
+      if (reservation.alreadyExisted) {
+        if (reservation.status === "pending") {
+          // Concorrência real: outra requisição com o MESMO clientOrderId está no meio do processamento
+          // agora — nunca cria uma segunda tentativa em paralelo, o cliente deve tentar de novo.
+          return errorResponse(res, 409, "ORDER_CREATE_IN_PROGRESS", "Este pedido já está sendo processado. Tente novamente em instantes.");
+        }
+        const existingSnap = await orderRef.get();
+        if (existingSnap.exists) {
+          return res.status(200).json({ order: existingSnap.data() as Order, reused: true });
+        }
+        return errorResponse(res, 500, "ORDER_STATE_INCONSISTENT", "Não foi possível recuperar o pedido já criado.");
+      }
+
+      // A partir daqui, a reserva atômica já existe (status "pending"). Qualquer saída — sucesso ou
+      // erro — precisa passar por releaseReservation() para nunca deixar um clientOrderId travado
+      // permanentemente em "pending" (o que faria um retry legítimo receber 409 para sempre).
+      const releaseReservation = () => releaseOrderReservation(db, uid, clientOrderId);
+
+      const productDocs = await Promise.all(
+        requestedItems.map((item) => db.collection("users").doc(uid).collection("products").doc(item.productId).get())
+      );
+
+      const orderItems: OrderItem[] = [];
+      for (let i = 0; i < requestedItems.length; i++) {
+        const doc = productDocs[i];
+        const requested = requestedItems[i];
+        if (!doc.exists) {
+          await releaseReservation();
+          return errorResponse(res, 409, "ORDER_ITEM_UNAVAILABLE", "Um produto do pedido não está mais disponível.", { productId: requested.productId });
+        }
+        const product = toPublicCatalogProduct(doc.id, doc.data() ?? {});
+        if (!product || product.available === false || product.availableQuantity <= 0) {
+          await releaseReservation();
+          return errorResponse(res, 409, "ORDER_ITEM_UNAVAILABLE", "Um produto do pedido não está mais disponível.", { productId: requested.productId });
+        }
+        if (requested.quantity > product.availableQuantity) {
+          await releaseReservation();
+          return errorResponse(res, 409, "ORDER_ITEM_INSUFFICIENT_STOCK", "Estoque insuficiente para um item do pedido.", { productId: requested.productId, available: product.availableQuantity });
+        }
+        let unitPrice: number;
+        try {
+          unitPrice = resolveEffectiveProductPrice(product).effectivePrice;
+        } catch {
+          await releaseReservation();
+          return errorResponse(res, 409, "ORDER_ITEM_UNAVAILABLE", "Um produto do pedido está com preço inválido.", { productId: requested.productId });
+        }
+        orderItems.push({
+          productId: product.id,
+          name: product.name,
+          quantity: requested.quantity,
+          unitPrice,
+          ...(product.imageUrl ? { imageUrl: product.imageUrl } : {}),
+        });
+      }
+
+      const total = calculateOrderTotal(orderItems);
+      const clientName = typeof body.clientName === "string" ? body.clientName.trim().slice(0, 140) : "";
+      const clientPhone = normalizeOrderPhone(body.clientPhone);
+
+      const paymentProvider: OrderPaymentProvider = paymentMethod === "pix" ? "manual_pix" : paymentMethod === "card" ? "mercadopago" : "manual_whatsapp";
+      const paymentStatus: OrderPaymentStatus = paymentMethod === "whatsapp" ? "not_started" : "awaiting_customer_payment";
+
+      const order: Order = {
+        id: orderRef.id,
+        clientId: "public-catalog",
+        clientName: clientName || "Cliente do catálogo",
+        status: "new",
+        items: orderItems,
+        total,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        ...(clientPhone ? { clientPhone } : {}),
+        ...(catalogSettings.store.name ? { storeName: catalogSettings.store.name } : {}),
+        paymentMethod,
+        paymentProvider,
+        paymentStatus,
+        clientOrderId,
+      };
+
+      try {
+        // create() (não set()): defesa extra — se por algum motivo o orderId já existisse (não deveria,
+        // já que orderRef.id veio de um auto-ID novo dentro da transaction), falha em vez de sobrescrever.
+        await orderRef.create(order);
+      } catch (writeError) {
+        await releaseReservation();
+        throw writeError;
+      }
+      await finalizeOrderReservation(db, uid, clientOrderId, orderRef.id);
+      return res.status(201).json({ order, reused: false });
+    } catch (error) {
+      return errorResponse(res, 500, "ORDER_CREATE_FAILED", error instanceof Error ? error.message : "Unknown error");
+    }
+  });
+
+  // PATCH /api/public/catalog/:storeSlug/orders/:orderId/mark-paid-by-customer — o cliente relata que
+  // já pagou (Pix manual). NUNCA vira "paid" aqui — isso é uma alegação, só o lojista (ou um webhook
+  // real do Mercado Pago, fora deste endpoint) confirma o recebimento de fato (doc §4.4).
+  app.patch("/api/public/catalog/:storeSlug/orders/:orderId/mark-paid-by-customer", publicCatalogRateLimit, async (req, res) => {
+    try {
+      const catalogSettings = await loadPublicCatalogSettings(getRouteParam(req, "storeSlug"));
+      if (!catalogSettings) return res.status(404).json({ error: "CATALOG_NOT_FOUND" });
+
+      const orderId = getRouteParam(req, "orderId");
+      const body = (req.body ?? {}) as { clientOrderId?: unknown };
+      const clientOrderId = typeof body.clientOrderId === "string" ? body.clientOrderId.trim() : "";
+      if (!orderId || !clientOrderId) return errorResponse(res, 400, "MISSING_FIELDS", "orderId e clientOrderId são obrigatórios.");
+
+      const db = getFirebaseAdmin().firestore();
+      const orderRef = db.collection("users").doc(catalogSettings.uid).collection("orders").doc(orderId);
+      const snapshot = await orderRef.get();
+      if (!snapshot.exists) return errorResponse(res, 404, "ORDER_NOT_FOUND", "Pedido não encontrado.");
+
+      const order = snapshot.data() as Order;
+      // clientOrderId funciona como o "bearer" de quem criou o pedido — só quem recebeu esse valor na
+      // criação (o próprio navegador do cliente) consegue reportar pagamento para ele.
+      if (order.clientOrderId !== clientOrderId) {
+        return errorResponse(res, 403, "ORDER_TOKEN_MISMATCH", "Não foi possível identificar este pedido.");
+      }
+
+      if (order.paymentStatus === "customer_reported_paid" || order.paymentStatus === "paid") {
+        return res.status(200).json({ order, alreadyReported: true });
+      }
+      if (order.paymentStatus !== "awaiting_customer_payment") {
+        return errorResponse(res, 409, "INVALID_PAYMENT_TRANSITION", "Este pedido não está aguardando pagamento.");
+      }
+
+      const updatedAt = new Date().toISOString();
+      await orderRef.set({ paymentStatus: "customer_reported_paid", updatedAt }, { merge: true });
+      return res.status(200).json({ order: { ...order, paymentStatus: "customer_reported_paid", updatedAt }, alreadyReported: false });
+    } catch (error) {
+      return errorResponse(res, 500, "ORDER_MARK_PAID_FAILED", error instanceof Error ? error.message : "Unknown error");
+    }
+  });
+
+  // POST /api/orders/:orderId/confirm-payment — o LOJISTA (autenticado, dono do pedido) confirma que o
+  // pagamento realmente caiu. É a única rota que transiciona paymentStatus para "paid" fora de um
+  // webhook real do Mercado Pago.
+  app.post("/api/orders/:orderId/confirm-payment", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const uid = (req as any).firebaseUid as string;
+      const orderId = getRouteParam(req, "orderId");
+      if (!orderId) return errorResponse(res, 400, "MISSING_ORDER_ID", "orderId é obrigatório.");
+
+      const db = getFirebaseAdmin().firestore();
+      const orderRef = db.collection("users").doc(uid).collection("orders").doc(orderId);
+      const snapshot = await orderRef.get();
+      if (!snapshot.exists) return errorResponse(res, 404, "ORDER_NOT_FOUND", "Pedido não encontrado.");
+
+      const order = snapshot.data() as Order;
+      if (order.paymentStatus === "paid") {
+        return res.status(200).json({ order, alreadyConfirmed: true });
+      }
+      if (order.paymentStatus !== "customer_reported_paid" && order.paymentStatus !== "awaiting_customer_payment") {
+        return errorResponse(res, 409, "INVALID_PAYMENT_TRANSITION", "Este pedido não pode ser confirmado neste estado.");
+      }
+
+      const updatedAt = new Date().toISOString();
+      await orderRef.set({ paymentStatus: "paid", updatedAt }, { merge: true });
+      return res.status(200).json({ order: { ...order, paymentStatus: "paid", updatedAt }, alreadyConfirmed: false });
+    } catch (error) {
+      return errorResponse(res, 500, "ORDER_CONFIRM_PAYMENT_FAILED", error instanceof Error ? error.message : "Unknown error");
+    }
+  });
+
+  // POST /api/public/catalog/:storeSlug/orders/:orderId/payment/mercadopago — RELEASE-CHECKOUT-03 §3.
+  // Cria (ou devolve, se já existir) uma cobrança Mercado Pago real vinculada ao pedido. Não autenticado
+  // (o comprador não tem conta) — toda decisão de segurança é resolvida aqui, nunca aceita do corpo:
+  // vendedor vem do storeSlug, total vem do pedido já persistido, token MP nunca sai do servidor.
+  app.post("/api/public/catalog/:storeSlug/orders/:orderId/payment/mercadopago", publicCatalogRateLimit, async (req, res) => {
+    try {
+      // LGPD/segurança (REVENDASMART-LGPD-ANPD-REMEDIATION-01, Fase 10): mesma camada distribuída da
+      // criação de pedido — este endpoint cria uma cobrança real no Mercado Pago, o alvo de maior valor
+      // para abuso entre os endpoints públicos.
+      const distributedKey = `mp-charge:${getPublicCatalogClientKey(req)}:${getRouteParam(req, "storeSlug")}`;
+      const distributedDecision = await checkDistributedRateLimit(
+        getFirebaseAdmin().firestore(),
+        distributedKey,
+        { windowMs: 60_000, max: 20 },
+      );
+      if (!distributedDecision.allowed) {
+        res.setHeader("Retry-After", String(distributedDecision.retryAfterSeconds));
+        return res.status(429).json({ error: "CATALOG_RATE_LIMITED" });
+      }
+
+      const catalogSettings = await loadPublicCatalogSettings(getRouteParam(req, "storeSlug"));
+      if (!catalogSettings) return res.status(404).json({ error: "CATALOG_NOT_FOUND" });
+      if (!catalogSettings.store.cardAvailable) {
+        return errorResponse(res, 403, "CARD_NOT_AVAILABLE", "Pagamento por cartão indisponível para esta loja.");
+      }
+
+      const orderId = getRouteParam(req, "orderId");
+      if (!orderId) return errorResponse(res, 400, "MISSING_ORDER_ID", "orderId é obrigatório.");
+
+      const uid = catalogSettings.uid;
+      const db = getFirebaseAdmin().firestore();
+      const orderRef = db.collection("users").doc(uid).collection("orders").doc(orderId);
+      const orderSnap = await orderRef.get();
+      if (!orderSnap.exists) return errorResponse(res, 404, "ORDER_NOT_FOUND", "Pedido não encontrado.");
+      const order = orderSnap.data() as Order;
+
+      if (order.paymentStatus === "paid") {
+        return errorResponse(res, 409, "ORDER_ALREADY_PAID", "Este pedido já foi pago.");
+      }
+      if (order.paymentStatus === "cancelled" || order.paymentStatus === "failed") {
+        return errorResponse(res, 409, "ORDER_NOT_PAYABLE", "Este pedido não pode mais ser pago.");
+      }
+
+      // Mesma reserva atômica de §1 (RELEASE-CHECKOUT-02), agora chaveada por orderId: garante UMA
+      // cobrança por pedido mesmo sob duplo clique/retry concorrente (§11-F).
+      const reservation = await reserveOrderCharge(db, uid, orderId);
+      if (reservation.alreadyExisted) {
+        if (reservation.status === "pending") {
+          return errorResponse(res, 409, "CHARGE_CREATE_IN_PROGRESS", "Uma cobrança para este pedido já está sendo criada. Tente novamente em instantes.");
+        }
+        const existingCharge = await db.collection("users").doc(uid).collection("charges").doc(reservation.chargeId).get();
+        if (existingCharge.exists) {
+          const data = existingCharge.data() as Charge;
+          return res.status(200).json({ chargeId: data.id, paymentUrl: data.paymentUrl, preferenceId: data.preferenceId ?? "", reused: true });
+        }
+        return errorResponse(res, 500, "CHARGE_STATE_INCONSISTENT", "Não foi possível recuperar a cobrança já criada.");
+      }
+
+      try {
+        const itemsSummary = order.items.length === 1 ? order.items[0].name : `${order.items.length} itens`;
+        const result = await createOrderMercadoPagoCharge({
+          uid,
+          chargeId: reservation.chargeId,
+          orderId,
+          amount: order.total,
+          title: `Pedido ${itemsSummary} - ${catalogSettings.store.name}`.slice(0, 250),
+          storeSlug: catalogSettings.slug,
+        });
+        await finalizeOrderChargeReservation(db, uid, orderId, reservation.chargeId);
+        return res.status(201).json({ chargeId: result.chargeId, paymentUrl: result.paymentUrl, preferenceId: result.preferenceId, reused: false });
+      } catch (error) {
+        // §9: nunca deixa uma reserva travada por causa de uma falha do provider — o pedido continua
+        // criado, o cliente pode tentar de novo ou escolher Pix/WhatsApp.
+        await releaseOrderChargeReservation(db, uid, orderId);
+        if (error instanceof MercadoPagoOrderChargeError) {
+          return errorResponse(res, error.httpStatus, error.code, error.userMessage);
+        }
+        throw error;
+      }
+    } catch (error) {
+      return errorResponse(res, 500, "ORDER_PAYMENT_FAILED", error instanceof Error ? error.message : "Unknown error");
+    }
+  });
+
+  // GET /api/public/catalog/:storeSlug/orders/:orderId/status — §7. A tela pós-redirect do Mercado
+  // Pago nunca confia no query param `payment=success/pending/failure` (o browser não é autoridade) —
+  // só neste status vindo do servidor. Payload mínimo: sem clientPhone/clientOrderId/itens, só o
+  // necessário para a UI decidir o que mostrar.
+  app.get("/api/public/catalog/:storeSlug/orders/:orderId/status", publicCatalogRateLimit, async (req, res) => {
+    try {
+      const catalogSettings = await loadPublicCatalogSettings(getRouteParam(req, "storeSlug"));
+      if (!catalogSettings) return res.status(404).json({ error: "CATALOG_NOT_FOUND" });
+
+      const orderId = getRouteParam(req, "orderId");
+      if (!orderId) return errorResponse(res, 400, "MISSING_ORDER_ID", "orderId é obrigatório.");
+
+      const db = getFirebaseAdmin().firestore();
+      const snapshot = await db.collection("users").doc(catalogSettings.uid).collection("orders").doc(orderId).get();
+      if (!snapshot.exists) return errorResponse(res, 404, "ORDER_NOT_FOUND", "Pedido não encontrado.");
+
+      const order = snapshot.data() as Order;
+      return res.status(200).json({
+        orderStatus: order.status,
+        paymentStatus: order.paymentStatus ?? null,
+        total: order.total,
+      });
+    } catch (error) {
+      return errorResponse(res, 500, "ORDER_STATUS_FAILED", error instanceof Error ? error.message : "Unknown error");
     }
   });
 
@@ -831,19 +1210,25 @@ export async function registerRoutes(
   // POST /api/user/settings/:userId - Save user settings to Firestore
   app.post("/api/user/settings/:userId", requireAuth, requireOwnership, async (req, res) => {
     const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
-    const body = req.body;
+    const rawBody = req.body;
+    let body: Record<string, any> = {};
     try {
 
       routeInfo("[/api/user/settings POST] userId:", userId);
-      routeInfo("[/api/user/settings POST] body keys:", Object.keys(body));
+      routeInfo("[/api/user/settings POST] body keys:", Object.keys(rawBody || {}));
 
       if (!userId) {
         return res.status(400).json({ error: "userId required" });
       }
 
-      if (!body || typeof body !== "object") {
+      if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) {
         return res.status(400).json({ error: "body must be an object" });
       }
+
+      // Ownership, plan and privilege fields are server-owned. Legacy payloads can still include
+      // them, but they are discarded and deleted from the stored document on the next successful
+      // save; no client value can influence catalog ownership.
+      body = sanitizePublicSettingsPayload(rawBody);
 
       const admin = getFirebaseAdmin();
       const db = admin.firestore();
@@ -851,8 +1236,8 @@ export async function registerRoutes(
       // ============ REFERRAL VALIDATION (if present in body) ============
       let referrerExists = false;
       if (body.referral_source) {
-        const referralSourceUid = body.referral_source;
-        routeInfo("[/api/user/settings POST] Validating referral_source:", referralSourceUid);
+        const referralSourceToken = body.referral_source;
+        routeInfo("[/api/user/settings POST] Validating referral_source token");
 
         // 0. Check if referral already exists (IMMUTABILITY - prevent overwrite)
         try {
@@ -860,7 +1245,7 @@ export async function registerRoutes(
           if (existingSettings.exists && existingSettings.data()?.referral_source) {
             routeWarn("[/api/user/settings POST] Referral already set, blocking reaplication:", {
               existing: existingSettings.data()?.referral_source,
-              attempted: referralSourceUid
+              attempted: "[redacted]"
             });
             return res.status(409).json({ 
               error: "Referral source already set and cannot be changed",
@@ -875,51 +1260,22 @@ export async function registerRoutes(
           // Don't block on check failure, continue
         }
 
-        // 1. Check format (basic UUID-like validation)
-        const isValidFormat = /^[a-zA-Z0-9_-]{10,}$/.test(referralSourceUid);
-        if (!isValidFormat) {
-          routeWarn("[/api/user/settings POST] Invalid referral format:", referralSourceUid);
-          return res.status(400).json({ 
-            error: "Invalid referral_source format",
-            referralValidation: { result: "invalid_format", referralSourceUid }
+        const resolution = await resolveReferralSource(db, referralSourceToken, userId);
+        if ("error" in resolution) {
+          routeWarn("[/api/user/settings POST] Referral rejected:", resolution.error);
+          return res.status(400).json({
+            error: resolution.error === "self_referral"
+              ? "Cannot refer yourself"
+              : resolution.error === "referrer_not_found"
+                ? "Referrer not found"
+                : "Invalid referral_source format",
+            referralValidation: { result: resolution.error },
           });
         }
-
-        // 2. Check self-referral (prevent user from referring themselves)
-        if (referralSourceUid === userId) {
-          routeWarn("[/api/user/settings POST] Self-referral attempt blocked:", userId);
-          return res.status(400).json({ 
-            error: "Cannot refer yourself",
-            referralValidation: { result: "self_referral", userId }
-          });
-        }
-
-        // 3. Check if referrer exists (CHANGED: now REQUIRED, not soft check)
-         referrerExists = false;
-        try {
-          const referrerSettings = await db.collection("user_settings").doc(referralSourceUid).get();
-          if (referrerSettings.exists) {
-            routeInfo("[/api/user/settings POST] Referrer validated: found in user_settings");
-            referrerExists = true;
-          } else {
-            routeWarn("[/api/user/settings POST] Referrer not found:", referralSourceUid);
-            // Reject if referrer doesn't exist (stricter validation)
-            return res.status(400).json({ 
-              error: "Referrer not found",
-              referralValidation: { result: "referrer_not_found", referralSourceUid }
-            });
-          }
-        } catch (e) {
-          routeWarn("[/api/user/settings POST] Referrer existence check failed:", (e as any)?.message);
-          // On error, reject to be safe
-          return res.status(500).json({ 
-            error: "Failed to validate referrer",
-            referralValidation: { result: "validation_error" }
-          });
-        }
+        referrerExists = true;
 
         // Mark referral as applied by backend with timestamp
-        body.referral_source = referralSourceUid;
+        body.referral_source = resolution.referrerUid;
         body.referral_applied_at = body.referral_applied_at || new Date().toISOString();
         body.referral_applied_by = "backend";
         body.referral_immutable = true; // Mark as immutable
@@ -927,7 +1283,7 @@ export async function registerRoutes(
       }
       
       routeInfo(`[/api/user/settings POST] Saving to Firestore: user_settings/${userId}`);
-      await db.collection("user_settings").doc(userId).set(body, { merge: true });
+      await persistUserSettingsWithCatalogOwnership({ db, ownerUid: userId, payload: body });
       routeInfo("[/api/user/settings POST] Successfully saved to Firestore");
 
       // ============ REFERRAL CONVERSION ATTRIBUTION (if new referral was applied) ============
@@ -1008,6 +1364,12 @@ export async function registerRoutes(
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
+      if (error instanceof CatalogSlugConflictError) {
+        return res.status(409).json({ error: "CATALOG_SLUG_TAKEN", message: "Este link de catálogo já está em uso." });
+      }
+      if (error instanceof InvalidCatalogSlugError) {
+        return res.status(400).json({ error: "INVALID_CATALOG_SLUG", message: "O link do catálogo é inválido." });
+      }
       return errorResponse(
         res,
         500,
@@ -1265,7 +1627,7 @@ export async function registerRoutes(
   });
 
   // Public Legal Documents Routes
-  app.get("/api/legal/privacy-policy", (req, res) => {
+  app.get(["/privacy-policy", "/api/legal/privacy-policy"], (req, res) => {
 
     try {
       const filePath = path.resolve(process.cwd(), "dist/public/privacy-policy.md");
@@ -1277,7 +1639,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/legal/terms-of-service", (req, res) => {
+  app.get(["/terms-of-service", "/api/legal/terms-of-service"], (req, res) => {
    
     try {
       const filePath = path.resolve(process.cwd(), "dist/public/terms-of-service.md");
@@ -1297,10 +1659,25 @@ export async function registerRoutes(
       const db = admin.firestore();
 
       const planDocRef = db.collection("users").doc(userId).collection("planData").doc("main");
-      const planDocSnap = await planDocRef.get();
+      const [planDocSnap, { entitlements }] = await Promise.all([
+        planDocRef.get(),
+        resolveUserEntitlements(db, userId),
+      ]);
+
+      // REVENDASMART-OWNER-ACCESS-02 — os campos comerciais abaixo continuam vindo de `planData`
+      // exatamente como antes (nunca sobrescritos por uma concessão interna); `hasPremiumAccess`/
+      // `isTester`/`isPremiumPlus` são a ÚNICA adição, computados por `resolveEntitlements`
+      // (shared/monetization.ts) — o mesmo resolver que o client usa sobre este mesmo payload, para os
+      // dois lados nunca divergirem sobre "quem tem acesso Premium".
+      const composed = {
+        hasPremiumAccess: entitlements.hasPremiumAccess,
+        isTester: entitlements.isTester,
+        isPremiumPlus: entitlements.isPremiumPlus,
+        entitlementSource: entitlements.source,
+      };
 
       if (planDocSnap.exists) {
-        return res.status(200).json(planDocSnap.data());
+        return res.status(200).json({ ...planDocSnap.data(), ...composed });
       }
 
       // Plan data doesn't exist, return default free plan
@@ -1312,6 +1689,7 @@ export async function registerRoutes(
         premiumSource: null,
         referralCode: null,
         referralCount: 0,
+        ...composed,
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
@@ -1337,16 +1715,26 @@ export async function registerRoutes(
       const existingPlan = await planDocRef.get();
 
 if (!existingPlan.exists) {
-  await planDocRef.set({
-        currentPlan: "free",
-        premiumActive: false,
-        premiumExpiresAt: null,
-        premiumStartedAt: null,
-        premiumSource: null,
-        referralCode,
-        referralCount: 0,
-        updatedAt: admin.firestore.Timestamp.now(),
-      }); 
+        // RELEASE-28: índice reverso code -> uid, gravado no MESMO batch que cria o referralCode — o
+        // código só é "válido para compartilhar" se a resolução também existir, e vice-versa. Chave é o
+        // próprio código (lookup direto por doc ID, sem query/índice composto novo).
+        const referralCodeRef = db.collection("referralCodes").doc(referralCode);
+        const batch = db.batch();
+        batch.set(planDocRef, {
+          currentPlan: "free",
+          premiumActive: false,
+          premiumExpiresAt: null,
+          premiumStartedAt: null,
+          premiumSource: null,
+          referralCode,
+          referralCount: 0,
+          updatedAt: admin.firestore.Timestamp.now(),
+        });
+        batch.set(referralCodeRef, {
+          uid: userId,
+          createdAt: admin.firestore.Timestamp.now(),
+        });
+        await batch.commit();
       }
 
 
@@ -1355,6 +1743,28 @@ if (!existingPlan.exists) {
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
       return errorResponse(res, 500, "PLAN_INITIALIZE_ERROR", msg, { userId });
+    }
+  });
+
+  // RELEASE-28: checagem pública de existência do código. Não devolve o UID; a resolução real para
+  // ownership acontece apenas no backend autenticado (/api/user/settings POST).
+  app.get("/api/referral/resolve-code/:code", async (req, res) => {
+    const code = getRouteParam(req, "code");
+    if (!isReferralCodeFormat(code)) {
+      return res.status(400).json({ error: "INVALID_REFERRAL_CODE_FORMAT" });
+    }
+    try {
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+      const codeDoc = await db.collection("referralCodes").doc(code).get();
+      const uid = codeDoc.exists ? codeDoc.data()?.uid : null;
+      if (typeof uid !== "string" || !uid) {
+        return res.status(404).json({ error: "REFERRAL_CODE_NOT_FOUND" });
+      }
+      return res.status(200).json({ ok: true });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      return errorResponse(res, 500, "REFERRAL_CODE_RESOLVE_ERROR", msg, { code });
     }
   });
 
@@ -1382,10 +1792,15 @@ if (!existingPlan.exists) {
     try {
       const admin = getFirebaseAdmin();
       const db = admin.firestore();
-      await Promise.all([
+      const [referredUserRecord] = await Promise.all([
         admin.auth().getUser(referredUid),
         admin.auth().getUser(referrerUid),
       ]);
+
+      // RELEASE-02: `onboarding_completed` sozinho não basta — ver isReferralAccountOldEnough acima.
+      if (!isReferralAccountOldEnough(referredUserRecord.metadata.creationTime)) {
+        return res.status(400).json({ error: "REFERRAL_ACCOUNT_TOO_NEW" });
+      }
 
       const eventId = referralEventId(referrerUid, referredUid);
       const eventRef = db.collection("referralEvents").doc(eventId);
@@ -1539,6 +1954,15 @@ if (!existingPlan.exists) {
       }
       return errorResponse(res, 500, "REFERRAL_VALIDATE_ERROR", "Não foi possível validar a indicação.");
     }
+  });
+
+  // ---------------------------------------------------------------------------
+  // GET /api/admin/status — RELEASE V1 §4.1: único jeito seguro do client saber se o usuário logado é
+  // admin/dev, para esconder (não só bloquear no backend) Anúncios Pro e o scanner de código de barras.
+  // Reaproveita o MESMO `requireAdmin` de todas as outras rotas admin — 200 = admin, 403 = não-admin.
+  // ---------------------------------------------------------------------------
+  app.get("/api/admin/status", requireAuth, requireAdmin, async (_req: Request, res: Response) => {
+    res.status(200).json({ isAdmin: true });
   });
 
   // ---------------------------------------------------------------------------

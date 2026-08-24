@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<title>PRO-07I — Premium Creative Composer V2</title>
+<style>
+  body { font-family: system-ui, sans-serif; padding: 16px; background: #101114; color: #f4f4f5; }
+  pre { white-space: pre-wrap; background: #050505; padding: 12px; border-radius: 8px; max-width: 1100px; }
+  .row { display: flex; gap: 24px; align-items: flex-start; margin-bottom: 24px; }
+  canvas { border: 1px solid #444; max-width: 300px; }
+  h2 { font-size: 13px; text-transform: uppercase; color: #a1a1aa; }
+</style>
+</head>
+<body>
+<h1>PRO-07I — Premium Creative Composer V2</h1>
+<pre id="log"></pre>
+<div id="canvasHost"></div>
+<script>
+const W = 1080;
+const H = 1350;
+const logEl = document.getElementById("log");
+function log(message) { logEl.textContent += message + "\n"; console.log(message); }
+
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("falha ao carregar " + url));
+    img.src = url;
+  });
+}
+
+function rectPx(rect) {
+  return { x: rect.x * W, y: rect.y * H, width: rect.width * W, height: rect.height * H };
+}
+
+function drawBackground(ctx, token) {
+  const angleRad = (token.angleDeg * Math.PI) / 180;
+  const length = Math.abs(W * Math.sin(angleRad)) + Math.abs(H * Math.cos(angleRad));
+  const x0 = W / 2 - Math.sin(angleRad) * length / 2;
+  const y0 = H / 2 + Math.cos(angleRad) * length / 2;
+  const x1 = W / 2 + Math.sin(angleRad) * length / 2;
+  const y1 = H / 2 - Math.cos(angleRad) * length / 2;
+  const gradient = ctx.createLinearGradient(x0, y0, x1, y1);
+  for (const stop of token.stops) gradient.addColorStop(stop.offset, stop.color);
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, W, H);
+}
+
+/** Todas as decorações são ambientais e executadas ANTES do produto. */
+function drawEnvironmentalDecorations(ctx, payload) {
+  const tokens = payload.creativeTokens;
+  const product = payload.transform;
+  const cx = product.translateX + product.targetWidth / 2;
+  const cy = product.translateY + product.targetHeight * 0.48;
+
+  ctx.save();
+  if (tokens.family === "luxury") {
+    const beam = ctx.createLinearGradient(150, 160, 840, 780);
+    beam.addColorStop(0, tokens.decorations.accent + "00");
+    beam.addColorStop(0.5, tokens.decorations.accent + "28");
+    beam.addColorStop(1, tokens.decorations.accent + "00");
+    ctx.fillStyle = beam;
+    ctx.beginPath();
+    ctx.moveTo(120, 130); ctx.lineTo(305, 130); ctx.lineTo(820, 830); ctx.lineTo(650, 830); ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = tokens.decorations.line + "52";
+    ctx.lineWidth = 2;
+    for (const radius of [265, 330, 395]) {
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + 30, radius, radius * 0.62, -0.12, Math.PI * 0.08, Math.PI * 0.92);
+      ctx.stroke();
+    }
+    ctx.fillStyle = tokens.decorations.secondary + "18";
+    ctx.beginPath();
+    ctx.arc(895, 330, 185, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (tokens.family === "editorial") {
+    ctx.fillStyle = tokens.decorations.secondary + "9c";
+    ctx.beginPath();
+    ctx.ellipse(cx + 92, cy + 5, 355, 425, 0.1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = tokens.decorations.line + "66";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx - 40, cy + 15, 300, Math.PI * 1.08, Math.PI * 1.9);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+    for (const x of [112, 136, 944, 968]) {
+      ctx.beginPath(); ctx.moveTo(x, 178); ctx.lineTo(x, 745); ctx.stroke();
+    }
+    ctx.fillStyle = tokens.decorations.accent + "36";
+    ctx.beginPath();
+    ctx.ellipse(870, 710, 145, 85, -0.5, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.strokeStyle = tokens.decorations.line + "5c";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(cx + 45, cy, 360, 250, -0.25, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(cx + 45, cy, 285, 195, -0.25, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = tokens.decorations.accent + "28";
+    ctx.beginPath();
+    ctx.moveTo(0, 250); ctx.lineTo(250, 155); ctx.lineTo(360, 530); ctx.lineTo(0, 650); ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = tokens.decorations.secondary + "30";
+    ctx.beginPath();
+    ctx.moveTo(830, 145); ctx.lineTo(1080, 85); ctx.lineTo(1080, 500); ctx.lineTo(920, 560); ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = tokens.decorations.accent + "72";
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 4; i += 1) {
+      ctx.beginPath(); ctx.moveTo(790 + i * 24, 260); ctx.lineTo(1010 + i * 12, 670); ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+/** Grounding separado do bitmap, sempre atrás do produto. */
+function drawGrounding(ctx, payload) {
+  const product = payload.transform;
+  const token = payload.creativeTokens.grounding;
+  const cx = product.translateX + product.targetWidth / 2;
+  const bottom = product.translateY + product.targetHeight;
+  const glowX = cx + token.glowOffsetX;
+  const glowY = product.translateY + product.targetHeight * 0.46 + token.glowOffsetY;
+  const glowRadius = Math.max(product.targetWidth, product.targetHeight) * token.glowRadiusRatio;
+
+  ctx.save();
+  const glow = ctx.createRadialGradient(glowX, glowY, 0, glowX, glowY, glowRadius);
+  glow.addColorStop(0, token.glowColor + Math.round(token.glowOpacity * 255).toString(16).padStart(2, "0"));
+  glow.addColorStop(1, token.glowColor + "00");
+  ctx.fillStyle = glow;
+  ctx.fillRect(40, 120, W - 80, 790);
+  ctx.restore();
+
+  ctx.save();
+  if (payload.family === "luxury") {
+    ctx.fillStyle = token.pedestalSide;
+    ctx.beginPath(); ctx.ellipse(cx, bottom + 21, product.targetWidth * 0.67, 42, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillRect(cx - product.targetWidth * 0.67, bottom - 2, product.targetWidth * 1.34, 24);
+    ctx.fillStyle = token.pedestalTop;
+    ctx.beginPath(); ctx.ellipse(cx, bottom - 2, product.targetWidth * 0.67, 34, 0, 0, Math.PI * 2); ctx.fill();
+  } else if (payload.family === "editorial") {
+    const plane = ctx.createLinearGradient(0, bottom - 12, 0, bottom + 68);
+    plane.addColorStop(0, token.pedestalTop + "cc");
+    plane.addColorStop(1, token.pedestalSide + "00");
+    ctx.fillStyle = plane;
+    ctx.beginPath(); ctx.ellipse(cx + 30, bottom + 12, product.targetWidth * 0.73, 58, -0.02, 0, Math.PI * 2); ctx.fill();
+  } else {
+    ctx.fillStyle = token.pedestalSide;
+    ctx.beginPath();
+    ctx.moveTo(cx - product.targetWidth * 0.58, bottom + 4);
+    ctx.lineTo(cx + product.targetWidth * 0.58, bottom + 4);
+    ctx.lineTo(cx + product.targetWidth * 0.45, bottom + 53);
+    ctx.lineTo(cx - product.targetWidth * 0.45, bottom + 53);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = token.pedestalTop;
+    ctx.beginPath();
+    ctx.moveTo(cx - product.targetWidth * 0.58, bottom + 4);
+    ctx.lineTo(cx - product.targetWidth * 0.43, bottom - 24);
+    ctx.lineTo(cx + product.targetWidth * 0.48, bottom - 24);
+    ctx.lineTo(cx + product.targetWidth * 0.58, bottom + 4);
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.globalAlpha = token.shadowOpacity;
+  ctx.fillStyle = token.shadowColor;
+  ctx.beginPath();
+  ctx.ellipse(cx, bottom + 6, product.targetWidth * token.shadowWidthRatio, token.shadowHeight, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function alignedX(box, align, width) {
+  if (align === "right" || align === "end") return box.x + box.width - width;
+  if (align === "center") return box.x + (box.width - width) / 2;
+  return box.x;
+}
+
+function drawCutCornerRect(ctx, x, y, width, height, cut) {
+  ctx.beginPath();
+  ctx.moveTo(x, y); ctx.lineTo(x + width - cut, y); ctx.lineTo(x + width, y + cut);
+  ctx.lineTo(x + width, y + height); ctx.lineTo(x + cut, y + height); ctx.lineTo(x, y + height - cut);
+  ctx.closePath();
+}
+
+function drawCommercialOverlay(ctx, payload) {
+  const typography = payload.creativeTokens.typography;
+  const composition = payload.creativeTokens.composition;
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = typography.foreground;
+  ctx.letterSpacing = typography.letterSpacing + "px";
+
+  const storeBox = rectPx(payload.safeZones.store);
+  ctx.font = "700 23px system-ui, sans-serif";
+  ctx.textAlign = composition.storeAlign;
+  const storeX = composition.storeAlign === "right" ? storeBox.x + storeBox.width : storeBox.x;
+  ctx.fillText(payload.overlay.storeName.toUpperCase(), storeX, storeBox.y + storeBox.height * 0.68);
+
+  const nameBox = rectPx(payload.safeZones.productName);
+  ctx.font = `${typography.nameWeight} 48px Georgia, serif`;
+  ctx.textAlign = composition.textAlign;
+  const nameX = composition.textAlign === "right" ? nameBox.x + nameBox.width : nameBox.x;
+  ctx.fillText(payload.overlay.productName, nameX, nameBox.y + nameBox.height * 0.58 + composition.productNameYOffset);
+  ctx.font = "600 21px system-ui, sans-serif";
+  ctx.fillStyle = typography.muted;
+  ctx.fillText(payload.overlay.brand || "", nameX, nameBox.y + nameBox.height * 0.96 + composition.productNameYOffset);
+
+  const priceBox = rectPx(payload.safeZones.price);
+  ctx.textAlign = "left";
+  ctx.fillStyle = typography.foreground;
+  ctx.font = `${typography.priceWeight} 56px system-ui, sans-serif`;
+  ctx.fillText(payload.overlay.priceText, priceBox.x + composition.priceXOffset, priceBox.y + priceBox.height * 0.84);
+
+  const benefitsBox = rectPx(payload.safeZones.benefits);
+  ctx.fillStyle = typography.muted;
+  ctx.font = "600 20px system-ui, sans-serif";
+  ctx.fillText(payload.overlay.benefits.join("  ·  "), benefitsBox.x, benefitsBox.y + benefitsBox.height * 0.7);
+
+  const ctaBox = rectPx(payload.safeZones.cta);
+  const cta = payload.creativeTokens.cta;
+  const ctaWidth = ctaBox.width * cta.widthRatio;
+  const ctaX = alignedX(ctaBox, cta.horizontalAlign, ctaWidth);
+  const ctaY = ctaBox.y + composition.ctaYOffset;
+  ctx.fillStyle = cta.fill;
+  ctx.strokeStyle = cta.border;
+  ctx.lineWidth = cta.borderWidth;
+  if (payload.family === "modern") {
+    drawCutCornerRect(ctx, ctaX, ctaY, ctaWidth, ctaBox.height, 14);
+  } else {
+    ctx.beginPath();
+    ctx.roundRect(ctaX, ctaY, ctaWidth, ctaBox.height, cta.radius);
+  }
+  ctx.fill();
+  if (cta.borderWidth > 0) ctx.stroke();
+  ctx.fillStyle = cta.foreground;
+  ctx.font = "800 25px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(payload.overlay.ctaLabel, ctaX + ctaWidth / 2, ctaY + ctaBox.height / 2 + 9);
+  ctx.textAlign = "left";
+  ctx.letterSpacing = "0px";
+}
+
+/**
+ * ÚNICA função de render: Preview e Export recebem o mesmo payload, transform, tokens e cutout.
+ * Ordem fixa: background -> decorations -> grounding -> PRODUCT -> commercial overlay.
+ */
+function renderCreativeV2(ctx, payload, cutoutImg) {
+  ctx.clearRect(0, 0, W, H);
+  drawBackground(ctx, payload.creativeTokens.background);
+  drawEnvironmentalDecorations(ctx, payload);
+  drawGrounding(ctx, payload);
+  // PRODUCT_LAYER_BOUNDARY: nenhuma decoração/grounding é desenhada depois deste ponto.
+  ctx.drawImage(cutoutImg, payload.transform.translateX, payload.transform.translateY, payload.transform.targetWidth, payload.transform.targetHeight);
+  drawCommercialOverlay(ctx, payload);
+}
+
+async function processFamily(family, cutoutImg) {
+  log(`\n=== ${family} ===`);
+  const response = await fetch("/creative-v2/prepare", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ family }),
+  });
+  const prepared = await response.json();
+  if (!prepared.ok) throw new Error(prepared.error);
+  const payload = prepared.payload;
+
+  const row = document.createElement("div");
+  row.className = "row";
+  const previewCanvas = document.createElement("canvas");
+  const exportCanvas = document.createElement("canvas");
+  previewCanvas.width = exportCanvas.width = W;
+  previewCanvas.height = exportCanvas.height = H;
+  const previewWrap = document.createElement("div");
+  const exportWrap = document.createElement("div");
+  previewWrap.innerHTML = `<h2>Preview — ${family}</h2>`;
+  exportWrap.innerHTML = `<h2>Export — ${family}</h2>`;
+  previewWrap.appendChild(previewCanvas);
+  exportWrap.appendChild(exportCanvas);
+  row.appendChild(previewWrap);
+  row.appendChild(exportWrap);
+  document.getElementById("canvasHost").appendChild(row);
+
+  const previewCtx = previewCanvas.getContext("2d");
+  const exportCtx = exportCanvas.getContext("2d");
+  renderCreativeV2(previewCtx, payload, cutoutImg);
+  renderCreativeV2(exportCtx, payload, cutoutImg);
+  const parity = previewCanvas.toDataURL("image/png") === exportCanvas.toDataURL("image/png");
+
+  const safe = rectPx(payload.safeZones.product);
+  const transform = payload.transform;
+  const productWithinSafeZone = transform.translateX >= safe.x - 0.01
+    && transform.translateY >= safe.y - 0.01
+    && transform.translateX + transform.targetWidth <= safe.x + safe.width + 0.01
+    && transform.translateY + transform.targetHeight <= safe.y + safe.height + 0.01;
+
+  const blob = await new Promise((resolve) => exportCanvas.toBlob(resolve, "image/png"));
+  await fetch(`/creative-v2/save-png?family=${family}`, {
+    method: "POST",
+    headers: { "Content-Type": "image/png" },
+    body: blob,
+  });
+  log(`parity=${parity}; safeZone=${productWithinSafeZone}; bytes=${blob.size}`);
+
+  return {
+    family,
+    ProductCreativeContext: payload.productCreativeContext,
+    assetId: payload.asset.assetId,
+    transform,
+    productWithinSafeZone,
+    allowCrop: transform.allowCrop,
+    previewExportParity: parity,
+    providerCallsThisRun: 0,
+    backgroundToken: payload.creativeTokens.background,
+    ctaToken: payload.creativeTokens.cta,
+    groundingToken: payload.creativeTokens.grounding,
+    decorationStrategy: payload.creativeTokens.decorations.strategy,
+    compositionStrategy: payload.creativeTokens.composition.strategy,
+    pngBytes: blob.size,
+  };
+}
+
+async function main() {
+  const cutoutImg = await loadImage("/cutout.png");
+  const results = [];
+  for (const family of ["luxury", "editorial", "modern"]) {
+    results.push(await processFamily(family, cutoutImg));
+  }
+  const report = {
+    schemaVersion: 1,
+    composerVersion: "premium-creative-v2",
+    width: W,
+    height: H,
+    cutoutHashSha256: "1329c84c0f4b9d7ab8a7814cbe7c76c0ca57b918d18a7fe5ac802052f65cc933",
+    sameAssetId: new Set(results.map((item) => item.assetId)).size === 1,
+    sameTransform: new Set(results.map((item) => JSON.stringify(item.transform))).size === 1,
+    results,
+  };
+  await fetch("/creative-v2/save-report", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(report),
+  });
+  log("creative-v2-report.json salvo. DONE.");
+}
+
+main().catch((error) => log("ERRO: " + error.message));
+</script>
+</body>
+</html>

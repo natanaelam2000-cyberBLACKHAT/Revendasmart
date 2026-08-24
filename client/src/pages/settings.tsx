@@ -1,42 +1,90 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, lazy, Suspense } from "react";
+import { useAdminAccess } from "@/hooks/useAdminAccess";
+
+const AdminGrantsPanel = lazy(() => import("@/components/admin/AdminGrantsPanel").then((m) => ({ default: m.AdminGrantsPanel })));
 import { Layout } from "@/components/layout";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
+import { AccountHero } from "@/components/account/AccountHero";
+import { AccountMenuItem } from "@/components/account/AccountMenuItem";
+import { clearScopedAccountLocalData } from "@/lib/account-deletion-local";
 import { notifyError, notifySuccess, notifyWarning } from "@/lib/notify";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import {
   AppSettings,
   logout, getCurrentUserId, getStored, STORAGE_KEYS
 } from "@/lib/mock-data";
-import { getCurrentFirebaseUser, getFirebaseIdToken, getFirebaseAuth, measureOperation, logTelemetryEvent } from "@/lib/firebase";
+import { clearTelemetryUserId, clearUserContext, getFirebaseIdToken, getFirebaseAuth, measureOperation, logTelemetryEvent, clearFirestoreOfflineCache } from "@/lib/firebase";
+import { onAuthStateChanged, signOut, type User as FirebaseAuthUser } from "firebase/auth";
 import { useLocation } from "wouter";
 import { getApiUrl } from "@/lib/api-config";
-import { buildPublicCatalogUrl } from "@/lib/public-url";
+import { buildPublicAppUrl, buildPublicCatalogUrl } from "@/lib/public-url";
 import { APP_BUILD_ID, APP_VERSION, formatAppBuildId } from "@/lib/build-info";
+import { toCsvRow } from "@/lib/export-security";
 import { QRCodeSVG } from "qrcode.react";
-import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { uploadImageViaServer } from "@/lib/server-upload";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
+import { usePlan } from "@/providers/PlanProvider";
+import { REFERRAL_REWARD_LIMIT } from "@shared/monetization";
+
+// RC-04 P1-04 — só para texto de UI; o servidor (server/routes.ts /api/referral/validate-referral)
+// é quem de fato concede os 30 dias (hardcoded lá, sem constante compartilhada até esta rodada).
+// Manter os dois números em sincronia se o período de recompensa mudar no futuro.
+const REFERRAL_REWARD_DAYS = 30;
 import { patchUserSettingsOptimistic } from "@/hooks/useUserSettings";
+import { useMPConnections } from "@/hooks/useMPConnections";
+import { queryClient } from "@/lib/queryClient";
 import { NICHO_CONFIG, ONBOARDING_NICHO_IDS, type NichoId } from "@/lib/nicho-config";
 import { APP_THEMES, BUTTON_TONES, CARD_TONES, MOTION_LEVELS, RADIUS_LEVELS, SHADOW_LEVELS, buildAppThemeCustomization, resolveAppThemeId, type AppThemeCustomization } from "@/lib/app-themes";
+import { ORDERS_FEATURE_LABEL, ORDERS_FEATURE_LABEL_MAX_LENGTH, resolveOrdersFeatureLabel } from "@/lib/orders";
+import { useTheme } from "next-themes";
+import { APPEARANCE_THEME_STORAGE_KEY } from "@/components/ThemeProvider";
 import {
-  Store, CreditCard,
-  Download, Save, ChevronRight, Bell, Upload, RefreshCw, Users, Share2, ExternalLink, FileSpreadsheet, QrCode, Copy, Mail, Scale, HelpCircle, ChevronDown, User, KeyRound, LogOut, ArrowLeft, Receipt
+  Store, CreditCard, ClipboardList, Loader2,
+  Download, Save, ChevronRight, Bell, Upload, RefreshCw, Users, Share2, ExternalLink, FileSpreadsheet, QrCode, Copy, Mail, Scale, HelpCircle, ChevronDown, User, KeyRound, LogOut, ArrowLeft, Receipt, Trash2, Monitor, Sun, Moon, Gift, ShieldCheck,
+  type LucideIcon
 } from "lucide-react";
+
+type AccountMenuEntry = {
+  title: string;
+  subtitle: string;
+  icon: LucideIcon;
+  color: string;
+  path: string;
+  disabled?: boolean;
+  badge?: string;
+};
 
 // MOVED OUTSIDE: InputField must be defined OUTSIDE Settings component
 // to prevent recreation on every render (which was causing focus loss)
-const InputField = ({ label, value, onChange, placeholder = "", type = "text", disabled = false }: any) => (
+const InputField = ({ label, value, onChange, placeholder = "", type = "text", disabled = false, maxLength, hint }: any) => (
   <div className="space-y-1.5">
     <label className="text-xs font-semibold text-muted-foreground px-1">{label}</label>
     <input
       type={type}
       disabled={disabled}
+      maxLength={maxLength}
       className={`w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none transition-all ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
       value={value || ""}
       onChange={e => onChange(e.target.value)}
       placeholder={placeholder}
     />
+    {hint && <p className="px-1 text-[11px] leading-relaxed text-muted-foreground">{hint}</p>}
   </div>
+);
+
+// Botão outlined "Salvar Alterações" reutilizado em Minha Conta, Minha Loja e no floating save.
+const SaveChangesButton = ({ onClick, disabled, isSaving, testId, floating = false }: {
+  onClick: () => void; disabled: boolean; isSaving: boolean; testId: string; floating?: boolean;
+}) => (
+  <button
+    type="button"
+    onClick={onClick}
+    disabled={disabled}
+    data-testid={testId}
+    className={`w-full flex items-center justify-center gap-2 rounded-[2rem] border-2 border-primary bg-white py-4 text-xs font-black uppercase tracking-widest text-primary disabled:opacity-40 ${floating ? "shadow-xl" : ""}`}
+  >
+    {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Salvar Alterações
+  </button>
 );
 
 const normalizeCatalogSlug = (value: string) => value.trim().toLowerCase().normalize("NFD")
@@ -75,6 +123,16 @@ async function compressLogo(file: File, maxSize = 512, quality = 0.82): Promise<
 export default function Settings() {
   // Get settings from Firestore via hook
   const { settings: firestoreSettings, loading: settingsLoading } = useUserSettings();
+  const { planData, activePlan, referralCount, referralCode } = usePlan();
+  // OWNER-ACCESS-02 §9 — a seção "Administração" só existe no menu/rotas quando o servidor confirma
+  // admin (GET /api/admin/status, via useAdminAccess). Esconder no client é só UX; a autoridade real
+  // continua sendo `requireAdmin` em cada rota de server/admin-grants.ts.
+  const { isAdmin } = useAdminAccess();
+  // RELEASE-28: o link público de indicação usa o CÓDIGO, nunca o UID bruto do Firebase — o código não
+  // é reversível sem a resolução server-owned (GET /api/referral/resolve-code), então compartilhar
+  // este link não expõe o UID em URL/histórico/referrer headers como o link antigo (?referral=<uid>)
+  // expunha. `referralCode` já vem pronto de usePlan(); nada é gerado aqui.
+  const referralShareLink = referralCode ? `https://revendasmart.vercel.app?referral=${referralCode}` : null;
 
   // Local state for form edits (synced with Firestore on save)
   // Initialize with default empty object to avoid undefined
@@ -113,6 +171,16 @@ export default function Settings() {
     setFormSettings((prev) => ({ ...prev, appTheme: nextTheme.id, primaryColor: nextCustomization.primaryColor, appThemeCustomization: nextCustomization }));
   };
 
+  // RELEASE-QUALITY-04 §1: claro/escuro/sistema — independente do `appTheme` (paleta de cor de marca)
+  // acima. `setTheme` troca IMEDIATAMENTE (next-themes já persiste em localStorage e reage a
+  // prefers-color-scheme sozinho); a escrita em formSettings.appearanceMode só serve para o campo
+  // acompanhar o usuário entre aparelhos quando ele salvar a página, nunca é a fonte da troca instantânea.
+  const { theme: appearanceTheme, setTheme: setAppearanceTheme } = useTheme();
+  const handleSelectAppearanceMode = (mode: "system" | "light" | "dark") => {
+    setAppearanceTheme(mode);
+    setFormSettings((prev) => ({ ...prev, appearanceMode: mode }));
+  };
+
   const updatePrimaryNicho = (nicho: string) => {
     const safeNicho = (nicho in NICHO_CONFIG ? nicho : "Geral") as NichoId;
     setFormSettings((prev) => {
@@ -139,6 +207,12 @@ export default function Settings() {
     if (!settingsLoading && firestoreSettings && !hasInitialized.current) {
       setFormSettings(firestoreSettings);
       hasInitialized.current = true;
+      // Continuidade entre aparelhos: só aplica a aparência salva no Firestore se este navegador
+      // AINDA NÃO tem uma escolha local própria — a escolha feita neste aparelho sempre vence, o
+      // Firestore é só para o primeiro acesso de um aparelho novo.
+      if (firestoreSettings.appearanceMode && typeof window !== "undefined" && !window.localStorage.getItem(APPEARANCE_THEME_STORAGE_KEY)) {
+        setAppearanceTheme(firestoreSettings.appearanceMode);
+      }
     }
   }, [settingsLoading]); // Only depend on loading state, not firestoreSettings
 
@@ -153,8 +227,21 @@ export default function Settings() {
 
   const [location, setLocation] = useLocation();
   const [generatedUrl, setGeneratedUrl] = useState("");
-  const [, setIsSaving] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
+  const copyReferralValue = (value: string | null, message: string) => {
+    if (!value) return;
+    navigator.clipboard.writeText(value);
+    setSaveMessage(message);
+    setTimeout(() => setSaveMessage(""), 3000);
+    logTelemetryEvent("referral_link_copied", { origin: "settings_growth" }).catch(() => {});
+  };
+  const { activeConnections: mpActiveConnections } = useMPConnections();
+  const isMercadoPagoConnected = mpActiveConnections.length > 0;
+  const hasPendingChanges = useMemo(
+    () => JSON.stringify(formSettings ?? {}) !== JSON.stringify(firestoreSettings ?? {}),
+    [formSettings, firestoreSettings]
+  );
   const [openHelpIndex, setOpenHelpIndex] = useState<number | null>(null);
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
   const [pendingBackupFile, setPendingBackupFile] = useState<File | null>(null);
@@ -176,22 +263,36 @@ export default function Settings() {
     return () => window.removeEventListener("popstate", syncTab);
   }, [location]);
 
-  // Get Firebase Auth UID (real)
-  const firebaseUid = useMemo(() => {
+  // Acompanha o usuário autenticado de forma reativa (mesmo padrão de useUserSettings.ts):
+  // se o Firebase ainda estiver restaurando a sessão no primeiro render, authReady começa
+  // false e firebaseUid/currentUserEmail só ficam disponíveis quando a sessão realmente resolve
+  // — nunca ficam congelados em null como no useMemo(..., []) anterior.
+  const [authUser, setAuthUser] = useState<FirebaseAuthUser | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+
+  useEffect(() => {
     const auth = getFirebaseAuth();
-    return auth?.currentUser?.uid || null;
+    if (!auth) {
+      setAuthReady(true);
+      setAuthUser(null);
+      return;
+    }
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setAuthUser(user ?? null);
+      setAuthReady(true);
+    });
+    return () => unsubscribe();
   }, []);
 
-  // Resolve current user email: Firebase Auth (real users) first
-  const currentUserEmail = useMemo(() => {
-    try {
-      const firebaseUser = getCurrentFirebaseUser();
-      if (firebaseUser?.email) return firebaseUser.email;
-      return null;
-    } catch { return null; }
-  }, []);
+  const firebaseUid = authUser?.uid ?? null;
+  const currentUserEmail = authUser?.email ?? null;
 
   const handleSave = async () => {
+    if (!authReady) {
+      // Sessão ainda restaurando — não é uma sessão expirada de verdade, só aguarde.
+      notifyWarning("Aguarde a sessão terminar de carregar e tente novamente.");
+      return;
+    }
     if (!firebaseUid) {
       setSaveMessage("Erro: usuário não autenticado.");
       notifyError("Sessão expirada. Faça login novamente.");
@@ -205,7 +306,19 @@ export default function Settings() {
       const rawStoreName = String(formSettings?.storeName || "").replace(/\s+/g, " ").trim();
       const normalizedStoreName = rawStoreName || "Minha loja";
       const catalogSlug = normalizeCatalogSlug(formSettings?.catalogSlug || formSettings?.catalog_slug || normalizedStoreName || "minha-loja");
-      const normalizedSettings = { ...formSettings, storeName: normalizedStoreName, catalogSlug, catalog_slug: catalogSlug };
+      // Rótulo da área de pedidos: espaços colapsados e aparados. Se sobrar vazio (ou só espaços), o
+      // campo é REMOVIDO do documento em vez de gravado como "" — assim o resolver cai no rótulo padrão
+      // e nenhuma conta antiga precisa de migração.
+      const rawOrdersLabel = String(formSettings?.featureLabels?.orders || "").replace(/\s+/g, " ").trim().slice(0, ORDERS_FEATURE_LABEL_MAX_LENGTH);
+      const { orders: _discardedOrdersLabel, ...otherFeatureLabels } = formSettings?.featureLabels ?? {};
+      const normalizedFeatureLabels = rawOrdersLabel ? { ...otherFeatureLabels, orders: rawOrdersLabel } : otherFeatureLabels;
+      const normalizedSettings = {
+        ...formSettings,
+        storeName: normalizedStoreName,
+        catalogSlug,
+        catalog_slug: catalogSlug,
+        featureLabels: normalizedFeatureLabels,
+      };
       setFormSettings(normalizedSettings);
 
       const response = await measureOperation("catalog_settings_save", async () => {
@@ -252,6 +365,28 @@ export default function Settings() {
   };
 
   const handleLogout = async () => {
+    const auth = getFirebaseAuth();
+    const uid = auth?.currentUser?.uid ?? getCurrentUserId();
+
+    try {
+      if (auth) {
+        await signOut(auth);
+      }
+    } catch (error) {
+      console.error("[settings] Logout failed:", error);
+      notifyError("Não foi possível encerrar sua sessão agora.");
+      return;
+    }
+
+    if (uid) {
+      await clearScopedAccountLocalData(uid);
+    }
+    // §8: apaga o cache offline do Firestore (IndexedDB) — isolamento por tenant além do path uid.
+    await clearFirestoreOfflineCache();
+
+    queryClient.clear();
+    clearUserContext();
+    clearTelemetryUserId();
     await logout();
     setLocation("/login");
   };
@@ -303,14 +438,13 @@ export default function Settings() {
     try {
       const blob = await compressLogo(file);
       if (!blob) throw new Error("Não foi possível processar a imagem.");
-      const storageRef = ref(getStorage(), `users/${firebaseUid}/branding/store-logo.jpg`);
-      await uploadBytes(storageRef, blob, {
-        cacheControl: "public,max-age=31536000,immutable",
-        contentType: "image/jpeg",
-      });
-      const storeLogo = await getDownloadURL(storageRef);
-      const nextSettings = { ...formSettings, storeLogo };
       const token = await getFirebaseIdToken();
+      if (!token) throw new Error("Não autenticado.");
+      // RELEASE-06: sobe pelo endpoint server-side (magic bytes + dimensões reais + quota validadas
+      // no servidor) em vez de uploadBytes() direto ao Storage.
+      const uploadResult = await uploadImageViaServer({ kind: "logo", blob, token });
+      const storeLogo = uploadResult.downloadUrl;
+      const nextSettings = { ...formSettings, storeLogo };
       const response = await fetch(getApiUrl(`/api/user/settings/${firebaseUid}`), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -365,16 +499,20 @@ export default function Settings() {
   };
 
   const displayName = formSettings?.sellerName || currentUserEmail?.split("@")[0] || "Usuário";
-  const accountMenu = [
+  const accountMenu: AccountMenuEntry[] = [
     { title: "Minha Conta", subtitle: "Perfil e dados pessoais", icon: User, color: "bg-primary/10 text-primary", path: "/settings?tab=account" },
     { title: "Minha Loja", subtitle: "Nome, logo e informações", icon: Store, color: "bg-violet-100 text-violet-700", path: "/settings?tab=store" },
     { title: "Chave Pix", subtitle: "Recebimento dos pedidos", icon: KeyRound, color: "bg-green-100 text-green-700", path: "/settings?tab=pix" },
     { title: "Compartilhar Catálogo", subtitle: "Link e QR Code do catálogo", icon: Share2, color: "bg-blue-100 text-blue-700", path: "/settings?tab=catalog" },
+    { title: "Indique e ganhe", subtitle: `A cada ${REFERRAL_REWARD_LIMIT} indicações, 30 dias de Premium`, icon: Gift, color: "bg-amber-100 text-amber-700", path: "/settings?tab=growth" },
     { title: "Clientes", subtitle: "Cadastro, busca e histórico de compras", icon: Users, color: "bg-cyan-100 text-cyan-700", path: "/clients" },
     { title: "Cobranças", subtitle: "Pendentes, vencidas e recebidas", icon: Receipt, color: "bg-emerald-100 text-emerald-700", path: "/billings" },
     { title: "Minha Assinatura", subtitle: "Plano e faturamento", icon: CreditCard, color: "bg-sky-100 text-sky-700", path: "/subscribe" },
+    { title: resolveOrdersFeatureLabel(firestoreSettings), subtitle: "Pedidos e encomendas da loja", icon: ClipboardList, color: "bg-purple-100 text-purple-700", path: "/orders" },
     { title: "Preferências", subtitle: "Notificações e ajustes", icon: Bell, color: "bg-slate-100 text-slate-700", path: "/settings?tab=preferences" },
     { title: "Suporte", subtitle: "Ajuda, FAQ e contato", icon: HelpCircle, color: "bg-amber-100 text-amber-700", path: "/settings?tab=support" },
+    // OWNER-ACCESS-02 §9 — só entra no array (e portanto só aparece no menu Conta) quando isAdmin=true.
+    ...(isAdmin ? [{ title: "Administração", subtitle: "Tester, Premium+ e contas internas", icon: ShieldCheck, color: "bg-rose-100 text-rose-700", path: "/settings?tab=admin" }] : []),
   ];
 
   if (settingsLoading && !hasInitialized.current) {
@@ -389,24 +527,32 @@ export default function Settings() {
     return (
       <Layout>
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-10">
-          <section className="bg-gradient-to-br from-primary to-primary/80 text-white rounded-[2rem] p-6 lg:p-8 shadow-xl shadow-primary/15 mb-6">
-            <div className="flex items-center gap-4">
-              <button type="button" onClick={() => logoInputRef.current?.click()} disabled={isUploadingLogo} className="relative w-14 h-14 rounded-2xl bg-white/15 border border-white/20 flex items-center justify-center font-black text-2xl overflow-hidden disabled:opacity-60" aria-label="Alterar logo da loja">
-                {formSettings?.storeLogo ? <img src={formSettings.storeLogo} alt="Logo da loja" className="w-full h-full object-cover" loading="lazy" decoding="async" width={56} height={56} /> : "R"}
-                <span className="absolute inset-x-0 bottom-0 bg-black/45 text-[8px] font-bold py-0.5">{isUploadingLogo ? "Enviando" : "Alterar"}</span>
-              </button>
-              <input ref={logoInputRef} type="file" accept="image/*" className="hidden" onChange={handleLogoChange} />
-              <div><p className="text-sm font-medium text-white/75">Revenda Smart</p><h1 className="text-2xl lg:text-3xl font-semibold tracking-tight mt-1">Olá, {displayName}!</h1><p className="text-sm text-white/75 mt-1">Gerencie sua conta e sua loja.</p></div>
-            </div>
-          </section>
+          <AccountHero displayName={displayName} logoUrl={formSettings?.storeLogo} />
           <div className="bg-white rounded-[2rem] border border-border/60 shadow-sm overflow-hidden divide-y divide-border/50">
-            {accountMenu.map(item => <button key={item.title} onClick={() => { const tab = new URL(item.path, window.location.origin).searchParams.get("tab"); if (tab) setActiveTab(tab); setLocation(item.path); }} className="w-full flex items-center gap-4 p-4 sm:p-5 text-left hover:bg-slate-50 active:bg-slate-100 transition-colors">
-              <div className={`w-11 h-11 rounded-2xl flex items-center justify-center flex-shrink-0 ${item.color}`}><item.icon className="w-5 h-5" /></div>
-              <div className="flex-1 min-w-0"><p className="text-sm sm:text-base font-bold">{item.title}</p><p className="text-xs text-muted-foreground mt-0.5">{item.subtitle}</p></div><ChevronRight className="w-5 h-5 text-muted-foreground/50" />
-            </button>)}
-            <button onClick={handleLogout} className="w-full flex items-center gap-4 p-4 sm:p-5 text-left hover:bg-red-50 transition-colors">
-              <div className="w-11 h-11 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center"><LogOut className="w-5 h-5" /></div><div className="flex-1"><p className="text-sm sm:text-base font-bold text-red-600">Sair</p><p className="text-xs text-red-500/70 mt-0.5">Encerrar sessão</p></div><ChevronRight className="w-5 h-5 text-red-300" />
-            </button>
+            {accountMenu.map(item => (
+              <AccountMenuItem
+                key={item.title}
+                icon={item.icon}
+                iconClassName={item.color}
+                title={item.title}
+                subtitle={item.subtitle}
+                disabled={item.disabled}
+                badge={item.badge}
+                onClick={item.disabled ? undefined : () => {
+                  const tab = new URL(item.path, window.location.origin).searchParams.get("tab");
+                  if (tab) setActiveTab(tab);
+                  setLocation(item.path);
+                }}
+              />
+            ))}
+            <AccountMenuItem
+              icon={LogOut}
+              iconClassName="bg-red-100 text-red-600"
+              title="Sair"
+              subtitle="Encerrar sessão"
+              tone="danger"
+              onClick={handleLogout}
+            />
           </div>
           <div className="mt-5 text-center text-muted-foreground" aria-label="Versão instalada do aplicativo">
             <p className="text-[11px] font-semibold" data-testid="account-app-version">Revenda Smart v{APP_VERSION}</p>
@@ -462,14 +608,100 @@ export default function Settings() {
                 <InputField label="E-mail" value={currentUserEmail || ""} disabled={true} />
                 <InputField label="WhatsApp" value={formSettings?.whatsapp} onChange={(v: string) => setFormSettings({...formSettings, whatsapp: v})} />
               </div>
-              <button data-testid="button-go-to-mp-settings" onClick={() => setLocation("/settings/mercadopago")} className="w-full flex items-center justify-between bg-white border border-border/60 py-4 px-5 rounded-2xl shadow-sm"><div className="flex items-center gap-3"><CreditCard className="w-5 h-5 text-[#009EE3]" /><div className="text-left"><p className="text-sm font-bold">Mercado Pago</p><p className="text-xs text-muted-foreground">Gerenciar conta de recebimento</p></div></div><ChevronRight className="w-5 h-5 text-muted-foreground" /></button>
+              <button data-testid="button-go-to-mp-settings" onClick={() => setLocation("/settings/mercadopago")} className="w-full flex items-center justify-between bg-white border border-border/60 py-4 px-5 rounded-2xl shadow-sm">
+                <div className="flex items-center gap-3">
+                  <CreditCard className="w-5 h-5 text-[#009EE3]" />
+                  <div className="text-left">
+                    <p className="text-sm font-bold">Mercado Pago</p>
+                    <p className="text-xs text-muted-foreground">Gerencie sua conta de recebimento</p>
+                    <p className={`mt-1 text-[10px] font-bold uppercase tracking-wide ${isMercadoPagoConnected ? "text-green-600" : "text-muted-foreground"}`} data-testid="text-mercadopago-status">
+                      {isMercadoPagoConnected ? "✓ Conectado" : "Não conectado"}
+                    </p>
+                  </div>
+                </div>
+                <ChevronRight className="w-5 h-5 text-muted-foreground" />
+              </button>
+
+              <SaveChangesButton onClick={handleSave} disabled={!hasPendingChanges || isSaving} isSaving={isSaving} testId="button-save-account" />
+
+              {/* RELEASE-03B — ponto de entrada in-app para a exclusão de conta.
+                  Sem dark pattern: a ação é visível, rotulada exatamente pelo que faz e explica a
+                  consequência antes do toque. Toda a lógica (confirmação, DELETE /api/account,
+                  logout, limpeza local) continua morando só em /account-deletion — aqui é apenas
+                  navegação, nunca uma segunda implementação da exclusão. */}
+              <section aria-labelledby="settings-danger-zone-title" className="pt-2 bg-white border border-red-200 rounded-2xl overflow-hidden shadow-sm">
+                <h3 id="settings-danger-zone-title" className="text-[10px] font-black text-muted-foreground uppercase tracking-widest px-5 pb-1">
+                  Zona de perigo
+                </h3>
+                {/* Reaproveita o item de menu da própria tela de Conta (variante `danger`) em vez de
+                    remarcar o mesmo layout à mão — consistência visual e sem custo extra de bundle. */}
+                <AccountMenuItem
+                  icon={Trash2}
+                  iconClassName="bg-red-100 text-red-600"
+                  title="Excluir minha conta"
+                  subtitle="Remove permanentemente sua conta e seus dados. Ação irreversível."
+                  tone="danger"
+                  testId="button-delete-account"
+                  onClick={() => setLocation("/account-deletion")}
+                />
+              </section>
             </div>
           )}
           {activeTab === 'store' && (
             <div className="space-y-5 animate-in fade-in slide-in-from-right-4">
               <div><p className="text-xs font-black text-violet-700 uppercase tracking-wider">Minha Loja</p><h2 className="text-2xl font-black mt-1">Nome, tema e nicho</h2><p className="text-sm text-muted-foreground mt-1">Ajuste a identidade da loja.</p></div>
+
+              {/* Logo compacto: mesma função de sempre (alterar logo da loja), só que como uma linha
+                  única em vez do card grande — a referência desta rodada não reserva espaço pra ele. */}
+              <div className="flex items-center gap-3">
+                <button type="button" onClick={() => logoInputRef.current?.click()} disabled={isUploadingLogo} className="relative w-11 h-11 shrink-0 rounded-xl bg-primary/10 border border-primary/15 flex items-center justify-center font-black text-sm text-primary overflow-hidden disabled:opacity-60" aria-label="Alterar logo da loja">
+                  {formSettings?.storeLogo ? <img src={formSettings.storeLogo} alt="Logo da loja" className="w-full h-full object-cover" loading="lazy" decoding="async" width={44} height={44} /> : (formSettings?.storeName || "R").charAt(0).toLocaleUpperCase("pt-BR")}
+                </button>
+                <input ref={logoInputRef} type="file" accept="image/*" className="hidden" onChange={handleLogoChange} />
+                <button type="button" onClick={() => logoInputRef.current?.click()} disabled={isUploadingLogo} className="text-xs font-semibold text-muted-foreground disabled:opacity-60">
+                  {isUploadingLogo ? "Enviando logo..." : "Logo da loja · toque para alterar"}
+                </button>
+              </div>
+
               <InputField label="Nome da Loja" value={formSettings?.storeName} onChange={(v: string) => setFormSettings({...formSettings, storeName: v})} />
               <InputField label="WhatsApp" value={formSettings?.whatsapp} onChange={(v: string) => setFormSettings({...formSettings, whatsapp: v})} />
+              {/* Só o rótulo visual da área de pedidos: rota /orders, coleção e status internos não mudam. */}
+              <InputField
+                label="Nome da área de pedidos"
+                value={formSettings?.featureLabels?.orders}
+                placeholder={ORDERS_FEATURE_LABEL}
+                maxLength={ORDERS_FEATURE_LABEL_MAX_LENGTH}
+                hint="Esse nome aparecerá no menu e na área de pedidos."
+                onChange={(v: string) => setFormSettings({ ...formSettings, featureLabels: { ...formSettings?.featureLabels, orders: v } })}
+              />
+
+              <div className="rs-store-card rs-store-premium-panel">
+                <div className="rs-store-panel-head">
+                  <div>
+                    <h3>Aparência do app</h3>
+                    <p>Escolha entre claro, escuro, ou acompanhar o sistema do aparelho.</p>
+                  </div>
+                </div>
+                <div className="rs-store-choice-row">
+                  <div>
+                    {([
+                      { id: "system" as const, label: "Sistema", icon: Monitor },
+                      { id: "light" as const, label: "Claro", icon: Sun },
+                      { id: "dark" as const, label: "Escuro", icon: Moon },
+                    ]).map((option) => (
+                      <button
+                        key={option.id}
+                        type="button"
+                        data-testid={`button-appearance-${option.id}`}
+                        onClick={() => handleSelectAppearanceMode(option.id)}
+                        className={(appearanceTheme ?? "system") === option.id ? "is-selected" : ""}
+                      >
+                        <option.icon className="h-3.5 w-3.5" aria-hidden="true" /> {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
 
               <div className="rs-store-card rs-store-premium-panel">
                 <div className="rs-store-panel-head">
@@ -486,10 +718,9 @@ export default function Settings() {
 
                 <div className="rs-store-theme-grid" aria-label="Trocar tema">
                   {APP_THEMES.map((theme) => (
-                    <button key={theme.id} type="button" onClick={() => updateStoreTheme(theme.id)} className={`rs-store-theme-option ${selectedThemeId === theme.id ? "is-selected" : ""}`}>
+                    <button key={theme.id} type="button" onClick={() => updateStoreTheme(theme.id)} title={theme.description} className={`rs-store-theme-option ${selectedThemeId === theme.id ? "is-selected" : ""}`}>
                       <span className={`rs-store-theme-swatch bg-gradient-to-br ${theme.swatch}`} />
                       <strong>{theme.label}</strong>
-                      <small>{theme.description}</small>
                     </button>
                   ))}
                 </div>
@@ -540,14 +771,15 @@ export default function Settings() {
                     const config = NICHO_CONFIG[nicho as NichoId];
                     const isSelected = selectedBusinessTypes.includes(nicho as NichoId);
                     return (
-                      <button key={nicho} type="button" onClick={() => toggleBusinessType(nicho as NichoId)} className={isSelected ? "is-selected" : ""}>
-                        <strong>{config?.label || nicho}</strong>
-                        <small>{config?.desc || "Nicho da loja"}</small>
+                      <button key={nicho} type="button" onClick={() => toggleBusinessType(nicho as NichoId)} title={config?.desc || undefined} className={isSelected ? "is-selected" : ""}>
+                        {config?.label || nicho}
                       </button>
                     );
                   })}
                 </div>
               </div>
+
+              <SaveChangesButton onClick={handleSave} disabled={!hasPendingChanges || isSaving} isSaving={isSaving} testId="button-save-store" />
             </div>
           )}
 
@@ -557,6 +789,10 @@ export default function Settings() {
               <div className="p-4 bg-green-50 border border-green-200 rounded-2xl">
                 <p className="text-xs font-black text-green-700 uppercase">Chave Pix</p>
                 <p className="text-[10px] text-green-600 mt-1">Usada para receber pedidos feitos pelo catálogo.</p>
+              </div>
+              <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl" data-testid="warning-pix-key-public">
+                <p className="text-xs font-black text-amber-700 uppercase">Atenção: fica visível publicamente</p>
+                <p className="text-[10px] text-amber-700 mt-1">A chave cadastrada aqui aparece para qualquer pessoa que abrir seu catálogo público, para que ela possa pagar por Pix. Se sua chave for um CPF, telefone ou e-mail, essa informação pessoal ficará visível a qualquer visitante. Se preferir, cadastre uma chave aleatória em vez de CPF, telefone ou e-mail.</p>
               </div>
               <InputField label="Chave Pix" value={formSettings?.pixKey} onChange={(v: string) => setFormSettings({...formSettings, pixKey: v})} placeholder="CPF, e-mail, telefone ou chave aleatória" />
             </div>
@@ -669,10 +905,33 @@ export default function Settings() {
                     <Share2 className="w-6 h-6 text-primary" />
                   </div>
                   <div>
-                    <h3 className="text-sm font-black uppercase tracking-widest text-primary">Programa de Indicação</h3>
-                    <p className="text-[10px] text-muted-foreground">Convide amigas e ganhe recompensas</p>
+                    <h3 className="text-sm font-black uppercase tracking-widest text-primary">Indique e ganhe</h3>
+                    <p className="text-[10px] text-muted-foreground">Indique {REFERRAL_REWARD_LIMIT} pessoas que começarem a usar o RevendaSmart e ganhe {REFERRAL_REWARD_DAYS} dias de Premium.</p>
                   </div>
                 </div>
+                {/* RC-04 P1-04 §12/§13 — progresso visual (○ ○ ○ → ● ● ●) + explicação do critério real de
+                    validação, com base exatamente na regra do servidor (server/routes.ts
+                    /api/referral/validate-referral): a indicação só conta quando o convidado cria a conta
+                    E conclui a configuração inicial (onboarding_completed) — nunca só o cadastro. */}
+                <div className="mt-4 flex items-center justify-center gap-2" aria-label={`${referralCount} de ${REFERRAL_REWARD_LIMIT} indicações validadas`} data-testid="referral-progress-dots">
+                  {Array.from({ length: REFERRAL_REWARD_LIMIT }).map((_, index) => (
+                    <span
+                      key={index}
+                      className={`h-3 w-3 rounded-full transition-colors ${index < referralCount ? "bg-primary" : "bg-primary/15"}`}
+                      aria-hidden="true"
+                    />
+                  ))}
+                </div>
+                <p className="mt-2 text-center text-xs font-bold text-foreground" data-testid="text-referral-progress-label">
+                  {referralCount >= REFERRAL_REWARD_LIMIT
+                    ? "Recompensa conquistada — 30 dias Premium adicionados à sua conta."
+                    : referralCount === 0
+                      ? `0 de ${REFERRAL_REWARD_LIMIT} indicações validadas`
+                      : `${referralCount} de ${REFERRAL_REWARD_LIMIT} indicações validadas · falta ${REFERRAL_REWARD_LIMIT - referralCount} para ganhar ${REFERRAL_REWARD_DAYS} dias de Premium`}
+                </p>
+                <p className="mt-2 text-center text-[10px] text-muted-foreground">
+                  A indicação é validada quando a pessoa convidada cria a conta e conclui a configuração inicial (onboarding).
+                </p>
               </div>
 
               {/* GROWTH METRICS SECTION - Real data from Firestore */}
@@ -710,7 +969,7 @@ export default function Settings() {
                         <div className="text-center py-6 text-muted-foreground" data-testid="text-empty-conversions">
                           <Users className="w-12 h-12 mx-auto mb-3 opacity-20" />
                           <p className="text-sm font-medium">Nenhuma indicação convertida ainda</p>
-                          <p className="text-[10px] mt-2 opacity-70">Convide amigas usando seu link. Quando elas completarem o onboarding, aparecerão aqui.</p>
+                          <p className="text-[10px] mt-2 opacity-70">Convide amigas usando seu link. Quando elas se cadastrarem por ele, aparecerão aqui.</p>
                         </div>
                       ) : (
                         <div className="space-y-3">
@@ -735,7 +994,18 @@ export default function Settings() {
                 </div>
               )}
 
-              {/* REWARD ELIGIBILITY SECTION - Base for future reward system */}
+              {/*
+                RELEASE-27: esta seção mostrava `user_settings.reward_eligible_conversions` /
+                `reward_granted_count` — contadores incrementados no MOMENTO do cadastro da indicada
+                (server/routes.ts, rota /api/user/settings), sem exigir onboarding completo nem a idade
+                mínima de conta antiabuso. A recompensa REAL (Premium via `premiumSource:
+                "referral_reward"`) só é concedida pelo caminho separado /api/referral/validate-referral,
+                que exige onboarding_completed + conta com idade mínima + evento validado, e usa
+                `planData.referralCount`. Os dois números podiam divergir — a tela prometia uma
+                recompensa que o back-end nunca de fato concedia por aquele caminho. Trocado para mostrar
+                o MESMO dado que decide a recompensa de verdade (usePlan().referralCount), nunca um
+                contador paralelo.
+              */}
               {settingsLoading ? (
                 <div className="p-6 bg-gradient-to-r from-amber-50 to-yellow-50 rounded-2xl border border-amber-100 animate-pulse space-y-3">
                   <div className="h-6 bg-amber-200 rounded-lg"></div>
@@ -748,53 +1018,31 @@ export default function Settings() {
                     <h3 className="text-xs font-black uppercase tracking-widest text-amber-900 mb-4">Seu Saldo de Recompensas</h3>
 
                     {(() => {
-                      const eligibleConversions = firestoreSettings?.reward_eligible_conversions || 0;
-                      const grantedCount = firestoreSettings?.reward_granted_count || 0;
-                      const lastGrantedAt = firestoreSettings?.reward_last_granted_at;
-
-                      const lastGrantedDate = lastGrantedAt ? (() => {
+                      const referralRewardActive = activePlan === "premium" && planData?.premiumSource === "referral_reward";
+                      const expiresAtLabel = referralRewardActive && planData?.premiumExpiresAt ? (() => {
                         try {
-                          const date = new Date(lastGrantedAt);
-                          return date.toLocaleDateString('pt-BR', {
-                            year: 'numeric',
-                            month: 'long',
-                            day: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit'
-                          });
+                          return new Date(planData.premiumExpiresAt as string).toLocaleDateString('pt-BR', { year: 'numeric', month: 'long', day: 'numeric' });
                         } catch {
-                          return lastGrantedAt;
+                          return null;
                         }
                       })() : null;
 
-                      return (eligibleConversions === 0 && grantedCount === 0) ? (
-                        <div className="text-center py-6 text-amber-900/60">
-                          <p className="text-[11px] font-medium">Nenhuma recompensa disponível ainda</p>
-                          <p className="text-[9px] mt-2 opacity-75">Suas indicações convertidas gerarão recompensas que aparecerão aqui</p>
-                        </div>
-                      ) : (
+                      return (
                         <div className="space-y-3">
-                          {/* Elegíveis Section */}
-                          {eligibleConversions > 0 && (
-                            <div className="p-4 bg-white/80 rounded-xl border border-amber-200/70 space-y-2">
-                              <div className="flex items-center justify-between">
-                                <span className="text-[10px] font-bold text-amber-900/70 uppercase tracking-wider">Disponíveis para Concessão</span>
-                                <span className="text-2xl font-black text-amber-700" data-testid="value-reward-eligible">{eligibleConversions}</span>
-                              </div>
-                              <p className="text-[9px] text-amber-900/60">Baseado em suas indicações convertidas</p>
+                          <div className="p-4 bg-white/80 rounded-xl border border-amber-200/70 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-bold text-amber-900/70 uppercase tracking-wider">Indicações validadas</span>
+                              <span className="text-2xl font-black text-amber-700" data-testid="value-reward-eligible">{referralCount}/{REFERRAL_REWARD_LIMIT}</span>
                             </div>
-                          )}
+                            <p className="text-[9px] text-amber-900/60">
+                              A cada {REFERRAL_REWARD_LIMIT} indicações que completarem o cadastro, você ganha 30 dias de Premium.
+                            </p>
+                          </div>
 
-                          {/* Concedidas Section */}
-                          {grantedCount > 0 && (
-                            <div className="p-4 bg-green-50/80 rounded-xl border border-green-200/70 space-y-2">
-                              <div className="flex items-center justify-between">
-                                <span className="text-[10px] font-bold text-green-900/70 uppercase tracking-wider">Recompensas Concedidas</span>
-                                <span className="text-2xl font-black text-green-700" data-testid="value-reward-granted">{grantedCount}</span>
-                              </div>
-                              {lastGrantedDate && (
-                                <p className="text-[9px] text-green-900/60">Última concessão: {lastGrantedDate}</p>
-                              )}
+                          {referralRewardActive && (
+                            <div className="p-4 bg-green-50/80 rounded-xl border border-green-200/70 space-y-2" data-testid="value-reward-granted">
+                              <span className="text-[10px] font-bold text-green-900/70 uppercase tracking-wider">Premium por indicação ativo</span>
+                              {expiresAtLabel && <p className="text-[9px] text-green-900/60">Válido até {expiresAtLabel}</p>}
                             </div>
                           )}
                         </div>
@@ -805,25 +1053,24 @@ export default function Settings() {
               )}
 
               <div className="space-y-4">
+                {/* RC-04 P1-04 §11: código isolado do link (era só embutido no link antes). Helper único
+                   (copyReferralValue, definido acima do JSX de retorno) evita duplicar clipboard/mensagem/
+                   telemetria nos dois botões. */}
                 <div>
-                  <label className="text-[10px] font-black text-muted-foreground uppercase px-1 tracking-widest mb-2 block">Seu Link de Referência</label>
+                  <label className="text-[10px] font-black text-muted-foreground uppercase px-1 tracking-widest mb-2 block">Seu Código</label>
                   <div className="flex gap-2">
-                    <input
-                      readOnly
-                      value={`https://revendasmart.vercel.app?referral=${firebaseUid || 'seu-id'}`}
-                      className="flex-1 bg-secondary/50 border-none rounded-2xl p-4 text-xs focus:ring-2 focus:ring-primary/20 outline-none"
-                    />
-                    <button
-                      onClick={() => {
-                        const link = `https://revendasmart.vercel.app?referral=${firebaseUid || 'seu-id'}`;
-                        navigator.clipboard.writeText(link);
-                        setSaveMessage("Link copiado!");
-                        setTimeout(() => setSaveMessage(""), 3000);
-                        logTelemetryEvent("referral_link_copied", { origin: "settings_growth" }).catch(() => {});
-                      }}
-                      className="bg-primary text-white font-black px-5 rounded-2xl flex items-center gap-2 uppercase text-[10px] active:scale-95 transition-all hover:shadow-md"
-                      data-testid="button-copy-referral"
-                    >
+                    <input readOnly value={referralCode || 'Carregando...'} className="flex-1 bg-secondary/50 border-none rounded-2xl p-4 text-sm font-black tracking-widest outline-none" data-testid="text-referral-code" />
+                    <button onClick={() => copyReferralValue(referralCode, "Código copiado!")} className="bg-secondary text-foreground font-bold px-5 rounded-2xl flex items-center gap-2 uppercase text-[10px] active:scale-95 transition-all" data-testid="button-copy-referral-code">
+                      <Copy className="w-4 h-4" /> Copiar
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black text-muted-foreground uppercase px-1 tracking-widest mb-2 block">Compartilhar Link</label>
+                  <div className="flex gap-2">
+                    <input readOnly value={referralShareLink || 'Carregando seu link...'} className="flex-1 bg-secondary/50 border-none rounded-2xl p-4 text-xs focus:ring-2 focus:ring-primary/20 outline-none" />
+                    <button onClick={() => copyReferralValue(referralShareLink, "Link copiado!")} className="bg-primary text-white font-black px-5 rounded-2xl flex items-center gap-2 uppercase text-[10px] active:scale-95 transition-all hover:shadow-md" data-testid="button-copy-referral">
                       <Save className="w-4 h-4" /> Copiar
                     </button>
                   </div>
@@ -831,7 +1078,7 @@ export default function Settings() {
 
                 <div className="bg-white p-4 rounded-2xl border border-border">
                   <p className="text-[11px] text-muted-foreground leading-relaxed">
-                    <strong>Como funciona:</strong> Compartilhe seu link com amigas consultoras. Quando elas se registrarem usando seu link, você ganha recompensas exclusivas!
+                    <strong>Como funciona:</strong> Compartilhe seu código ou link com amigas consultoras. A indicação é validada quando a pessoa convidada cria a conta e conclui a configuração inicial. A cada {REFERRAL_REWARD_LIMIT} indicações validadas, você ganha {REFERRAL_REWARD_DAYS} dias de Premium grátis.
                   </p>
                 </div>
 
@@ -839,31 +1086,36 @@ export default function Settings() {
                   <p className="text-[10px] font-bold text-foreground uppercase tracking-wider">Compartilhe via:</p>
                   <div className="flex gap-2 flex-wrap">
                     <button
-                      onClick={() => {
-                        const link = `https://revendasmart.vercel.app?referral=${firebaseUid || 'seu-id'}`;
-                        const text = `Confira o Revenda Smart! Gestão inteligente para quem vende. ${link}`;
-                        const canShare = typeof navigator.share === "function";
-                        const method = canShare ? "native_share" : "direct_share";
+                      onClick={async () => {
+                        const link = referralShareLink;
+                        if (!link) return;
+                        const text = `Estou usando o RevendaSmart para organizar minhas vendas, estoque e catálogo. Use meu código de indicação: ${referralCode || ""} ou entre direto por aqui: ${link}`;
+
+                        // RC-04 P1-04 §14 — no Android (WebView), `navigator.share` normalmente não existe;
+                        // o mecanismo real já usado pelo app para compartilhamento nativo é o plugin
+                        // @capacitor/share (mesmo padrão de client/src/lib/marketing-share.ts), nunca chamado
+                        // aqui antes desta correção — o botão silenciosamente só copiava o texto no Android.
+                        const { Capacitor } = await import("@capacitor/core");
+                        const isNative = Capacitor.isNativePlatform();
+                        const method: "native_share" | "direct_share" = isNative ? "native_share" : "direct_share";
                         logTelemetryEvent("referral_share_initiated", { method, origin: "settings_growth" }).catch(() => {});
 
-                        if (canShare) {
-                          navigator.share({ title: "Revenda Smart", text })
-                            .then(() => {
-                              logTelemetryEvent("referral_share_success", { method: "native_share" }).catch(() => {});
-                              setSaveMessage("Compartilhado.");
-                              notifySuccess("Catálogo compartilhado.");
-                              setTimeout(() => setSaveMessage(""), 3000);
-                            })
-                            .catch((err) => {
-                              notifyWarning("Operação cancelada.");
-                              logTelemetryEvent("referral_share_failed", { method: "native_share", reason: err?.message || "unknown" }).catch(() => {});
-                            });
-                        } else {
-                          navigator.clipboard.writeText(text);
-                          logTelemetryEvent("referral_share_success", { method: "direct_share" }).catch(() => {});
-                          setSaveMessage("Texto copiado.");
-                          notifySuccess("Texto copiado.");
-                          setTimeout(() => setSaveMessage(""), 3000);
+                        try {
+                          if (isNative) {
+                            const { Share } = await import("@capacitor/share");
+                            await Share.share({ title: "Revenda Smart", text });
+                          } else if (typeof navigator.share === "function") {
+                            await navigator.share({ title: "Revenda Smart", text });
+                          } else {
+                            await navigator.clipboard.writeText(text);
+                            setSaveMessage("Texto copiado.");
+                            notifySuccess("Texto copiado.");
+                            setTimeout(() => setSaveMessage(""), 3000);
+                          }
+                          logTelemetryEvent("referral_share_success", { method }).catch(() => {});
+                        } catch (err) {
+                          notifyWarning("Operação cancelada.");
+                          logTelemetryEvent("referral_share_failed", { method, reason: (err as Error)?.message || "unknown" }).catch(() => {});
                         }
                       }}
                       className="bg-secondary text-foreground font-bold px-4 py-2 rounded-xl text-[10px] uppercase active:scale-95 transition-all flex items-center gap-2"
@@ -872,7 +1124,8 @@ export default function Settings() {
                     </button>
                     <button
                       onClick={() => {
-                        const link = `https://revendasmart.vercel.app?referral=${firebaseUid || 'seu-id'}`;
+                        const link = referralShareLink;
+                        if (!link) return;
                         navigator.clipboard.writeText(link);
                         setSaveMessage("Link copiado para compartilhar!");
                         setTimeout(() => setSaveMessage(""), 3000);
@@ -886,6 +1139,15 @@ export default function Settings() {
                 </div>
               </div>
             </div>
+          )}
+
+          {/* OWNER-ACCESS-02 §9/§12 — dupla checagem: além de só entrar no menu quando isAdmin (acima),
+              o próprio conteúdo só renderiza com isAdmin=true, mesmo que alguém force `?tab=admin` na URL.
+              Cada mutação real ainda passa por requireAdmin no servidor de qualquer forma. */}
+          {activeTab === 'admin' && isAdmin && (
+            <Suspense fallback={<PageSkeleton variant="cards" />}>
+              <AdminGrantsPanel />
+            </Suspense>
           )}
 
           {activeTab === 'backup' && (
@@ -915,6 +1177,7 @@ export default function Settings() {
                       const date = new Date().toISOString().split('T')[0];
                       a.download = `revendasmart-backup-${date}.json`;
                       a.click();
+                      window.URL.revokeObjectURL(url);
                       setSaveMessage("Backup exportado.");
                       notifySuccess("Backup exportado.");
                       setTimeout(() => setSaveMessage(""), 3000);
@@ -963,12 +1226,14 @@ export default function Settings() {
                     const data = getStored(STORAGE_KEYS.CLIENTS, []);
                     const headers = ["ID", "Nome", "Telefone", "Email", "Notas"];
                     const rows = data.map((c: any) => [c.id, c.name, c.phone, c.email || "", c.notes || ""]);
-                    const csv = [headers, ...rows].map(r => r.join(",")).join("\n");
+                    const csv = [headers, ...rows].map(r => toCsvRow(r)).join("\n");
                     const blob = new Blob(["\ufeff" + csv], { type: 'text/csv;charset=utf-8;' });
                     const link = document.createElement("a");
-                    link.href = URL.createObjectURL(blob);
+                    const url = URL.createObjectURL(blob);
+                    link.href = url;
                     link.download = `clientes-${new Date().toISOString().split('T')[0]}.csv`;
                     link.click();
+                    URL.revokeObjectURL(url);
                   }}
                   className="w-full bg-white border border-border text-foreground font-bold py-4 rounded-xl text-xs uppercase flex items-center justify-center gap-2 active:scale-95 transition-all shadow-sm"
                 >
@@ -980,12 +1245,14 @@ export default function Settings() {
                     const data = getStored(STORAGE_KEYS.SALES, []);
                     const headers = ["ID", "Cliente ID", "Total", "Pagamento", "Data"];
                     const rows = data.map((s: any) => [s.id, s.clientId, s.totalPrice, s.paymentType, s.date]);
-                    const csv = [headers, ...rows].map(r => r.join(",")).join("\n");
+                    const csv = [headers, ...rows].map(r => toCsvRow(r)).join("\n");
                     const blob = new Blob(["\ufeff" + csv], { type: 'text/csv;charset=utf-8;' });
                     const link = document.createElement("a");
-                    link.href = URL.createObjectURL(blob);
+                    const url = URL.createObjectURL(blob);
+                    link.href = url;
                     link.download = `vendas-${new Date().toISOString().split('T')[0]}.csv`;
                     link.click();
+                    URL.revokeObjectURL(url);
                   }}
                   className="w-full bg-white border border-border text-foreground font-bold py-4 rounded-xl text-xs uppercase flex items-center justify-center gap-2 active:scale-95 transition-all shadow-sm"
                 >
@@ -997,12 +1264,14 @@ export default function Settings() {
                     const data = getStored(STORAGE_KEYS.INSTALLMENTS, []);
                     const headers = ["ID", "Venda ID", "Cliente ID", "Valor", "Vencimento", "Status"];
                     const rows = data.map((i: any) => [i.id, i.saleId, i.clientId, i.amount, i.dueDate, i.status]);
-                    const csv = [headers, ...rows].map(r => r.join(",")).join("\n");
+                    const csv = [headers, ...rows].map(r => toCsvRow(r)).join("\n");
                     const blob = new Blob(["\ufeff" + csv], { type: 'text/csv;charset=utf-8;' });
                     const link = document.createElement("a");
-                    link.href = URL.createObjectURL(blob);
+                    const url = URL.createObjectURL(blob);
+                    link.href = url;
                     link.download = `faturamento-${new Date().toISOString().split('T')[0]}.csv`;
                     link.click();
+                    URL.revokeObjectURL(url);
                   }}
                   className="w-full bg-white border border-border text-foreground font-bold py-4 rounded-xl text-xs uppercase flex items-center justify-center gap-2 active:scale-95 transition-all shadow-sm"
                 >
@@ -1041,7 +1310,7 @@ export default function Settings() {
 6. Defina o estoque
 7. Clique em Salvar
 
-Dica: Deixe o estoque > 0 para aparecer no catálogo público.`
+Dica: produtos sem estoque podem continuar visíveis no catálogo, mas ficam indisponíveis para pedido.`
                 },
                 {
                   title: '🏪 Como Usar o Catálogo',
@@ -1053,7 +1322,7 @@ Dica: Deixe o estoque > 0 para aparecer no catálogo público.`
    - Link fica em Configurações → Link do Catálogo
    - Copie e compartilhe por WhatsApp, Instagram, etc
 
-Apenas produtos com estoque > 0 aparecem!`
+Produtos sem estoque podem continuar visíveis no catálogo, mas ficam indisponíveis para pedido.`
                 },
                 {
                   title: '📢 Como Gerar Anúncio / Marketing',
@@ -1206,7 +1475,7 @@ Dica: Descreva seu problema e se possível anexe uma screenshot do erro.`
 
                 {/* Privacy Policy */}
                 <a
-                  href={getApiUrl("/api/legal/privacy-policy")}
+                  href={buildPublicAppUrl("/privacy-policy")}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="w-full flex items-center justify-between bg-white border border-border/60 p-4 rounded-2xl shadow-sm hover:bg-primary/5 transition-colors"
@@ -1224,7 +1493,7 @@ Dica: Descreva seu problema e se possível anexe uma screenshot do erro.`
 
                 {/* Terms of Service */}
                 <a
-                  href={getApiUrl("/api/legal/terms-of-service")}
+                  href={buildPublicAppUrl("/terms-of-service")}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="w-full flex items-center justify-between bg-white border border-border/60 p-4 rounded-2xl shadow-sm hover:bg-primary/5 transition-colors"
@@ -1278,11 +1547,11 @@ Dica: Descreva seu problema e se possível anexe uma screenshot do erro.`
           )}
         </div>
 
-        <div className="fixed bottom-[calc(6rem+env(safe-area-inset-bottom))] left-0 right-0 p-4 max-w-md mx-auto z-40">
-          <button onClick={handleSave} className="w-full bg-primary text-white font-black py-4 rounded-[2rem] shadow-xl flex items-center justify-center gap-2 uppercase text-xs">
-            <Save className="w-4 h-4" /> Salvar Alterações
-          </button>
-        </div>
+        {(activeTab === 'pix' || activeTab === 'catalog' || activeTab === 'preferences') && (
+          <div className="fixed bottom-[calc(6rem+env(safe-area-inset-bottom))] left-0 right-0 p-4 max-w-md mx-auto z-40">
+            <SaveChangesButton onClick={handleSave} disabled={!hasPendingChanges || isSaving} isSaving={isSaving} testId="button-save-floating" floating />
+          </div>
+        )}
       </div>
     </Layout>
   );

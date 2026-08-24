@@ -1,4 +1,5 @@
 import { initializeFirebaseAdmin } from "./firebase-admin-init.js";
+import { maskId, maskPhone } from "./logger.js";
 
 interface Product {
   id: string;
@@ -35,7 +36,9 @@ interface Installment {
 async function audit() {
   const TARGET_UID = "F1cB0wulSwferWbqLBVJHTlcaLo2";
   
-  console.log(`\n🔍 AUDITORIA FIRESTORE - UID: ${TARGET_UID}\n`);
+  // LGPD §11 (REVENDASMART-LGPD-ANPD-REMEDIATION-01): uid mascarado — este script imprime no stdout de
+  // quem o roda, que costuma ir para scrollback de terminal ou log de CI, nunca deve conter PII crua.
+  console.log(`\n🔍 AUDITORIA FIRESTORE - UID: ${maskId(TARGET_UID)}\n`);
 
   try {
     await initializeFirebaseAdmin();
@@ -104,12 +107,13 @@ async function audit() {
       }, null, 2));
     });
 
-    console.log(`\n👥 CLIENTS SAMPLE (top 3):`);
+    // LGPD §11: nome/telefone do cliente do lojista são PII de terceiro — nunca em texto puro no stdout.
+    console.log(`\n👥 CLIENTS SAMPLE (top 3, PII mascarada):`);
     clients.slice(0, 3).forEach(c => {
       console.log(JSON.stringify({
         id: c.id,
-        name: c.name,
-        phone: c.phone
+        name: c.name ? `${c.name.slice(0, 1)}***` : c.name,
+        phone: maskPhone(c.phone)
       }, null, 2));
     });
 

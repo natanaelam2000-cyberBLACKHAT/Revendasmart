@@ -142,31 +142,27 @@ user_logged_out: Record<string, never>;
   };
 
   // Referral Capture (Deep Link Processing)
+  // RELEASE-28: o payload nunca carrega o UID/código bruto — nem em URL nem em telemetria/logs.
   referral_link_opened: {
-    referralUid: string;
     stage: "app_open";
   };
   referral_captured: {
-    referralUid: string;
     stage: "app_open" | "signup";
-    result: "success" | "invalid";
+    result: "success" | "invalid" | "code_not_found" | "resolve_failed";
+    via?: "code" | "legacy_uid";
   };
   referral_applied_client: {
-    referralUid: string;
     stage: "signup_local";
     result: "success" | "pending";
   };
   referral_applied_backend: {
-    referralUid: string;
     stage: "signup_api";
     result: "success" | "invalid_format" | "self_referral" | "referrer_not_found" | "error";
   };
   referral_rejected: {
-    referralUid: string;
     reason: "invalid_format" | "self_referral" | "referrer_not_found" | "api_error" | "already_set";
   };
   referral_already_set: {
-    referralUid: string;
     existingReferralSource: string;
   };
 
@@ -199,6 +195,7 @@ declare global {
  * Initialize internal telemetry in fail-open mode.
  */
 export function initializeInternalTelemetry(_app: FirebaseApp): void {
+  void _app;
   isInitialized = true;
 }
 
@@ -206,10 +203,13 @@ export function initializeInternalTelemetry(_app: FirebaseApp): void {
  * Preserve the public telemetry API without blocking user flows.
  */
 export async function logTelemetryEvent<K extends keyof InternalTelemetryEvents>(
-  _eventName: K,
-  _data: InternalTelemetryEvents[K],
-  _userId?: string
+  eventName: K,
+  data: InternalTelemetryEvents[K],
+  userId?: string
 ): Promise<void> {
+  void eventName;
+  void data;
+  void userId;
   if (!isInitialized) return;
 }
 

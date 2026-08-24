@@ -1,10 +1,20 @@
 import type { AppSettings, Client, Product, Sale } from "@/lib/mock-data";
+import { buildLastSaleByClientId, isClientInactive } from "@/lib/client-activity";
 
 export type HomeSummaryKpiId = "monthlyRevenue" | "monthlyProfit" | "monthlySalesCount" | "monthComparison";
 export const HOME_SUMMARY_KPI_IDS: HomeSummaryKpiId[] = ["monthlyRevenue", "monthlyProfit", "monthlySalesCount", "monthComparison"];
 
 type PriorityTone = "danger" | "warning" | "info";
 type InsightTone = "success" | "warning" | "info";
+
+/**
+ * RELEASE-26: nome do query param que carrega o contexto do card de Prioridades até o destino
+ * (`/products?priority=out-of-stock`, `/clients?priority=inactive-clients`). Os VALORES são os
+ * próprios `id` de HomePriorityItem — um só vocabulário, nunca uma segunda lista de strings que
+ * pudesse desalinhar do que o card realmente representa. products.tsx/clients.tsx leem este mesmo
+ * nome de param para aplicar o filtro correspondente.
+ */
+export const PRIORITY_QUERY_PARAM = "priority";
 
 export interface HomePriorityItem {
   id: string;
@@ -59,8 +69,6 @@ interface HomeDashboardInput {
   referenceDate?: Date;
 }
 
-const DAY_MS = 86_400_000;
-
 export function formatHomeCurrency(value: number): string {
   const safe = Number.isFinite(value) ? value : 0;
   return safe.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -100,13 +108,25 @@ function saleTotal(sale: Sale): number {
   return safeNumber(sale.totalPrice ?? sale.total ?? sale.subtotal);
 }
 
-function saleProfit(sale: Sale, productsById: Map<string, Product>): number {
+/**
+ * RELEASE-26: custo dos itens de UMA venda — nunca "receita do item menos custo". A receita exibida
+ * (`saleTotal`, `sale.totalPrice`) já é o valor final COM desconto do carrinho aplicado; os preços de
+ * `sale.products[].price` são por unidade, ANTES desse desconto. A versão antiga somava
+ * quantidade × (preço-do-item SEM desconto − custo) e chamava isso de "lucro do mês" — uma base maior
+ * que a receita exibida, então o lucro podia ficar MAIOR que o faturamento sempre que houvesse
+ * desconto relevante (o "R$ 400,00 de faturamento / R$ 403,90 de lucro" observado em produção).
+ *
+ * Correção: lucro = receita (já com desconto) − custo (soma de quantidade × custo cadastrado do
+ * produto, o desconto do carrinho não muda quanto o produto custou). Produto sem `costPrice` continua
+ * contribuindo custo 0 — nunca um custo inventado. Produto excluído do catálogo depois da venda
+ * também continua contribuindo custo 0 (mesmo comportamento de antes: sem dado, sem suposição).
+ */
+function saleCost(sale: Sale, productsById: Map<string, Product>): number {
   return (sale.products || []).reduce((sum, item) => {
     const product = productsById.get(item.productId);
     if (!product) return sum;
     const quantity = safeNumber(item.quantity);
-    const price = safeNumber(item.price);
-    return sum + quantity * (price - safeNumber(product.costPrice));
+    return sum + quantity * safeNumber(product.costPrice);
   }, 0);
 }
 
@@ -195,8 +215,10 @@ export function buildHomeDashboardViewModel({ products, clients, sales, settings
   const productsById = new Map(products.map((product) => [product.id, product]));
   const previousMonth = previousMonthOf(referenceDate);
   const lowStockThreshold = safeNumber(settings.lowStockThreshold) > 0 ? safeNumber(settings.lowStockThreshold) : 3;
-  const lastSaleByClientId = new Map<string, Date>();
-  // Critério preservado: cliente ativo na Home é cliente com venda recente registrada no histórico usado pela tela.
+  // RELEASE-26: extraído para client-activity.ts — é o MESMO critério que /clients usa para aplicar o
+  // filtro "clientes inativos" quando o card de Prioridades leva o usuário até lá. Duas implementações
+  // do mesmo cálculo poderiam divergir (o card diz "24" e a lista filtrada mostra outro número).
+  const lastSaleByClientId = buildLastSaleByClientId(sales);
   const categoryRevenue = new Map<string, number>();
 
   let monthlyRevenue = 0;
@@ -207,15 +229,12 @@ export function buildHomeDashboardViewModel({ products, clients, sales, settings
   for (const sale of sales) {
     const parsedDate = parseSafeDate(sale.date);
     if (!parsedDate) continue;
-    if (sale.clientId) {
-      const currentLastSale = lastSaleByClientId.get(sale.clientId);
-      if (!currentLastSale || parsedDate > currentLastSale) lastSaleByClientId.set(sale.clientId, parsedDate);
-    }
 
     if (sameMonth(parsedDate, referenceDate)) {
       monthlySalesCount += 1;
-      monthlyRevenue += saleTotal(sale);
-      monthlyProfit += saleProfit(sale, productsById);
+      const monthlySaleRevenue = saleTotal(sale);
+      monthlyRevenue += monthlySaleRevenue;
+      monthlyProfit += monthlySaleRevenue - saleCost(sale, productsById);
       for (const item of sale.products || []) {
         const product = productsById.get(item.productId);
         if (!product) continue;
@@ -233,10 +252,7 @@ export function buildHomeDashboardViewModel({ products, clients, sales, settings
   const outOfStockProducts = products.filter((product) => productStock(product) <= 0);
   const lowStockProducts = products.filter((product) => productStock(product) > 0 && productStock(product) <= lowStockThreshold);
   const productsWithoutImage = products.filter((product) => !product.imageUrl && !product.thumbnailUrl);
-  const inactiveClientsCount = clients.filter((client) => {
-    const lastSale = lastSaleByClientId.get(client.id);
-    return Boolean(lastSale && Math.floor((referenceDate.getTime() - lastSale.getTime()) / DAY_MS) >= 60);
-  }).length;
+  const inactiveClientsCount = clients.filter((client) => isClientInactive(lastSaleByClientId.get(client.id), referenceDate)).length;
   const storeName = String(settings.storeName || settings.storeIdentity?.name || "Minha loja").trim() || "Minha loja";
   const catalogActive = settings.enablePublicCatalog !== false && Boolean(settings.catalogSlug || settings.catalog_slug);
 
@@ -257,7 +273,7 @@ export function buildHomeDashboardViewModel({ products, clients, sales, settings
     id: "out-of-stock",
     label: `${outOfStockProducts.length} produto(s) sem estoque`,
     detail: "Reponha antes de divulgar.",
-    path: "/products",
+    path: `/products?${PRIORITY_QUERY_PARAM}=out-of-stock`,
     severity: 1,
     tone: "danger",
   });
@@ -265,7 +281,7 @@ export function buildHomeDashboardViewModel({ products, clients, sales, settings
     id: "low-stock",
     label: `${lowStockProducts.length} produto(s) acabando`,
     detail: `Limite atual: ${lowStockThreshold} unidade(s).`,
-    path: "/products",
+    path: `/products?${PRIORITY_QUERY_PARAM}=low-stock`,
     severity: 2,
     tone: "warning",
   });
@@ -273,7 +289,7 @@ export function buildHomeDashboardViewModel({ products, clients, sales, settings
     id: "inactive-clients",
     label: `${inactiveClientsCount} cliente(s) sem comprar há mais de 60 dias`,
     detail: "Considere uma abordagem de relacionamento.",
-    path: "/clients",
+    path: `/clients?${PRIORITY_QUERY_PARAM}=inactive-clients`,
     severity: 3,
     tone: "warning",
   });
@@ -281,7 +297,7 @@ export function buildHomeDashboardViewModel({ products, clients, sales, settings
     id: "products-without-image",
     label: `${productsWithoutImage.length} produto(s) sem imagem`,
     detail: "Imagens ajudam no catálogo e nas divulgações.",
-    path: "/products",
+    path: `/products?${PRIORITY_QUERY_PARAM}=products-without-image`,
     severity: 4,
     tone: "info",
   });

@@ -123,3 +123,15 @@ export const ACCESS_TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000; // 5 minutes
 export const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;            // 10 minutes
 export const ACCESS_TOKEN_TTL_S = 21600;                      // 6 hours (MP default)
 export const REFRESH_TOKEN_TTL_DAYS = 180;                    // 180 days (MP default)
+
+// ---------------------------------------------------------------------------
+// RELEASE-05 — browser continuity proof for the OAuth callback.
+//
+// The state nonce alone proves the callback carries a value the SERVER issued and hasn't seen
+// consumed yet — it does NOT prove the browser completing the callback is the same one that started
+// the flow (a leaked/copied callback URL would still "work"). An HttpOnly cookie set on the
+// `start-auth` response and required to match the `state` param on `callback` closes that gap: only
+// the browser that received the Set-Cookie response can present it back, and `SameSite=Lax` still
+// allows it to survive the top-level redirect through Mercado Pago's own domain.
+// ---------------------------------------------------------------------------
+export const MP_OAUTH_CONTINUITY_COOKIE = "mp_oauth_attempt";

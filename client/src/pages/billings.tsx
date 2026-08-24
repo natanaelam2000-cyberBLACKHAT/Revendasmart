@@ -17,6 +17,7 @@ import { PaymentLinkModal } from "@/components/PaymentLinkModal";
 import { PartialPaymentModal } from "@/components/PartialPaymentModal";
 import { getApiUrl } from "@/lib/api-config";
 import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
+import { toCsvRow } from "@/lib/export-security";
 import type { Charge } from "../../../shared/charges";
 
 type BillingTab = "installments" | "charges";
@@ -353,16 +354,17 @@ if (type === "reminder") {
   };
 
   const exportCSV = () => {
-    const headers = "Data,Cliente,Valor,Status\n";
+    const headers = toCsvRow(["Data", "Cliente", "Valor", "Status"]) + "\n";
     const rows = billings
-      .map((b) => `${format(parseISO(b.dueDate), "dd/MM/yyyy")},${getRecordClient(b as InstallmentWithClientSnapshot)?.name || "N/A"},${b.amount},${b.status}`)
+      .map((b) => toCsvRow([format(parseISO(b.dueDate), "dd/MM/yyyy"), getRecordClient(b as InstallmentWithClientSnapshot)?.name || "N/A", b.amount, b.status]))
       .join("\n");
-    const blob = new Blob([headers + rows], { type: "text/csv" });
+    const blob = new Blob([`\uFEFF${headers}${rows}`], { type: "text/csv;charset=utf-8;" });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = "cobrancas.csv";
     a.click();
+    window.URL.revokeObjectURL(url);
   };
 
   const reminderInfo = useMemo(() => {

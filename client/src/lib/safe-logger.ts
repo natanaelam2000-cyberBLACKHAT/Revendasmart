@@ -1,12 +1,12 @@
 export type SafeLogLevel = "debug" | "info" | "warn" | "error" | "fatal";
 export type SafeLogContext = Record<string, unknown>;
 
-const IS_PRODUCTION = import.meta.env.PROD;
+const IS_PRODUCTION = Boolean(import.meta.env?.PROD);
 const MAX_STRING_LENGTH = 600;
 const MAX_DEPTH = 4;
 const MAX_ARRAY_ITEMS = 12;
 
-const SENSITIVE_KEY_PATTERN = /token|secret|password|senha|authorization|cookie|private[_-]?key|credential|rawbody|raw_body|payload|client_secret|access[_-]?token|refresh[_-]?token|card|cvv|cpf|rg/i;
+const SENSITIVE_KEY_PATTERN = /token|secret|password|senha|authorization|cookie|private[_-]?key|api[_-]?key|credential|rawbody|raw_body|payload|client_secret|access[_-]?token|refresh[_-]?token|card|cvv|cpf|rg/i;
 const IDENTIFIER_KEYS = new Set([
   "uid",
   "userid",

@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<title>PRO-07H — Premium Creative Composer v1 (Case B)</title>
+<style>
+  body { font-family: system-ui, sans-serif; padding: 16px; background: #111; color: #eee; }
+  pre { white-space: pre-wrap; background: #000; padding: 12px; border-radius: 8px; max-width: 1100px; }
+  .row { display: flex; gap: 24px; align-items: flex-start; margin-bottom: 24px; }
+  canvas { border: 1px solid #555; max-width: 300px; }
+  h2 { font-size: 13px; text-transform: uppercase; color: #999; }
+</style>
+</head>
+<body>
+<h1>PRO-07H — Premium Creative Composer v1 (luxury / editorial / modern)</h1>
+<pre id="log"></pre>
+<div id="canvasHost"></div>
+<script>
+const logEl = document.getElementById("log");
+function log(message) { logEl.textContent += message + "\n"; console.log(message); }
+
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("falha ao carregar " + url));
+    img.src = url;
+  });
+}
+
+/** Converte um `linear-gradient(XXXdeg, cor P%, ...)` do sistema real (buildMarketingProVisualProfile)
+ * para um gradiente de canvas equivalente — mesmas cores, mesmo ângulo, sem inventar paleta nova. */
+function cssLinearGradientToCanvas(ctx, css, width, height) {
+  const match = css.match(/^linear-gradient\(\s*([\d.]+)deg\s*,\s*(.+)\)$/i);
+  if (!match) return null;
+  const angleDeg = parseFloat(match[1]);
+  const stops = match[2].split(/,(?![^(]*\))/).map((part) => {
+    const stopMatch = part.trim().match(/^(#[0-9a-fA-F]{3,8}|rgba?\([^)]+\))\s+([\d.]+)%$/);
+    return stopMatch ? { color: stopMatch[1], offset: parseFloat(stopMatch[2]) / 100 } : null;
+  }).filter(Boolean);
+
+  const angleRad = (angleDeg * Math.PI) / 180;
+  const length = Math.abs(width * Math.sin(angleRad)) + Math.abs(height * Math.cos(angleRad));
+  const cx = width / 2, cy = height / 2;
+  const half = length / 2;
+  const x0 = cx - Math.sin(angleRad) * half;
+  const y0 = cy + Math.cos(angleRad) * half;
+  const x1 = cx + Math.sin(angleRad) * half;
+  const y1 = cy - Math.cos(angleRad) * half;
+
+  const gradient = ctx.createLinearGradient(x0, y0, x1, y1);
+  for (const stop of stops) gradient.addColorStop(stop.offset, stop.color);
+  return gradient;
+}
+
+function rectPx(rect, width, height) {
+  return { x: rect.x * width, y: rect.y * height, width: rect.width * width, height: rect.height * height };
+}
+
+/**
+ * §6: UMA função de desenho, chamada para Preview e para Export com o MESMO payload — nunca duas
+ * implementações. Ordem das camadas: fundo -> decorações -> grounding (glow/pedestal/sombra) ->
+ * PRODUTO (cutout, geometria exata do ProductTransform, nunca tocado) -> texto comercial.
+ */
+function renderCreative(ctx, payload, cutoutImg) {
+  const W = 1080, H = 1350;
+  ctx.clearRect(0, 0, W, H);
+
+  // 1) Fundo — sistema real (buildMarketingProVisualProfile), não inventado aqui.
+  const gradient = cssLinearGradientToCanvas(ctx, payload.profile.backgroundCss, W, H);
+  ctx.fillStyle = gradient || "#111827";
+  ctx.fillRect(0, 0, W, H);
+
+  // 2) Decorações — mesmas do sistema real (profile.decorations), nunca sobre a zona de produto/texto.
+  for (const decoration of payload.profile.decorations) {
+    const rect = rectPx(decoration.rect, W, H);
+    ctx.save();
+    ctx.globalAlpha = decoration.opacity;
+    ctx.fillStyle = decoration.fill;
+    ctx.beginPath();
+    ctx.roundRect(rect.x, rect.y, rect.width, rect.height, Math.min(rect.width, rect.height) / 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // 3) GROUNDING (§5) — só efeitos de camada, nunca tocam o pixel do produto. Glow ambiente atrás do
+  // produto, pedestal/superfície na base da zona de produto, sombra separada sob o footprint do produto.
+  const productBoxPx = rectPx(payload.safeZones.product, W, H);
+  const footprintCenterX = payload.transform.translateX + payload.transform.targetWidth / 2;
+  const footprintBottomY = payload.transform.translateY + payload.transform.targetHeight;
+
+  ctx.save();
+  const glowRadius = Math.max(payload.transform.targetWidth, payload.transform.targetHeight) * 0.85;
+  const glow = ctx.createRadialGradient(footprintCenterX, payload.transform.translateY + payload.transform.targetHeight * 0.45, 0, footprintCenterX, payload.transform.translateY + payload.transform.targetHeight * 0.45, glowRadius);
+  glow.addColorStop(0, payload.profile.accent + "55");
+  glow.addColorStop(1, payload.profile.accent + "00");
+  ctx.fillStyle = glow;
+  ctx.fillRect(productBoxPx.x - 60, productBoxPx.y - 60, productBoxPx.width + 120, productBoxPx.height + 120);
+  ctx.restore();
+
+  ctx.save();
+  ctx.globalAlpha = 0.5;
+  const pedestalGradient = ctx.createLinearGradient(0, footprintBottomY - 10, 0, footprintBottomY + 40);
+  pedestalGradient.addColorStop(0, payload.profile.surfaceCss.includes("rgba") ? "rgba(255,255,255,.5)" : "#ffffff88");
+  pedestalGradient.addColorStop(1, "#00000000");
+  ctx.fillStyle = pedestalGradient;
+  ctx.beginPath();
+  ctx.ellipse(footprintCenterX, footprintBottomY + 4, payload.transform.targetWidth * 0.62, 22, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.save();
+  ctx.globalAlpha = 0.38;
+  ctx.fillStyle = "#000000";
+  ctx.beginPath();
+  ctx.ellipse(footprintCenterX, footprintBottomY + 10, payload.transform.targetWidth * 0.42, 16, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // 4) PRODUTO — geometria EXATA do ProductTransform (uniform-contain, sem crop/stretch/rotate). Nunca
+  // recalculado, nunca outro valor. Nenhum efeito acima altera este drawImage nem os pixels do cutout.
+  ctx.drawImage(cutoutImg, payload.transform.translateX, payload.transform.translateY, payload.transform.targetWidth, payload.transform.targetHeight);
+
+  // 5) Texto comercial — posições vêm dos safeZones canônicos (MARKETING_PRO_FORMATS.portrait.safeZones).
+  const isDark = payload.profile.foreground === "#ffffff";
+  ctx.fillStyle = payload.profile.foreground;
+  ctx.textBaseline = "alphabetic";
+
+  const storeBox = rectPx(payload.safeZones.store, W, H);
+  ctx.font = "900 30px system-ui, sans-serif";
+  ctx.fillText(payload.overlay.storeName, storeBox.x, storeBox.y + storeBox.height * 0.7);
+
+  const nameBox = rectPx(payload.safeZones.productName, W, H);
+  ctx.font = "900 46px system-ui, sans-serif";
+  ctx.fillText(payload.overlay.productName, nameBox.x, nameBox.y + nameBox.height * 0.55);
+  if (payload.overlay.brand) {
+    ctx.font = "600 24px system-ui, sans-serif";
+    ctx.fillStyle = payload.profile.mutedForeground;
+    ctx.fillText(payload.overlay.brand, nameBox.x, nameBox.y + nameBox.height * 0.98);
+    ctx.fillStyle = payload.profile.foreground;
+  }
+
+  const priceBox = rectPx(payload.safeZones.price, W, H);
+  ctx.font = "900 58px system-ui, sans-serif";
+  ctx.fillText(payload.overlay.priceText, priceBox.x, priceBox.y + priceBox.height * 0.85);
+
+  const benefitsBox = rectPx(payload.safeZones.benefits, W, H);
+  ctx.font = "600 22px system-ui, sans-serif";
+  ctx.fillStyle = payload.profile.mutedForeground;
+  ctx.fillText(payload.overlay.benefits.join("  ·  "), benefitsBox.x, benefitsBox.y + benefitsBox.height * 0.7);
+
+  const ctaBox = rectPx(payload.safeZones.cta, W, H);
+  ctx.fillStyle = payload.profile.accent;
+  ctx.beginPath();
+  ctx.roundRect(ctaBox.x, ctaBox.y, ctaBox.width, ctaBox.height, ctaBox.height / 2);
+  ctx.fill();
+  ctx.fillStyle = isDark ? "#111111" : "#ffffff";
+  ctx.font = "900 28px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(payload.overlay.ctaLabel, ctaBox.x + ctaBox.width / 2, ctaBox.y + ctaBox.height / 2 + 10);
+  ctx.textAlign = "left";
+}
+
+function rectsIntersect(a, b) {
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
+async function processStyle(style, cutoutImg) {
+  log(`\n=== ${style} ===`);
+  const prepareResponse = await fetch("/creative/prepare", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ style }),
+  });
+  const prepared = await prepareResponse.json();
+  if (!prepared.ok) {
+    log("REJEITADO (fail-closed): " + prepared.error);
+    return null;
+  }
+  const payload = prepared.payload;
+  log("assetId = " + payload.asset.assetId);
+  log("transform.scale = " + payload.transform.scale);
+
+  const host = document.getElementById("canvasHost");
+  const row = document.createElement("div");
+  row.className = "row";
+  const previewWrap = document.createElement("div");
+  previewWrap.innerHTML = `<h2>Preview — ${style}</h2>`;
+  const previewCanvas = document.createElement("canvas");
+  previewCanvas.width = 1080; previewCanvas.height = 1350;
+  previewWrap.appendChild(previewCanvas);
+  const exportWrap = document.createElement("div");
+  exportWrap.innerHTML = `<h2>Export PNG — ${style}</h2>`;
+  const exportCanvas = document.createElement("canvas");
+  exportCanvas.width = 1080; exportCanvas.height = 1350;
+  exportWrap.appendChild(exportCanvas);
+  row.appendChild(previewWrap);
+  row.appendChild(exportWrap);
+  host.appendChild(row);
+
+  const previewCtx = previewCanvas.getContext("2d");
+  const exportCtx = exportCanvas.getContext("2d");
+  renderCreative(previewCtx, payload, cutoutImg);
+  renderCreative(exportCtx, payload, cutoutImg);
+
+  // Preview/export parity: mesma imagem (comparação de pixel-checksum simples via toDataURL — não é
+  // prova criptográfica, mas os dois canvases vieram do MESMO código com o MESMO payload).
+  const parity = previewCanvas.toDataURL() === exportCanvas.toDataURL();
+  log("preview === export (pixel a pixel via toDataURL): " + parity);
+
+  // Produto nunca ultrapassa a safe-zone do produto (o transform já garante isso via o Gate, aqui é
+  // uma segunda confirmação geométrica, independente).
+  const productBoxPx = { x: payload.safeZones.product.x * 1080, y: payload.safeZones.product.y * 1350, width: payload.safeZones.product.width * 1080, height: payload.safeZones.product.height * 1350 };
+  const withinSafeZone = payload.transform.translateX >= productBoxPx.x - 0.01
+    && payload.transform.translateY >= productBoxPx.y - 0.01
+    && payload.transform.translateX + payload.transform.targetWidth <= productBoxPx.x + productBoxPx.width + 0.01
+    && payload.transform.translateY + payload.transform.targetHeight <= productBoxPx.y + productBoxPx.height + 0.01;
+  log("produto dentro da safe-zone: " + withinSafeZone);
+
+  const blob = await new Promise((resolve) => exportCanvas.toBlob(resolve, "image/png"));
+  log(`premium-${style}.png codificado: ${blob.size} bytes`);
+  await fetch(`/creative/save-png?style=${style}`, { method: "POST", headers: { "Content-Type": "image/png" }, body: blob });
+  log(`premium-${style}.png salvo.`);
+
+  return {
+    style,
+    assetId: payload.asset.assetId,
+    sourceWidth: payload.asset.width,
+    sourceHeight: payload.asset.height,
+    transform: payload.transform,
+    previewExportParity: parity,
+    productWithinSafeZone: withinSafeZone,
+    pngBytes: blob.size,
+    providerCallsThisRun: 0,
+  };
+}
+
+async function main() {
+  log("Carregando cutout.png (compartilhado pelas 3 variações, nunca recarregado por estilo)...");
+  const cutoutImg = await loadImage("/cutout.png");
+  log(`cutout: ${cutoutImg.naturalWidth}x${cutoutImg.naturalHeight}`);
+
+  const results = [];
+  for (const style of ["luxury", "editorial", "modern"]) {
+    const result = await processStyle(style, cutoutImg);
+    if (result) results.push(result);
+  }
+
+  const sameAssetId = new Set(results.map((r) => r.assetId)).size === 1;
+  const sameTransform = new Set(results.map((r) => JSON.stringify(r.transform))).size === 1;
+  log("\n=== RESUMO ===");
+  log("mesmo assetId nas 3 variações: " + sameAssetId);
+  log("mesmo transform nas 3 variações: " + sameTransform);
+
+  await fetch("/creative/save-report", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ results, sameAssetId, sameTransform }),
+  });
+  log("creative-report.json salvo. DONE.");
+}
+
+main().catch((error) => log("ERRO: " + error.message));
+</script>
+</body>
+</html>

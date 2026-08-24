@@ -33,6 +33,16 @@ export interface PublicCatalogStore {
   showPrice: boolean;
   showStock: boolean;
   allowWhatsappOrders: boolean;
+  /**
+   * true quando o lojista cadastrou uma chave Pix — habilita a opção "Pix" no fechamento do pedido.
+   * LGPD §7 (REVENDASMART-LGPD-ANPD-REMEDIATION-01): o VALOR da chave não vai mais nesta carga inicial
+   * (que qualquer visitante recebe só de abrir a URL, com cache de CDN) — só este booleano. O valor real
+   * é buscado sob demanda em GET /api/public/catalog/:storeSlug/pix-key quando o comprador abre a etapa
+   * de pagamento por Pix.
+   */
+  pixAvailable: boolean;
+  /** true quando o lojista tem uma conexão Mercado Pago ativa — nunca expõe detalhes da conexão em si. */
+  cardAvailable: boolean;
 }
 
 export interface PublicCatalogProduct {

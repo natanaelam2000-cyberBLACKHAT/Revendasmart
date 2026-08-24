@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, getFirestore, onSnapshot } from "firebase/firestore";
 import { getFirebaseAuth } from "@/lib/firebase";
+import { subscribeSharedUserCollection } from "@/lib/firestore-shared-collection";
 import type { Product } from "@/lib/mock-data";
 
 interface ProductsData {
@@ -10,6 +10,16 @@ interface ProductsData {
   error?: string;
 }
 
+function mapProductDoc(id: string, data: Record<string, unknown>): Product {
+  return { ...data, id } as Product;
+}
+
+/**
+ * RELEASE-QUALITY-02 §1 — a leitura real (`onSnapshot`) agora é compartilhada via
+ * `subscribeSharedUserCollection`: outra tela lendo "products" para o mesmo uid ao mesmo tempo (ex.:
+ * dashboard + catalog + reports) reaproveita o mesmo listener em vez de abrir um novo. A API pública
+ * deste hook (shape do retorno, semântica de loading/error) não muda — nenhum consumer precisa mudar.
+ */
 export function useProductsData(): ProductsData {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
@@ -23,9 +33,9 @@ export function useProductsData(): ProductsData {
       return;
     }
 
-    let unsubscribeProducts: (() => void) | undefined;
+    let unsubscribeCollection: (() => void) | undefined;
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-      unsubscribeProducts?.();
+      unsubscribeCollection?.();
 
       if (!user) {
         setProducts([]);
@@ -35,27 +45,16 @@ export function useProductsData(): ProductsData {
       }
 
       setLoading(true);
-      unsubscribeProducts = onSnapshot(
-        collection(getFirestore(), "users", user.uid, "products"),
-        (snapshot) => {
-          const data = snapshot.docs
-            .map((doc) => ({ ...doc.data(), id: doc.id } as Product))
-            .filter((product) => product && typeof product === "object" && product.id);
-          setProducts(data);
-          setError(undefined);
-          setLoading(false);
-        },
-        (err) => {
-          console.error("[useProductsData] Products error:", err);
-          setProducts([]);
-          setError("Failed to load products");
-          setLoading(false);
-        }
-      );
+      unsubscribeCollection = subscribeSharedUserCollection("products", user.uid, mapProductDoc, (snapshot) => {
+        const filtered = snapshot.data.filter((product) => product && typeof product === "object" && product.id);
+        setProducts(filtered);
+        setError(snapshot.error);
+        setLoading(false);
+      });
     });
 
     return () => {
-      unsubscribeProducts?.();
+      unsubscribeCollection?.();
       unsubscribeAuth();
     };
   }, []);

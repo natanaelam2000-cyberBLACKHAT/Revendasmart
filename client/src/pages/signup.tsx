@@ -4,7 +4,7 @@ import { bootstrapUserData } from "@/lib/mock-data";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { getFirebaseAuth, getFirebaseError, logTelemetryEvent, setTelemetryUserId, trackAnalyticsEvent, setFirebaseAnalyticsUserId, logError } from "@/lib/firebase";
 import { getApiUrl } from "@/lib/api-config";
-import { UserPlus, ShoppingBag, Sparkles } from "lucide-react";
+import { UserPlus } from "lucide-react";
 
 export default function Signup() {
   const [, setLocation] = useLocation();
@@ -42,11 +42,11 @@ export default function Signup() {
       trackAnalyticsEvent("sign_up", { method: "email" });
 
       // Handle referral attribution if captured from deep link
-      const referralUid = localStorage.getItem("rs:referral_source");
-      if (referralUid) {
+      const referralToken = localStorage.getItem("rs:referral_source");
+      if (referralToken) {
         
         // 1. Log client-side application attempt
-        logTelemetryEvent("referral_applied_client", { referralUid, stage: "signup_local", result: "success" }, user.uid).catch(() => {});
+        logTelemetryEvent("referral_applied_client", { stage: "signup_local", result: "success" }, user.uid).catch(() => {});
         
         try {
           // 2. Store in localStorage first (fallback if API fails)
@@ -54,7 +54,7 @@ export default function Signup() {
           const existingSettings = localStorage.getItem(settingsKey);
           if (existingSettings) {
             const settings = JSON.parse(existingSettings);
-            settings.referral_source = referralUid;
+            settings.referral_source = referralToken;
             settings.referral_applied_at = new Date().toISOString();
             localStorage.setItem(settingsKey, JSON.stringify(settings));
           }
@@ -69,15 +69,14 @@ export default function Signup() {
               "Authorization": `Bearer ${token}`
             },
             body: JSON.stringify({
-              referral_source: referralUid,
+              referral_source: referralToken,
               referral_applied_at: new Date().toISOString()
             })
           });
 
           if (apiResponse.ok) {
-            const apiData = await apiResponse.json();
+            await apiResponse.json();
             logTelemetryEvent("referral_applied_backend", { 
-              referralUid, 
               stage: "signup_api", 
               result: "success" 
             }, user.uid).catch(() => {});
@@ -91,18 +90,15 @@ export default function Signup() {
             // Special handling for "already_set" (immutability)
             if (failureReason === "already_set") {
               logTelemetryEvent("referral_already_set", { 
-                referralUid, 
                 existingReferralSource: errorData.referralValidation?.existingReferralSource || "unknown"
               }, user.uid).catch(() => {});
             } else {
               logTelemetryEvent("referral_rejected", { 
-                referralUid, 
                 reason: failureReason as any
               }, user.uid).catch(() => {});
             }
-            
+
             logTelemetryEvent("referral_applied_backend", { 
-              referralUid, 
               stage: "signup_api", 
               result: failureReason as any
             }, user.uid).catch(() => {});
@@ -110,9 +106,8 @@ export default function Signup() {
         } catch (e) {
           console.warn("[signup] Referral application error:", e);
           const errorMsg = e instanceof Error ? e.message : "Unknown error";
-          logError("signup_referral_failed", errorMsg, { context: { referralUid }, userId: user.uid });
+          logError("signup_referral_failed", errorMsg, { userId: user.uid });
           logTelemetryEvent("referral_rejected", { 
-            referralUid, 
             reason: "api_error"
           }, user.uid).catch(() => {});
         }
@@ -203,7 +198,7 @@ export default function Signup() {
             value={email}
             onChange={e => setEmail(e.target.value)}
             placeholder="seu@email.com"
-            pattern="[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+            pattern="[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"
           />
         </div>
 

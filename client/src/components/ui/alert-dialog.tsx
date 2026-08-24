@@ -3,6 +3,7 @@ import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
 
 import { cn } from "@/lib/utils"
 import { buttonVariants } from "@/components/ui/button"
+import { useDismissibleOnBack } from "@/hooks/useDismissibleOnBack"
 
 const AlertDialog = AlertDialogPrimitive.Root
 
@@ -28,19 +29,31 @@ AlertDialogOverlay.displayName = AlertDialogPrimitive.Overlay.displayName
 const AlertDialogContent = React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Content>
->(({ className, ...props }, ref) => (
-  <AlertDialogPortal>
-    <AlertDialogOverlay />
-    <AlertDialogPrimitive.Content
-      ref={ref}
-      className={cn(
-        "fixed left-[50%] top-[50%] z-[121] grid max-h-[calc(100dvh-1.5rem)] w-[calc(100vw-1.5rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto overscroll-contain border bg-background p-6 rs-dialog-surface pb-[max(1.5rem,calc(env(safe-area-inset-bottom)+1rem))] shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg motion-reduce:animate-none motion-reduce:duration-0",
-        className
-      )}
-      {...props}
-    />
-  </AlertDialogPortal>
-))
+>(({ className, children, ...props }, ref) => {
+  // RELEASE-QUALITY-03 P1-01: AlertDialog não tem um botão de fechar próprio (diferente de Dialog/Sheet)
+  // — o consumer decide via AlertDialogCancel/AlertDialogAction. O botão físico "voltar" precisa de um
+  // jeito de "cancelar" que sempre exista, então um `AlertDialogPrimitive.Cancel` oculto (mesma semântica
+  // do Escape) é adicionado só para isso — nunca visível, nunca no tab order.
+  const hiddenCancelRef = React.useRef<HTMLButtonElement>(null);
+  useDismissibleOnBack(true, () => hiddenCancelRef.current?.click());
+
+  return (
+    <AlertDialogPortal>
+      <AlertDialogOverlay />
+      <AlertDialogPrimitive.Content
+        ref={ref}
+        className={cn(
+          "fixed left-[50%] top-[50%] z-[121] grid max-h-[calc(100dvh-1.5rem)] w-[calc(100vw-1.5rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto overscroll-contain border bg-background p-6 rs-dialog-surface pb-[max(1.5rem,calc(env(safe-area-inset-bottom)+1rem))] shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg motion-reduce:animate-none motion-reduce:duration-0",
+          className
+        )}
+        {...props}
+      >
+        {children}
+        <AlertDialogPrimitive.Cancel ref={hiddenCancelRef} tabIndex={-1} aria-hidden="true" className="sr-only" />
+      </AlertDialogPrimitive.Content>
+    </AlertDialogPortal>
+  );
+})
 AlertDialogContent.displayName = AlertDialogPrimitive.Content.displayName
 
 const AlertDialogHeader = ({

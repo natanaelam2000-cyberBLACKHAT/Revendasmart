@@ -265,6 +265,9 @@ export default function Login() {
           <p className="rs-login-signup">
             Não tem conta? <Link href="/signup">Criar conta</Link>
           </p>
+          <p className="rs-login-signup">
+            <Link href="/account-deletion">Solicitar exclusão de conta e dados</Link>
+          </p>
         </form>
       </section>
     </main>

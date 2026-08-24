@@ -9,7 +9,9 @@ service cloud.firestore {
     }
     
     function userOwnsResource(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
+      return isAuthenticated()
+        && request.auth.uid == userId
+        && !exists(/databases/$(database)/documents/account_deletion_requests/$(userId));
     }
     
     function isAdmin() {
@@ -26,13 +28,50 @@ service cloud.firestore {
         'discountPercent', 'discount', 'promotionalPrice', 'createdAt', 'updatedAt',
         'nameNormalized', 'brandNormalized', 'categoryNormalized',
         'barcodeNormalized', 'productTypeNormalized', 'searchTokens',
-        'searchSchemaVersion'
+        'searchSchemaVersion', 'approvedCutout'
       ];
     }
 
-    function isValidProductCreate(productId) {
-      return request.resource.data.keys().hasOnly(productAllowedFields())
-        && request.resource.data.keys().hasAll(['name', 'salePrice'])
+    // PRO-07K — cutout já aprovado (Photoroom + Pixel Preservation Gate, fora desta Rule) e persistido
+    // no próprio documento do produto. Shape fechado, sem bytes/base64/mask inline, sem API key, sem
+    // resposta bruta de provider. `storagePath` é travado no caminho canônico e único deste produto —
+    // nunca aponta para outro usuário/produto nem sobrescreve a imagem original (uma igualdade exata de
+    // string também descarta `data:`/base64 de graça, sem precisar de um `.matches()` extra).
+    //
+    // Deliberadamente mais enxuta que o validador espelho do client (`validateApprovedProductCutoutShape`,
+    // shared/approved-product-cutout.ts, que é TypeScript puro e não tem o limite de custo de avaliação
+    // das Security Rules). `hasAll` seria redundante aqui: cada chave obrigatória é acessada abaixo e a
+    // ausência de qualquer uma faz a Rule negar. Os campos MENOS críticos (`provider`, `family`, `context`)
+    // ficam fora da checagem de valor — `hasOnly` ainda impede qualquer chave desconhecida, enquanto o
+    // helper TypeScript valida o conteúdo antes da escrita.
+    function isValidApprovedProductCutout(cutout, uid, productId) {
+      return cutout is map
+        && cutout.keys().hasOnly([
+          'sourceAssetId', 'cutoutAssetId', 'storagePath', 'downloadUrl', 'width', 'height', 'mimeType',
+          'coordinateSpaceVersion', 'preservesOriginalPixels', 'method', 'provider', 'createdAt', 'family', 'context'
+        ])
+        && cutout.sourceAssetId is string && cutout.sourceAssetId.size() > 0
+        && cutout.cutoutAssetId is string && cutout.cutoutAssetId.size() > 0
+        && cutout.storagePath == 'users/' + uid + '/product-cutouts/' + productId + '/cutout-v1.png'
+        && cutout.width is int && cutout.width > 0 && cutout.width <= 20000
+        && cutout.height is int && cutout.height > 0 && cutout.height <= 20000
+        && cutout.mimeType == 'image/png'
+        && cutout.coordinateSpaceVersion == 'product-image-coordinate-space-v1'
+        && cutout.preservesOriginalPixels == true
+        && cutout.method in ['local-heuristic', 'specialized-api', 'multimodal-model']
+        && cutout.createdAt is string && cutout.createdAt.size() > 0
+        && (!cutout.keys().hasAny(['downloadUrl'])
+          || (cutout.downloadUrl is string && cutout.downloadUrl.size() <= 2048 && !cutout.downloadUrl.matches('(?i)^data:.*')));
+    }
+
+    function isValidProductCreate(uid, productId) {
+      let keys = request.resource.data.keys();
+      // Valide o shape aninhado antes da allowlist ampla do produto: dois `hasOnly` consecutivos são o
+      // principal custo de avaliação, e um cutout inválido deve falhar sem pagar o segundo.
+      return (!keys.hasAny(['approvedCutout'])
+          || isValidApprovedProductCutout(request.resource.data.approvedCutout, uid, productId))
+        && keys.hasOnly(productAllowedFields())
+        && keys.hasAll(['name', 'salePrice'])
         && request.resource.data.get('id', productId) == productId
         && request.resource.data.name is string
         && request.resource.data.name.size() > 0
@@ -101,41 +140,16 @@ service cloud.firestore {
         && request.resource.data.get('searchSchemaVersion', 0) <= 10;
     }
 
-    function isValidProductUpdate(productId) {
+    function isValidProductUpdate(uid, productId) {
       let changed = request.resource.data.diff(resource.data).affectedKeys();
-      return changed.hasOnly(productAllowedFields())
-        && (!changed.hasAny(['id']) || request.resource.data.get('id', productId) == productId)
-        && (!changed.hasAny(['name']) || (request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 180))
-        && (!changed.hasAny(['salePrice']) || (request.resource.data.salePrice is number && request.resource.data.salePrice > 0 && request.resource.data.salePrice <= 1000000))
-        && (!changed.hasAny(['costPrice']) || (request.resource.data.costPrice is number && request.resource.data.costPrice >= 0 && request.resource.data.costPrice <= 1000000))
-        && (!changed.hasAny(['stock']) || (request.resource.data.stock is number && request.resource.data.stock >= 0 && request.resource.data.stock <= 1000000))
-        && (!changed.hasAny(['brand']) || (request.resource.data.brand is string && request.resource.data.brand.size() <= 100))
-        && (!changed.hasAny(['origin']) || (request.resource.data.origin is string && request.resource.data.origin.size() <= 80))
-        && (!changed.hasAny(['category']) || (request.resource.data.category is string && request.resource.data.category.size() <= 100))
-        && (!changed.hasAny(['productType']) || (request.resource.data.productType is string && request.resource.data.productType.size() <= 80))
-        && (!changed.hasAny(['barcode']) || (request.resource.data.barcode is string && request.resource.data.barcode.size() <= 80))
-        && (!changed.hasAny(['description']) || (request.resource.data.description is string && request.resource.data.description.size() <= 2000))
-        && (!changed.hasAny(['imageUrl']) || (request.resource.data.imageUrl is string && request.resource.data.imageUrl.size() <= 2000))
-        && (!changed.hasAny(['storagePath']) || (request.resource.data.storagePath is string && request.resource.data.storagePath.size() <= 1000))
-        && (!changed.hasAny(['imageId']) || (request.resource.data.imageId is string && request.resource.data.imageId.size() <= 200))
-        && (!changed.hasAny(['photoUrl']) || (request.resource.data.photoUrl is string && request.resource.data.photoUrl.size() <= 2000))
-        && (!changed.hasAny(['image']) || (request.resource.data.image is string && request.resource.data.image.size() <= 2000))
-        && (!changed.hasAny(['photo']) || (request.resource.data.photo is string && request.resource.data.photo.size() <= 2000))
-        && (!changed.hasAny(['gender']) || (request.resource.data.gender is string && request.resource.data.gender.size() <= 40))
-        && (!changed.hasAny(['lastSoldDate']) || (request.resource.data.lastSoldDate is string && request.resource.data.lastSoldDate.size() <= 80))
-        && (!changed.hasAny(['extras']) || request.resource.data.extras is map)
-        && (!changed.hasAny(['isFeatured']) || request.resource.data.isFeatured is bool)
-        && (!changed.hasAny(['isOnSale']) || request.resource.data.isOnSale is bool)
-        && (!changed.hasAny(['discountPercent']) || (request.resource.data.discountPercent is number && request.resource.data.discountPercent >= 0 && request.resource.data.discountPercent <= 100))
-        && (!changed.hasAny(['discount']) || (request.resource.data.discount is number && request.resource.data.discount >= 0))
-        && (!changed.hasAny(['promotionalPrice']) || (request.resource.data.promotionalPrice is number && request.resource.data.promotionalPrice >= 0))
-        && (!changed.hasAny(['nameNormalized']) || (request.resource.data.nameNormalized is string && request.resource.data.nameNormalized.size() <= 180))
-        && (!changed.hasAny(['brandNormalized']) || (request.resource.data.brandNormalized is string && request.resource.data.brandNormalized.size() <= 120))
-        && (!changed.hasAny(['categoryNormalized']) || (request.resource.data.categoryNormalized is string && request.resource.data.categoryNormalized.size() <= 120))
-        && (!changed.hasAny(['barcodeNormalized']) || (request.resource.data.barcodeNormalized is string && request.resource.data.barcodeNormalized.size() <= 100))
-        && (!changed.hasAny(['productTypeNormalized']) || (request.resource.data.productTypeNormalized is string && request.resource.data.productTypeNormalized.size() <= 100))
-        && (!changed.hasAny(['searchTokens']) || (request.resource.data.searchTokens is list && request.resource.data.searchTokens.size() <= 16))
-        && (!changed.hasAny(['searchSchemaVersion']) || (request.resource.data.searchSchemaVersion is number && request.resource.data.searchSchemaVersion >= 0 && request.resource.data.searchSchemaVersion <= 10));
+      let keys = request.resource.data.keys();
+      // Trocar qualquer referência da foto original invalida o cutout derivado. Fail-closed: a troca
+      // deve remover approvedCutout; um novo cutout pode ser anexado depois, já derivado do novo asset.
+      return (!changed.hasAny(['imageUrl', 'storagePath', 'imageId', 'photoUrl', 'image', 'photo'])
+          || !keys.hasAny(['approvedCutout']))
+        // O estado final de um update obedece exatamente ao mesmo contrato do create. Isso preserva
+        // todos os limites anteriores sem repetir dezenas de `changed.hasAny(...)` caros.
+        && isValidProductCreate(uid, productId);
     }
 
     function clientAllowedFields() {
@@ -178,7 +192,182 @@ service cloud.firestore {
         && (!changed.hasAny(['totalSpent']) || (request.resource.data.totalSpent is number && request.resource.data.totalSpent >= 0))
         && (!changed.hasAny(['purchaseCount']) || (request.resource.data.purchaseCount is number && request.resource.data.purchaseCount >= 0));
     }
-    
+
+    // Encomendas/Pedidos: rascunho de pedido do cliente, sem baixa de estoque, sem venda e sem
+    // cobrança automática (essas ações continuam existindo só nos fluxos próprios de Vendas/Cobranças).
+    //
+    // LIMITAÇÃO CONHECIDA E INTENCIONAL — items[]:
+    // Security Rules não têm iterador para percorrer uma lista de tamanho variável, então NÃO é
+    // possível validar aqui name/quantity/unitPrice/productId/imageUrl de CADA item. O que a Rule
+    // garante sobre items é apenas: é uma lista, não vazia, com no máximo 100 elementos. A validação
+    // detalhada de cada OrderItem continua no frontend (NewOrderSheet + calculateOrderItemSubtotal).
+    // Se um dia for preciso enforcement real por item, o caminho é mover items para uma subcoleção —
+    // decisão de arquitetura deliberada, não feita agora.
+    //
+    // LIMITAÇÃO INTENCIONAL — total:
+    // A Rule NÃO valida total == soma(quantity * unitPrice), e isso é por design: pedido é RASCUNHO e
+    // order.total NÃO é autoridade financeira. Quando um pedido virar venda, o backend terá de
+    // recalcular tudo do zero a partir dos produtos relidos (mesmo princípio de /api/sales/finalize,
+    // que já ignora qualquer preço vindo do cliente).
+    function orderAllowedFields() {
+      return [
+        'id', 'clientId', 'clientName', 'clientPhone', 'storeName', 'status', 'items', 'total',
+        'createdAt', 'updatedAt', 'expectedDate', 'notes'
+      ];
+    }
+
+    function orderRequiredFields() {
+      return ['id', 'clientId', 'clientName', 'status', 'items', 'total', 'createdAt', 'updatedAt'];
+    }
+
+    function isValidOrderCreate(orderId) {
+      let data = request.resource.data;
+      return data.keys().hasOnly(orderAllowedFields())
+        && data.keys().hasAll(orderRequiredFields())
+        && data.id is string
+        && data.id == orderId
+        && data.id.size() >= 1
+        && data.id.size() <= 64
+        && data.clientId is string
+        && data.clientId.size() >= 1
+        && data.clientId.size() <= 128
+        && data.clientName is string
+        && data.clientName.size() >= 1
+        && data.clientName.size() <= 140
+        // O app sempre cria o pedido com status "new" — mudar de status é uma ação separada (update).
+        && data.status == 'new'
+        && data.items is list
+        && data.items.size() >= 1
+        && data.items.size() <= 100
+        && data.total is number
+        && data.total >= 0
+        && data.total <= 100000000
+        && data.createdAt is string
+        && data.createdAt.size() <= 40
+        && data.updatedAt is string
+        && data.updatedAt.size() <= 40
+        // Documento recém-criado: os dois carimbos nascem iguais (useOrdersData usa o mesmo `now`).
+        // Isso impede que um update seja disfarçado de create para burlar as travas de transição.
+        && data.createdAt == data.updatedAt
+        && data.get('clientPhone', '') is string
+        && data.get('clientPhone', '').size() <= 40
+        && data.get('storeName', '') is string
+        && data.get('storeName', '').size() <= 140
+        && data.get('expectedDate', '') is string
+        && data.get('expectedDate', '').size() <= 40
+        && data.get('notes', '') is string
+        && data.get('notes', '').size() <= 2000;
+    }
+
+    // Fluxo de status sempre para frente, mais cancelamento. Entregue e cancelado são terminais: nada
+    // sai deles. Espelha ORDER_STATUS_TRANSITIONS em client/src/lib/orders.ts — os dois precisam
+    // continuar iguais, e há teste de emulador cobrindo cada aresta permitida e proibida.
+    function isValidOrderStatusTransition(oldStatus, newStatus) {
+      return (oldStatus == 'new' && (newStatus == 'in_progress' || newStatus == 'cancelled'))
+        || (oldStatus == 'in_progress' && (newStatus == 'ready' || newStatus == 'cancelled'))
+        || (oldStatus == 'ready' && (newStatus == 'delivered' || newStatus == 'cancelled'));
+    }
+
+    // Depois de criado, o cliente só pode empurrar o status adiante. Nenhuma tela edita cliente,
+    // itens, total, telefone, nome da loja, previsão ou observações — e a Rule impede isso mesmo que
+    // alguém tente por fora do app. Os snapshots (clientPhone/storeName) são imutáveis por definição.
+    function isValidOrderUpdate(orderId) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return changed.hasOnly(['status', 'updatedAt'])
+        // Ambos precisam MUDAR de verdade: um update que não altera status não tem por que existir, e
+        // um que mexe no status sem tocar em updatedAt deixaria o carimbo mentindo sobre o documento.
+        && changed.hasAll(['status', 'updatedAt'])
+        && request.resource.data.updatedAt is string
+        && request.resource.data.updatedAt.size() <= 40
+        && request.resource.data.updatedAt != resource.data.updatedAt
+        && request.resource.data.createdAt == resource.data.createdAt
+        && isValidOrderStatusTransition(resource.data.status, request.resource.data.status);
+    }
+
+    // Histórico de Anúncios (marketingHistory): registro do que o lojista gerou/compartilhou.
+    // Não é dado financeiro nem operacional — é histórico de uso —, mas continua sendo dado privado
+    // do lojista e precisa do mesmo isolamento por uid das demais coleções. Sem uma Rule própria,
+    // esta subcoleção dependia apenas do default-deny da raiz e as escritas eram silenciosamente
+    // negadas (o app cai para histórico local no catch), o que mascarava a ausência de contrato.
+    //
+    // A allowlist reflete o payload REAL de sanitizeMarketingHistoryPayload — campos ausentes são
+    // normais, porque o sanitizador remove tudo que estiver undefined antes de gravar.
+    function marketingHistoryAllowedFields() {
+      return [
+        'action', 'productId', 'productName', 'productBrand', 'productImageUrl', 'productVolume',
+        'stockStatus', 'imageUrl', 'photoUrl', 'image', 'imageId', 'generatedText', 'template',
+        'templateId', 'themeId', 'price', 'priceText', 'headline', 'note', 'ctaText', 'storeName',
+        'storeLogoUrl', 'primaryColor', 'showBrand', 'showVolume', 'showStockStatus',
+        'showWhatsAppCta', 'backgroundStyle', 'catalogUrl', 'createdAt', 'createdAtISO',
+        'updatedAt', 'updatedAtISO', 'source', 'productAssetSnapshot'
+      ];
+    }
+
+    function isValidProductAssetSnapshot(snapshot, historyProductId) {
+      return snapshot is map
+        && snapshot.keys().hasOnly(['productId', 'assetId', 'assetRef', 'sourceUrl', 'width', 'height', 'mimeType'])
+        && snapshot.keys().hasAll(['productId', 'assetId', 'assetRef', 'width', 'height'])
+        && snapshot.productId is string
+        && snapshot.productId.size() > 0
+        && snapshot.productId.size() <= 128
+        && snapshot.productId == historyProductId
+        && snapshot.assetId is string
+        && snapshot.assetId.size() > 0
+        && snapshot.assetId.size() <= 256
+        && snapshot.assetRef is string
+        && snapshot.assetRef.size() > 0
+        && snapshot.assetRef.size() <= 512
+        && !snapshot.assetRef.matches('(?i)data:.*')
+        && snapshot.width is int
+        && snapshot.width > 0
+        && snapshot.width <= 100000
+        && snapshot.height is int
+        && snapshot.height > 0
+        && snapshot.height <= 100000
+        && snapshot.get('sourceUrl', '') is string
+        && snapshot.get('sourceUrl', '').size() <= 2048
+        && !snapshot.get('sourceUrl', '').matches('(?i)data:.*')
+        && snapshot.get('mimeType', 'image/unknown') is string
+        && snapshot.get('mimeType', 'image/unknown').size() <= 80
+        && snapshot.get('mimeType', 'image/unknown').matches('image/[A-Za-z0-9.+-]+');
+    }
+
+    function isValidMarketingHistoryShape() {
+      let data = request.resource.data;
+      return data.keys().hasOnly(marketingHistoryAllowedFields())
+        && data.action in ['generated', 'downloaded', 'copied', 'shared', 'edited', 'duplicated']
+        && data.get('productId', '') is string
+        && data.get('productId', '').size() <= 128
+        && data.get('productName', '') is string
+        && data.get('productName', '').size() <= 200
+        && data.get('generatedText', '') is string
+        && data.get('generatedText', '').size() <= 4000
+        && data.get('note', '') is string
+        && data.get('note', '').size() <= 1000
+        && data.get('storeName', '') is string
+        && data.get('storeName', '').size() <= 140
+        && data.get('createdAtISO', '') is string
+        && data.get('createdAtISO', '').size() <= 40
+        && (!data.keys().hasAny(['productAssetSnapshot'])
+          || isValidProductAssetSnapshot(data.productAssetSnapshot, data.get('productId', '')))
+        // `source` registra de onde o anúncio nasceu. É OPCIONAL — entradas legadas, criadas antes do
+        // campo existir, não o têm e continuam válidas. Mas, quando presente, só os dois valores que
+        // o app realmente produz são aceitos: nada de string arbitrária entrando no histórico.
+        && data.get('source', 'manual') in ['catalog', 'manual'];
+    }
+
+    function isValidMarketingHistoryCreate() {
+      return isValidMarketingHistoryShape()
+        && request.resource.data.keys().hasAll(['action', 'createdAtISO']);
+    }
+
+    // A edição de um anúncio salvo reescreve o conteúdo, mas a data de criação é histórica e não pode
+    // ser reescrita — é o que permite auditar quando a ação original aconteceu.
+    function isValidMarketingHistoryUpdate() {
+      return isValidMarketingHistoryShape()
+        && request.resource.data.get('createdAtISO', '') == resource.data.get('createdAtISO', '');
+    }
+
     // ===== FIRESTORE SECURITY RULES =====
     
     // ===== ROOT LEVEL: /users/{uid} =====
@@ -190,8 +379,8 @@ service cloud.firestore {
       // User can only read/write their own products
       match /products/{productId} {
         allow read: if userOwnsResource(uid);
-        allow create: if userOwnsResource(uid) && isValidProductCreate(productId);
-        allow update: if userOwnsResource(uid) && isValidProductUpdate(productId);
+        allow create: if userOwnsResource(uid) && isValidProductCreate(uid, productId);
+        allow update: if userOwnsResource(uid) && isValidProductUpdate(uid, productId);
         allow delete: if userOwnsResource(uid);
       }
       
@@ -202,6 +391,26 @@ service cloud.firestore {
         allow create: if userOwnsResource(uid) && isValidClientCreate(clientId);
         allow update: if userOwnsResource(uid) && isValidClientUpdate(clientId);
         allow delete: if userOwnsResource(uid);
+      }
+
+      // SUBCOLLECTION: orders (Encomendas/Pedidos)
+      // User can only read/create their own orders. Update is limited to status changes — no other
+      // field can be edited from the client. Deletion is disabled: there is no delete UI today.
+      // SUBCOLLECTION: marketingHistory (Histórico de Anúncios)
+      // Isolado por uid como o resto. Delete é permitido porque a UI realmente apaga registros
+      // (remover item e "limpar histórico"), diferente de orders, onde apagar não existe.
+      match /marketingHistory/{entryId} {
+        allow read: if userOwnsResource(uid);
+        allow create: if userOwnsResource(uid) && isValidMarketingHistoryCreate();
+        allow update: if userOwnsResource(uid) && isValidMarketingHistoryUpdate();
+        allow delete: if userOwnsResource(uid);
+      }
+
+      match /orders/{orderId} {
+        allow read: if userOwnsResource(uid);
+        allow create: if userOwnsResource(uid) && isValidOrderCreate(orderId);
+        allow update: if userOwnsResource(uid) && isValidOrderUpdate(orderId);
+        allow delete: if false;
       }
       
       // SUBCOLLECTION: charges
@@ -230,34 +439,47 @@ service cloud.firestore {
       }
 
       // SUBCOLLECTION: sales
-      // Users may create sales only inside their own account. Existing sales
-      // remain immutable from the client; stock-safe mutations belong to the
-      // transactional backend flow handled separately.
+      // LGPD/segurança (REVENDASMART-LGPD-ANPD-REMEDIATION-01, Fase 9): a criação de venda só acontece
+      // pelo backend (POST /api/sales/finalize, Admin SDK — que ignora estas regras), dentro de uma
+      // transaction que recalcula preço/total a partir dos produtos e decrementa estoque de forma
+      // segura. Nenhum caller no cliente grava diretamente nesta coleção (confirmado por auditoria de
+      // código — a fila offline em `offline-sales-queue.ts` escreve em `pendingSales`, nunca aqui). A
+      // regra de `create` client-side foi removida: ela só validava formato, nunca recalculava total
+      // nem decrementava estoque, permitindo ao próprio dono da conta gravar receita fabricada dentro
+      // do seu próprio tenant. Existing sales continuam imutáveis do cliente.
       match /sales/{saleId} {
         allow read: if userOwnsResource(uid);
-        allow create: if userOwnsResource(uid)
-          && request.resource.data.keys().hasAll([
-            'id', 'clientId', 'products', 'subtotal', 'total',
-            'paymentType', 'date'
-          ])
-          && request.resource.data.id == saleId
-          && request.resource.data.clientId is string
-          && request.resource.data.clientId.size() > 0
-          && request.resource.data.products is list
-          && request.resource.data.products.size() > 0
-          && request.resource.data.products.size() <= 100
-          && request.resource.data.subtotal is number
-          && request.resource.data.subtotal >= 0
-          && request.resource.data.total is number
-          && request.resource.data.total >= 0
-          && request.resource.data.total <= request.resource.data.subtotal
-          && request.resource.data.paymentType is string
-          && request.resource.data.paymentType in ['avista', 'prazo']
-          && request.resource.data.date is string
-          && request.resource.data.date.size() > 0;
-        allow update, delete: if false;
+        allow create, update, delete: if false;
       }
-      
+
+      // SUBCOLLECTION: pendingSales
+      // RELEASE-QUALITY-04 §3 — fila local de vendas à vista feitas offline. O cliente escreve e
+      // sincroniza esses documentos sozinho antes de virarem uma venda real (via
+      // POST /api/sales/finalize, Admin SDK); são transitórios e nunca a fonte de verdade do
+      // faturamento, que continua sendo só `sales`. `payload` é imutável após a criação — só `status`
+      // (e o texto de erro de uma falha) pode mudar, o que impede o cliente de reescrever a venda em
+      // trânsito para outra coisa.
+      // RELEASE-QUALITY-05 §9: "conflict" (recusa de negócio explicável — estoque/produto mudou, nunca
+      // decrementa nada) foi adicionado ao lado de "failed" (falha genérica). `conflictReason`, quando
+      // presente, precisa ser um dos motivos que o servidor já sabe distinguir por código de erro.
+      match /pendingSales/{saleId} {
+        allow read: if userOwnsResource(uid);
+        allow create: if userOwnsResource(uid)
+          && request.resource.data.id == saleId
+          && request.resource.data.status == 'pending'
+          && request.resource.data.payload is map
+          && request.resource.data.payload.saleId == saleId
+          && request.resource.data.payload.paymentType == 'avista';
+        allow update: if userOwnsResource(uid)
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.payload == resource.data.payload
+          && request.resource.data.status is string
+          && request.resource.data.status in ['pending', 'syncing', 'failed', 'conflict']
+          && (!('conflictReason' in request.resource.data) ||
+              request.resource.data.conflictReason in ['INSUFFICIENT_STOCK', 'PRODUCT_NOT_FOUND', 'PRODUCT_CHANGED']);
+        allow delete: if userOwnsResource(uid);
+      }
+
       // SUBCOLLECTION: mercadopago_connections
       // User can read their own MP connections
       // Writes are backend-only (OAuth flow)
@@ -284,6 +506,12 @@ service cloud.firestore {
     // OAuth state nonces - server-side only
     // Used during OAuth callback flow (backend validation)
     match /mercadopago_oauth_states/{nonce} {
+      allow read, write: if false;
+    }
+
+    // Server-owned deletion tombstones. Besides being unreadable to clients, their
+    // existence makes userOwnsResource fail for ID tokens issued before deletion.
+    match /account_deletion_requests/{uid} {
       allow read, write: if false;
     }
     

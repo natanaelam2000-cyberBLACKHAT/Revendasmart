@@ -386,6 +386,12 @@ async function syncPaymentFromMP(
     await updateCharge(uid, chargeId, updates);
     paymentInfo(`[payments/sync] Charge status updated: ${charge.status} → ${newStatus}`);
 
+    // §6: propaga para o pedido do catálogo público quando esta charge tem um. A Charge (fonte de
+    // verdade financeira) já está persistida no passo acima — isto é side-effect best-effort.
+    if (newStatus === "paid" && charge.orderId) {
+      await syncOrderPaymentStatusFromCharge(uid, charge.orderId);
+    }
+
     return { ...charge, ...updates } as Charge;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -437,12 +443,47 @@ async function handleCreateLink(req: Request, res: Response) {
       return res.status(400).json({ error: "amount must be a positive number" });
     }
 
+    const admin = getFirebaseAdmin();
+    const db = admin.firestore();
+
+    // RELEASE-QUALITY-02 §5: retry idempotente — uma venda que já registrou uma cobrança para este
+    // saleId (link ainda válido) nunca deve gerar uma segunda cobrança só porque o cliente tocou em
+    // "Tentar novamente" depois de uma falha anterior. Reaproveita a cobrança existente em vez de criar
+    // uma nova preferência no Mercado Pago.
+    if (body.saleId && String(body.saleId).trim() !== "") {
+      stage = "check_existing_charge_for_sale";
+      paymentInfo("[payments/create-link] stage=", stage);
+      const existingForSale = await db
+        .collection("users")
+        .doc(body.uid)
+        .collection("charges")
+        .where("saleId", "==", body.saleId)
+        .limit(5)
+        .get();
+      const reusable = existingForSale.docs.find((snapshot) => {
+        const data = snapshot.data() as Partial<Charge>;
+        return Boolean(data.paymentUrl) && data.status !== "cancelled" && data.status !== "expired" && data.status !== "failed";
+      });
+      if (reusable) {
+        const data = reusable.data() as Charge;
+        paymentInfo("[payments/create-link] Reusing existing charge for saleId (idempotent retry)");
+        return res.status(200).json({
+          chargeId: reusable.id,
+          paymentUrl: data.paymentUrl,
+          preferenceId: data.preferenceId ?? "",
+          externalReference: data.externalReference ?? "",
+          tokenSource: data.tokenSource ?? "central",
+          status: data.status,
+          environment: data.environment,
+          reused: true,
+        });
+      }
+    }
+
     // Generate stable chargeId (Firestore auto-ID)
     stage = "firestore_ref_creation";
     paymentInfo("[payments/create-link] stage=", stage);
-    
-    const admin = getFirebaseAdmin();
-    const db = admin.firestore();
+
     const chargeRef = db
       .collection("users")
       .doc(body.uid)
@@ -710,6 +751,177 @@ async function handleCreateLink(req: Request, res: Response) {
         ? "A conexão com o Mercado Pago precisa ser renovada. Reconecte sua conta em Ajustes."
         : "Não foi possível iniciar o pagamento agora. Tente novamente em instantes.",
     });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// RELEASE-CHECKOUT-03 — cobrança Mercado Pago para um PEDIDO do catálogo público.
+//
+// Deliberadamente uma função separada de handleCreateLink, não uma variante dela: handleCreateLink é
+// autenticada (o próprio vendedor chama, com seu token) e confia em `body.uid`/`body.clientId`/
+// `body.amount` vindos do request porque quem está autenticado É o dono dos dados. Aqui o chamador é
+// um visitante anônimo do catálogo — nada pode vir do corpo da requisição além de já ter sido validado
+// pelo caller (routes.ts) contra o pedido persistido no servidor. Reaproveita as MESMAS peças (token
+// resolution, cliente MP, buildExternalReference, persistência de Charge, mapeamento de erro) sem
+// duplicar a lógica de negócio nem criar um segundo sistema de pagamento.
+// ---------------------------------------------------------------------------
+export class MercadoPagoOrderChargeError extends Error {
+  readonly code: string;
+  readonly userMessage: string;
+  readonly httpStatus: number;
+
+  constructor(code: string, userMessage: string, httpStatus = 502, cause?: unknown) {
+    super(code, { cause });
+    this.name = "MercadoPagoOrderChargeError";
+    this.code = code;
+    this.userMessage = userMessage;
+    this.httpStatus = httpStatus;
+  }
+}
+
+/** Nunca `/catalog` (rota interna autenticada do app do vendedor) — sempre a loja pública do próprio pedido. */
+function buildPublicOrderBackUrls(storeSlug: string, orderId: string) {
+  const base = `${FRONTEND_URL}/u/${encodeURIComponent(storeSlug)}`;
+  const suffix = `order=${encodeURIComponent(orderId)}`;
+  return {
+    success: `${base}?${suffix}&payment=success`,
+    pending: `${base}?${suffix}&payment=pending`,
+    failure: `${base}?${suffix}&payment=failure`,
+  };
+}
+
+export interface CreateOrderMercadoPagoChargeParams {
+  uid: string;
+  /** Pré-alocado pelo caller a partir da reserva atômica (reserveOrderCharge) — garante idempotência. */
+  chargeId: string;
+  orderId: string;
+  /** SEMPRE `order.total` já persistido no servidor — nunca um valor vindo do corpo da requisição pública. */
+  amount: number;
+  title: string;
+  storeSlug: string;
+}
+
+export interface CreateOrderMercadoPagoChargeResult {
+  chargeId: string;
+  paymentUrl: string;
+  preferenceId: string;
+  externalReference: string;
+  environment: string;
+}
+
+export async function createOrderMercadoPagoCharge(
+  params: CreateOrderMercadoPagoChargeParams,
+): Promise<CreateOrderMercadoPagoChargeResult> {
+  const { accessToken, tokenSource, connectionId } = await getValidMPAccessToken(params.uid, null);
+  if (!accessToken || accessToken.trim().length < 20) {
+    throw new MercadoPagoOrderChargeError(
+      "MP_TOKEN_UNAVAILABLE",
+      "Pagamento por cartão indisponível no momento. Escolha Pix ou combine pelo WhatsApp.",
+      503,
+    );
+  }
+
+  const mpClient = new MercadoPagoConfig({ accessToken, options: { timeout: 10000 } });
+  const preferenceClient = new Preference(mpClient);
+  const chargeEnvironment = detectEnvironment(accessToken);
+  const externalReference = buildExternalReference(params.uid, params.chargeId, { kind: "order", id: params.orderId });
+  const backUrls = buildPublicOrderBackUrls(params.storeSlug, params.orderId);
+
+  let preference: any;
+  try {
+    preference = await preferenceClient.create({
+      body: {
+        items: [
+          {
+            id: params.chargeId,
+            title: params.title,
+            quantity: 1,
+            unit_price: params.amount,
+            currency_id: "BRL",
+          },
+        ],
+        external_reference: externalReference,
+        back_urls: backUrls,
+        auto_return: "approved",
+        notification_url: `${APP_BASE_URL}/api/payments/webhook?uid=${encodeURIComponent(params.uid)}&chargeId=${encodeURIComponent(params.chargeId)}`,
+        metadata: {
+          uid: params.uid,
+          chargeId: params.chargeId,
+          orderId: params.orderId,
+          tokenSource,
+          mpConnectionId: connectionId,
+        },
+      },
+    });
+  } catch (mpError) {
+    paymentLogError("[payments/order-charge] Mercado Pago request failed", {
+      message: mpError instanceof Error ? mpError.message : String(mpError),
+    });
+    throw new MercadoPagoOrderChargeError(
+      "PAYMENT_PREFERENCE_FAILED",
+      "Não foi possível iniciar o pagamento por cartão agora. Escolha Pix ou combine pelo WhatsApp.",
+      502,
+      mpError,
+    );
+  }
+
+  const rawPaymentUrl = preference?.init_point ?? "";
+  const sandboxUrl = preference?.sandbox_init_point ?? "";
+  const preferenceId = preference?.id ?? "";
+  const finalPaymentUrl = chargeEnvironment === "sandbox" ? (sandboxUrl || rawPaymentUrl) : rawPaymentUrl;
+  if (!finalPaymentUrl) {
+    paymentLogError("[payments/order-charge] No init_point received from MP");
+    throw new MercadoPagoOrderChargeError(
+      "PAYMENT_URL_MISSING",
+      "Não foi possível iniciar o pagamento por cartão agora. Escolha Pix ou combine pelo WhatsApp.",
+    );
+  }
+
+  const charge: Charge = {
+    id: params.chargeId,
+    uid: params.uid,
+    provider: "mercadopago",
+    mode: "one_time",
+    environment: chargeEnvironment,
+    status: "pending",
+    providerRawStatus: "pending",
+    amount: params.amount,
+    currency: "BRL",
+    clientId: "public-catalog",
+    orderId: params.orderId,
+    title: params.title,
+    paymentUrl: finalPaymentUrl,
+    externalReference,
+    tokenSource: tokenSource || "central",
+    createdAt: now(),
+    updatedAt: now(),
+    ...(preferenceId ? { preferenceId } : {}),
+    mpConnectionId: connectionId,
+  };
+
+  await getFirebaseAdmin().firestore().collection("users").doc(params.uid).collection("charges").doc(params.chargeId).set(charge);
+
+  return { chargeId: params.chargeId, paymentUrl: finalPaymentUrl, preferenceId, externalReference, environment: chargeEnvironment };
+}
+
+/**
+ * §6 — quando o webhook (ou um resync manual) confirma pagamento de uma cobrança vinculada a um
+ * pedido do catálogo, propaga o status para o PEDIDO. Nunca deixa uma falha aqui derrubar o
+ * processamento do webhook — a Charge (fonte de verdade financeira) já foi atualizada com sucesso
+ * antes desta função ser chamada; se o pedido não sincronizar, fica só para investigação manual, não
+ * para reprocessar o pagamento.
+ */
+async function syncOrderPaymentStatusFromCharge(uid: string, orderId: string): Promise<void> {
+  try {
+    const db = getFirebaseAdmin().firestore();
+    const orderRef = db.collection("users").doc(uid).collection("orders").doc(orderId);
+    const snap = await orderRef.get();
+    if (!snap.exists) return;
+    if (snap.data()?.paymentStatus === "paid") return; // já sincronizado — replay do webhook é idempotente
+    await orderRef.set({ paymentStatus: "paid", updatedAt: now() }, { merge: true });
+    paymentInfo("[payments/sync] Order payment status synced to paid", { orderId });
+  } catch (err) {
+    logPaymentError("sync_order_from_charge", uid, err instanceof Error ? err.message : String(err), { orderId });
   }
 }
 

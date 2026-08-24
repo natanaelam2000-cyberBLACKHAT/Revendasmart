@@ -1,5 +1,27 @@
 apply plugin: 'com.android.application'
 
+// RELEASE-08 §6: versionCode/versionName vêm de um único arquivo (android/version.properties) — nunca
+// editar o número em mais de um lugar.
+def versionPropsFile = rootProject.file("version.properties")
+def versionProps = new Properties()
+versionProps.load(new FileInputStream(versionPropsFile))
+def appVersionCode = versionProps.getProperty("androidVersionCode")?.trim()
+def appVersionName = versionProps.getProperty("androidVersionName")?.trim()
+if (!appVersionCode || !appVersionCode.isInteger()) {
+    throw new GradleException("android/version.properties: androidVersionCode precisa ser um inteiro (valor atual: '${appVersionCode}').")
+}
+if (!appVersionName) {
+    throw new GradleException("android/version.properties: androidVersionName ausente.")
+}
+
+// RELEASE-08 §2: signing de release nunca vem de um arquivo versionado nem cai silenciosamente no
+// keystore de debug. As 4 variáveis precisam vir do ambiente (local não commitado, ou secrets de CI).
+def releaseKeystorePath = System.getenv("REVENDASMART_KEYSTORE_PATH")
+def releaseKeystorePassword = System.getenv("REVENDASMART_KEYSTORE_PASSWORD")
+def releaseKeyAlias = System.getenv("REVENDASMART_KEY_ALIAS")
+def releaseKeyPassword = System.getenv("REVENDASMART_KEY_PASSWORD")
+def releaseSigningConfigured = releaseKeystorePath && releaseKeystorePassword && releaseKeyAlias && releaseKeyPassword
+
 android {
     namespace = "com.revendasmart.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +29,8 @@ android {
         applicationId "com.revendasmart.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode appVersionCode.toInteger()
+        versionName appVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,11 +38,47 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            release {
+                storeFile file(releaseKeystorePath)
+                storePassword releaseKeystorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
     buildTypes {
         release {
+            // §9: minifyEnabled/shrinkResources ficam OFF deliberadamente — a maior parte da lógica do
+            // app vive no bundle JS (WebView), não em código Java/Kotlin, então o ganho de tamanho do
+            // R8 é pequeno; e proguard-rules.pro ainda não tem as regras de "keep" que os plugins
+            // Capacitor (reflection-heavy) exigiriam para sobreviver à ofuscação sem quebrar em runtime.
+            // Ativar isso exige um ciclo de teste dedicado em todos os plugins nativos antes de ligar.
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (releaseSigningConfigured) {
+                signingConfig signingConfigs.release
+            }
         }
+    }
+}
+
+// §2 fail-closed: uma release ASSINADA (bundleRelease/assembleRelease) sem as 4 variáveis de ambiente
+// nunca deve produzir um artefato silenciosamente não assinado, nem cair no keystore de debug — falha
+// explicitamente, antes de qualquer trabalho de build, com uma mensagem dizendo exatamente o que falta.
+gradle.taskGraph.whenReady { graph ->
+    def wantsSignedRelease = graph.allTasks.any { it.name in ["bundleRelease", "assembleRelease"] }
+    if (wantsSignedRelease && !releaseSigningConfigured) {
+        def missing = []
+        if (!releaseKeystorePath) missing << "REVENDASMART_KEYSTORE_PATH"
+        if (!releaseKeystorePassword) missing << "REVENDASMART_KEYSTORE_PASSWORD"
+        if (!releaseKeyAlias) missing << "REVENDASMART_KEY_ALIAS"
+        if (!releaseKeyPassword) missing << "REVENDASMART_KEY_PASSWORD"
+        throw new GradleException(
+            "Release assinada requer variáveis de ambiente ausentes: ${missing.join(', ')}. " +
+            "Nenhum keystore de debug é usado como fallback para release — veja docs/ANDROID_RELEASE_SIGNING.md."
+        )
     }
 }
 

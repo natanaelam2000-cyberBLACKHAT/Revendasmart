@@ -26,7 +26,7 @@ export function Layout({ children, title, hideBottomNav = false }: LayoutProps) 
     : location.startsWith(href) || (href === "/settings" && location === "/subscribe");
 
   return (
-    <div className="rs-app-shell bg-slate-50 text-foreground">
+    <div className="rs-app-shell bg-background text-foreground">
       {!hideBottomNav && (
         <aside className="rs-sidebar-safe hidden lg:flex fixed inset-y-0 left-0 z-50 w-64 flex-col bg-white border-r border-border/60 px-5 py-7">
           <Link href="/">
@@ -86,9 +86,9 @@ export function Layout({ children, title, hideBottomNav = false }: LayoutProps) 
                 <Link key={item.href} href={item.href}>
                   <div
                     aria-current={isActive ? "page" : undefined}
-                    className={`rs-pressable group relative flex min-h-[52px] min-w-0 flex-col items-center justify-center rounded-2xl px-0.5 py-1.5 text-center touch-manipulation outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2 focus-visible:ring-offset-white ${isActive ? "bg-primary/10 text-primary shadow-sm" : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"}`}
+                    className={`rs-pressable group relative flex min-h-[52px] min-w-0 flex-col items-center justify-center rounded-2xl px-0.5 py-1.5 text-center touch-manipulation outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2 focus-visible:ring-offset-background ${isActive ? "bg-primary/10 text-primary shadow-sm" : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"}`}
                   >
-                    <span className={`mb-0.5 flex h-7 w-7 items-center justify-center rounded-xl transition-[transform,background-color,box-shadow,color] duration-180 motion-reduce:transition-none ${isActive ? "bg-white text-primary shadow-sm ring-1 ring-primary/10 scale-105" : "bg-transparent group-hover:bg-white/70"}`}>
+                    <span className={`mb-0.5 flex h-7 w-7 items-center justify-center rounded-xl transition-[transform,background-color,box-shadow,color] duration-180 motion-reduce:transition-none ${isActive ? "bg-white text-primary shadow-sm ring-1 ring-primary/10 scale-105" : "bg-transparent group-hover:bg-accent"}`}>
                       <item.icon className={`transition-all duration-200 ${isActive ? "h-5 w-5" : "h-[18px] w-[18px]"}`} aria-hidden="true" />
                     </span>
                     <span className={`block w-full whitespace-nowrap text-center text-[9px] font-black leading-none tracking-[-0.02em] transition-colors duration-200 min-[390px]:text-[10px] ${isActive ? "text-primary" : "text-muted-foreground"}`}>

@@ -11,9 +11,7 @@ type Props = {
 
 export function MarketingCopyPanel({ generatedText, copied, onTextChange, onCopy, extensionSlot }: Props) {
   return (
-    <section className="rounded-[1.75rem] border border-border/60 bg-white p-4 shadow-sm" data-testid="marketing-copy-panel">
-      <p className="text-[10px] font-black uppercase tracking-[.18em] text-primary">5. Texto</p>
-      <h2 className="mt-1 text-base font-black">Mensagem para WhatsApp</h2>
+    <section className="rounded-xl border border-border/50 bg-secondary/20 p-3" data-testid="marketing-copy-panel">
       <label htmlFor="marketing-whatsapp-copy" className="mt-3 block text-xs font-bold text-muted-foreground">Edite a mensagem antes de copiar ou compartilhar</label>
       <textarea
         id="marketing-whatsapp-copy"

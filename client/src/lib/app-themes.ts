@@ -457,13 +457,44 @@ export function buildAppThemeCustomization(themeId: unknown, patch?: AppThemeCus
   return resolveCustomization({ primaryColor: patch?.primaryColor || theme.primaryColor, ...patch }, theme);
 }
 
+/**
+ * Chrome/Android lê a cor da barra de endereço a partir desta meta tag em tempo real — diferente do
+ * `theme_color` do manifest.json, que só é aplicado quando o app é instalado (PWA) e não pode ser
+ * atualizado dinamicamente por usuário sem um manifest por tenant (fora do escopo desta correção).
+ */
+function updateBrowserThemeColor(color: string): void {
+  let meta = document.querySelector('meta[name="theme-color"]');
+  if (!meta) {
+    meta = document.createElement("meta");
+    meta.setAttribute("name", "theme-color");
+    document.head.appendChild(meta);
+  }
+  meta.setAttribute("content", color);
+}
+
+/**
+ * RELEASE-QUALITY-04 §1: tokens de SUPERFÍCIE (fundo/texto/card/borda) do tema de marca — nunca
+ * aplicados como inline style quando o modo escuro está ativo, porque inline style vence qualquer
+ * regra de `.dark { }` no CSS independente de especificidade/ordem. Sem esta exclusão, escolher
+ * qualquer tema de marca (a maioria dos usuários tem um escolhido, "purple" é o padrão) apagaria o
+ * dark mode inteiro. `--primary`/`--ring` ficam de fora desta lista de propósito: a cor de marca
+ * continua atravessando para o escuro, só a superfície é que passa a vir do `.dark` do CSS.
+ */
+const APP_THEME_SURFACE_TOKENS = [
+  "--background", "--foreground", "--card", "--card-foreground", "--popover", "--popover-foreground",
+  "--secondary", "--secondary-foreground", "--muted", "--muted-foreground", "--accent", "--accent-foreground",
+  "--border", "--input",
+] as const;
+
 export function applyAppTheme(settingsOrTheme: unknown, maybeCustomization?: AppThemeCustomization): void {
   if (typeof document === "undefined") return;
   const rawSettings = settingsOrTheme && typeof settingsOrTheme === "object" ? settingsOrTheme as { appTheme?: unknown; appThemeCustomization?: unknown } : null;
   const theme = getAppTheme(rawSettings ? rawSettings.appTheme : settingsOrTheme);
   const customization = resolveCustomization(rawSettings ? rawSettings.appThemeCustomization : maybeCustomization, theme);
   const root = document.documentElement;
+  const isDarkMode = root.classList.contains("dark");
   const primaryHsl = hexToHsl(customization.primaryColor);
+  updateBrowserThemeColor(isDarkMode ? "#0F1419" : customization.primaryColor);
 
   root.dataset.appTheme = theme.id;
   root.dataset.rsButtonTone = customization.buttonTone;
@@ -473,6 +504,10 @@ export function applyAppTheme(settingsOrTheme: unknown, maybeCustomization?: App
   root.dataset.rsMotion = customization.motion;
 
   Object.entries(theme.cssVariables).forEach(([name, color]) => {
+    if (isDarkMode && (APP_THEME_SURFACE_TOKENS as readonly string[]).includes(name)) {
+      root.style.removeProperty(name); // devolve o controle para o .dark do CSS
+      return;
+    }
     root.style.setProperty(name, color);
   });
   if (primaryHsl) {
@@ -480,6 +515,11 @@ export function applyAppTheme(settingsOrTheme: unknown, maybeCustomization?: App
     root.style.setProperty("--ring", primaryHsl);
   }
   Object.entries(buildDesignSystemVariables(theme.id, customization)).forEach(([name, value]) => {
+    // --rs-input-bg tem um override próprio no .dark do CSS (ver index.css) — inline aqui apagaria ele.
+    if (isDarkMode && name === "--rs-input-bg") {
+      root.style.removeProperty(name);
+      return;
+    }
     root.style.setProperty(name, value);
   });
   root.style.setProperty("--rs-primary-hex", customization.primaryColor);

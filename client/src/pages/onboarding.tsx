@@ -367,7 +367,9 @@ export default function Onboarding() {
       else if (msg.includes("AbortError") || msg.includes("abort")) friendlyError = "Conexão demorou muito. Verifique sua internet e tente novamente.";
       setError(friendlyError);
       logError("onboarding_progress_save_failed", msg, { userId: uid ?? undefined });
-      setLocation("/");
+      // RELEASE-QUALITY-02 §6: redirecionar aqui escondia o erro (a tela mudava antes do usuário ler o
+      // banner) e fingia uma conclusão que não aconteceu. Ficar na mesma etapa preserva as respostas já
+      // dadas e deixa o mesmo botão disponível como retry — nenhuma navegação nova é necessária.
     } finally {
       setIsSaving(false);
     }

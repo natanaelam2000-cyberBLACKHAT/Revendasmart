@@ -1,131 +1,164 @@
-# Observabilidade segura das APIs
+# Observabilidade de producao
 
-Esta base de observabilidade adiciona rastreabilidade interna sem enviar dados pessoais ou segredos para logs.
+Esta camada separa diagnostico operacional de analytics de produto. Logs e eventos de erro existem para localizar falhas e apoiar suporte; eventos de produto continuam em Firebase Analytics.
+
+## Inventario
+
+| Area | Estado | Evidencia |
+| --- | --- | --- |
+| Logger server-side sanitizado | IMPLEMENTED | `server/logger.ts` |
+| Request ID API | IMPLEMENTED | `requestIdMiddleware`, header `X-Request-Id` |
+| Logs HTTP estruturados para `/api` | IMPLEMENTED | evento `http.request` em `server/index.ts` |
+| Sentry server | PARTIAL | `@sentry/node` inicializa somente com `SENTRY_DSN` |
+| React ErrorBoundary global | IMPLEMENTED | `client/src/components/GlobalErrorBoundary.tsx` |
+| Captura client `window.error` e `unhandledrejection` | IMPLEMENTED | `client/src/lib/client-diagnostics.ts` |
+| RTDB error logs client | REMOVED | `client/src/lib/error-logging.ts` não escreve mais em Realtime Database |
+| Firebase Analytics | IMPLEMENTED | `client/src/lib/firebase-analytics.ts`; analytics de produto, nao erro tecnico |
+| Firebase Performance | IMPLEMENTED | `client/src/lib/firebase-performance.ts`; automatic network/page metrics |
+| Crashlytics Android nativo | MISSING | Nenhum plugin/config nativo encontrado |
+| Android Vitals / Play Console | OBSERVABILITY_CONSOLE_PENDING | Depende de app publicado/configurado no Play Console |
+| Alertas Cloud Monitoring/Sentry | OBSERVABILITY_CONSOLE_PENDING | Configuracao externa ainda nao aplicada |
 
 ## Request ID
 
-Toda requisição passa pelo `requestIdMiddleware`.
+Toda requisicao passa pelo `requestIdMiddleware`.
 
 - Header aceito: `X-Request-Id`.
-- Caracteres aceitos: letras, números, `.`, `_`, `:`, `-`.
+- Caracteres aceitos: letras, numeros, `.`, `_`, `:`, `-`.
 - Tamanho aceito: 6 a 80 caracteres.
-- Quando ausente ou inválido, o backend gera um ID hexadecimal curto de 16 caracteres.
+- Quando ausente ou invalido, o backend gera um ID hexadecimal curto de 16 caracteres.
 - O backend sempre devolve `X-Request-Id` na resposta.
 
-Use esse valor como código de atendimento para localizar logs de uma falha.
+Use esse valor como codigo de atendimento para localizar logs de uma falha.
 
-## Formato dos logs HTTP
+## Logs HTTP
 
-As rotas `/api` geram um evento estruturado `http.request` com:
+Rotas `/api` geram `http.request` com:
 
-- `timestamp`;
-- `level`;
-- `event`;
-- `requestId`;
-- `method`;
-- `route` normalizada;
-- `status`;
-- `durationMs`;
-- `eventType`;
-- `result`;
-- `errorCode`, quando houver erro;
-- `responseBytes`.
+- `requestId`
+- `method`
+- `route` normalizada
+- `status`
+- `durationMs`
+- `eventType`
+- `result`
+- `errorCode`, quando houver
+- `responseBytes`
 
-A rota é normalizada para evitar gravar identificadores longos ou valores sensíveis.
+A rota e identificadores sao normalizados para reduzir exposicao de dados sensiveis.
 
-## Dados proibidos nos logs
+## Dominios criticos
+
+Eventos criticos devem usar nomes estaveis e os dominios abaixo:
+
+| Dominio | Eventos esperados |
+| --- | --- |
+| `AUTH` | login/signup/logout failures, token invalid/expired |
+| `CATALOG` | public catalog read failures, slug conflicts, ownership failures |
+| `UPLOAD` | accepted, rejected, quota exceeded, storage write failed |
+| `SUBSCRIPTION_MP` | create/cancel/status/webhook success or failure |
+| `PLAY_BILLING` | verify/restore/rtdn success or failure |
+| `MARKETING_PRO` | entitlement denied, generation started, ready, failed |
+| `ACCOUNT_DELETION` | blocked, completed, failed |
+| `REFERRAL` | rejected, tracked, validated, grant failed |
+
+O helper `logDomainEvent()` existe para novos pontos instrumentados. Logs legados ja usam nomes especificos por dominio, como `uploads.log`, `play_billing.log`, `marketing_pro.*` e `account_deletion.*`.
+
+## Dados proibidos
 
 Nunca registrar:
 
-- `Authorization`;
-- cookies;
-- access tokens;
-- refresh tokens;
-- senhas;
-- payload completo;
-- e-mail completo;
-- telefone completo;
-- CPF/RG;
-- cartão, CVV ou dados financeiros sensíveis;
-- URL com query string sensível.
+- access token
+- refresh token
+- purchaseToken bruto
+- authorization code
+- API key
+- senha
+- dados de cartao
+- binario ou imagem
+- payload completo
+- Authorization header
+- cookies
+- e-mail, telefone, CPF ou RG completos
 
-O logger sanitiza chaves e strings conhecidas, mas a regra operacional é não enviar esses dados ao logger.
+O logger sanitiza chaves e strings conhecidas, mas a regra operacional e nao enviar esses dados ao logger.
 
-## Códigos seguros de erro
+## Client crash reporting
 
-O handler central classifica erros não tratados em códigos seguros:
+Estrategia atual recomendada:
 
-- `VALIDATION_ERROR`;
-- `UNAUTHENTICATED`;
-- `FORBIDDEN`;
-- `NOT_FOUND`;
-- `CONFLICT`;
-- `RATE_LIMITED`;
-- `EXTERNAL_SERVICE_ERROR`;
-- `INTERNAL_SERVER_ERROR`.
+1. Agora: ErrorBoundary + handlers globais + safeLogger local, sem dependencia nova.
+2. Proxima decisao: Sentry client/web se a equipe quiser stack traces e source map upload em um console unico.
+3. Android nativo: Firebase Crashlytics depois que Play Console/Android release estiverem prontos.
 
-A resposta de erro interna inclui:
+Comparacao curta:
 
-```json
-{
-  "message": "Mensagem segura.",
-  "error": {
-    "code": "SAFE_ERROR_CODE",
-    "message": "Mensagem segura.",
-    "requestId": "abc123"
-  }
-}
-```
+| Opcao | Pro | Caveat |
+| --- | --- | --- |
+| Sentry client/web | Bom para React/WebView e source maps | Exige DSN client, configuracao de privacidade e upload de source maps |
+| Firebase Crashlytics | Bom para crashes/ANR nativos Android | Exige plugin/config nativo e Play/Firebase console |
+| Combinacao minima | Melhor cobertura final | Mais manutencao e Data Safety mais cuidadoso |
 
-O campo `message` foi mantido por compatibilidade com clientes existentes.
+Decisao desta sprint: nao instalar dependencia nova. `OBSERVABILITY_CONSOLE_PENDING` permanece verdadeiro para Sentry client/Crashlytics/alertas.
+
+## Analytics vs diagnostico
+
+Firebase Analytics registra eventos de produto. Nao deve receber dados comerciais sensiveis ou payloads de erro tecnico.
+
+Diagnostico usa:
+
+- server logs estruturados;
+- `requestId`;
+- `client.diagnostic`;
+- logs locais sanitizados no cliente quando houver erro durante a sessão.
 
 ## Health e readiness
 
 ### `GET /api/health`
 
-Confirma apenas que o processo está vivo. Não valida Firebase, Mercado Pago ou variáveis de ambiente.
+Confirma apenas que o processo esta vivo. Nao valida Firebase, Mercado Pago, Google Play, Photoroom, Gemini ou outro provider pago.
 
 ### `GET /api/readiness`
 
-Executa checagens leves e sem escrita. Atualmente valida apenas se o Firebase Admin já está disponível no processo.
+Executa checagens leves e sem escrita. Atualmente valida apenas disponibilidade local do Firebase Admin no processo, com timeout curto.
 
-Regras:
+## Source maps
 
-- não consulta Mercado Pago;
-- não grava dados;
-- não expõe project ID, tokens ou variáveis de ambiente;
-- usa timeout curto;
-- retorna `503` com estado `degraded` quando uma dependência essencial não está pronta.
+`vite.config.ts` usa `build.sourcemap: mode !== "production"`. Builds de producao nao publicam source maps em `dist/public`.
 
-## Como localizar uma falha
+Se Sentry client for adotado, o upload de source maps deve ser feito para o console de crash reporting, sem expor `.map` publicamente e sem embutir segredo no bundle.
 
-1. Peça ao usuário o código de atendimento/request ID mostrado ou capturado no header `X-Request-Id`.
-2. Procure nos logs por `requestId`.
-3. Use `event=http.request`, `route`, `status` e `errorCode` para identificar a rota e a classe da falha.
-4. Se houver `http.unhandled_error`, use apenas informações sanitizadas; não copie payloads ou tokens para tickets.
+## Alertas obrigatorios
 
-## Desenvolvimento e produção
+P0:
 
-Em produção, stack traces não são enviados ao cliente. Em desenvolvimento, os logs continuam sanitizados pelo mesmo logger central.
+- auth outage;
+- spike de API 5xx;
+- falhas de verificacao de billing;
+- falhas de webhook;
+- falhas de account deletion;
+- anomalias de upload/quota.
 
-## Frontend e código de atendimento
+P1:
 
-O frontend ainda usa `getApiUrl()` como helper central de URL, mas várias telas chamam `fetch()` diretamente e tratam erros localmente. Por isso, esta Sprint não espalhou alterações por componentes ou páginas.
+- falhas de Marketing provider;
+- degradacao de latencia;
+- falhas de catalogo publico.
 
-Decisão atual:
+Esses alertas dependem de Cloud Monitoring, Sentry ou console equivalente. Ainda nao foram configurados neste checkout.
 
-- preservar mensagens amigáveis existentes;
-- disponibilizar `requestId` no header e em erros centralizados do backend;
-- adotar um helper compartilhado de resposta em sprint futura antes de exibir `Código de atendimento: ABC123` de forma uniforme;
-- não exibir código técnico para autenticação inválida, validação simples ou erro comum de formulário.
+## Android Vitals
 
-## Decisão de readiness
+`PLAY_CONSOLE_PENDING`:
 
-A readiness foi mantida local e barata por padrão. Ela verifica se o Firebase Admin já está disponível no processo, mas não faz leitura remota de Firestore em cada chamada.
+- crash-free users;
+- ANR;
+- pre-launch report;
+- device catalog;
+- distribuicao de WebView versions.
 
-Justificativa:
+## Estado final desta sprint
 
-- health checks podem ser chamados com alta frequência;
-- uma leitura real recorrente no Firestore geraria custo e latência sem necessidade para o gate básico;
-- uma checagem profunda pode ser adicionada depois como endpoint autenticado ou execução operacional sob demanda;
-- Mercado Pago não deve ser consultado por health/readiness.
+- `OBSERVABILITY_RUNTIME_READY`: runtime local basico pronto.
+- `CLIENT_CRASH_REPORTING_READY`: parcialmente pronto para React/WebView; console externo pendente.
+- `PRODUCTION_ALERTING_READY`: nao, depende de configuracao externa.

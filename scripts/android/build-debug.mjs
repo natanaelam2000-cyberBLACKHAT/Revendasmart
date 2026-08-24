@@ -171,9 +171,13 @@ async function main() {
   });
   console.log("Sincronização Android concluída; iniciando o Gradle.");
 
+  // Nota: no Windows, `cmd.exe /c gradlew.bat` (sem `.\` explícito) falha neste tipo de ambiente quando
+  // NoDefaultCurrentDirectoryInExePath=1 está setado (cmd não procura o executável no cwd) — usar o
+  // caminho relativo explícito evita depender dessa configuração da máquina (mesmo fix já aplicado em
+  // build-release.mjs; RELEASE-CANDIDATE-01 encontrou o mesmo bug aqui, nunca replicado).
   const gradleCommand = isWindows ? "cmd.exe" : "./gradlew";
   const gradleArgs = isWindows
-    ? ["/d", "/s", "/c", "gradlew.bat", "clean", "assembleDebug", "--stacktrace", "--no-daemon"]
+    ? ["/d", "/s", "/c", ".\\gradlew.bat", "clean", "assembleDebug", "--stacktrace", "--no-daemon"]
     : ["clean", "assembleDebug", "--stacktrace", "--no-daemon"];
   await runCommand(gradleCommand, gradleArgs, { cwd: "android" });
 

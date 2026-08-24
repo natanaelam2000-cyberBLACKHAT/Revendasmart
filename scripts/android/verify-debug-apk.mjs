@@ -1,8 +1,7 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   ANDROID_PACKAGE_NAME,
@@ -14,7 +13,9 @@ import {
   assertRevendaSmartRepository,
   buildDirectoryHashMap,
   compareDirectoryHashMaps,
+  extractZipArchive,
   getGitSnapshot,
+  inspectApkBadging,
   repositoryLabel,
   resolveRepositoryRoot,
   sha256File,
@@ -35,80 +36,6 @@ export const FORBIDDEN_APK_MARKERS = [
 ];
 
 function fail(message) { throw new Error(message); }
-function normalizeExecutable(value) { return String(value || "").trim().replace(/^['\"]|['\"]$/g, ""); }
-function executableNames(name) { return process.platform === "win32" ? [`${name}.exe`, `${name}.cmd`, `${name}.bat`, name] : [name]; }
-function executableCandidatesFromPath(name) {
-  const candidates = [];
-  for (const directory of String(process.env.PATH || "").split(delimiter).filter(Boolean)) {
-    for (const executable of executableNames(name)) candidates.push(join(directory, executable));
-  }
-  return candidates;
-}
-function firstExistingExecutable(candidates) {
-  for (const candidate of candidates.map(normalizeExecutable).filter(Boolean)) {
-    if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
-  }
-  return "";
-}
-function resolveJarExecutable() {
-  const javaHome = normalizeExecutable(process.env.JAVA_HOME);
-  const candidate = firstExistingExecutable([
-    javaHome ? join(javaHome, "bin", process.platform === "win32" ? "jar.exe" : "jar") : "",
-    ...executableCandidatesFromPath("jar"),
-  ]);
-  if (!candidate) fail("jar não foi encontrado; configure JAVA_HOME para o JDK usado no build Android.");
-  return candidate;
-}
-function sdkRoots() {
-  return [...new Set([process.env.ANDROID_HOME, process.env.ANDROID_SDK_ROOT].map(normalizeExecutable).filter(Boolean))];
-}
-function aaptCandidates() {
-  const candidates = [process.env.AAPT_PATH];
-  for (const sdkRoot of sdkRoots()) {
-    const buildTools = join(sdkRoot, "build-tools");
-    if (!existsSync(buildTools)) continue;
-    candidates.push(...walkFiles(buildTools)
-      .filter((file) => /[/\\]aapt(?:\.exe)?$/i.test(file))
-      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true })));
-  }
-  candidates.push(...executableCandidatesFromPath("aapt"));
-  return [...new Set(candidates.map(normalizeExecutable).filter(Boolean))];
-}
-
-export function parseAaptPackageName(output) {
-  return String(output || "").match(/^package:\s+name='([^']+)'/m)?.[1] || "";
-}
-
-function inspectApkPackage(apkPath) {
-  let attempted = 0;
-  for (const candidate of aaptCandidates()) {
-    if (!existsSync(candidate)) continue;
-    attempted += 1;
-    const result = spawnSync(candidate, ["dump", "badging", apkPath], {
-      encoding: "utf8",
-      shell: false,
-      maxBuffer: 16 * 1024 * 1024,
-    });
-    if (result.status === 0) {
-      const packageName = parseAaptPackageName(result.stdout);
-      if (packageName) return { packageName, inspector: candidate };
-    }
-  }
-  fail(`não foi possível inspecionar o package dentro do APK com aapt${attempted ? ` (${attempted} candidato(s) testado(s))` : ""}.`);
-}
-
-function extractApk(apkPath, outputDirectory) {
-  const result = spawnSync(resolveJarExecutable(), ["xf", apkPath], {
-    cwd: outputDirectory,
-    encoding: "utf8",
-    shell: false,
-    maxBuffer: 32 * 1024 * 1024,
-  });
-  if (result.status !== 0) {
-    const detail = String(result.stderr || result.stdout || "").trim();
-    fail(`não foi possível extrair o APK${detail ? `: ${detail}` : "."}`);
-  }
-}
 
 function readableBundleFiles(root) {
   return walkFiles(root).filter((file) => /\.(?:html|js|css|json|map|txt)$/i.test(file));
@@ -177,7 +104,7 @@ export function verifyDebugApk(options = {}) {
 
   const temporaryDirectory = mkdtempSync(join(tmpdir(), "revendasmart-debug-apk-"));
   try {
-    extractApk(apkPath, temporaryDirectory);
+    extractZipArchive(apkPath, temporaryDirectory);
     const expectedWebRoot = join(temporaryDirectory, "assets", "public");
     const manifestFiles = walkFiles(temporaryDirectory).filter((file) => file.endsWith(BUILD_MANIFEST_FILE));
     if (manifestFiles.length !== 1 || manifestFiles[0] !== join(expectedWebRoot, BUILD_MANIFEST_FILE)) {
@@ -198,7 +125,7 @@ export function verifyDebugApk(options = {}) {
       fail("o APK foi gerado antes do build web/sync atual.");
     }
 
-    const packageInspection = inspectApkPackage(apkPath);
+    const packageInspection = inspectApkBadging(apkPath);
     if (packageInspection.packageName !== ANDROID_PACKAGE_NAME) {
       fail(`package do APK é ${packageInspection.packageName}; esperado ${ANDROID_PACKAGE_NAME}.`);
     }

@@ -10,11 +10,22 @@ const budgets = [
   { label: 'main css', pattern: /^index-.*\.css$/, maxKb: 175 },
   { label: 'entry js', pattern: /^index-.*\.js$/, maxKb: 35 },
   { label: 'dashboard route', pattern: /^dashboard-.*\.js$/, maxKb: 55 },
-  { label: 'onboarding route', pattern: /^onboarding-.*\.js$/, maxKb: 25 },
+  // RELEASE-QUALITY-04: onboarding subiu por um deslocamento marginal de chunk (o novo ThemeProvider
+  // global em main.tsx muda como o Vite particiona os bundles, não código novo na própria rota).
+  { label: 'onboarding route', pattern: /^onboarding-.*\.js$/, maxKb: 26 },
   { label: 'add-product route', pattern: /^add-product-.*\.js$/, maxKb: 35 },
-  { label: 'public catalog route', pattern: /^public-catalog-.*\.js$/, maxKb: 30 },
+  // REVENDASMART-LGPD-ANPD-REMEDIATION-01 Fase 7: +1kB pela busca sob demanda da chave Pix (minimização
+  // de exposição — o valor não vem mais na carga inicial do catálogo).
+  { label: 'public catalog route', pattern: /^public-catalog-.*\.js$/, maxKb: 31 },
   { label: 'reports route', pattern: /^reports-.*\.js$/, maxKb: 35 },
-  { label: 'settings route', pattern: /^settings-.*\.js$/, maxKb: 50 },
+  // RELEASE-QUALITY-04: +2kB para o seletor de aparência (Sistema/Claro/Escuro) exigido pelo ticket.
+  // RC-04: +2kB para tornar "Indique e ganhe" descobrível (entrada no menu Conta já existia noutro
+  // arquivo) — código isolado do link, progresso visual (§12) e o fix real do compartilhamento nativo
+  // Android (@capacitor/share, que antes silenciosamente caía para clipboard no WebView) exigidos pelo ticket.
+  // OWNER-ACCESS-02: +1kB para a entrada condicional "Administração" no menu Conta (useAdminAccess +
+  // lazy import + checagem isAdmin) — o painel em si (AdminGrantsPanel) é lazy-loaded em chunk PRÓPRIO
+  // (AdminGrantsPanel-*.js, fora deste orçamento) e só baixa para quem já é admin.
+  { label: 'settings route', pattern: /^settings-.*\.js$/, maxKb: 56 },
   { label: 'store intelligence panel', pattern: /^StoreIntelligencePanel-.*\.js$/, maxKb: 18, optional: true },
   { label: 'scanner vendor', pattern: /^vendor-scanner-.*\.js$/, maxKb: 430 },
   { label: 'recharts vendor', pattern: /^vendor-recharts-.*\.js$/, maxKb: 350 },

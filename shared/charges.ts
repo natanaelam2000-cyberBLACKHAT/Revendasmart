@@ -90,6 +90,10 @@ export interface Charge {
   clientName?: string;                 // Optional snapshot for read performance/new documents
   clientPhone?: string;                // Optional snapshot for read performance/new documents
   saleId?: string;                     // Ref → users/{uid}/sales/{saleId} (optional)
+  // RELEASE-CHECKOUT-03: link to a public-catalog order (checkout §5). Mutually exclusive with saleId
+  // in practice (a charge pays either an internal sale or a public order, never both), but both fields
+  // stay optional/independent — no shared/renamed field, so the existing saleId flow is untouched.
+  orderId?: string;                    // Ref → users/{uid}/orders/{orderId} (optional)
 
   // ── Content ───────────────────────────────────────────────────────────────
   title: string;                       // Payment title shown to payer
@@ -166,31 +170,57 @@ export interface MPWebhookPayload {
 
 // ---------------------------------------------------------------------------
 // externalReference builder
-// Format: {uid}_{chargeId}_{saleId|noSale}
-// Allows webhook to identify uid + chargeId without DB lookup
+// Format: {uid}_{chargeId}_{saleId|noSale}                (existing sale flow, unchanged)
+//      or {uid}_{chargeId}_order:{orderId}                (RELEASE-CHECKOUT-03: public catalog order)
+// Allows webhook to identify uid + chargeId (+ sale/order, when present) without DB lookup.
+// The "order:" prefix is a NEW variant — every externalReference already persisted in production for
+// sales keeps parsing exactly as before (bare saleId or "noSale", never prefixed), so no historical
+// charge/webhook replay breaks.
 // ---------------------------------------------------------------------------
+export type ExternalReferenceTarget =
+  | { kind: "sale"; id: string }
+  | { kind: "order"; id: string }
+  | undefined;
+
 export function buildExternalReference(
   uid: string,
   chargeId: string,
-  saleId?: string
+  target?: ExternalReferenceTarget | string,
 ): string {
-  return `${uid}_${chargeId}_${saleId ?? "noSale"}`;
+  // Aceita a chamada legada `buildExternalReference(uid, chargeId, saleId?: string)` sem mudar nenhum
+  // call site existente do fluxo de venda — só a rota nova de pedido do catálogo passa o objeto tipado.
+  let refSegment: string;
+  if (typeof target === "string") {
+    refSegment = target;
+  } else if (!target) {
+    refSegment = "noSale";
+  } else if (target.kind === "sale") {
+    refSegment = target.id;
+  } else {
+    refSegment = `order:${target.id}`;
+  }
+  return `${uid}_${chargeId}_${refSegment}`;
 }
 
 /** Parse externalReference back to components */
 export function parseExternalReference(
   ref: string
-): { uid: string; chargeId: string; saleId: string | null } | null {
+): { uid: string; chargeId: string; saleId: string | null; orderId: string | null } | null {
   const parts = ref.split("_");
   if (parts.length < 3) return null;
-  // uid may contain no underscores; chargeId is the second segment; rest is saleId
+  // uid may contain no underscores; chargeId is the second segment; rest is saleId/order:orderId
   // Firebase UIDs: 28 chars alphanumeric — no underscores, safe to split on _
   const uid = parts[0];
   const chargeId = parts[1];
-  const saleIdRaw = parts.slice(2).join("_");
+  const refSegment = parts.slice(2).join("_");
+  if (refSegment.startsWith("order:")) {
+    const orderId = refSegment.slice("order:".length);
+    return { uid, chargeId, saleId: null, orderId: orderId || null };
+  }
   return {
     uid,
     chargeId,
-    saleId: saleIdRaw === "noSale" ? null : saleIdRaw,
+    saleId: refSegment === "noSale" ? null : refSegment,
+    orderId: null,
   };
 }

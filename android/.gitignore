@@ -58,6 +58,11 @@ captures/
 *.jks
 *.keystore
 
+# RELEASE-08: signing de release usa variáveis de ambiente (docs/ANDROID_RELEASE_SIGNING.md), nunca um
+# destes arquivos — mas ficam bloqueados por padrão, caso alguém crie um localmente por hábito.
+key.properties
+keystore.properties
+
 # External native build folder generated in Android Studio 2.2 and later
 .externalNativeBuild
 .cxx/

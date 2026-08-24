@@ -1,95 +1,66 @@
-import type { ReactNode } from "react";
-import { WandSparkles } from "lucide-react";
-import {
-  MARKETING_AD_THEME_IDS,
-  MARKETING_AD_THEMES,
-  MARKETING_TEMPLATES,
-  type MarketingAdThemeId,
-  type MarketingTemplateId,
-} from "@/lib/marketing-ad";
+import { MARKETING_TEMPLATES, type MarketingTemplateId, type MarketingTemplateTier } from "@/lib/marketing-ad";
+
+/**
+ * Trilho horizontal com os templates REAIS do anúncio.
+ *
+ * Antes os dez templates ficavam empilhados numa grade de duas colunas, e logo abaixo vinha uma
+ * segunda grade com os temas de cor — juntos ocupavam quase uma tela inteira de celular no meio do
+ * fluxo. Agora os templates rolam lateralmente (scroll horizontal intencional) e a cor foi para a
+ * seção de personalização, junto das demais decisões visuais.
+ *
+ * A lista sai inteira de MARKETING_TEMPLATES: nada é inventado para preencher o trilho.
+ *
+ * PRO-04: templates Pro continuam VISÍVEIS para todo mundo (é assim que o Free entende o valor do
+ * plano), mas ficam com aria-disabled e um selo "PRO" quando `allowedTiers` não inclui a faixa deles.
+ * Este componente nunca lê o plano da conta por conta própria — recebe só a lista de faixas já
+ * resolvida por `pages/marketing.tsx`, o único lugar da árvore que sabe qual é o plano ativo.
+ */
+const TEMPLATE_ENTRIES = Object.entries(MARKETING_TEMPLATES) as [MarketingTemplateId, { label: string; emoji: string; tier: MarketingTemplateTier }][];
 
 type Props = {
   template: MarketingTemplateId;
-  theme: MarketingAdThemeId;
   v2TemplatesEnabled: boolean;
+  allowedTiers: readonly MarketingTemplateTier[];
   onTemplateChange: (template: MarketingTemplateId) => void;
-  onThemeChange: (theme: MarketingAdThemeId) => void;
-  onUseThemeAsDefault: () => void;
-  extensionSlot?: ReactNode;
+  onLockedTemplateTap?: (template: MarketingTemplateId) => void;
 };
 
-export function MarketingTemplateSelector({
-  template,
-  theme,
-  v2TemplatesEnabled,
-  onTemplateChange,
-  onThemeChange,
-  onUseThemeAsDefault,
-  extensionSlot,
-}: Props) {
+export function MarketingTemplateSelector({ template, v2TemplatesEnabled, allowedTiers, onTemplateChange, onLockedTemplateTap }: Props) {
   return (
-    <section className="grid gap-5 rounded-[1.75rem] border border-border/60 bg-white p-4 shadow-sm sm:p-5" data-testid="marketing-template-selector">
-      <div>
-        <p className="text-[10px] font-black uppercase tracking-[.18em] text-primary">2. Defina o visual</p>
-        <h2 className="mt-1 text-base font-black">Template e tema</h2>
-      </div>
-
-      {v2TemplatesEnabled && (
-        <div className="flex gap-3 rounded-xl border border-blue-200 bg-blue-50 p-3 text-blue-900">
-          <WandSparkles className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
-          <p className="text-xs leading-5">Novos templates visuais estão disponíveis no mesmo editor manual.</p>
-        </div>
-      )}
-
-      <div>
-        <p className="mb-2 text-xs font-bold text-muted-foreground">Template</p>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-          {Object.entries(MARKETING_TEMPLATES).map(([id, item]) => (
+    <div data-testid="marketing-template-selector">
+      <div className="-mx-1 flex snap-x gap-2 overflow-x-auto hide-scrollbar px-1 pb-1">
+        {TEMPLATE_ENTRIES.map(([id, item]) => {
+          const active = template === id;
+          const locked = !allowedTiers.includes(item.tier);
+          return (
             <button
               key={id}
               type="button"
-              onClick={() => onTemplateChange(id as MarketingTemplateId)}
-              aria-pressed={template === id}
+              onClick={() => (locked ? onLockedTemplateTap?.(id) : onTemplateChange(id))}
+              aria-pressed={active}
+              aria-disabled={locked}
+              data-testid={`button-marketing-template-${id}`}
+              data-locked={locked}
               className={[
-                "flex min-h-20 flex-col items-center justify-center gap-1 rounded-xl border p-2 text-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2",
-                template === id ? "border-primary bg-primary/5 text-primary" : "border-border bg-white text-muted-foreground",
+                "rs-pressable relative flex min-h-[4.25rem] w-20 shrink-0 snap-start flex-col items-center justify-start gap-1 rounded-xl border px-1 py-2 transition",
+                active ? "border-primary bg-primary/10 text-primary" : "border-border/60 bg-white text-muted-foreground",
+                locked ? "opacity-60" : "",
               ].join(" ")}
             >
-              <span className="text-lg">{item.emoji}</span>
-              <span className="text-[10px] font-bold leading-tight">{item.label}</span>
+              {locked && (
+                <span className="absolute -right-1 -top-1 rounded-full bg-amber-500 px-1 py-0.5 text-[8px] font-black leading-none text-white">
+                  PRO
+                </span>
+              )}
+              <span className="text-base leading-none">{item.emoji}</span>
+              <span className="text-center text-[10px] font-bold leading-[1.15]">{item.label}</span>
             </button>
-          ))}
-        </div>
+          );
+        })}
       </div>
-
-      <div>
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <p className="text-xs font-bold text-muted-foreground">Tema do card</p>
-          <button type="button" onClick={onUseThemeAsDefault} className="rounded text-[10px] font-black text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2">Usar como padrão</button>
-        </div>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {MARKETING_AD_THEME_IDS.map((themeId) => {
-            const item = MARKETING_AD_THEMES[themeId];
-            return (
-              <button
-                key={themeId}
-                type="button"
-                onClick={() => onThemeChange(themeId)}
-                aria-pressed={theme === themeId}
-                className={[
-                  "rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2",
-                  theme === themeId ? "border-primary bg-primary/5" : "border-border bg-white",
-                ].join(" ")}
-              >
-                <div className="mb-2 h-9 rounded-lg" style={{ background: "linear-gradient(135deg,#fff 0%," + item.accent + "33 55%,#fff 100%)" }} />
-                <p className="text-[11px] font-black">{item.label}</p>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {extensionSlot}
-    </section>
+      {v2TemplatesEnabled && (
+        <p className="mt-1.5 text-[10px] font-semibold text-muted-foreground">Novos templates visuais estão disponíveis neste mesmo editor.</p>
+      )}
+    </div>
   );
 }

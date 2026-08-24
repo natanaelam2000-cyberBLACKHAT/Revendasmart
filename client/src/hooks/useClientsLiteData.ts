@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, getFirestore, onSnapshot } from "firebase/firestore";
 import { getFirebaseAuth } from "@/lib/firebase";
+import { subscribeSharedUserCollection } from "@/lib/firestore-shared-collection";
 import type { Client } from "@/lib/mock-data";
 
 interface ClientsLiteData {
@@ -10,6 +10,11 @@ interface ClientsLiteData {
   error?: string;
 }
 
+function mapClientDoc(id: string, data: Record<string, unknown>): Client {
+  return { ...data, id } as Client;
+}
+
+/** RELEASE-QUALITY-02 §1 — ver useProductsData.ts: mesma subscription compartilhada por uid+coleção. */
 export function useClientsLiteData(): ClientsLiteData {
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
@@ -23,9 +28,9 @@ export function useClientsLiteData(): ClientsLiteData {
       return;
     }
 
-    let unsubscribeClients: (() => void) | undefined;
+    let unsubscribeCollection: (() => void) | undefined;
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-      unsubscribeClients?.();
+      unsubscribeCollection?.();
 
       if (!user) {
         setClients([]);
@@ -35,25 +40,15 @@ export function useClientsLiteData(): ClientsLiteData {
       }
 
       setLoading(true);
-      unsubscribeClients = onSnapshot(
-        collection(getFirestore(), "users", user.uid, "clients"),
-        (snapshot) => {
-          const data = snapshot.docs.map((doc) => ({ ...doc.data(), id: doc.id } as Client));
-          setClients(data);
-          setError(undefined);
-          setLoading(false);
-        },
-        (err) => {
-          console.error("[useClientsLiteData] Clients error:", err);
-          setClients([]);
-          setError("Failed to load clients");
-          setLoading(false);
-        }
-      );
+      unsubscribeCollection = subscribeSharedUserCollection("clients", user.uid, mapClientDoc, (snapshot) => {
+        setClients(snapshot.data);
+        setError(snapshot.error);
+        setLoading(false);
+      });
     });
 
     return () => {
-      unsubscribeClients?.();
+      unsubscribeCollection?.();
       unsubscribeAuth();
     };
   }, []);

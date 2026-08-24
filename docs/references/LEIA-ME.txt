@@ -1,0 +1,8 @@
+COMO USAR NO PROJETO REVENDASMART
+
+1. Extraia este ZIP na raiz do repositório.
+2. Confirme que estes arquivos existem:
+   - docs/references/catalogo-referencia-completa.jpg
+   - docs/references/catalogo-referencia-categorias.jpg
+3. No Claude Code, cole o conteúdo do arquivo PROMPT-CLAUDE.txt.
+4. Não autorize alterações até o Claude confirmar que abriu e analisou as duas imagens.

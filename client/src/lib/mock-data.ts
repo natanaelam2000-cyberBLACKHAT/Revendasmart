@@ -1,4 +1,5 @@
 import { notifyWarning } from "@/lib/notify";
+import type { ApprovedProductCutout } from "@shared/approved-product-cutout";
 
 export type Category = string;
 /** Brand agora é string livre — suporta marcas pré-definidas e digitadas manualmente */
@@ -24,6 +25,9 @@ export interface Product {
   gender?: string;
   lastSoldDate?: string;
   extras?: Record<string, any>;
+  /** PRO-07K — cutout aprovado e persistido (Photoroom + Pixel Preservation Gate), quando existir. Nunca
+   * dentro de `extras` (que é um bag de strings de formulário, incompatível com um objeto estruturado). */
+  approvedCutout?: ApprovedProductCutout;
   isFeatured?: boolean;
   isOnSale?: boolean;
   discountPercent?: number;
@@ -95,6 +99,29 @@ export const deleteImage = async (id: string): Promise<void> => {
     store.delete(id);
   } catch (e) {
     console.error('Error deleting image from IndexedDB', e);
+  }
+};
+
+/**
+ * LGPD §8 (REVENDASMART-LGPD-ANPD-REMEDIATION-01) — este banco IndexedDB é por ORIGEM, não por uid
+ * (mesma limitação já documentada para o cache do Firestore em `firebase.ts`). Apagar só as imagens
+ * referenciadas pelo índice em localStorage do usuário que está saindo (o que `account-deletion-local.ts`
+ * já faz) pode deixar para trás blobs de um produto cujo `imageId` não estava mais indexado localmente.
+ * Esta função limpa o object store inteiro — seguro porque é só um cache local re-populável a partir do
+ * Storage/Firestore, nunca a fonte de verdade — e é chamada em toda transição de usuário (troca de conta
+ * ou sessão expirando), não só no logout manual.
+ */
+export const clearAllImagesFromIndexedDb = async (): Promise<void> => {
+  try {
+    const db = await initImageDB();
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    tx.objectStore(STORE_NAME).clear();
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) {
+    console.error('Error clearing image IndexedDB store', e);
   }
 };
 
@@ -192,6 +219,14 @@ export interface AppSettings {
   lowStockThreshold: number;
   monthlyGoal?: number;
   appTheme?: string;
+  /**
+   * RELEASE-QUALITY-04 §1 — modo de aparência (claro/escuro/sistema). Campo NOVO e separado de
+   * `appTheme` de propósito: `appTheme` é a paleta de cor de marca (rosa/roxo/azul), isto aqui é
+   * claro-vs-escuro — os dois são independentes e não devem ser confundidos. A fonte instantânea do
+   * tema é o localStorage do next-themes (ThemeProvider); este campo só existe para continuidade da
+   * escolha entre aparelhos do mesmo usuário.
+   */
+  appearanceMode?: "system" | "light" | "dark";
   appThemeCustomization?: {
     primaryColor?: string;
     buttonTone?: string;
@@ -199,6 +234,14 @@ export interface AppSettings {
     shadowIntensity?: string;
     radius?: string;
     motion?: string;
+  };
+  /**
+   * Nomes que o lojista pode dar às áreas do app. Só o rótulo visual muda — rota, coleção do Firestore,
+   * status internos e chaves de analytics continuam com os nomes técnicos. Opcional e sem migração:
+   * contas antigas simplesmente não têm o campo e caem no rótulo padrão.
+   */
+  featureLabels?: {
+    orders?: string;
   };
   customCategoriesByNicho?: Record<string, string[]>;
   onboarding_theme_selected?: boolean;

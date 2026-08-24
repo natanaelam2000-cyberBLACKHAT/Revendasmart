@@ -1,18 +1,32 @@
 import { useEffect, useRef, useState } from "react";
 import { X, Camera } from "lucide-react";
+import { useDismissibleOnBack } from "@/hooks/useDismissibleOnBack";
 
 interface ScannerProps { onScan: (code: string) => void; onClose: () => void; }
 export function BarcodeScanner({ onScan, onClose }: ScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState<string | null>(null);
+  // §3/P1-01: full-screen dismissível — este componente só existe montado enquanto o scanner está
+  // ativo (lazy-loaded pela tela que o abre), então "sempre aberto enquanto montado" é o estado certo.
+  useDismissibleOnBack(true, onClose);
   useEffect(() => {
     let active = true;
     let codeReader: { reset: () => void } | undefined;
     const start = async () => {
       try {
-        const { BrowserMultiFormatReader } = await import("@zxing/library");
+        // Leitor 1D apenas (MultiFormatOneDReader): cobre EAN-13/EAN-8/UPC-A/UPC-E/Code 128/Code 39/
+        // Code 93/ITF — todos os formatos de código de barras de produto que este scanner precisa ler.
+        // O leitor multi-formato anterior arrastava também PDF417, DataMatrix, Aztec e MaxiCode para o
+        // bundle, e nenhum fluxo do app lê códigos 2D (o QR do catálogo é gerado, nunca escaneado).
+        //
+        // O caminho profundo é obrigatório, não estilo: @zxing/library não declara "sideEffects": false,
+        // então o barrel "@zxing/library" não pode ser tree-shakeado e traria a biblioteca inteira mesmo
+        // importando só esta classe (medido: 405,90 kB vs 141,60 kB no chunk vendor-scanner). Isso
+        // depende da estrutura interna da versão instalada — ver o smoke test correspondente antes de
+        // atualizar a dependência.
+        const { BrowserBarcodeReader } = await import("@zxing/library/esm/browser/BrowserBarcodeReader");
         if (!active || !videoRef.current) return;
-        const reader = new BrowserMultiFormatReader();
+        const reader = new BrowserBarcodeReader();
         codeReader = reader;
         await reader.decodeFromVideoDevice(null, videoRef.current, (result) => {
           if (result && active) { onScan(result.getText()); onClose(); }

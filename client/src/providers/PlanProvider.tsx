@@ -1,10 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { PLAN_CONFIG, type PlanType } from "@shared/monetization";
+import { PLAN_CONFIG, isPremiumActive, type PlanType, type PlanData as MonetizationPlanData } from "@shared/monetization";
 import { apiRequest, buildApiErrorDisplayMessage } from "@/lib/api-client";
 import { getFirebaseAuth } from "@/lib/firebase";
 
-type ActivePlan = PlanType | "admin";
+type ActivePlan = PlanType;
 
 type PlanData = {
   currentPlan?: string;
@@ -18,6 +18,15 @@ type PlanData = {
   nextBillingAt?: string | null;
   lastPaymentAt?: string | null;
   canceledAt?: string | null;
+  premiumSource?: string | null;
+  billingProvider?: "mercado_pago" | "google_play" | null;
+  // OWNER-ACCESS-02 — computados pelo servidor (GET /api/plan/data/:userId), nunca pelo client:
+  // composição de planData (comercial) + internalGrants (Tester/Premium+), via resolveEntitlements
+  // (shared/monetization.ts). O client só lê, nunca recalcula "quem tem Premium" com regra própria.
+  hasPremiumAccess?: boolean;
+  isTester?: boolean;
+  isPremiumPlus?: boolean;
+  entitlementSource?: "commercial" | "tester_grant" | "premium_plus_grant" | "none";
 };
 
 type PlanLimits = {
@@ -39,6 +48,8 @@ interface PlanProviderValue {
   hasPremiumAccess: boolean;
   isPremium: boolean;
   premiumActive: boolean;
+  isTester: boolean;
+  isPremiumPlus: boolean;
   globalConfig: null;
   referralCode: string | null;
   referralCount: number;
@@ -49,12 +60,20 @@ interface PlanProviderValue {
 const FREE_LIMITS = PLAN_CONFIG.free.limits;
 const PlanContext = createContext<PlanProviderValue | null>(null);
 
+// RELEASE-16 §3/§4, estendido em OWNER-ACCESS-02: única fonte de verdade para "tem acesso Premium" —
+// preferencialmente `data.hasPremiumAccess`, já composto pelo servidor (planData comercial + eventual
+// concessão interna Tester/Premium+, via resolveEntitlements em shared/monetization.ts). O fallback
+// local com `isPremiumActive()` só cobre um payload antigo/incompleto sem o campo (nunca deveria
+// acontecer com o servidor atual, mas evita quebrar se algum outro caminho ainda devolver o shape cru).
 function resolveActivePlan(data: PlanData | null): ActivePlan {
-  return data?.premiumActive === true || data?.currentPlan === "premium" ? "premium" : "free";
+  const hasAccess = typeof data?.hasPremiumAccess === "boolean"
+    ? data.hasPremiumAccess
+    : isPremiumActive(data as unknown as MonetizationPlanData | null);
+  return hasAccess ? "premium" : "free";
 }
 
 function resolveLimits(activePlan: ActivePlan): PlanLimits {
-  if (activePlan === "premium" || activePlan === "admin") {
+  if (activePlan === "premium") {
     return {
       products: Infinity,
       clients: Infinity,
@@ -125,11 +144,14 @@ export function PlanProvider({ children }: { children: ReactNode }) {
   }, [loadPlan]);
 
   const activePlan = useMemo(() => resolveActivePlan(planData), [planData]);
-  const hasPremiumAccess = activePlan === "premium" || activePlan === "admin";
+  const hasPremiumAccess = activePlan === "premium";
   const limits = useMemo(() => resolveLimits(activePlan), [activePlan]);
+  // RELEASE-28: `/signup?ref=` nunca era capturado — `/signup` é rota PÚBLICA (App.tsx), fora do
+  // PrivateRouter, que é onde a captura de `?referral=` roda. Corrigido para o mesmo formato que
+  // settings.tsx já usa e que de fato é capturado: origem + `?referral=<código>`.
   const shareLink = useMemo(() => {
     if (!planData?.referralCode || typeof window === "undefined") return null;
-    return `${window.location.origin}/signup?ref=${planData.referralCode}`;
+    return `${window.location.origin}/?referral=${planData.referralCode}`;
   }, [planData?.referralCode]);
 
   const refresh = useCallback(() => loadPlan(), [loadPlan]);
@@ -144,6 +166,8 @@ export function PlanProvider({ children }: { children: ReactNode }) {
     hasPremiumAccess,
     isPremium: hasPremiumAccess,
     premiumActive: hasPremiumAccess,
+    isTester: planData?.isTester ?? false,
+    isPremiumPlus: planData?.isPremiumPlus ?? false,
     globalConfig: null,
     referralCode: planData?.referralCode ?? null,
     referralCount: planData?.referralCount ?? 0,

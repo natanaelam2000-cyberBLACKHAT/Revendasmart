@@ -30,6 +30,7 @@ import {
   OAUTH_STATE_TTL_MS,
   ACCESS_TOKEN_TTL_S,
   REFRESH_TOKEN_TTL_DAYS,
+  MP_OAUTH_CONTINUITY_COOKIE,
 } from "../shared/connections";
 import { logError, logInfo, logWarn } from "./logger";
 
@@ -105,6 +106,40 @@ function getMPConnectionClientKey(req: Request): string {
 function getQueryValue(value: unknown): string {
   if (Array.isArray(value)) return String(value[0] ?? "");
   return typeof value === "string" ? value : "";
+}
+
+// ---------------------------------------------------------------------------
+// RELEASE-05 — browser continuity: parse/compare the HttpOnly cookie set by
+// start-auth against the `state` the callback received. Pure functions (no
+// Express/cookie-parser dependency) so they're directly unit-testable.
+// ---------------------------------------------------------------------------
+export function parseCookieHeader(header: string | undefined | null): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!header) return result;
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    const key = part.slice(0, eq).trim();
+    if (!key) continue;
+    const rawValue = part.slice(eq + 1).trim();
+    try {
+      result[key] = decodeURIComponent(rawValue);
+    } catch {
+      result[key] = rawValue;
+    }
+  }
+  return result;
+}
+
+/** Timing-safe: the nonce is a secret, so a naive `===` would leak length/prefix via timing. */
+export function hasMatchingOAuthContinuityCookie(cookieHeader: string | undefined | null, expectedNonce: string): boolean {
+  const provided = parseCookieHeader(cookieHeader)[MP_OAUTH_CONTINUITY_COOKIE];
+  if (!provided || provided.length !== expectedNonce.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(provided, "utf8"), Buffer.from(expectedNonce, "utf8"));
+  } catch {
+    return false;
+  }
 }
 
 function mpConnectionRateLimit(
@@ -315,22 +350,51 @@ async function refreshAccessTokens(refreshTokenPlain: string): Promise<MPTokenRe
   return resp.json() as Promise<MPTokenResponse>;
 }
 
-async function fetchMPAccountInfo(accessToken: string): Promise<{
-  email: string;
-  name?: string;
-  documentId?: string;
-}> {
+interface MercadoPagoAccountMetadata {
+  readonly email: string;
+  readonly name?: string;
+  readonly documentId?: string;
+}
+
+/**
+ * RELEASE-05B — /users/me nem sempre traz nome/documento (contas business, permissões reduzidas de
+ * escopo, contas antigas). Pura de propósito: nunca lança, nunca inventa um nome/documento "unknown"
+ * como se fosse dado real do Mercado Pago, e — o ponto central do bug original — OMITE a chave
+ * (`name`/`documentId` simplesmente ausentes do objeto retornado) em vez de deixá-la presente com
+ * valor `undefined`, que é exatamente o que o Firestore recusa a persistir.
+ */
+export function sanitizeMercadoPagoAccountMetadata(raw: unknown): MercadoPagoAccountMetadata {
+  const data = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const email = typeof data.email === "string" ? data.email.trim() : "";
+  const firstName = typeof data.first_name === "string" ? data.first_name.trim() : "";
+  const lastName = typeof data.last_name === "string" ? data.last_name.trim() : "";
+  const name = [firstName, lastName].filter(Boolean).join(" ").trim();
+
+  const identification = data.identification && typeof data.identification === "object"
+    ? (data.identification as Record<string, unknown>)
+    : {};
+  const rawDocumentId = identification.number;
+  const documentId = typeof rawDocumentId === "string"
+    ? rawDocumentId.trim()
+    : typeof rawDocumentId === "number" && Number.isFinite(rawDocumentId)
+      ? String(rawDocumentId)
+      : "";
+
+  return {
+    email,
+    ...(name ? { name } : {}),
+    ...(documentId ? { documentId } : {}),
+  };
+}
+
+async function fetchMPAccountInfo(accessToken: string): Promise<MercadoPagoAccountMetadata> {
   try {
     const resp = await fetch("https://api.mercadopago.com/users/me", {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!resp.ok) return { email: "" };
-    const data: any = await resp.json();
-    return {
-      email: data.email ?? "",
-      name: [data.first_name, data.last_name].filter(Boolean).join(" ") || undefined,
-      documentId: data.identification?.number ?? undefined,
-    };
+    const data: unknown = await resp.json();
+    return sanitizeMercadoPagoAccountMetadata(data);
   } catch {
     return { email: "" };
   }
@@ -532,13 +596,25 @@ async function handleStartAuth(req: Request, res: Response) {
     // Create server-side nonce bound to this uid
     const nonce = await createOAuthState(uid, ipAddress);
 
+    // RELEASE-05: bind this attempt to THIS browser — HttpOnly so client JS never reads/replays it,
+    // Secure so it never leaves TLS, SameSite=Lax so it still rides the top-level redirect back from
+    // Mercado Pago. Never relied on alone (state stays server-owned/single-use/expiring) — this is the
+    // additional continuity layer the callback checks before trusting the state at all.
+    res.cookie(MP_OAUTH_CONTINUITY_COOKIE, nonce, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      maxAge: OAUTH_STATE_TTL_MS,
+      path: "/api/mercadopago",
+    });
+
     const authUrl = new URL(MP_AUTH_URL);
     authUrl.searchParams.set("client_id", CLIENT_ID);
     authUrl.searchParams.set("response_type", "code");
     authUrl.searchParams.set("redirect_uri", REDIRECT_URI);
     authUrl.searchParams.set("state", nonce);
 
-    mpInfo("[mp-connections] OAuth flow started");
+    mpInfo("oauth_attempt_created");
 
     return res.json({ authUrl: authUrl.toString(), nonce });
   } catch (err) {
@@ -557,6 +633,11 @@ async function handleStartAuth(req: Request, res: Response) {
 // This is backend-only — no user token in this request.
 // uid is recovered from the nonce stored in Firestore.
 // ---------------------------------------------------------------------------
+function rejectCallback(res: Response, reason: string): void {
+  mpWarn("oauth_callback_rejected", { reason });
+  return res.redirect(frontendRedirectUrl(`/settings/mercadopago?status=error&reason=${reason}`));
+}
+
 async function handleCallback(req: Request, res: Response) {
   const code = getQueryValue(req.query.code);
   const nonce = getQueryValue(req.query.state);
@@ -564,16 +645,26 @@ async function handleCallback(req: Request, res: Response) {
 
   // Handle MP OAuth error (user denied permission)
   if (oauthError) {
-    mpWarn("[mp-connections/callback] MP returned OAuth error");
+    mpWarn("oauth_callback_rejected", { reason: "provider_denied" });
     return res.redirect(frontendRedirectUrl("/settings/mercadopago?status=denied"));
   }
 
   if (!code || !nonce) {
-    return res.redirect(frontendRedirectUrl("/settings/mercadopago?status=error&reason=missing_params"));
+    rejectCallback(res, "missing_params");
+    return;
   }
 
   if (!/^[a-f0-9]{64}$/i.test(nonce) || code.length > 2048) {
-    return res.redirect(frontendRedirectUrl("/settings/mercadopago?status=error&reason=invalid_state"));
+    rejectCallback(res, "invalid_state");
+    return;
+  }
+
+  // RELEASE-05: browser continuity — checked BEFORE touching the state document at all, so a
+  // leaked/copied callback URL opened in a different browser (which never received the start-auth
+  // Set-Cookie response) never even gets to learn whether the nonce exists, and never burns it.
+  if (!hasMatchingOAuthContinuityCookie(req.headers.cookie, nonce)) {
+    rejectCallback(res, "continuity_mismatch");
+    return;
   }
 
   try {
@@ -582,8 +673,8 @@ async function handleCallback(req: Request, res: Response) {
     const stateDoc = await db.collection("mercadopago_oauth_states").doc(nonce).get();
 
     if (!stateDoc.exists) {
-      mpWarn("[mp-connections/callback] State not found", { stateNonce: nonce });
-      return res.redirect(frontendRedirectUrl("/settings/mercadopago?status=error&reason=invalid_state"));
+      rejectCallback(res, "invalid_state");
+      return;
     }
 
     const stateData = stateDoc.data() as MPOAuthState;
@@ -592,10 +683,10 @@ async function handleCallback(req: Request, res: Response) {
     // Validate and consume the nonce
     const oauthState = await consumeOAuthState(nonce, uid);
     if (!oauthState) {
-      return res.redirect(
-        frontendRedirectUrl("/settings/mercadopago?status=error&reason=invalid_state")
-      );
+      rejectCallback(res, "invalid_state");
+      return;
     }
+    mpInfo("oauth_attempt_consumed");
 
     // Exchange code for tokens
     const tokens = await exchangeCodeForTokens(code);
@@ -639,6 +730,9 @@ async function handleCallback(req: Request, res: Response) {
       .collection("mercadopago_connections")
       .doc();
 
+    // RELEASE-05B: accountName/accountDocumentId só entram no objeto quando accountInfo realmente os
+    // trouxe — nunca como uma chave presente com valor `undefined` (é exatamente isso que o Firestore
+    // recusa a persistir). Construção explícita, sem JSON.parse(JSON.stringify(...)) como faxina.
     const connection: MPConnection = {
       id: connRef.id,
       uid,
@@ -649,8 +743,8 @@ async function handleCallback(req: Request, res: Response) {
       refreshTokenExpiresAt,
       merchantId: String(tokens.user_id),
       accountEmail: accountInfo.email,
-      accountName: accountInfo.name,
-      accountDocumentId: accountInfo.documentId,
+      ...(accountInfo.name ? { accountName: accountInfo.name } : {}),
+      ...(accountInfo.documentId ? { accountDocumentId: accountInfo.documentId } : {}),
       status: "active",
       isDefault: true,
       environment,
@@ -662,7 +756,8 @@ async function handleCallback(req: Request, res: Response) {
 
     await connRef.set(connection);
 
-    mpInfo("[mp-connections/callback] Connection created", { environment });
+    mpInfo("merchant_connection_created", { environment });
+    res.clearCookie(MP_OAUTH_CONTINUITY_COOKIE, { path: "/api/mercadopago" });
 
     return res.redirect(
       frontendRedirectUrl(`/settings/mercadopago?status=success&connectionId=${connRef.id}`)

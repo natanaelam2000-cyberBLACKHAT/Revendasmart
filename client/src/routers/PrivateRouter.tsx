@@ -3,8 +3,10 @@ import { Route, Switch, useLocation } from "wouter";
 import { onAuthStateChanged } from "firebase/auth";
 import { MaintenanceBanner } from "@/components/MaintenanceBanner";
 import { UserFeedbackHost } from "@/components/UserFeedbackHost";
+import { ConnectivityIndicator } from "@/components/ConnectivityIndicator";
 import { getApiUrl } from "@/lib/api-config";
 import { getFirebaseAuth, logTelemetryEvent } from "@/lib/firebase";
+import { isReferralCodeFormat } from "@shared/monetization";
 import { PlanProvider } from "@/providers/PlanProvider";
 import { UserSettingsProvider } from "@/providers/UserSettingsProvider";
 
@@ -14,6 +16,7 @@ const Products = lazy(() => import("@/pages/products"));
 const Sell = lazy(() => import("@/pages/sell"));
 const Catalog = lazy(() => import("@/pages/catalog"));
 const Clients = lazy(() => import("@/pages/clients"));
+const Orders = lazy(() => import("@/pages/orders"));
 const ClientDetail = lazy(() => import("@/pages/client-detail"));
 const Billings = lazy(() => import("@/pages/billings"));
 const BillingCalendar = lazy(() => import("@/pages/billing-calendar"));
@@ -42,29 +45,35 @@ function PrivateRoutes() {
   const [, setLocation] = useLocation();
   const [authState, setAuthState] = useState<{ uid: string | null; loading: boolean }>({ uid: null, loading: true });
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      const referralUid = params.get("referral");
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const referralParam = (params.get("referral") ?? params.get("ref"))?.trim();
+    if (!referralParam) return;
 
-      if (referralUid && referralUid.trim()) {
-        logTelemetryEvent("referral_link_opened", { referralUid, stage: "app_open" }).catch(() => {});
+    logTelemetryEvent("referral_link_opened", { stage: "app_open" }).catch(() => {});
+    // Tira o parâmetro da URL assim que lido, antes mesmo de a resolução (assíncrona, para código)
+    // terminar — nunca deixa o UID/código sentado na barra de endereço, histórico ou referrer headers
+    // por mais tempo que o necessário.
+    const newUrl = window.location.pathname + window.location.hash;
+    window.history.replaceState({ path: newUrl }, "", newUrl);
 
-        const isValidUid = /^[a-zA-Z0-9_-]{10,}$/.test(referralUid);
-        if (isValidUid) {
-          try {
-            localStorage.setItem("rs:referral_source", referralUid);
-            logTelemetryEvent("referral_captured", { referralUid, stage: "app_open", result: "success" }).catch(() => {});
-          } catch (error) {
-            console.warn("Failed to save referral to localStorage:", error);
-          }
-        } else {
-          logTelemetryEvent("referral_captured", { referralUid, stage: "app_open", result: "invalid" }).catch(() => {});
-        }
-
-        const newUrl = window.location.pathname + window.location.hash;
-        window.history.replaceState({ path: newUrl }, "", newUrl);
+    const persistReferralSource = (referralCode: string) => {
+      try {
+        localStorage.setItem("rs:referral_source", referralCode);
+        logTelemetryEvent("referral_captured", { stage: "app_open", result: "success", via: "code" }).catch(() => {});
+      } catch (error) {
+        console.warn("Failed to save referral to localStorage:", error);
       }
+    };
+
+    // RELEASE-28: só o código público fica no client até o backend autenticado resolver ownership.
+    // Links legados com UID bruto deixam de ser aceitos aqui porque não existe forma segura de
+    // distinguir "link antigo legítimo" de "UID arbitrário forjado pelo cliente".
+    if (isReferralCodeFormat(referralParam)) {
+      persistReferralSource(referralParam);
+      return;
     }
+    logTelemetryEvent("referral_captured", { stage: "app_open", result: "invalid" }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -108,6 +117,7 @@ function PrivateRoutes() {
     <>
       <MaintenanceBanner />
       <UserFeedbackHost />
+      <ConnectivityIndicator />
       <Switch>
         <Route path="/onboarding" component={Onboarding} />
         <Route path="/" component={Dashboard} />
@@ -120,6 +130,7 @@ function PrivateRoutes() {
         <Route path="/catalog" component={Catalog} />
         <Route path="/clients" component={Clients} />
         <Route path="/clients/:id" component={ClientDetail} />
+        <Route path="/orders" component={Orders} />
         <Route path="/billings" component={Billings} />
         <Route path="/billing-calendar" component={BillingCalendar} />
         <Route path="/marketing" component={Marketing} />

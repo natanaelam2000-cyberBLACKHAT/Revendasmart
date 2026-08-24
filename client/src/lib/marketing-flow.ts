@@ -1,7 +1,11 @@
 import type { Product } from "@/lib/mock-data";
 import { MARKETING_TEMPLATES, type MarketingTemplateId } from "@/lib/marketing-ad";
 
-export type MarketingWorkspaceView = "hub" | "editor" | "history";
+/**
+ * Áreas do Marketing. "Visão geral" deixou de ser categoria principal: quem entra já cai no fluxo de
+ * criação, e os recursos com IA ficam isolados em "pro" para não se misturarem ao editor gratuito.
+ */
+export type MarketingWorkspaceView = "editor" | "pro" | "history";
 export type MarketingLaunchSource = "hub" | "catalog" | "legacy-social" | "history";
 
 export interface MarketingLaunchRequest {

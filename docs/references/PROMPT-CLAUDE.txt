@@ -1,0 +1,20 @@
+Antes de editar qualquer arquivo, abra e analise visualmente estas referências locais:
+
+- docs/references/catalogo-referencia-completa.jpg
+- docs/references/catalogo-referencia-categorias.jpg
+
+Confirme explicitamente:
+1. que conseguiu abrir as duas imagens;
+2. as dimensões de cada arquivo;
+3. quais seções visuais identificou;
+4. quantos cards aparecem aproximadamente por linha;
+5. como interpretou a densidade, os espaçamentos e os carrosséis horizontais;
+6. que o nome e o logotipo da Centauro não serão copiados;
+7. que a identidade visual será REVENDASMART;
+8. que o catálogo interno mostrará Compartilhar no lugar do carrinho;
+9. que o catálogo público mostrará Carrinho no lugar de Compartilhar.
+
+Essas duas imagens são a referência visual definitiva.
+Ignore referências anteriores, inclusive Samsung e o hero vertical atual.
+
+Não altere código ainda. Primeiro entregue somente a análise das imagens e aguarde minha confirmação.

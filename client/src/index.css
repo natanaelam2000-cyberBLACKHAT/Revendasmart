@@ -107,6 +107,68 @@
   --rs-duration-normal: 220ms;
 }
 
+/*
+ * Paleta escura — valores convertidos de DARK_MODE_PROPOSAL.md (já existia no repo, nunca aplicado).
+ * Mesma estrutura de tokens do :root claro; a camada --rs-* herda tudo automaticamente por já
+ * derivar via hsl(var(--x)) — só --rs-input-bg ganha um ajuste aqui embaixo (ver comentário).
+ */
+.dark {
+  --background: 210 25% 8%;         /* #0F1419 Dark Slate */
+  --foreground: 240 11% 96%;        /* #F5F5F7 texto quase branco */
+
+  --card: 219 29% 16%;              /* #1C2433 Deep Charcoal */
+  --card-foreground: 240 11% 96%;
+
+  --popover: 219 29% 16%;
+  --popover-foreground: 240 11% 96%;
+
+  --primary: 258 100% 70%;          /* #9366FF roxo elegante */
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 216 26% 22%;         /* #2A3648 Slate Blue */
+  --secondary-foreground: 240 11% 96%;
+
+  --muted: 219 29% 16%;
+  --muted-foreground: 219 15% 71%;  /* #A9B1C0 texto secundário */
+
+  --accent: 216 26% 22%;            /* #2A3648 hover/focus */
+  --accent-foreground: 240 11% 96%;
+
+  --destructive: 4 90% 58%;         /* #F44336 */
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 215 17% 27%;            /* #3A4452 */
+  --input: 215 17% 27%;
+  --ring: 258 100% 70%;
+  --success: 123 38% 57%;           /* #66BB6A */
+  --warning: 36 100% 65%;           /* #FFB74D */
+  --info: 199 91% 64%;              /* #4FC3F7 */
+
+  /* --background é muito escuro para o padrão "background em baixa opacidade" que funciona no claro
+     (o input ficaria visualmente colado no card atrás dele) — override central aqui, não em componente. */
+  --rs-input-bg: hsl(var(--accent) / 0.9);
+}
+
+/*
+ * RC-04 P0/P1-01 — QA real em Android encontrou dezenas de cards/headers/inputs pelo app inteiro
+ * usando `bg-white`/`bg-white/NN` do Tailwind como cor de "superfície" hardcoded, nunca ligada ao
+ * token `--card` (que já é dark-mode-aware). Resultado: em modo escuro, o fundo do app fica escuro
+ * mas esses cards continuam brancos ("tema híbrido"). Em vez de editar bg-white em dezenas de
+ * arquivos, uma única regra central redireciona os usos de bg-white como SUPERFÍCIE para o token de
+ * card do tema ativo — mesmo princípio já usado acima para data-rs-card-tone. Cobre só as variantes
+ * de opacidade realmente usadas como superfície (base, /70, /80, /90, /95). Deliberadamente NÃO
+ * cobre bg-white/10, /20, /25, /30: essas são usadas como overlay translúcido sobre imagem/gradiente/
+ * câmera (scanner, PageSkeleton shimmer, ícones sobre hero colorido) e precisam continuar brancas em
+ * qualquer tema — escurecê-las tornaria esses elementos ilegíveis sobre fundos coloridos/fotos.
+ */
+.dark .bg-white,
+.dark .bg-white\/70,
+.dark .bg-white\/80,
+.dark .bg-white\/90,
+.dark .bg-white\/95 {
+  background-color: hsl(var(--card)) !important;
+}
+
 @layer base {
   * {
     @apply border-border;
@@ -157,12 +219,23 @@
   max-width: 100%;
 }
 
+/*
+ * RC-04 P0/P1-02 — fonte ÚNICA do respiro superior contra a status bar Android. Antes, só
+ * `.rs-app-header` reservava `env(safe-area-inset-top)`, e esse header só existe quando a página passa
+ * `title` para `<Layout>` (layout.tsx) — páginas com cabeçalho próprio (ex.: dashboard.tsx, "Visão
+ * Geral") não passam `title`, então nada reservava espaço e o conteúdo nascia atrás da status bar/
+ * notificações, exatamente o bug relatado em QA real. `.rs-app-frame` envolve o `<main>` incondicionalmente
+ * (com ou sem `title`), então mover a reserva de espaço pra cá cobre toda página que usa `Layout`, uma
+ * única vez. `.rs-app-header`, quando existe, passa a somar só o respiro visual fixo (1.5rem) por cima —
+ * nunca soma env(safe-area-inset-top) de novo, então nunca duplica padding.
+ */
 .rs-app-frame {
+  padding-top: env(safe-area-inset-top);
   padding-bottom: 7rem;
 }
 
 .rs-app-header {
-  padding-top: max(1.5rem, env(safe-area-inset-top));
+  padding-top: 1.5rem;
 }
 
 .rs-bottom-nav-edge {
@@ -176,6 +249,112 @@
   padding-top: max(1.75rem, env(safe-area-inset-top));
   padding-left: max(1.25rem, env(safe-area-inset-left));
 }
+
+/* RELEASE-QUALITY-02 §4 — tokens genéricos para overlays full-screen fora do app shell principal
+ * (`.rs-app-header`/`.rs-bottom-nav-edge` já cobrem o shell; isto cobre wizards/onboardings próprios
+ * como o do Perfil Criativo). Somam ao padding que já existe via `max()` — nunca duplicam, porque cada
+ * tela só aplica UMA dessas classes no seu próprio header/rodapé, nunca empilhada com outra fonte de
+ * inset já tratada (Radix Dialog/Sheet e o ClientPickerSheet já resolvem isso sozinhos, ver seus
+ * próprios `env(safe-area-inset-bottom)`, então esta classe não é usada neles). */
+.rs-overlay-safe-top {
+  padding-top: max(0.75rem, env(safe-area-inset-top));
+}
+
+.rs-overlay-safe-bottom {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+
+/* RELEASE-QUALITY-04 §7 — badge discreto de conectividade. Fixo, pequeno, nunca bloqueia toque no
+ * resto da tela (largura própria, não overlay full-screen). Cores via tokens centrais — acompanha
+ * claro/escuro automaticamente, nada hardcoded aqui. */
+.rs-connectivity-badge {
+  position: fixed;
+  top: max(0.75rem, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  pointer-events: none;
+}
+.rs-connectivity-badge--offline { background: hsl(var(--muted-foreground)); color: hsl(var(--background)); }
+.rs-connectivity-badge--syncing { background: hsl(var(--info)); color: #fff; }
+.rs-connectivity-badge--failed { background: hsl(var(--destructive)); color: hsl(var(--destructive-foreground)); }
+.rs-connectivity-badge--pending { background: hsl(var(--warning)); color: #fff; }
+.rs-connectivity-badge--synced { background: hsl(var(--success)); color: #fff; }
+
+/* RELEASE-QUALITY-05 §9/§10 — conflito de venda offline (estoque/produto mudou desde que a venda foi
+ * feita). Único badge que precisa de toque (expandir/tentar novamente/cancelar), então o wrapper (não o
+ * `.rs-connectivity-badge` genérico) é quem fica fixo/centralizado, e só ele e seus filhos reativam
+ * pointer-events — o resto da tela continua livre de toque através do badge. */
+.rs-connectivity-conflict-wrap {
+  position: fixed;
+  top: max(0.75rem, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: min(22rem, calc(100vw - 1.5rem));
+}
+.rs-connectivity-badge--conflict {
+  position: static;
+  transform: none;
+  pointer-events: auto;
+  cursor: pointer;
+  border: none;
+  background: hsl(var(--warning));
+  color: #fff;
+}
+.rs-connectivity-conflict-panel {
+  pointer-events: auto;
+  width: 100%;
+  max-height: min(60vh, 24rem);
+  overflow-y: auto;
+  background: hsl(var(--card));
+  color: hsl(var(--card-foreground));
+  border-radius: 1rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.rs-connectivity-conflict-item {
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.75rem;
+  background: hsl(var(--muted));
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.rs-connectivity-conflict-message {
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin: 0;
+}
+.rs-connectivity-conflict-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.rs-connectivity-conflict-actions button {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  padding: 0.375rem 0.625rem;
+  border-radius: 999px;
+  border: none;
+  cursor: pointer;
+}
+.rs-connectivity-conflict-actions button:first-child { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+.rs-connectivity-conflict-actions button:last-child { background: hsl(var(--secondary)); color: hsl(var(--secondary-foreground)); }
 
 @media (min-width: 640px) {
   .rs-safe-x {
@@ -436,7 +615,7 @@ html[data-rs-shadow="strong"] .shadow-lg,
 html[data-rs-shadow="strong"] .shadow-xl {
   box-shadow: var(--rs-shadow-lg) !important;
 }
-.rs-store-card{border:1px solid hsl(var(--border)/.6);border-radius:1.5rem;background:#fff;padding:1rem;box-shadow:0 1px 3px hsl(var(--foreground)/.08)}
+.rs-store-card{border:1px solid hsl(var(--border)/.6);border-radius:1.5rem;background:hsl(var(--card));padding:1rem;box-shadow:0 1px 3px hsl(var(--foreground)/.08)}
 .rs-store-label{font-size:.68rem;font-weight:900;letter-spacing:.12em;text-transform:uppercase;color:hsl(var(--muted-foreground))}
 .rs-store-action{margin-top:.75rem;display:flex;width:100%;align-items:center;justify-content:space-between;border:1px solid hsl(var(--primary)/.18);border-radius:1rem;background:hsl(var(--primary)/.06);padding:.8rem 1rem;color:hsl(var(--primary));font-size:.72rem;font-weight:900;letter-spacing:.08em;text-transform:uppercase}
 .rs-store-control{margin-top:.5rem;width:100%;border:0;border-radius:1rem;background:hsl(var(--secondary)/.5);padding:1rem;font-size:.875rem;outline:0}
@@ -453,23 +632,25 @@ html[data-rs-shadow="strong"] .shadow-xl {
 .rs-store-mini-preview{display:grid;min-width:5.5rem;height:5.5rem;place-items:center;border-radius:1.35rem;color:white;box-shadow:0 16px 34px hsl(var(--foreground)/.16);text-align:center}
 .rs-store-mini-preview span{font-size:1.65rem;font-weight:900;line-height:1}
 .rs-store-mini-preview small{max-width:4.5rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.58rem;font-weight:900;text-transform:uppercase;letter-spacing:.08em}
-.rs-store-theme-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.65rem}
-.rs-store-theme-option{min-width:0;border:1px solid hsl(var(--border)/.7);border-radius:1.15rem;background:white;padding:.7rem;text-align:left;box-shadow:0 1px 3px hsl(var(--foreground)/.06);transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease}
+/* Grid compacto de temas: amostra + nome, sem texto descritivo (referência da rodada de compactação) */
+.rs-store-theme-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.5rem}
+.rs-store-theme-option{min-width:0;border:1px solid hsl(var(--border)/.7);border-radius:.85rem;background:hsl(var(--card));padding:.4rem;text-align:center;transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease}
 .rs-store-theme-option:active{transform:scale(.98)}
-.rs-store-theme-option.is-selected{border-color:hsl(var(--primary));box-shadow:0 12px 26px hsl(var(--primary)/.12)}
-.rs-store-theme-swatch{display:block;height:2.25rem;border-radius:.9rem;margin-bottom:.55rem}
-.rs-store-theme-option strong,.rs-store-nicho-grid strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.72rem;font-weight:900;color:hsl(var(--foreground))}
-.rs-store-theme-option small,.rs-store-nicho-grid small{margin-top:.25rem;display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font-size:.62rem;line-height:1.25;color:hsl(var(--muted-foreground))}
+.rs-store-theme-option.is-selected{border-color:hsl(var(--primary));box-shadow:0 6px 16px hsl(var(--primary)/.16)}
+.rs-store-theme-swatch{display:block;height:1.75rem;border-radius:.6rem;margin-bottom:.35rem}
+.rs-store-theme-option strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.62rem;font-weight:800;color:hsl(var(--foreground))}
 .rs-store-fine-tune{display:grid;gap:.75rem;border-top:1px solid hsl(var(--border)/.55);padding-top:.85rem}
 .rs-store-color-control{display:flex;align-items:center;justify-content:space-between;gap:1rem;border-radius:1rem;background:hsl(var(--secondary)/.45);padding:.75rem .9rem;font-size:.72rem;font-weight:900;color:hsl(var(--foreground))}
-.rs-store-color-control input{height:2.4rem;width:3.2rem;border:0;border-radius:.8rem;background:white;padding:.25rem}
+.rs-store-color-control input{height:2.4rem;width:3.2rem;border:0;border-radius:.8rem;background:hsl(var(--card));padding:.25rem}
 .rs-store-choice-row{display:grid;gap:.45rem}
 .rs-store-choice-row p{font-size:.62rem;font-weight:900;letter-spacing:.12em;text-transform:uppercase;color:hsl(var(--muted-foreground))}
 .rs-store-choice-row div{display:flex;gap:.45rem;overflow-x:auto;padding-bottom:.1rem}
 .rs-store-choice-row button{flex-shrink:0;border-radius:999px;background:hsl(var(--secondary));padding:.55rem .75rem;font-size:.62rem;font-weight:900;color:hsl(var(--muted-foreground))}
 .rs-store-choice-row button.is-selected{background:hsl(var(--primary));color:white}
-.rs-store-nicho-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.6rem}
-.rs-store-nicho-grid button{min-width:0;border:1px solid hsl(var(--border)/.65);border-radius:1rem;background:white;padding:.8rem;text-align:left;transition:all .16s ease}
-.rs-store-nicho-grid button.is-selected{border-color:hsl(var(--primary));background:hsl(var(--primary)/.07)}
-@media (min-width:640px){.rs-store-theme-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.rs-store-nicho-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.rs-store-premium-panel{padding:1.25rem}}
-@media (max-width:430px){.rs-store-panel-head{display:grid}.rs-store-mini-preview{width:100%;height:4.5rem}.rs-store-theme-grid,.rs-store-nicho-grid{grid-template-columns:1fr}.rs-store-choice-row div{scroll-snap-type:x mandatory}.rs-store-choice-row button{scroll-snap-align:start}}
+/* Nichos: chips compactos que quebram linha (largura pelo conteúdo), sem descrição — igual à referência */
+.rs-store-nicho-grid{display:flex;flex-wrap:wrap;gap:.45rem}
+.rs-store-nicho-grid button{min-width:0;border:1px solid hsl(var(--border)/.65);border-radius:999px;background:hsl(var(--card));padding:.5rem .9rem;font-size:.68rem;font-weight:800;color:hsl(var(--foreground));text-align:center;transition:all .16s ease}
+.rs-store-nicho-grid button.is-selected{border-color:hsl(var(--primary));background:hsl(var(--primary)/.1);color:hsl(var(--primary))}
+@media (min-width:480px){.rs-store-theme-grid{grid-template-columns:repeat(5,minmax(0,1fr))}}
+@media (min-width:640px){.rs-store-premium-panel{padding:1.25rem}}
+@media (max-width:430px){.rs-store-panel-head{display:grid}.rs-store-mini-preview{width:100%;height:4.5rem}.rs-store-choice-row div{scroll-snap-type:x mandatory}.rs-store-choice-row button{scroll-snap-align:start}}

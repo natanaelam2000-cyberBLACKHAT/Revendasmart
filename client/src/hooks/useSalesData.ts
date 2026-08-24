@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, getFirestore, onSnapshot } from "firebase/firestore";
 import { getFirebaseAuth } from "@/lib/firebase";
+import { subscribeSharedUserCollection } from "@/lib/firestore-shared-collection";
 import type { Sale } from "@/lib/mock-data";
 
 interface SalesData {
@@ -10,6 +10,11 @@ interface SalesData {
   error?: string;
 }
 
+function mapSaleDoc(id: string, data: Record<string, unknown>): Sale {
+  return { ...data, id } as Sale;
+}
+
+/** RELEASE-QUALITY-02 §1 — ver useProductsData.ts: mesma subscription compartilhada por uid+coleção. */
 export function useSalesData(): SalesData {
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
@@ -23,9 +28,9 @@ export function useSalesData(): SalesData {
       return;
     }
 
-    let unsubscribeSales: (() => void) | undefined;
+    let unsubscribeCollection: (() => void) | undefined;
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-      unsubscribeSales?.();
+      unsubscribeCollection?.();
 
       if (!user) {
         setSales([]);
@@ -35,25 +40,15 @@ export function useSalesData(): SalesData {
       }
 
       setLoading(true);
-      unsubscribeSales = onSnapshot(
-        collection(getFirestore(), "users", user.uid, "sales"),
-        (snapshot) => {
-          const data = snapshot.docs.map((doc) => ({ ...doc.data(), id: doc.id } as Sale));
-          setSales(data);
-          setError(undefined);
-          setLoading(false);
-        },
-        (err) => {
-          console.error("[useSalesData] Sales error:", err);
-          setSales([]);
-          setError("Failed to load sales");
-          setLoading(false);
-        }
-      );
+      unsubscribeCollection = subscribeSharedUserCollection("sales", user.uid, mapSaleDoc, (snapshot) => {
+        setSales(snapshot.data);
+        setError(snapshot.error);
+        setLoading(false);
+      });
     });
 
     return () => {
-      unsubscribeSales?.();
+      unsubscribeCollection?.();
       unsubscribeAuth();
     };
   }, []);

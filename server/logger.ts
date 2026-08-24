@@ -9,6 +9,18 @@ declare module "express-serve-static-core" {
 
 export type LogContext = Record<string, unknown>;
 
+export type ObservabilityDomain =
+  | "AUTH"
+  | "CATALOG"
+  | "UPLOAD"
+  | "SUBSCRIPTION_MP"
+  | "PLAY_BILLING"
+  | "MARKETING_PRO"
+  | "ACCOUNT_DELETION"
+  | "REFERRAL";
+
+export type ObservabilityResult = "success" | "failure" | "retry";
+
 
 export type SafeHttpErrorCode =
   | "VALIDATION_ERROR"
@@ -92,7 +104,10 @@ const MAX_STRING_LENGTH = 600;
 const MAX_DEPTH = 5;
 const MAX_ARRAY_ITEMS = 20;
 
-const SENSITIVE_KEY_PATTERN = /token|secret|password|senha|authorization|cookie|private[_-]?key|credential|rawbody|raw_body|payload|client_secret|access[_-]?token|refresh[_-]?token|card|cvv|cpf|rg/i;
+// LGPD §11 (REVENDASMART-LGPD-ANPD-REMEDIATION-01): cnpj e pix/pixkey adicionados — a chave Pix
+// costuma SER um CPF/telefone/e-mail, e cnpj era uma lacuna real na lista original (só cpf/rg estavam
+// cobertos).
+const SENSITIVE_KEY_PATTERN = /token|secret|password|senha|authorization|cookie|private[_-]?key|api[_-]?key|credential|rawbody|raw_body|payload|client_secret|access[_-]?token|refresh[_-]?token|card|cvv|cpf|cnpj|rg|pix[_-]?key|^pix$/i;
 const IDENTIFIER_KEYS = new Set([
   "uid",
   "userid",
@@ -117,6 +132,9 @@ const IDENTIFIER_KEYS = new Set([
   "clientid",
   "saleid",
   "productid",
+  // LGPD §11: nome do cliente do lojista não era mascarado se aparecesse num campo de contexto com
+  // essa chave — só e-mail/telefone tinham mascaramento por padrão de chave (ver maskEmail/maskPhone).
+  "clientname",
 ]);
 
 function shortHash(value: string): string {
@@ -157,6 +175,9 @@ function sanitizeString(value: string): string {
     .replace(/(TEST-|APP_USR-|APP-)[A-Za-z0-9._~+/=-]{16,}/g, "[redacted-token]")
     .replace(/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/g, "[redacted-private-key]")
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, (email) => maskEmail(email) || "[redacted-email]")
+    // LGPD §11: CNPJ (14 dígitos, formato XX.XXX.XXX/XXXX-XX) era uma lacuna real — só CPF (11 dígitos)
+    // tinha regex própria. A chave Pix, especialmente, pode ser um CNPJ.
+    .replace(/\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/g, "**.***.***/****-**")
     .replace(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, "***.***.***-**")
     .replace(/(?:\+55\s*)?\(?\d{2}\)?[\s-]9?\d{4}[-\s]\d{4}/g, (phone) => maskPhone(phone) || "[redacted-phone]");
 
@@ -235,6 +256,21 @@ export function logError(event: string, error?: unknown, context: LogContext = {
   writeLog("error", event, {
     ...context,
     ...(error === undefined ? {} : { error: sanitizeError(error) }),
+  });
+}
+
+export function logDomainEvent(
+  domain: ObservabilityDomain,
+  event: string,
+  result: ObservabilityResult,
+  context: LogContext = {},
+): void {
+  const logEvent = result === "failure" ? logWarn : logInfo;
+  logEvent("domain.event", {
+    domain,
+    event,
+    result,
+    ...context,
   });
 }
 

@@ -10,14 +10,32 @@ import { usePlan } from "@/providers/PlanProvider";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";
 import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
 import { buildPublicCatalogUrl } from "@/lib/public-url";
+import { toCsvRow } from "@/lib/export-security";
+import { useSalesData } from "@/hooks/useSalesData";
+import { buildLastSaleByClientId, isClientInactive } from "@/lib/client-activity";
+import { useDismissibleOnBack } from "@/hooks/useDismissibleOnBack";
+import { PRIORITY_QUERY_PARAM } from "@/lib/home-dashboard-view-model";
+
+/**
+ * RELEASE-26: lê o contexto do card de Prioridades ("N clientes sem comprar há +60 dias") ANTES de
+ * cair num /clients genérico — mesmo padrão de products.tsx (readPriorityFilterFromLocation) e de
+ * marketing-flow.ts (readMarketingLaunchRequest): lido uma vez, na montagem, via query string.
+ */
+function readInactiveFilterFromLocation(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get(PRIORITY_QUERY_PARAM) === "inactive-clients";
+}
 
 export default function Clients() {
   const { clients, loading, loadingMore, error, hasMore, totalCount, loadMore, addClient, updateClient, deleteClient } = usePaginatedClientsData();
   const { activePlan } = usePlan();
   const [, setLocation] = useLocation();
+  const { sales } = useSalesData();
   const [billings] = useState<Installment[]>([]);
   const [settings] = useState(() => defaultSettings);
   const [search, setSearch] = useState("");
+  // Ponto do gate de contexto (RELEASE-26): `false` = navegação orgânica, sem card de origem.
+  const [inactiveOnly, setInactiveOnly] = useState<boolean>(readInactiveFilterFromLocation);
   const [showAdd, setShowAdd] = useState(false);
   const [showLimitModal, setShowLimitModal] = useState(false);
   const [newClient, setNewClient] = useState({ name: '', phone: '', email: '', notes: '' });
@@ -28,12 +46,24 @@ export default function Clients() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
 
+  // P1-01: modal de cliente (novo/editar) é um overlay customizado (não usa o primitivo Sheet/Dialog) —
+  // back físico do Android precisa fechá-lo antes de sair da tela.
+  useDismissibleOnBack(showAdd, () => setShowAdd(false));
+
+  // Mesmo critério de client-activity.ts usado no card de Prioridades da Home — o número que o card
+  // prometeu ("N clientes sem comprar há +60 dias") precisa bater com o que este filtro mostra aqui.
+  const lastSaleByClientId = useMemo(() => buildLastSaleByClientId(sales), [sales]);
+  const referenceDate = useMemo(() => new Date(), []);
+
   const filtered = useMemo(() => {
-    return clients.filter(c =>
-      c.name.toLowerCase().includes(search.toLowerCase()) ||
-      c.phone.includes(search)
-    );
-  }, [clients, search]);
+    return clients.filter(c => {
+      const matchesSearch =
+        c.name.toLowerCase().includes(search.toLowerCase()) ||
+        c.phone.includes(search);
+      const matchesInactive = !inactiveOnly || isClientInactive(lastSaleByClientId.get(c.id), referenceDate);
+      return matchesSearch && matchesInactive;
+    });
+  }, [clients, search, inactiveOnly, lastSaleByClientId, referenceDate]);
 
   const clientById = useMemo(() => new Map(clients.map(client => [client.id, client])), [clients]);
 
@@ -125,10 +155,10 @@ export default function Clients() {
   };
 
   const exportCSV = () => {
-    const headers = "ID,Nome,Telefone,Email,Notas\n";
+    const headers = toCsvRow(["ID", "Nome", "Telefone", "Email", "Notas"]) + "\n";
     notifyInfo("Exportando clientes carregados.");
-    const rows = clients.map(c => `${c.id},${c.name},${c.phone},${c.email || ''},${c.notes || ''}`).join("\n");
-    const blob = new Blob([headers + rows], { type: 'text/csv' });
+    const rows = clients.map(c => toCsvRow([c.id, c.name, c.phone, c.email || '', c.notes || ''])).join("\n");
+    const blob = new Blob([`\uFEFF${headers}${rows}`], { type: 'text/csv;charset=utf-8;' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.setAttribute('hidden', '');
@@ -137,6 +167,7 @@ export default function Clients() {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
   };
 
   if (loading) {
@@ -208,6 +239,14 @@ export default function Clients() {
   return (
     <Layout title="Clientes" hideBottomNav={showAdd}>
       <div className="px-4 sm:px-6 lg:px-8 py-6 pb-[max(8rem,calc(env(safe-area-inset-bottom)+7rem))] max-w-5xl mx-auto">
+        {inactiveOnly && (
+          <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2.5" data-testid="banner-priority-filter">
+            <p className="text-xs font-bold text-primary">Filtro: Sem comprar há mais de 60 dias</p>
+            <button type="button" onClick={() => setInactiveOnly(false)} className="rs-pressable rounded-lg px-2 py-1 text-[11px] font-bold text-primary hover:bg-primary/10" data-testid="button-clear-priority-filter">
+              Ver todos
+            </button>
+          </div>
+        )}
         <div className="flex gap-3 mb-6">
           <div className="relative flex-1">
             <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -275,7 +314,7 @@ export default function Clients() {
               {clients.length === 0 ? (
                 <button onClick={() => setShowAdd(true)} className="rs-pressable mt-5 rounded-2xl bg-primary px-5 py-3 text-xs font-semibold text-white">Cadastrar cliente</button>
               ) : (
-                <button onClick={() => setSearch("")} className="rs-pressable mt-5 rounded-2xl bg-secondary px-5 py-3 text-xs font-semibold text-foreground">Limpar filtros</button>
+                <button onClick={() => { setSearch(""); setInactiveOnly(false); }} className="rs-pressable mt-5 rounded-2xl bg-secondary px-5 py-3 text-xs font-semibold text-foreground">Limpar filtros</button>
               )}
             </div>
           ) : (
@@ -316,7 +355,9 @@ export default function Clients() {
                         </div>
                       </a>
                     </Link>
-                    {!isSelectionMode && <div className="flex flex-col gap-1"><button onClick={() => openEdit(client)} className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center"><Pencil className="w-4 h-4" /></button><ConfirmActionDialog title="Excluir cliente" description={<><p>Deseja excluir <strong>{client.name}</strong>?</p><p className="mt-2">Essa ação não pode ser desfeita.</p></>} confirmLabel="Excluir" onConfirm={() => handleDeleteClient(client.id)} trigger={<button className="w-9 h-9 rounded-xl bg-red-50 text-red-600 flex items-center justify-center" aria-label={`Excluir ${client.name}`}><Trash2 className="w-4 h-4" /></button>} /></div>}
+                    {/* P1-02: min-h-11/min-w-11 = 44px de área de toque real — o ícone continua w-4 h-4
+                        visualmente, só a área clicável cresce (era 36px, abaixo do confortável em mobile). */}
+                    {!isSelectionMode && <div className="flex flex-col gap-1"><button onClick={() => openEdit(client)} className="min-h-11 min-w-11 rounded-xl bg-primary/10 text-primary flex items-center justify-center" aria-label={`Editar ${client.name}`}><Pencil className="w-4 h-4" /></button><ConfirmActionDialog title="Excluir cliente" description={<><p>Deseja excluir <strong>{client.name}</strong>?</p><p className="mt-2">Essa ação não pode ser desfeita.</p></>} confirmLabel="Excluir" onConfirm={() => handleDeleteClient(client.id)} trigger={<button className="min-h-11 min-w-11 rounded-xl bg-red-50 text-red-600 flex items-center justify-center" aria-label={`Excluir ${client.name}`}><Trash2 className="w-4 h-4" /></button>} /></div>}
                   </div>
                 );
               })}

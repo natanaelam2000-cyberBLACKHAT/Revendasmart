@@ -3,6 +3,14 @@
   "outputDirectory": "dist/public",
   "rewrites": [
     {
+      "source": "/privacy-policy",
+      "destination": "https://revendasmart-backend-cc2743rkmq-uc.a.run.app/privacy-policy"
+    },
+    {
+      "source": "/terms-of-service",
+      "destination": "https://revendasmart-backend-cc2743rkmq-uc.a.run.app/terms-of-service"
+    },
+    {
       "source": "/api/:path*",
       "destination": "https://revendasmart-backend-cc2743rkmq-uc.a.run.app/api/:path*"
     },

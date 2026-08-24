@@ -6,6 +6,7 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { useDismissibleOnBack } from "@/hooks/useDismissibleOnBack"
 
 const Sheet = SheetPrimitive.Root
 
@@ -56,22 +57,29 @@ interface SheetContentProps
 const SheetContent = React.forwardRef<
   React.ElementRef<typeof SheetPrimitive.Content>,
   SheetContentProps
->(({ side = "right", className, children, ...props }, ref) => (
-  <SheetPortal>
-    <SheetOverlay />
-    <SheetPrimitive.Content
-      ref={ref}
-      className={cn(sheetVariants({ side }), "max-h-[100dvh] overflow-y-auto overscroll-contain pb-[max(1rem,env(safe-area-inset-bottom))]", className)}
-      {...props}
-    >
-      <SheetPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-secondary">
-        <X className="h-4 w-4" />
-        <span className="sr-only">Fechar</span>
-      </SheetPrimitive.Close>
-      {children}
-    </SheetPrimitive.Content>
-  </SheetPortal>
-))
+>(({ side = "right", className, children, ...props }, ref) => {
+  // RELEASE-QUALITY-03 P1-01: reaproveita o MESMO botão X que já fecha a sheet — o back físico do
+  // Android só clica nele, nunca inventa um segundo caminho de fechamento.
+  const closeRef = React.useRef<HTMLButtonElement>(null);
+  useDismissibleOnBack(true, () => closeRef.current?.click());
+
+  return (
+    <SheetPortal>
+      <SheetOverlay />
+      <SheetPrimitive.Content
+        ref={ref}
+        className={cn(sheetVariants({ side }), "max-h-[100dvh] overflow-y-auto overscroll-contain pb-[max(1rem,env(safe-area-inset-bottom))]", className)}
+        {...props}
+      >
+        <SheetPrimitive.Close ref={closeRef} className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-secondary">
+          <X className="h-4 w-4" />
+          <span className="sr-only">Fechar</span>
+        </SheetPrimitive.Close>
+        {children}
+      </SheetPrimitive.Content>
+    </SheetPortal>
+  );
+})
 SheetContent.displayName = SheetPrimitive.Content.displayName
 
 const SheetHeader = ({

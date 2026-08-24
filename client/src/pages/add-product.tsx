@@ -1,24 +1,33 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from "react";
 import { Layout } from "@/components/layout";
-import { Camera, CheckCircle2, ChevronDown, ScanLine, Wand2, Sparkles, ChevronLeft, ImagePlus, AlertCircle } from "lucide-react";
+import { Camera, CheckCircle2, ChevronDown, ScanLine, Sparkles, ChevronLeft, ImagePlus, AlertCircle } from "lucide-react";
 import { useLocation, useParams } from "wouter";
 
 const BarcodeScanner = lazy(
   () => import("@/components/barcode-scanner")
 );
+// RELEASE V1 §6/§7: mesmo padrão do BarcodeScanner acima — lazy, porque só Premium/admin em modo de
+// edição chega a ver estas ferramentas (a maioria das visitas a esta tela nunca paga o bundle delas).
+const PhotoroomCutoutTool = lazy(
+  () => import("@/components/PhotoroomCutoutTool").then((mod) => ({ default: mod.PhotoroomCutoutTool }))
+);
+const ProductPhotoEnhancementTool = lazy(
+  () => import("@/components/ProductPhotoEnhancementTool").then((mod) => ({ default: mod.ProductPhotoEnhancementTool }))
+);
 import { Product, defaultSettings } from "@/lib/mock-data";
 import type { PlanType } from "@shared/monetization";
 import { getFirebaseAuth, logTelemetryEvent } from "@/lib/firebase";
+import { useAdminAccess } from "@/hooks/useAdminAccess";
 import {
   getFirestore,
   doc,
   setDoc,
   getDoc,
   getCountFromServer,
-  collection
+  collection,
+  increment
 } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
-import { getStorage } from "firebase/storage";
+import { uploadImageViaServer, deleteImageViaServer, ServerUploadError } from "@/lib/server-upload";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { usePlanData } from "@/hooks/usePlanData";
 import { notifyError, notifySuccess } from "@/lib/notify";
@@ -29,9 +38,13 @@ import {
   getNichoConfig,
   getProductCategoriesForNicho,
   inferNichoFromCategory,
+  normalizeProductCategory,
   toBusinessTypesArray,
   type NichoId
 } from "@/lib/nicho-config";
+import { assessRawProductImage, loadOrientedImageElement } from "@/lib/product-image-metadata";
+import { MARKETING_PRODUCT_IMAGE_QUALITY_POLICY_V0, type ProductImageQualityAssessment } from "@shared/product-image-quality";
+import { PRODUCT_IMAGE_COORDINATE_SPACE_VERSION, type CanonicalDecodedImage } from "@shared/product-image-coordinate-space";
 
 /**
  * Comprime uma imagem usando Canvas
@@ -40,62 +53,56 @@ import {
  * @param maxHeight - Altura máxima (default 1200px)
  * @param quality - Qualidade JPEG (0-1, default 0.85)
  * @param targetSize - Tamanho alvo em bytes (default 2MB)
- * @returns Promise<Blob | null> - Blob comprimido ou null se exceder limite
+ * @returns Promise<CompressedProductImage | null> - Blob comprimido + dimensões finais, ou null se exceder limite
  */
 // 🔥 CORRIGIDO COMPLETO
+
+type CompressedProductImage = { blob: Blob; width: number; height: number };
 
 async function compressImage(
   file: File,
   maxWidth = 1200,
   maxHeight = 1200,
   quality = 0.82,
-  targetSize = 2 * 1024 * 1024,
+  targetSize = 500 * 1024,
   outputType = "image/webp"
-): Promise<Blob | null> {
+): Promise<CompressedProductImage | null> {
+  // PRO-07F.2A: decode unificado com a extração de metadados (product-image-metadata.ts) — antes disto
+  // havia uma segunda cópia própria do mesmo mecanismo de decode só aqui.
+  const img = await loadOrientedImageElement(file);
+  if (!img) return null;
+
+  const scale = Math.min(maxWidth / img.width, maxHeight / img.height, 1);
+  const width = Math.max(1, Math.round(img.width * scale));
+  const height = Math.max(1, Math.round(img.height * scale));
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  canvas.width = width;
+  canvas.height = height;
+  ctx.drawImage(img, 0, 0, width, height);
+
   return new Promise((resolve) => {
-    const objectUrl = URL.createObjectURL(file);
-    const img = new Image();
+    const tryEncode = (type: string, nextQuality: number, fallback?: () => void) => {
+      canvas.toBlob(
+        (blob) => {
+          if (blob && blob.size <= targetSize) {
+            resolve({ blob, width, height });
+            return;
+          }
+          fallback?.();
+        },
+        type,
+        nextQuality
+      );
+    };
 
-    img.onload = () => {
-      URL.revokeObjectURL(objectUrl);
-      const scale = Math.min(maxWidth / img.width, maxHeight / img.height, 1);
-      const width = Math.max(1, Math.round(img.width * scale));
-      const height = Math.max(1, Math.round(img.height * scale));
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
-
-      if (!ctx) return resolve(null);
-
-      canvas.width = width;
-      canvas.height = height;
-      ctx.drawImage(img, 0, 0, width, height);
-
-      const tryEncode = (type: string, nextQuality: number, fallback?: () => void) => {
-        canvas.toBlob(
-          (blob) => {
-            if (blob && blob.size <= targetSize) {
-              resolve(blob);
-              return;
-            }
-            fallback?.();
-          },
-          type,
-          nextQuality
-        );
-      };
-
-      tryEncode(outputType, quality, () => {
-        tryEncode("image/jpeg", Math.min(quality, 0.78), () => {
-          tryEncode("image/jpeg", 0.62, () => resolve(null));
-        });
+    tryEncode(outputType, quality, () => {
+      tryEncode("image/jpeg", Math.min(quality, 0.78), () => {
+        tryEncode("image/jpeg", 0.62, () => resolve(null));
       });
-    };
-
-    img.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      resolve(null);
-    };
-    img.src = objectUrl;
+    });
   });
 }
 
@@ -131,7 +138,7 @@ function saveLocalBrandSuggestion(nicho: string, value: string, existing: string
   if (!normalized) return existing;
   const merged = [normalized, ...existing.filter((item) => item.toLocaleLowerCase("pt-BR") !== normalized.toLocaleLowerCase("pt-BR"))].slice(0, 20);
   if (typeof window !== "undefined") {
-    try { localStorage.setItem(brandSuggestionStorageKey(nicho), JSON.stringify(merged)); } catch {}
+    try { localStorage.setItem(brandSuggestionStorageKey(nicho), JSON.stringify(merged)); } catch { /* persistência local é só uma conveniência opcional; falha aqui não afeta o salvamento do produto */ }
   }
   return merged;
 }
@@ -163,10 +170,13 @@ function logProductSaveDiagnostic(event: string, context: Record<string, unknown
   logTelemetryEvent(event as any, context as any).catch(() => {});
 }
 
-async function cleanupUploadedProductImages(paths: string[]) {
+/** RELEASE-18: storage.rules nega delete direto do client nestes paths — rollback de upload (Firestore
+ * write seguinte falhou) precisa passar pelo endpoint server-side, igual ao upload em si. */
+async function cleanupUploadedProductImages(productId: string, token: string, paths: string[]) {
   if (!paths.length) return;
-  const storage = getStorage();
-  await Promise.allSettled(paths.map((path) => deleteObject(ref(storage, path))));
+  await Promise.allSettled(
+    paths.map((storagePath) => deleteImageViaServer({ kind: "product", targetId: productId, storagePath, token })),
+  );
 }
 
 interface ProductFormData {
@@ -196,8 +206,29 @@ const [, setLocation] = useLocation();
   const { id } = useParams();
   const [success, setSuccess] = useState(false);
   const [scanning, setScanning] = useState(false);
-  const [isEnhancing, setIsEnhancing] = useState(false);
+  // RELEASE V1 §4.3/§6/§7: mesma checagem de admin/dev reaproveitada em 3 lugares nesta tela — scanner
+  // de câmera (ainda experimental, §4.3), e como parte do gate Premium-ou-admin do recorte PhotoRoom
+  // (§6) e da melhoria real de foto (§7). O campo de texto do código de barras continua disponível para
+  // todo mundo (digitar manualmente sempre funcionou e não é o recurso incompleto).
+  const { isAdmin: isAdminUser } = useAdminAccess();
   const [isCompressingImage, setIsCompressingImage] = useState(false);
+  /**
+   * PRO-07E.1: avaliação objetiva do arquivo ORIGINAL (antes da compressão). Nome deliberadamente
+   * prefixado "source" — uma futura avaliação do derivado comprimido precisará de um campo PRÓPRIO,
+   * com outro prefixo, nunca sobrescrevendo este. Só armazenado nesta sprint — ainda não usado para
+   * bloquear upload nem para mudar a UX (ver PRO-07E.2) — por isso o valor ainda não é lido em nenhum
+   * lugar deste componente nesta sprint.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- lido a partir do PRO-07E.2, ver comentário acima
+  const [sourceImageQualityAssessment, setSourceImageQualityAssessment] = useState<ProductImageQualityAssessment | null>(null);
+  /**
+   * PRO-07F.2A: metadata canônica do DERIVADO comprimido — width/height já orientados por EXIF (mesmo
+   * decode do original), sem redecodificar o Blob resultante: os dois já são conhecidos no momento em
+   * que o canvas gera o Blob. Ainda não consumida nesta sprint (a Marketing resolve sua própria versão
+   * a partir da URL do Storage), mas já expressa no mesmo tipo canônico usado lá em vez de um shape solto.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- consumido em sprint futura, ver comentário acima
+  const [derivedProductImageCanonical, setDerivedProductImageCanonical] = useState<CanonicalDecodedImage | null>(null);
   const [formError, setFormError] = useState<string>("");
   const [showLimitModal, setShowLimitModal] = useState(false);
 
@@ -219,6 +250,14 @@ const [, setLocation] = useLocation();
     businessTypes[0] as NichoId || 'Geral'
   );
   const nichoConfig = getNichoConfig(activeNicho);
+  // Quando true, a próxima mudança de activeNicho veio do carregamento do produto salvo
+  // (edição) e NÃO deve resetar marca/origem/extras — só a troca manual do seletor de nicho deve fazer isso.
+  const skipNichoResetRef = useRef(false);
+  // RELEASE-QUALITY-05 §8: estoque no momento em que o formulário de EDIÇÃO carregou — usado só para
+  // calcular o delta que o vendedor realmente pretendeu aplicar (ver handleSave), nunca a autoridade
+  // final. Sem isto, salvar a edição sobrescreveria com um valor absoluto qualquer decremento de venda
+  // que tenha acontecido (em qualquer dispositivo) entre abrir o formulário e salvar.
+  const originalStockAtLoadRef = useRef<number | null>(null);
 
   // Categories: ALWAYS from the active nicho only (never mix nichos).
   // If onboarding configured categories for this nicho, use that personalized list.
@@ -258,10 +297,17 @@ const [, setLocation] = useLocation();
     }
     return baseCategorySuggestions;
   }, [baseCategorySuggestions, formData.category]);
+  // Categoria/marca salva que não existe mais na lista padrão do nicho: preserva o valor (nunca some
+  // silenciosamente) e sinaliza para o vendedor revisar conscientemente, em vez de trocar sozinho.
+  const isLegacyCategory = Boolean(formData.category) && !baseCategorySuggestions.includes(formData.category);
+  const isLegacyBrand = Boolean(formData.brand) && hasPredefinedBrands && !(nichoConfig.predefinedBrands || []).includes(formData.brand);
   const brandSuggestions = useMemo(() => {
     const seen = new Set<string>();
     const merged: string[] = [];
-    for (const brand of [...(nichoConfig.predefinedBrands || []), ...localBrandSuggestions]) {
+    // Marca salva vem primeiro para nunca ficar invisível no select quando não bate com a lista do nicho
+    // (ex: produto legado, marca digitada livremente antes, ou nicho inferido incorretamente).
+    for (const brand of [formData.brand, ...(nichoConfig.predefinedBrands || []), ...localBrandSuggestions]) {
+      if (!brand) continue;
       const key = brand.toLocaleLowerCase("pt-BR");
       if (!seen.has(key)) {
         seen.add(key);
@@ -269,7 +315,7 @@ const [, setLocation] = useLocation();
       }
     }
     return merged;
-  }, [localBrandSuggestions, nichoConfig.predefinedBrands]);
+  }, [formData.brand, localBrandSuggestions, nichoConfig.predefinedBrands]);
 
 
  useEffect(() => {
@@ -279,8 +325,14 @@ const [, setLocation] = useLocation();
     }
   };
 }, [formData.imageUrl]);
-  // When active nicho changes (user switches type selector), update category, brand, and CLEAN extras
+  // When active nicho changes (user switches type selector), update category, brand, and CLEAN extras.
+  // Não roda essa lógica quando a mudança veio do carregamento do produto para edição
+  // (nesse caso o próprio efeito de carregar já trouxe os valores reais e corretos).
   useEffect(() => {
+    if (skipNichoResetRef.current) {
+      skipNichoResetRef.current = false;
+      return;
+    }
     const newConfig = getNichoConfig(activeNicho);
     const newHasPredefined = !!newConfig.predefinedBrands;
     setLocalBrandSuggestions(loadLocalBrandSuggestions(activeNicho));
@@ -316,7 +368,10 @@ const [, setLocation] = useLocation();
               const product = docSnap.data() as Product;
               const inferredNicho = (product.productType as NichoId) ||
                 inferNichoFromCategory(product.category || "");
-              setActiveNicho(inferredNicho);
+              setActiveNicho((current) => {
+                if (current !== inferredNicho) skipNichoResetRef.current = true;
+                return inferredNicho;
+              });
 
               const savedNichoConfig = getNichoConfig(inferredNicho);
               const savedHasPredefined = !!savedNichoConfig.predefinedBrands;
@@ -325,11 +380,12 @@ const [, setLocation] = useLocation();
                 !savedNichoConfig.predefinedBrands!.includes(product.brand);
 
               setBrandMode(isCustomBrand ? 'custom' : (savedHasPredefined ? 'predefined' : 'custom'));
+              originalStockAtLoadRef.current = Number.isFinite(Number(product.stock)) ? Number(product.stock) : 0;
               setFormData({
                 name: product.name,
                 brand: product.brand || "",
                 origin: product.origin || product.extras?.origin || "",
-                category: product.category || "",
+                category: normalizeProductCategory(product.category || ""),
                 costPrice: product.costPrice,
                 salePrice: product.salePrice,
                 stock: product.stock,
@@ -435,7 +491,7 @@ const [, setLocation] = useLocation();
     if (isSaving) return;
 
     let saveStage: ProductSaveStage = "unknown";
-    let uploadedPaths: string[] = [];
+    const uploadedPaths: string[] = [];
     let attemptedPayload: Record<string, unknown> | undefined;
     let productPathUid = "";
     setIsSaving(true);
@@ -492,15 +548,18 @@ const [, setLocation] = useLocation();
       if (file) {
         saveStage = "storage_upload";
         try {
-          const storage = getStorage();
-          const safeName = file.name.replace(/[^a-z0-9._-]+/gi, "_");
-          storagePath = `users/${uid}/products/${productId}/${safeName}`;
-          const storageRef = ref(storage, storagePath);
-          await uploadBytes(storageRef, file, { cacheControl: "public,max-age=31536000,immutable", contentType: file.type || "image/jpeg" });
+          // RELEASE-06: sobe pelo endpoint server-side (magic bytes + dimensões reais + quota
+          // validadas no servidor) em vez de uploadBytes() direto ao Storage — mesma foto já
+          // comprimida pelo canvas acima, só muda ONDE ela é gravada.
+          const token = await auth?.currentUser?.getIdToken();
+          if (!token) throw new Error("Not authenticated");
+          const result = await uploadImageViaServer({ kind: "product", targetId: productId, blob: file, token });
+          storagePath = result.storagePath;
           uploadedPaths.push(storagePath);
-          imageUrl = await getDownloadURL(storageRef);
+          imageUrl = result.downloadUrl;
         } catch (uploadErr) {
-          logTelemetryEvent("add_product_image_upload_failed" as any, { stage: "upload", errorCode: getErrorCode(uploadErr), hasImage: true, productType: activeNicho }).catch(() => {});
+          const errorCode = uploadErr instanceof ServerUploadError ? (uploadErr.reason || uploadErr.code) : getErrorCode(uploadErr);
+          logTelemetryEvent("add_product_image_upload_failed" as any, { stage: "upload", errorCode, hasImage: true, productType: activeNicho }).catch(() => {});
           setUploadError(getProductSaveErrorMessage(uploadErr, "storage_upload"));
           imageUrl = "";
           storagePath = "";
@@ -513,6 +572,15 @@ const [, setLocation] = useLocation();
 
       const productData = buildProductCreatePayload({ formData, productName, normalizedBrand, category, costPrice, salePrice, stock, imageUrl, storagePath, activeNicho });
       attemptedPayload = { ...productData, id: id || productId };
+      // RELEASE-QUALITY-05 §8: em EDIÇÃO, nunca grava o estoque como valor absoluto — uma venda (em
+      // qualquer dispositivo) pode ter decrementado o estoque real entre o formulário carregar e o
+      // vendedor salvar. `increment()` aplica só a DIFERENÇA que o vendedor efetivamente digitou, de
+      // forma atômica no servidor do Firestore — não sobrescreve nem é sobrescrita por um decremento de
+      // venda concorrente. Criação de produto novo continua com valor absoluto (nada concorrente a
+      // proteger: o documento ainda não existe).
+      if (id && originalStockAtLoadRef.current !== null) {
+        attemptedPayload.stock = increment(stock - originalStockAtLoadRef.current);
+      }
 
       saveStage = id ? "firestore_update" : "firestore_create";
       try {
@@ -524,7 +592,8 @@ const [, setLocation] = useLocation();
       } catch (writeErr) {
         if (uploadedPaths.length) {
           saveStage = "storage_cleanup";
-          await cleanupUploadedProductImages(uploadedPaths);
+          const cleanupToken = await currentUser.getIdToken().catch(() => "");
+          if (cleanupToken) await cleanupUploadedProductImages(productId, cleanupToken, uploadedPaths);
           saveStage = id ? "firestore_update" : "firestore_create";
         }
         throw writeErr;
@@ -561,7 +630,7 @@ const [, setLocation] = useLocation();
     setFormData(prev => ({ ...prev, barcode: code }));
   }, []);
 
-  const openScanner = useCallback(() => setScanning(true), []);
+  const openScanner = useCallback(() => { if (isAdminUser) setScanning(true); }, [isAdminUser]);
   const closeScanner = useCallback(() => setScanning(false), []);
 
 const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -570,19 +639,40 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
 
   setIsCompressingImage(true);
   setFormError("");
+  setSourceImageQualityAssessment(null);
+  setDerivedProductImageCanonical(null);
+
+  // PRO-07E.1: avalia o arquivo ORIGINAL antes de qualquer compressão — depois de `compressImage` essa
+  // informação já não existe mais em lugar nenhum (o original nunca é persistido). Só calcula e guarda
+  // localmente; não bloqueia nem muda o fluxo existente abaixo, mesmo em caso de erro na avaliação.
+  try {
+    const assessment = await assessRawProductImage(file, MARKETING_PRODUCT_IMAGE_QUALITY_POLICY_V0);
+    setSourceImageQualityAssessment(assessment);
+  } catch (assessmentError) {
+    logTelemetryEvent("add_product_image_quality_assessment_failed" as any, { stage: "assessment" }).catch(() => {});
+    void assessmentError;
+  }
 
   try {
-    const compressedBlob = await compressImage(file, 1200, 1200, 0.82, 2 * 1024 * 1024, "image/webp");
+    const compressed = await compressImage(file, 1200, 1200, 0.82, 500 * 1024, "image/webp");
 
-    if (!compressedBlob) {
+    if (!compressed) {
       setFormError("Erro ao processar a imagem.");
       notifyError("Erro ao processar a imagem.");
       return;
     }
 
-    const compressedFile = new File([compressedBlob], optimizedImageName(file.name, compressedBlob.type), {
-      type: compressedBlob.type || "image/jpeg",
+    const compressedFile = new File([compressed.blob], optimizedImageName(file.name, compressed.blob.type), {
+      type: compressed.blob.type || "image/jpeg",
       lastModified: Date.now(),
+    });
+
+    setDerivedProductImageCanonical({
+      width: compressed.width,
+      height: compressed.height,
+      orientationNormalized: true,
+      decodeMethod: "html-image-element",
+      coordinateSpaceVersion: PRODUCT_IMAGE_COORDINATE_SPACE_VERSION,
     });
 
     selectedFileRef.current = compressedFile;
@@ -597,18 +687,15 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
       };
     });
 
-  } catch (err) {
+  } catch {
     logTelemetryEvent("add_product_image_compression_failed" as any, { stage: "compression" }).catch(() => {});
     setFormError("Erro ao otimizar a imagem.");
   } finally {
     setIsCompressingImage(false);
   }
 };
-  const enhancePhoto = () => {
-    if (!formData.imageUrl) return;
-    setIsEnhancing(true);
-    setTimeout(() => { setIsEnhancing(false); setSuccess(true); }, 2000);
-  };
+  // RELEASE V1 §7: o antigo `enhancePhoto()` era um `setTimeout` de 2s que não processava a imagem —
+  // substituído por `ProductPhotoEnhancementTool` (chamada real ao servidor, ver render abaixo).
 
   if (success) {
     return (
@@ -717,17 +804,12 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
           <div className="flex flex-col items-center gap-4 mb-1 rounded-[2rem] bg-white/70 border border-border/40 px-3 py-4 shadow-sm">
             <div className="relative group cursor-pointer">
               <div className="w-40 h-40 bg-secondary rounded-[2.5rem] border-2 border-dashed border-border/60 flex flex-col items-center justify-center text-muted-foreground transition-all overflow-hidden relative">
-                {formData.imageUrl && !isEnhancing && !isCompressingImage ? (
+                {formData.imageUrl && !isCompressingImage ? (
                    <img src={formData.imageUrl} alt="Prévia do produto" className="w-full h-full object-cover" loading="lazy" decoding="async" width={160} height={160} />
                 ) : isCompressingImage ? (
                   <div className="absolute inset-0 bg-primary/20 flex flex-col items-center justify-center text-primary">
                     <Sparkles className="w-8 h-8 animate-spin" />
                     <span className="text-[10px] font-bold mt-1 uppercase">Otimizando...</span>
-                  </div>
-                ) : isEnhancing ? (
-                  <div className="absolute inset-0 bg-primary/20 flex flex-col items-center justify-center text-primary">
-                    <Sparkles className="w-8 h-8 animate-bounce" />
-                    <span className="text-[10px] font-bold mt-1 uppercase">Melhorando...</span>
                   </div>
                 ) : (
                   <>
@@ -736,14 +818,6 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                   </>
                 )}
               </div>
-              <button
-                type="button"
-                onClick={enhancePhoto}
-                disabled={isCompressingImage || isEnhancing}
-                className="absolute -bottom-2 -right-2 bg-primary text-white p-3 rounded-2xl shadow-lg active:scale-90 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Wand2 className="w-4 h-4" />
-              </button>
             </div>
 
             <div className="flex flex-col w-full gap-2 px-4">
@@ -770,6 +844,19 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
             {uploadError && <p className="text-xs text-destructive font-medium text-center">{uploadError}</p>}
           </div>
 
+          {/* RELEASE V1 §6/§7: PhotoRoom e melhoria de foto exigem um produto JÁ SALVO (a imagem
+              original precisa existir no Storage com um productId real) — por isso só aparecem em modo
+              de edição, nunca durante o cadastro inicial (a foto ainda é só um blob local até salvar).
+              Premium/admin apenas — Free nunca monta estes componentes (zero chamadas ao provider). */}
+          {id && formData.imageUrl && (activePlan === "premium" || isAdminUser) && (
+            <Suspense fallback={<div className="rounded-2xl border border-border/40 bg-white/70 p-3.5 text-xs font-semibold text-muted-foreground">Carregando ferramentas Premium...</div>}>
+              <div className="space-y-3">
+                <PhotoroomCutoutTool productId={id} originalImageUrl={formData.imageUrl} />
+                <ProductPhotoEnhancementTool productId={id} originalImageUrl={formData.imageUrl} />
+              </div>
+            </Suspense>
+          )}
+
           {/* Código de barras */}
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-muted-foreground uppercase px-1">Código de Barras</label>
@@ -785,14 +872,16 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                 onChange={e => setFormData({ ...formData, barcode: e.target.value })}
                 data-testid="input-barcode"
               />
-              <button
-                type="button"
-                onClick={openScanner}
-                className="bg-secondary text-foreground p-3 rounded-2xl border border-border"
-                data-testid="button-scan-barcode"
-              >
-                <ScanLine className="w-5 h-5" />
-              </button>
+              {isAdminUser && (
+                <button
+                  type="button"
+                  onClick={openScanner}
+                  className="bg-secondary text-foreground p-3 rounded-2xl border border-border"
+                  data-testid="button-scan-barcode"
+                >
+                  <ScanLine className="w-5 h-5" />
+                </button>
+              )}
             </div>
           </div>
 
@@ -849,7 +938,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                     data-testid="select-brand"
                   >
                     {brandSuggestions.map(b => (
-                      <option key={b} value={b}>{b}</option>
+                      <option key={b} value={b}>{b}{isLegacyBrand && b === formData.brand ? " (valor existente — revisar)" : ""}</option>
                     ))}
                   </select>
                   <ChevronDown className="w-4 h-4 absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
@@ -937,7 +1026,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                 >
                   <option value="">Selecione uma categoria...</option>
                   {categorySuggestions.map(cat => (
-                    <option key={cat} value={cat}>{cat}</option>
+                    <option key={cat} value={cat}>{cat}{isLegacyCategory && cat === formData.category ? " (valor existente — revisar)" : ""}</option>
                   ))}
                 </select>
                 <ChevronDown className="w-4 h-4 absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
@@ -1012,7 +1101,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
       </div>
 
    <Suspense fallback={<div>Carregando scanner...</div>}>
-  {scanning && (
+  {scanning && isAdminUser && (
     <BarcodeScanner
       onScan={handleBarcodeScan}
       onClose={closeScanner}

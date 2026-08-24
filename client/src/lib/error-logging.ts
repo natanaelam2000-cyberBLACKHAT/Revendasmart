@@ -1,35 +1,25 @@
-import { initializeApp, FirebaseApp } from "firebase/app";
-import { getDatabase, ref, push, set, Database } from "firebase/database";
+import type { FirebaseApp } from "firebase/app";
 import { maskEmail, maskId, safeLogger, sanitizeLogMessage, sanitizeLogPayload } from "@/lib/safe-logger";
 
 /**
  * ERROR LOGGING MODULE
- * 
- * Custom client-side error tracking and logging to Firebase Realtime Database.
- * Captures JavaScript errors, network failures, and business logic errors
- * for monitoring and diagnostics.
- * 
- * Features:
- * - Automatic error logging with stack traces
- * - Business event tracking
- * - User context attribution
- * - Async, non-blocking logging
+ *
+ * Client-side error tracking and diagnostics, routed through `safeLogger` (browser console, already
+ * sanitized/masked — see safe-logger.ts).
+ *
+ * RELEASE-22: this module used to write to Firebase Realtime Database (`error_logs`/`event_logs`).
+ * RTDB was never configured for this project — no `databaseURL` in `client/src/lib/firebase.ts`'s
+ * config, no `database` entry in `firebase.json`, no versioned Rules anywhere in this repo — and the
+ * one place that documented an observed outcome (`internal-telemetry.ts`) recorded that the equivalent
+ * write path failed with `permission_denied` on Android/PWA. Writing to an unconfigured, unruled
+ * database is not real observability; it's a dead network call with an undefined access-control
+ * posture. This module now only logs locally (safeLogger → browser console) — the same sink
+ * `client-diagnostics.ts` already writes to for every event, so no diagnostic signal is lost, only the
+ * RTDB call that never reliably worked. Server-side observability (structured logs, Sentry when
+ * configured) and Firebase Analytics/Performance are untouched by this change.
  */
 
-let database: Database | null = null;
 let isInitialized = false;
-
-interface ErrorLog {
-  timestamp: string;
-  userId?: string;
-  errorType: string;
-  message: string;
-  stack?: string;
-  context?: Record<string, unknown>;
-  url: string;
-  userAgent: string;
-  severity: "error" | "warning" | "info";
-}
 
 declare global {
   interface Window {
@@ -41,21 +31,16 @@ declare global {
 }
 
 /**
- * Initialize error logging (uses existing Firebase app)
+ * Marks error logging as ready. Kept as a function (rather than deleted) so `firebase.ts` doesn't need
+ * to change its call site — it no longer touches Firebase Realtime Database.
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- assinatura preservada para o call site em firebase.ts; RTDB (o único uso real do app aqui) foi removido nesta tarefa
 export function initializeErrorLogging(app: FirebaseApp): void {
-  if (isInitialized) return;
-
-  try {
-    database = getDatabase(app);
-    isInitialized = true;
-  } catch (error) {
-    safeLogger.error("error_logging_initialize_failed", error, { module: "error-logging" });
-  }
+  isInitialized = true;
 }
 
 /**
- * Log an error for monitoring and diagnostics
+ * Log an error for local diagnostics (browser console via safeLogger — sanitized, masked).
  */
 export async function logError(
   errorType: string,
@@ -67,65 +52,45 @@ export async function logError(
     severity?: "error" | "warning" | "info";
   }
 ): Promise<void> {
-  if (!isInitialized || !database) {
-    safeLogger.warn("error_logging_not_initialized", { module: "error-logging", errorType });
-    return;
+  if (!isInitialized) return;
+
+  const context: Record<string, unknown> = {
+    module: "error-logging",
+    message: sanitizeLogMessage(message),
+    url: typeof window !== "undefined" ? window.location.pathname : "unknown",
+  };
+  if (options?.error?.stack) {
+    context.stack = sanitizeLogMessage(options.error.stack, "Stack indisponível.");
+  }
+  if (options?.context) {
+    context.context = sanitizeLogPayload(options.context);
+  }
+  if (options?.userId) {
+    context.userId = maskId(options.userId) || undefined;
   }
 
-  try {
-    const errorLog: ErrorLog = {
-      timestamp: new Date().toISOString(),
-      errorType,
-      message: sanitizeLogMessage(message),
-      url: typeof window !== "undefined" ? window.location.href : "unknown",
-      userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
-      severity: options?.severity || "error",
-    };
-
-    // Only add optional fields if they have values (Firebase doesn't allow undefined)
-    if (options?.error?.stack) {
-      errorLog.stack = sanitizeLogMessage(options.error.stack, "Stack indisponível.");
-    }
-    if (options?.context) {
-      errorLog.context = sanitizeLogPayload(options.context) as Record<string, unknown>;
-    }
-    if (options?.userId) {
-      errorLog.userId = maskId(options.userId) || undefined;
-    }
-
-    const errorsRef = ref(database, "error_logs");
-    const newErrorRef = push(errorsRef);
-    await set(newErrorRef, errorLog);
-  } catch (err) {
-    safeLogger.error("error_logging_log_error_failed", err, { module: "error-logging" });
-  }
+  const severity = options?.severity ?? "error";
+  if (severity === "warning") safeLogger.warn(errorType, context);
+  else if (severity === "info") safeLogger.info(errorType, context);
+  else safeLogger.error(errorType, options?.error, context);
 }
 
 /**
- * Log a business event for tracking user journeys and system behavior
+ * Log a business event for local diagnostics (browser console via safeLogger — sanitized, masked).
  */
 export async function logEvent(
   eventName: string,
   data?: Record<string, unknown>,
   userId?: string
 ): Promise<void> {
-  if (!isInitialized || !database) return;
+  if (!isInitialized) return;
 
-  try {
-    const eventLog = {
-      timestamp: new Date().toISOString(),
-      eventName,
-      data: sanitizeLogPayload(data),
-      userId: maskId(userId) || undefined,
-      url: typeof window !== "undefined" ? window.location.href : "unknown",
-    };
-
-    const eventsRef = ref(database, "event_logs");
-    const newEventRef = push(eventsRef);
-    await set(newEventRef, eventLog);
-  } catch (err) {
-    safeLogger.error("error_logging_log_event_failed", err, { module: "error-logging", eventName });
-  }
+  safeLogger.info(eventName, {
+    module: "error-logging",
+    data: sanitizeLogPayload(data),
+    userId: userId ? maskId(userId) || undefined : undefined,
+    url: typeof window !== "undefined" ? window.location.pathname : "unknown",
+  });
 }
 
 /**

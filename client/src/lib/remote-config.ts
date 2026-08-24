@@ -27,8 +27,21 @@
  * Safe use: UI visibility, A/B testing non-critical features, rollout control
  */
 
-import { getRemoteConfig, fetchAndActivate, getString, getBoolean, onConfigUpdate, activate } from "firebase/remote-config";
-import { FirebaseApp } from "firebase/app";
+import type { FirebaseApp } from "firebase/app";
+
+/**
+ * RELEASE-QUALITY-02 §7 — o SDK `firebase/remote-config` (e o `@firebase/app`/`@firebase/installations`
+ * que ele arrasta) só é importado de verdade quando alguma destas funções roda pela primeira vez, nunca
+ * no carregamento do bundle de entrada. Antes, o import estático aqui fazia esses chunks entrarem no
+ * boot de TODO acesso ao app, mesmo em telas que nunca leem uma flag. O comportamento observável não
+ * muda: `fetchRemoteConfig`/`refreshRemoteConfig` já eram assíncronos e já eram chamados de dentro de um
+ * `useEffect` (nunca bloqueavam a primeira renderização) — só o MOMENTO em que o código do SDK é
+ * baixado/parseado passa a ser adiado até o primeiro uso real, em vez de sempre no startup.
+ */
+let remoteConfigModulePromise: Promise<typeof import("firebase/remote-config")> | null = null;
+function loadRemoteConfigModule(): Promise<typeof import("firebase/remote-config")> {
+  return (remoteConfigModulePromise ??= import("firebase/remote-config"));
+}
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -47,7 +60,13 @@ export interface RemoteFlags {
   // Growth Features
   referral_program_enabled: boolean;
   marketing_templates_v2_enabled: boolean;
-  
+  marketing_pro_creative_v2_enabled: boolean;
+  /** PRO-08: só controla VISIBILIDADE do botão "Gerar fundo com IA" — o backend é a autoridade real
+   * (`MARKETING_PRO_REAL_BACKGROUND_ENABLED`, server-side). Mismatch é seguro nas duas direções: flag
+   * aqui ON + backend OFF só mostra um botão que devolve erro amigável; flag aqui OFF esconde o botão
+   * mesmo que o backend já aceitasse a chamada. */
+  marketing_pro_real_background_enabled: boolean;
+
   // Maintenance
   maintenance_mode_enabled: boolean;
   maintenance_message: string;
@@ -63,9 +82,23 @@ const DEFAULT_FLAGS: RemoteFlags = {
   sales_dashboard_enabled: true,
   referral_program_enabled: false,
   marketing_templates_v2_enabled: false,
+  marketing_pro_creative_v2_enabled: false,
+  marketing_pro_real_background_enabled: false,
   maintenance_mode_enabled: false,
   maintenance_message: "",
 };
+
+/**
+ * PRO-13R2 — Remote Config não possui emulator local. Este override afeta SOMENTE visibilidade da UI
+ * e só existe quando Vite confirma simultaneamente DEV + Firebase Emulator + opt-in explícito. O
+ * backend continua exigindo sua própria env, token Firebase, entitlement e ownership. Em produção,
+ * `import.meta.env.DEV` é false; adicionalmente, script/build.ts já rejeita build com emuladores ON.
+ */
+function getLocalEmulatorBooleanOverride(flagName: keyof RemoteFlags): boolean | undefined {
+  if (!import.meta.env.DEV || import.meta.env.VITE_USE_FIREBASE_EMULATORS !== "true") return undefined;
+  if (flagName === "marketing_pro_real_background_enabled" && import.meta.env.VITE_MARKETING_PRO_REAL_BACKGROUND_ENABLED === "true") return true;
+  return undefined;
+}
 
 // ============================================================================
 // STATE & CALLBACKS
@@ -100,12 +133,13 @@ export function unsubscribeFromConfigUpdates(): void {
  * Initialize Remote Config with safe defaults
  * Must be called after Firebase is initialized
  */
-export function initializeRemoteConfig(app: FirebaseApp): void {
+export async function initializeRemoteConfig(app: FirebaseApp): Promise<void> {
   if (isInitialized) return;
 
   try {
+    const { getRemoteConfig } = await loadRemoteConfigModule();
     remoteConfig = getRemoteConfig(app);
-    
+
     // Set default values (used if fetch fails)
     remoteConfig.settings.minimumFetchIntervalMillis = 3600000; // 1 hour
     remoteConfig.settings.cacheTTL = 3600000;
@@ -121,21 +155,22 @@ export function initializeRemoteConfig(app: FirebaseApp): void {
  * Setup real-time listener for Remote Config updates
  * Called after initial fetch to enable live updates
  */
-export function setupConfigUpdateListener(): void {
+export async function setupConfigUpdateListener(): Promise<void> {
   if (!remoteConfig || !isInitialized) {
     console.warn("[RemoteConfig] Not initialized, cannot setup listener");
     return;
   }
 
   try {
+    const { onConfigUpdate, activate, getBoolean, getString } = await loadRemoteConfigModule();
     // unsubscribeConfigListener: Firebase provides a function to unsubscribe
     unsubscribeConfigListener = onConfigUpdate(remoteConfig, {
       next: async () => {
-      
+
       try {
         // Activate the updated config before reading values
         await activate(remoteConfig);
-        
+
         // Load updated flags from activated config
         flags = {
           onboarding_v2_enabled: getBoolean(remoteConfig, "onboarding_v2_enabled"),
@@ -143,6 +178,8 @@ export function setupConfigUpdateListener(): void {
           sales_dashboard_enabled: getBoolean(remoteConfig, "sales_dashboard_enabled"),
           referral_program_enabled: getBoolean(remoteConfig, "referral_program_enabled"),
           marketing_templates_v2_enabled: getBoolean(remoteConfig, "marketing_templates_v2_enabled"),
+          marketing_pro_creative_v2_enabled: getBoolean(remoteConfig, "marketing_pro_creative_v2_enabled"),
+          marketing_pro_real_background_enabled: getBoolean(remoteConfig, "marketing_pro_real_background_enabled"),
           maintenance_mode_enabled: getBoolean(remoteConfig, "maintenance_mode_enabled"),
           maintenance_message: getString(remoteConfig, "maintenance_message"),
         };
@@ -176,9 +213,10 @@ export async function fetchRemoteConfig(): Promise<void> {
   }
 
   try {
+    const { fetchAndActivate, getBoolean, getString } = await loadRemoteConfigModule();
     // Fetch from Firebase (respects cache TTL)
     await fetchAndActivate(remoteConfig);
-    
+
     // Load all flags from Remote Config
     flags = {
       onboarding_v2_enabled: getBoolean(remoteConfig, "onboarding_v2_enabled"),
@@ -186,6 +224,8 @@ export async function fetchRemoteConfig(): Promise<void> {
       sales_dashboard_enabled: getBoolean(remoteConfig, "sales_dashboard_enabled"),
       referral_program_enabled: getBoolean(remoteConfig, "referral_program_enabled"),
       marketing_templates_v2_enabled: getBoolean(remoteConfig, "marketing_templates_v2_enabled"),
+      marketing_pro_creative_v2_enabled: getBoolean(remoteConfig, "marketing_pro_creative_v2_enabled"),
+      marketing_pro_real_background_enabled: getBoolean(remoteConfig, "marketing_pro_real_background_enabled"),
       maintenance_mode_enabled: getBoolean(remoteConfig, "maintenance_mode_enabled"),
       maintenance_message: getString(remoteConfig, "maintenance_message"),
     };
@@ -218,6 +258,8 @@ export function getFlag(flagName: keyof RemoteFlags): boolean | string {
     return false;
   }
 
+  const localOverride = getLocalEmulatorBooleanOverride(flagName);
+  if (localOverride !== undefined) return localOverride;
   const value = flags[flagName];
   return value !== undefined ? value : DEFAULT_FLAGS[flagName];
 }

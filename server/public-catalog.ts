@@ -20,6 +20,8 @@ export interface BuildPublicCatalogPayloadInput {
   products: readonly PublicCatalogSourceProduct[];
   sales: readonly Record<string, unknown>[];
   now: Date | number;
+  /** Default false: callers that discard `.store` (ex.: paginação de produtos) não precisam informar. */
+  cardAvailable?: boolean;
 }
 
 export interface BuiltPublicCatalogPayload {
@@ -105,7 +107,7 @@ function buildPublicAttributes(value: unknown): Record<string, unknown> | undefi
   return Object.keys(attributes).length > 0 ? attributes : undefined;
 }
 
-export function buildPublicCatalogStore(settings: Record<string, unknown>, slug: string): PublicCatalogStore {
+export function buildPublicCatalogStore(settings: Record<string, unknown>, slug: string, cardAvailable: boolean): PublicCatalogStore {
   const identity = settings.storeIdentity && typeof settings.storeIdentity === "object" && !Array.isArray(settings.storeIdentity)
     ? settings.storeIdentity as Record<string, unknown>
     : {};
@@ -138,10 +140,22 @@ export function buildPublicCatalogStore(settings: Record<string, unknown>, slug:
       ? { primaryColor: cleanColor(settings.primaryColor) || cleanColor(identity.primaryColor) }
       : {}),
     ...(whatsappNumber ? { whatsappNumber } : {}),
+    // LGPD §7: só o booleano — o VALOR da chave Pix não entra na carga inicial do catálogo (que
+    // qualquer visitante recebe só de abrir a URL, com cache de CDN de 60s). O valor é servido sob
+    // demanda pelo endpoint dedicado GET /api/public/catalog/:storeSlug/pix-key, chamado apenas quando
+    // o comprador efetivamente chega na etapa de pagamento por Pix.
+    pixAvailable: Boolean(cleanText(settings.pixKey, 140)),
     showPrice: settings.showPrice !== false,
     showStock: settings.showStock !== false,
     allowWhatsappOrders: settings.allowWhatsappOrders !== false,
+    cardAvailable,
   };
+}
+
+/** Mesma normalização usada para os demais campos do catálogo — reaproveitada pelo endpoint dedicado
+ * de chave Pix (ver comentário acima) em vez de embutida na carga pública inicial. */
+export function resolvePublicCatalogPixKey(settings: Record<string, unknown>): string | undefined {
+  return cleanText(settings.pixKey, 140);
 }
 
 export function toPublicCatalogProduct(
@@ -306,7 +320,7 @@ export function buildPublicCatalogPayload(input: BuildPublicCatalogPayloadInput)
   };
 
   return {
-    store: buildPublicCatalogStore(input.settings, input.slug),
+    store: buildPublicCatalogStore(input.settings, input.slug, input.cardAvailable ?? false),
     presentation,
     products,
   };

@@ -277,6 +277,59 @@ const p = normalizeStatus(paymentStatus);
 return s === "authorized" || s === "active" || s === "approved" || p === "approved";
 }
 
+// ---------------------------------------------------------------------------
+// RELEASE-09 — semântica de cancelamento
+//
+// "Cancelar" significa PARAR DE RENOVAR, nunca "perder agora o período já pago". O modelo de estados
+// efetivo (derivado dos campos que já existiam, sem inventar um enum novo):
+//
+//   ACTIVE_AUTORENEW          subscriptionStatus=authorized/active/approved  + autoRenew=true
+//   CANCELLED_UNTIL_PERIOD_END subscriptionStatus=cancelled + autoRenew=false + now < paid-through
+//   EXPIRED                   subscriptionStatus=cancelled/expired + now >= paid-through
+//   REFUNDED/REVOKED          paymentStatus=refunded/charged_back → revoga IMEDIATAMENTE
+//   PENDING                   subscriptionStatus=pending → nunca concede Premium
+//
+// A propriedade central: `cancelled && now < paid-through` ⇒ Premium continua ativo.
+// ---------------------------------------------------------------------------
+
+/**
+ * Fim do período JÁ PAGO, sempre server-owned. `premiumExpiresAt` é a fonte preferida (é o campo que
+ * o cancelamento congela); `nextBillingAt` é o fallback enquanto a assinatura ainda renova — para o
+ * Mercado Pago, a próxima cobrança é exatamente onde o período atual termina.
+ *
+ * Retorna `null` quando nenhuma das duas datas é utilizável. Esse `null` é um fallback deliberadamente
+ * CONSERVADOR (§10 legacy): um documento antigo, já cancelado e sem nenhuma data, não ganha Premium
+ * retroativo — permanece exatamente como estava antes do RELEASE-09.
+ */
+export function resolvePaidThroughDate(planData: any): Date | null {
+  return toDateOrNull(planData?.premiumExpiresAt) ?? toDateOrNull(planData?.nextBillingAt);
+}
+
+/**
+ * Estorno/chargeback: o dinheiro do período voltou para o usuário, então o acesso pode ser retirado
+ * na hora, sem esperar o fim do período. `rejected` NÃO entra aqui — é uma tentativa de cobrança que
+ * falhou (renovação futura), não um estorno do período corrente.
+ */
+export function isRevokingPaymentStatus(paymentStatus?: string | null): boolean {
+  const p = normalizeStatus(paymentStatus);
+  return p === "refunded" || p === "charged_back" || p === "chargeback";
+}
+
+/** Comparação sempre em instante absoluto (epoch), nunca em string local — o fuso do servidor não
+ * pode mudar o veredito de quem ainda tem acesso. */
+export function isWithinPaidPeriod(planData: any, now: Date = new Date()): boolean {
+  const paidThrough = resolvePaidThroughDate(planData);
+  return Boolean(paidThrough && now.getTime() < paidThrough.getTime());
+}
+
+/** A assinatura está em um estado que ainda gera cobranças futuras? É isto — e não `premiumActive` —
+ * que define `autoRenew`: uma assinatura cancelada dentro do período pago mantém o Premium, mas nunca
+ * volta a renovar. */
+function isRenewingSubscriptionStatus(status?: string | null): boolean {
+  const s = normalizeStatus(status);
+  return s === "authorized" || s === "active" || s === "approved";
+}
+
 function isRecentPending(planData: any): boolean {
 if (!planData?.subscriptionStatus || normalizeStatus(planData.subscriptionStatus) !== "pending") return false;
 const updatedAt = planData?.updatedAt?.toDate?.() ?? planData?.updatedAt ?? null;
@@ -355,12 +408,25 @@ if (existingData?.premiumOverride === true) {
 return { premiumActive: true, reason: "admin_override" };
 }
 
+// 🚫 RELEASE-09 — ESTORNO/CHARGEBACK REVOGA IMEDIATAMENTE
+// Vem antes de qualquer ativação por status: se o pagamento do período foi devolvido, não existe
+// período pago para preservar.
+if (isRevokingPaymentStatus(paymentStatus)) {
+return { premiumActive: false, reason: "payment_refunded" };
+}
+
 // 🥈 PRIORIDADE 2 — PAGAMENTO (MERCADO PAGO)
 if (s === "authorized" || s === "active" || s === "approved") {
 return { premiumActive: true, reason: "subscription_active" };
 }
 
-if (p === "approved") {
+// RELEASE-09: uma assinatura cancelada/pausada/expirada é um estado TERMINAL — quem decide se ainda
+// há acesso é o período pago (logo abaixo), nunca o `paymentStatus` do último ciclo. Sem esta
+// ressalva, o "approved" da última cobrança bem-sucedida continuaria concedendo Premium para sempre,
+// mesmo muito depois do período acabar.
+const subscriptionTerminated = s === "cancelled" || s === "paused" || s === "expired";
+
+if (p === "approved" && !subscriptionTerminated) {
 return { premiumActive: true, reason: "payment_approved" };
 }
 
@@ -379,8 +445,16 @@ if (!Number.isNaN(trialEnd.getTime()) && now < trialEnd) {
 // 🔄 FALLBACK (evita perder premium por erro temporário)
 
 
+// ✅ RELEASE-09 — CANCELADA, MAS AINDA DENTRO DO PERÍODO JÁ PAGO
+// Cancelar interrompe a renovação; não devolve o dinheiro do período corrente. Enquanto esse período
+// não termina, o acesso continua. Só `cancelled` recebe essa carência: `paused`/`expired` descrevem
+// uma assinatura que já não tem período válido em curso.
+if (s === "cancelled" && isWithinPaidPeriod(existingData, now)) {
+return { premiumActive: true, reason: "cancelled_within_paid_period" };
+}
+
 // ❌ CANCELAMENTOS / EXPIRAÇÕES
-if (s === "cancelled" || s === "paused" || s === "expired") {
+if (subscriptionTerminated) {
 return { premiumActive: false, reason: "subscription_inactive" };
 }
 
@@ -391,6 +465,10 @@ return { premiumActive: false, reason: "subscription_pending" };
 // ❌ DEFAULT
 return { premiumActive: false, reason: "no_subscription" };
 }
+/** Só para testes (script/subscription-cancel-tests.ts): expõe a reconciliação pura sem precisar de
+ * Firestore, para cobrir fronteiras de data e documentos legados. */
+export const reconcilePremiumStatusForTests = reconcilePremiumStatus;
+
 /**
 
 Update user's planData in Firestore based on subscription and payment status.
@@ -535,14 +613,20 @@ existingData
 
 const premiumActive = premiumReconciliation.premiumActive;
 
+// RELEASE-09: autoRenew descreve a RENOVAÇÃO FUTURA, e por isso deriva do status da assinatura —
+// nunca de `premiumActive`. Uma assinatura cancelada dentro do período pago mantém o Premium com
+// autoRenew=false; derivar de `premiumActive` religaria a renovação de uma assinatura já cancelada.
+const subscriptionRenewing = isRenewingSubscriptionStatus(subscriptionStatus);
+
 const update: Record<string, any> = {
+  billingProvider: "mercado_pago",
   subscriptionId,
   subscriptionStatus,
   paymentStatus: paymentStatus ?? null,
   mercadoPagoPaymentId: mercadoPagoPaymentId ?? null,
   premiumActive,
   currentPlan: premiumActive ? "premium" : "free",
-  autoRenew: premiumActive,
+  autoRenew: subscriptionRenewing,
   updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   lastSubscriptionSyncSource: eventContext.source ?? "manual",
 };
@@ -560,22 +644,50 @@ subInfo(`[syncPlanDataFromSubscription] premiumActive=${premiumActive}`);
 subInfo(`[syncPlanDataFromSubscription] reason=${premiumReconciliation.reason}`);
 
 if (premiumActive) {
-update.premiumExpiresAt = null;
-
 if (!existingData?.premiumStartedAt) {
   update.premiumStartedAt = admin.firestore.FieldValue.serverTimestamp();
 }
 
-update.lastPaymentAt = admin.firestore.FieldValue.serverTimestamp();
-update.canceledAt = null;
+if (subscriptionRenewing) {
+  // Renovando: o período é aberto (não há data de término conhecida) e o fim do ciclo atual é
+  // sempre a próxima cobrança. Uma renovação bem-sucedida cai aqui e estende o acesso.
+  update.premiumExpiresAt = null;
+  update.canceledAt = null;
+  update.lastPaymentAt = admin.firestore.FieldValue.serverTimestamp();
 
-if (nextBillingDate) {
-  update.nextBillingAt = new Date(nextBillingDate);
+  if (nextBillingDate) {
+    update.nextBillingAt = new Date(nextBillingDate);
+  }
+} else {
+  // RELEASE-09: cancelada no provider, mas ainda dentro do período pago. Congela o fim do período
+  // em `premiumExpiresAt` para que ele não dependa mais de `nextBillingAt` (que o Mercado Pago para
+  // de atualizar depois do cancelamento) e nunca reabre a renovação.
+  const paidThrough = resolvePaidThroughDate(existingData);
+  if (paidThrough) update.premiumExpiresAt = paidThrough;
+  if (!existingData?.canceledAt) {
+    update.canceledAt = admin.firestore.FieldValue.serverTimestamp();
+  }
 }
 
 } else {
-if (["cancelled", "paused"].includes(subscriptionStatus)) {
-update.canceledAt = admin.firestore.FieldValue.serverTimestamp();
+if (["cancelled", "paused"].includes(normalizeStatus(subscriptionStatus))) {
+if (!existingData?.canceledAt) {
+  update.canceledAt = admin.firestore.FieldValue.serverTimestamp();
+}
+}
+
+// RELEASE-09: o acesso terminou (estorno, expiração ou pausa). Materializa um `premiumExpiresAt`
+// no passado para que os leitores baseados em data — `isPremiumActive()` em shared/monetization.ts,
+// consumido por server/marketing-pro.ts e pela UI — também vejam o fim, em vez de dependerem só do
+// booleano `premiumActive`. Uma data que JÁ é passada é preservada (auditoria fiel do fim real).
+const existingPaidThrough = resolvePaidThroughDate(existingData);
+const hadSubscriptionEntitlement =
+  existingData?.premiumActive === true ||
+  existingData?.currentPlan === "premium" ||
+  existingData?.premiumSource === "subscription";
+
+if (hadSubscriptionEntitlement && (!existingPaidThrough || existingPaidThrough.getTime() > Date.now())) {
+  update.premiumExpiresAt = new Date();
 }
 }
 
@@ -703,6 +815,7 @@ subInfo("[subscriptions/create] Request received");
 });
 
       await planRef.set({
+  billingProvider: "mercado_pago",
   subscriptionId: response.id,
   subscriptionStatus: "pending",
   updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -738,12 +851,35 @@ subInfo("[subscriptions/create] Request received");
       const planSnap = await planRef.get();
       const planData = planSnap.data();
 
+      // RELEASE-16 §6: isolamento de provider — este endpoint só cancela assinaturas do Mercado Pago.
+      // Uma assinatura cuja evidência authoritative é Google Play nunca deve ser tocada por aqui, mesmo
+      // que (por bug futuro) `subscriptionId` também esteja presente.
+      if (planData?.billingProvider === "google_play") {
+        return res.status(409).json({ error: "SUBSCRIPTION_MANAGED_BY_GOOGLE_PLAY" });
+      }
+
       if (!planData?.subscriptionId) {
         return res.status(404).json({ error: "NO_SUBSCRIPTION" });
       }
 
+      // RELEASE-09: cancelar = parar de renovar, preservando o período JÁ PAGO. O fim desse período é
+      // resolvido ANTES de qualquer escrita, e nunca é encurtado por este endpoint.
+      const paidThrough = resolvePaidThroughDate(planData);
+      const stillWithinPaidPeriod = Boolean(paidThrough && Date.now() < paidThrough.getTime());
+
+      const buildCancelResponse = (idempotent: boolean) => ({
+        success: true,
+        status: "cancelled" as const,
+        ...(idempotent ? { idempotent: true } : {}),
+        premiumActive: stillWithinPaidPeriod,
+        currentPlan: stillWithinPaidPeriod ? "premium" : "free",
+        premiumExpiresAt: paidThrough ? paidThrough.toISOString() : null,
+        autoRenew: false,
+      });
+
+      // Idempotente: repetir o cancelamento devolve o mesmo estado e nunca reduz o período pago.
       if (normalizeStatus(planData.subscriptionStatus) === "cancelled") {
-        return res.json({ success: true, status: "cancelled", idempotent: true });
+        return res.json(buildCancelResponse(true));
       }
 
       if (sendSubscriptionCredentialError(res, "cancel", uid)) return;
@@ -754,14 +890,38 @@ subInfo("[subscriptions/create] Request received");
         body: { status: "cancelled" },
       });
 
-      await planRef.set({
+      const cancelUpdate: Record<string, any> = {
+        billingProvider: "mercado_pago",
         subscriptionStatus: "cancelled",
-        premiumActive: false,
-        currentPlan: "free",
+        // A renovação futura para imediatamente — este é o efeito real de "cancelar".
+        autoRenew: false,
+        canceledAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
+      };
 
-      return res.json({ success: true });
+      if (stillWithinPaidPeriod) {
+        // O acesso continua até o fim do período pago; a data fica congelada em `premiumExpiresAt`
+        // para não depender mais de `nextBillingAt` (que o provider deixa de atualizar).
+        cancelUpdate.premiumActive = true;
+        cancelUpdate.currentPlan = "premium";
+        cancelUpdate.premiumExpiresAt = paidThrough;
+      } else {
+        // Sem período pago em curso (ou legado sem nenhuma data conhecida): comportamento conservador,
+        // idêntico ao anterior — vira Free na hora.
+        cancelUpdate.premiumActive = false;
+        cancelUpdate.currentPlan = "free";
+        if (paidThrough) cancelUpdate.premiumExpiresAt = paidThrough;
+      }
+
+      await planRef.set(cancelUpdate, { merge: true });
+
+      subInfo("[subscriptions/cancel] cancelled", {
+        uid,
+        stillWithinPaidPeriod,
+        premiumExpiresAt: paidThrough ? paidThrough.toISOString() : null,
+      });
+
+      return res.json(buildCancelResponse(false));
 
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -810,11 +970,15 @@ const needsSync =
     premiumActive !== !!data?.premiumActive ||
     data?.currentPlan !== (premiumActive ? "premium" : "free")
   );
+      const paidThrough = resolvePaidThroughDate(data);
       return res.json({
         subscriptionId: data?.subscriptionId ?? null,
         subscriptionStatus: data?.subscriptionStatus ?? null,
        premiumActive,
 currentPlan: premiumActive ? "premium" : "free",
+        // RELEASE-09: a UI precisa distinguir "cancelada mas ativa até DD/MM" de "Free".
+        autoRenew: isRenewingSubscriptionStatus(data?.subscriptionStatus),
+        premiumExpiresAt: paidThrough ? paidThrough.toISOString() : null,
       });
 
     } catch (error) {

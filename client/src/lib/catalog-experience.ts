@@ -2,10 +2,12 @@ import {
   NICHO_CONFIG,
   ONBOARDING_NICHO_IDS,
   inferNichoFromCategory,
+  normalizeProductCategory,
   type NichoId,
 } from "@/lib/nicho-config";
 import type { AppSettings, Product, Sale } from "@/lib/mock-data";
 import { normalizeProductSearchText } from "@/lib/product-search";
+import { compareProductAvailabilityFirst } from "@/lib/product-availability";
 
 export type CatalogExperienceMode = "general" | "focused" | "segmented" | "hub";
 
@@ -204,7 +206,7 @@ function normalizeThreshold(value: unknown): number {
   return Math.max(0, toFiniteNumber(value));
 }
 
-function hasProductImage(product: Product): boolean {
+export function hasProductImage(product: Product): boolean {
   const runtimeProduct = product as Product & {
     photoUrl?: unknown;
     image?: unknown;
@@ -285,23 +287,33 @@ function compareHeroCandidates(left: ProductFacts, right: ProductFacts): number 
 }
 
 function compareAvailableFirst(left: ProductFacts, right: ProductFacts): number {
-  const leftAvailable = left.stock > 0;
-  const rightAvailable = right.stock > 0;
-  if (leftAvailable !== rightAvailable) return leftAvailable ? -1 : 1;
+  // Mesma regra de disponibilidade usada em Produtos e na vitrine — nenhuma coleção curada
+  // (ofertas, destaques, mais vendidos) pode promover um esgotado acima de um disponível.
+  const byAvailability = compareProductAvailabilityFirst({ stock: left.stock }, { stock: right.stock });
+  if (byAvailability !== 0) return byAvailability;
   return compareFactTieBreakers(left, right);
 }
 
 function selectHero(facts: readonly ProductFacts[]): CatalogHero | undefined {
+  // Um hero sem foto aparece "quebrado" no banner grande, então produtos com imagem
+  // sempre têm prioridade sobre destaque/promoção/mais vendido — só cai para um
+  // produto sem imagem se nenhum produto em estoque tiver foto.
   let candidate: ProductFacts | undefined;
+  let candidateWithoutImage: ProductFacts | undefined;
   for (const fact of facts) {
     if (fact.stock <= 0) continue;
-    if (!candidate || compareHeroCandidates(fact, candidate) < 0) candidate = fact;
+    if (fact.hasImage) {
+      if (!candidate || compareHeroCandidates(fact, candidate) < 0) candidate = fact;
+    } else if (!candidateWithoutImage || compareHeroCandidates(fact, candidateWithoutImage) < 0) {
+      candidateWithoutImage = fact;
+    }
   }
-  if (!candidate) return undefined;
+  const chosen = candidate || candidateWithoutImage;
+  if (!chosen) return undefined;
   return {
-    product: candidate.product,
-    reason: getHeroReason(candidate),
-    unitsSold: candidate.unitsSold,
+    product: chosen.product,
+    reason: getHeroReason(chosen),
+    unitsSold: chosen.unitsSold,
   };
 }
 
@@ -320,7 +332,7 @@ function buildCollections(facts: readonly ProductFacts[], lowStockThreshold: num
   }> = [
     { id: "offers", predicate: (fact) => fact.isPromotion, comparator: compareAvailableFirst },
     { id: "featured", predicate: (fact) => fact.product.isFeatured === true, comparator: compareAvailableFirst },
-    { id: "best_sellers", predicate: (fact) => fact.unitsSold > 0 },
+    { id: "best_sellers", predicate: (fact) => fact.unitsSold > 0, comparator: compareAvailableFirst },
     { id: "kits", predicate: (fact) => fact.categoryKey === "kit" || fact.categoryKey === "kits" },
     { id: "ready_to_deliver", predicate: (fact) => fact.stock > 0 },
     {
@@ -408,7 +420,7 @@ function resolveProductNiche(
       : { nicheId: explicitNicheId, source: "orphaned" };
   }
 
-  const category = normalizeDisplayText(product.category);
+  const category = normalizeProductCategory(normalizeDisplayText(product.category));
   if (!category) {
     return selectedNiches.has("Geral")
       ? { nicheId: "Geral", source: "uncategorized" }
@@ -427,7 +439,7 @@ function createProductFacts(
   selectedNiches: ReadonlySet<CatalogNicheId>,
 ): ProductFacts {
   const resolution = resolveProductNiche(product, selectedNiches);
-  const category = normalizeDisplayText(product.category);
+  const category = normalizeProductCategory(normalizeDisplayText(product.category));
   return {
     product,
     stock: normalizeStock(product.stock),

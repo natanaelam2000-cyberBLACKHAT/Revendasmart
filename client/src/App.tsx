@@ -8,11 +8,12 @@ import { queryClient } from "./lib/queryClient";
 const Login = lazy(() => import("@/pages/login"));
 const Signup = lazy(() => import("@/pages/signup"));
 const PublicCatalog = lazy(() => import("@/pages/public-catalog"));
+const AccountDeletion = lazy(() => import("@/pages/account-deletion"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 const PrivateRouter = lazy(() => import("@/routers/PrivateRouter"));
 
 function isPublicPath(path: string) {
-  return path === "/login" || path === "/signup" || path.startsWith("/u/");
+  return path === "/login" || path === "/signup" || path === "/account-deletion" || path.startsWith("/u/");
 }
 
 function PublicRouter() {
@@ -21,6 +22,7 @@ function PublicRouter() {
       <Route path="/login" component={Login} />
       <Route path="/signup" component={Signup} />
       <Route path="/u/:storeSlug" component={PublicCatalog} />
+      <Route path="/account-deletion" component={AccountDeletion} />
       <Route component={NotFound} />
     </Switch>
   );

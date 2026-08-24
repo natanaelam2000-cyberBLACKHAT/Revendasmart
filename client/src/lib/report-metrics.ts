@@ -125,19 +125,30 @@ function addRankingValue(map: Map<string, RankingItem>, id: string, label: strin
   map.set(id, current);
 }
 
+/**
+ * RELEASE-26: custo dos itens de UMA venda — nunca "receita do item menos custo". `sale.products[].price`
+ * é o preço por unidade ANTES do desconto do carrinho; `saleTotal()`/`sale.total` (usado como "receita"
+ * em todo este arquivo) já é o valor final COM desconto. A versão antiga somava
+ * quantidade × (preço-sem-desconto − custo) e chamava isso de lucro — base maior que a receita
+ * exibida, então o lucro period podia superar a receita do período sempre que houvesse desconto
+ * relevante (mesma causa raiz corrigida em home-dashboard-view-model.ts).
+ *
+ * Ranking por produto/categoria/marca (calculateRanking, mais abaixo) continua usando o preço do item
+ * diretamente — aquilo é outro problema (ratear um desconto de carrinho entre itens), fora do escopo
+ * desta correção; documentado, não corrigido aqui.
+ */
 function getSaleItemMetrics(sale: Sale, productById: Map<string, Product>) {
-  let profit = 0;
+  let cost = 0;
   let quantity = 0;
 
   for (const item of sale.products || []) {
     const itemQuantity = Number(item.quantity || 0);
-    const price = Number(item.price || 0);
     const product = productById.get(item.productId);
-    profit += product ? itemQuantity * (price - Number(product.costPrice || 0)) : 0;
+    if (product) cost += itemQuantity * Number(product.costPrice || 0);
     quantity += itemQuantity;
   }
 
-  return { profit, quantity };
+  return { cost, quantity };
 }
 
 function calculatePeriod(
@@ -157,8 +168,9 @@ function calculatePeriod(
     if (!date || !isWithinInterval(date, { start, end })) continue;
 
     const itemMetrics = getSaleItemMetrics(sale, productById);
-    revenue += saleTotal(sale);
-    profit += itemMetrics.profit;
+    const saleRevenue = saleTotal(sale);
+    revenue += saleRevenue;
+    profit += saleRevenue - itemMetrics.cost;
     productsSold += itemMetrics.quantity;
     salesCount += 1;
     if (sale.clientId) activeClients.add(sale.clientId);
@@ -231,7 +243,7 @@ export function calculateRanking(
     const saleRevenue = saleTotal(sale);
     const saleMetrics = getSaleItemMetrics(sale, productById);
     const clientName = clientById.get(sale.clientId)?.name || sale.clientName || "Cliente não identificado";
-    addRankingValue(clientMap, sale.clientId || "unknown", clientName, saleRevenue, saleMetrics.profit, saleMetrics.quantity);
+    addRankingValue(clientMap, sale.clientId || "unknown", clientName, saleRevenue, saleRevenue - saleMetrics.cost, saleMetrics.quantity);
 
     for (const item of sale.products || []) {
       const product = productById.get(item.productId);
@@ -328,9 +340,10 @@ export function calculateIndicators(
   let totalQuantity = 0;
 
   for (const sale of sales) {
-    totalRevenue += saleTotal(sale);
+    const saleRevenue = saleTotal(sale);
+    totalRevenue += saleRevenue;
     const metrics = getSaleItemMetrics(sale, productById);
-    totalProfit += metrics.profit;
+    totalProfit += saleRevenue - metrics.cost;
     totalQuantity += metrics.quantity;
   }
 

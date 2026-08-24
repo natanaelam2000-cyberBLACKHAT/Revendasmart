@@ -51,7 +51,7 @@ export function RemoteConfigProvider({ children }: RemoteConfigProviderProps) {
         await fetchRemoteConfigFn();
         
         // Setup real-time listener for updates
-        setupConfigUpdateListener();
+        void setupConfigUpdateListener();
       } catch (err) {
         console.warn("[RemoteConfigProvider] Initial fetch failed:", err);
       } finally {

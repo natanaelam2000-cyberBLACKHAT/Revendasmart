@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useLocation } from "wouter";
 import { Layout } from "@/components/layout";
+import { PageSkeleton } from "@/components/PageSkeleton";
 import {
   Star,
   Zap,
@@ -19,13 +20,25 @@ import {
 } from "lucide-react";
 import { ApiError, apiRequest, buildApiErrorDisplayMessage } from "@/lib/api-client";
 import { usePlanData } from "@/hooks/usePlanData";
-import { isPremiumFromGlobalAccess, type GlobalConfig, type PlanData as MonetizationPlanData } from "@shared/monetization";
+import { isPremiumFromGlobalAccess, resolveLegacyBillingProvider, type GlobalConfig, type PlanData as MonetizationPlanData } from "@shared/monetization";
+import { getFirebaseAuth } from "@/lib/firebase";
+import {
+  isAndroidNativeApp,
+  getAndroidPremiumOffers,
+  purchasePremiumViaGooglePlay,
+  recoverPendingGooglePlayPurchases,
+  restoreAndroidPurchases,
+  openAndroidSubscriptionManagement,
+  type PlayBillingProductOffer,
+  type PlayPurchaseFlowResult,
+} from "@/lib/play-billing";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 type PageStatus = "idle" | "loading" | "redirecting" | "success" | "error" | "cancelling" | "cancelled";
 type CreateSubscriptionResponse = { initPoint?: string };
+type AndroidBillingStatus = "idle" | "loading" | "pending" | "restoring" | "error";
 
 // ---------------------------------------------------------------------------
 // Helper: format date for PT-BR
@@ -80,19 +93,49 @@ export default function Subscribe() {
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
-  const { planData, globalConfig: rawGlobalConfig, isPremium, hasPremiumAccess, loading: planLoading, refresh, error: planError } = usePlanData();
+  // RELEASE-07B: Android nativo usa Google Play Billing; Web/PWA continua no Mercado Pago (abaixo).
+  const [isAndroid, setIsAndroid] = useState(false);
+  const [androidOffers, setAndroidOffers] = useState<PlayBillingProductOffer[]>([]);
+  const [androidStatus, setAndroidStatus] = useState<AndroidBillingStatus>("idle");
+  const [androidErrorMsg, setAndroidErrorMsg] = useState("");
+
+  const {
+    planData,
+    globalConfig: rawGlobalConfig,
+    hasPremiumAccess,
+    premiumPeriodEndsAt,
+    isCancelledWithinPaidPeriod,
+    loading: planLoading,
+    refresh,
+    error: planError,
+    isTester,
+    isPremiumPlus,
+  } = usePlanData();
   const globalConfig = rawGlobalConfig as GlobalConfig | null;
+  // RELEASE-16 §6/§7: quem concedeu a assinatura ATUAL decide para onde o cancelamento vai — nunca o
+  // dispositivo atual sozinho, para não chamar Mercado Pago para uma conta assinada via Play ou
+  // vice-versa. `resolveLegacyBillingProvider` só resolve "google_play" com evidência server-owned
+  // (billingProvider explícito ou campos playXxx já persistidos) — uma assinatura legada sem nenhum
+  // desses nunca abre o fluxo de gestão da Play só por estar rodando em Android.
+  const resolvedBillingProvider = resolveLegacyBillingProvider(planData as MonetizationPlanData | null);
+  const managesSubscriptionViaGooglePlay = isAndroid && resolvedBillingProvider === "google_play";
+  // OWNER-ACCESS-02 §15 — só existe algo para "gerenciar/cancelar" quando há uma assinatura paga real
+  // por trás. Tester/Premium+ têm hasPremiumAccess=true sem nunca gerar subscriptionId/billingProvider —
+  // mesmo guard já usado pelo card "Status da Assinatura" (`planData?.subscriptionId`) logo abaixo.
+  const hasPaidSubscription = Boolean(planData?.subscriptionId || resolvedBillingProvider);
   const isGlobalPremiumActive = isPremiumFromGlobalAccess(planData as MonetizationPlanData | null, globalConfig);
   const subscriptionUiState = useMemo(() => {
     const subscriptionStatus = (planData?.subscriptionStatus ?? "").toLowerCase();
     const paymentStatus = (planData?.paymentStatus ?? "").toLowerCase();
-    const premiumActive = !!planData?.premiumActive || isPremium || hasPremiumAccess;
-    const hasValidSubscription = hasPremiumAccess || premiumActive || ["authorized", "active", "approved"].includes(subscriptionStatus) || paymentStatus === "approved";
+    // RELEASE-16 §3: nunca reintroduzir uma leitura paralela do booleano cru — `hasPremiumAccess` (via
+    // `usePlanData`) já é a decisão canônica de `isPremiumActive()`.
+    const premiumActive = hasPremiumAccess;
+    const hasValidSubscription = hasPremiumAccess || ["authorized", "active", "approved"].includes(subscriptionStatus) || paymentStatus === "approved";
     const isPending = subscriptionStatus === "pending";
     const hasRecentPending = isPending && !!planData?.subscriptionId;
     const showBuyButton = !hasValidSubscription && !hasRecentPending && !isGlobalPremiumActive;
     return { premiumActive, hasValidSubscription, isPending, hasRecentPending, showBuyButton, subscriptionStatus };
-  }, [planData, isPremium, isGlobalPremiumActive, hasPremiumAccess]);
+  }, [planData, isGlobalPremiumActive, hasPremiumAccess]);
   const isActiveSubscriber = subscriptionUiState.hasValidSubscription;
   const isPendingPayment = subscriptionUiState.isPending;
   const isCancelledSubscriber = planData?.subscriptionStatus === "cancelled";
@@ -123,6 +166,32 @@ export default function Subscribe() {
       setErrorMsg("O pagamento não foi concluído. Tente novamente.");
       window.history.replaceState({}, "", "/subscribe");
     }
+  }, []);
+
+  // Detecta Android nativo, carrega os produtos com preço localizado da Play, e roda a recuperação de
+  // compras pendentes (§9: app aberto/retomado após uma compra aprovada mas o /verify não rodou ainda).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const android = await isAndroidNativeApp();
+      if (cancelled) return;
+      setIsAndroid(android);
+      if (!android) return;
+
+      const offers = await getAndroidPremiumOffers();
+      if (!cancelled) setAndroidOffers(offers);
+
+      const auth = getFirebaseAuth();
+      const user = auth?.currentUser;
+      if (user) {
+        const idToken = await user.getIdToken();
+        await recoverPendingGooglePlayPurchases(idToken, user.uid);
+        if (!cancelled) await refresh?.();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // ---------------------------------------------------------------------------
@@ -172,16 +241,78 @@ export default function Subscribe() {
   }
 
   // ---------------------------------------------------------------------------
+  // Actions — Android (Google Play Billing)
+  // ---------------------------------------------------------------------------
+  async function handleSubscribeAndroid(interval: "monthly" | "yearly") {
+    setAndroidStatus("loading");
+    setAndroidErrorMsg("");
+    const auth = getFirebaseAuth();
+    const user = auth?.currentUser;
+    if (!user) {
+      setAndroidStatus("error");
+      setAndroidErrorMsg("Faça login novamente.");
+      return;
+    }
+    const idToken = await user.getIdToken();
+    const result: PlayPurchaseFlowResult = await purchasePremiumViaGooglePlay({ interval, token: idToken, firebaseUid: user.uid });
+    if (result.kind === "activated") {
+      setAndroidStatus("idle");
+      setStatus("success");
+      await refresh?.();
+    } else if (result.kind === "pending") {
+      setAndroidStatus("pending");
+    } else if (result.kind === "cancelled") {
+      // Cancelamento do usuário no fluxo nativo não é um erro — só volta ao estado normal.
+      setAndroidStatus("idle");
+    } else if (result.kind === "product_unavailable") {
+      setAndroidStatus("error");
+      setAndroidErrorMsg("Este produto ainda não está disponível na Play Store.");
+    } else {
+      setAndroidStatus("error");
+      setAndroidErrorMsg(result.message);
+    }
+  }
+
+  async function handleRestoreAndroid() {
+    setAndroidStatus("restoring");
+    setAndroidErrorMsg("");
+    const auth = getFirebaseAuth();
+    const user = auth?.currentUser;
+    if (!user) {
+      setAndroidStatus("error");
+      setAndroidErrorMsg("Faça login novamente.");
+      return;
+    }
+    try {
+      const idToken = await user.getIdToken();
+      await restoreAndroidPurchases(idToken, user.uid);
+      await refresh?.();
+      setAndroidStatus("idle");
+    } catch (err) {
+      setAndroidStatus("error");
+      setAndroidErrorMsg(err instanceof Error ? err.message : "Erro ao restaurar compras.");
+    }
+  }
+
+  async function handleManageAndroidSubscription() {
+    try {
+      await openAndroidSubscriptionManagement();
+    } catch (err) {
+      setAndroidStatus("error");
+      setAndroidErrorMsg(err instanceof Error ? err.message : "Não foi possível abrir a gestão de assinatura da Play.");
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Render States
   // ---------------------------------------------------------------------------
 
+  // P1-04: `planLoading` é uma espera de rede real (status do plano) antes do primeiro render — trocado
+  // o spinner genérico pelo mesmo `PageSkeleton` usado nas outras telas de configurações/conta.
   if (planLoading) {
     return (
       <Layout title="Premium">
-        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-          <Loader2 className="w-10 h-10 text-primary animate-spin" />
-          <p className="text-muted-foreground text-sm">Carregando...</p>
-        </div>
+        <PageSkeleton variant="settings" />
       </Layout>
     );
   }
@@ -229,9 +360,12 @@ export default function Subscribe() {
             <XCircle className="w-12 h-12 text-gray-400" />
           </div>
           <div className="space-y-2">
-            <h1 className="text-2xl font-black text-foreground">Assinatura cancelada</h1>
-            <p className="text-muted-foreground text-sm max-w-xs">
-              Sua assinatura foi cancelada. Você permanecerá no plano Grátis a partir de agora.
+            <h1 className="text-2xl font-black text-foreground">Renovação cancelada</h1>
+            {/* RELEASE-09: cancelar interrompe a renovação, não o período já pago. */}
+            <p className="text-muted-foreground text-sm max-w-xs" data-testid="text-cancelled-until">
+              {premiumPeriodEndsAt
+                ? `Seu Premium permanece ativo até ${fmtDate(premiumPeriodEndsAt)}. Depois dessa data você volta ao plano Grátis.`
+                : "Sua assinatura não será renovada. Você permanecerá no plano Grátis a partir de agora."}
             </p>
           </div>
           <button
@@ -301,8 +435,8 @@ export default function Subscribe() {
 
 </div>
 
-{/* BLOCO DE PREÇO + CTA MELHORADO */}
-{showBuyButton && !isGlobalPremiumActive && !hasPremiumAccess && (
+{/* BLOCO DE PREÇO + CTA MELHORADO (Web/PWA — Mercado Pago) */}
+{!isAndroid && showBuyButton && !isGlobalPremiumActive && !hasPremiumAccess && (
   <div className="bg-green-50 border border-green-200 rounded-2xl p-5 text-center space-y-3 mb-6">
 
     <p className="text-lg font-black text-green-700">
@@ -332,9 +466,58 @@ export default function Subscribe() {
 
   </div>
 )}
+
+{/* BLOCO DE PREÇO + CTA (Android nativo — Google Play Billing) */}
+{isAndroid && showBuyButton && !isGlobalPremiumActive && !hasPremiumAccess && (
+  <div className="bg-green-50 border border-green-200 rounded-2xl p-5 text-center space-y-3 mb-6" data-testid="android-billing-card">
+    <p className="text-lg font-black text-green-700">
+      {androidOffers.length > 0
+        ? androidOffers.map((offer) => offer.formattedPrice).join(" · ")
+        : "Preço exibido pela Play Store ao assinar"}
+    </p>
+
+    <button
+      onClick={() => handleSubscribeAndroid("monthly")}
+      disabled={androidStatus === "loading"}
+      className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-4 rounded-xl shadow-md transition-all active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2"
+      data-testid="button-subscribe-google-play"
+    >
+      {androidStatus === "loading" ? (
+        <>
+          <Loader2 className="w-4 h-4 animate-spin" />
+          Iniciando...
+        </>
+      ) : (
+        <>🚀 Assinar via Google Play</>
+      )}
+    </button>
+
+    {androidStatus === "pending" && (
+      <p className="text-xs font-bold text-blue-600 bg-blue-50 rounded-xl p-3" data-testid="android-billing-pending">
+        Pagamento em processamento pela Google Play. Assim que for confirmado, o Premium é ativado automaticamente.
+      </p>
+    )}
+    {androidStatus === "error" && androidErrorMsg && (
+      <p className="text-xs font-bold text-red-600 bg-red-50 rounded-xl p-3" data-testid="android-billing-error">{androidErrorMsg}</p>
+    )}
+
+    <button
+      onClick={handleRestoreAndroid}
+      disabled={androidStatus === "restoring"}
+      className="text-primary text-xs font-bold underline disabled:opacity-60"
+      data-testid="button-restore-google-play"
+    >
+      {androidStatus === "restoring" ? "Restaurando..." : "Já assinei — restaurar compras"}
+    </button>
+
+    <p className="text-[11px] text-muted-foreground">
+      Cancelamento a qualquer momento pela Google Play
+    </p>
+  </div>
+)}
         <div className="bg-white border border-border/60 rounded-3xl p-5 mb-6 shadow-sm">
           <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Plano atual</p>
-          <div className="flex items-center justify-between mt-2"><div><p className="text-lg font-black">{hasPremiumAccess ? "Premium" : "Grátis"}</p><p className={`text-xs font-bold ${hasPremiumAccess ? "text-green-600" : "text-muted-foreground"}`}>{hasPremiumAccess ? "Premium ativo" : "Plano gratuito"}</p></div><CreditCard className="w-6 h-6 text-primary" /></div>
+          <div className="flex items-center justify-between mt-2"><div><p className="text-lg font-black">{isPremiumPlus ? "Premium+" : isTester ? "Tester" : hasPremiumAccess ? "Premium" : "Grátis"}</p><p className={`text-xs font-bold ${hasPremiumAccess ? "text-green-600" : "text-muted-foreground"}`}>{isPremiumPlus ? "Premium+ concedido" : isTester ? "Acesso de testadora" : hasPremiumAccess ? "Premium ativo" : "Plano gratuito"}</p></div><CreditCard className="w-6 h-6 text-primary" /></div>
           {planError && <p className="text-xs text-amber-700 bg-amber-50 rounded-xl p-3 mt-3">Dados de cobrança temporariamente indisponíveis. Seu acesso continua funcionando.</p>}
         </div>
 
@@ -345,7 +528,7 @@ export default function Subscribe() {
               ? "bg-amber-50 border-amber-200"
               : isPendingPayment
               ? "bg-blue-50 border-blue-200"
-              : "bg-gray-50 border-gray-200"
+              : "bg-muted border-border"
           }`} data-testid="card-subscription-status">
             <p className="text-xs font-black uppercase tracking-widest text-muted-foreground mb-2">
               Status da Assinatura
@@ -354,17 +537,27 @@ export default function Subscribe() {
               {isActiveSubscriber && <CheckCircle className="w-5 h-5 text-green-500" />}
               {isPendingPayment && <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />}
               {isCancelledSubscriber && <XCircle className="w-5 h-5 text-gray-400" />}
+              {/* RELEASE-09: "cancelada mas ainda paga" é um estado próprio — nunca rotular como
+                  "Renovação automática" (a renovação já parou) nem como Free (o acesso continua). */}
               <span className={`font-bold text-sm ${
+                isCancelledWithinPaidPeriod ? "text-amber-600" :
                 isActiveSubscriber ? "text-green-600" :
                 isPendingPayment ? "text-blue-600" :
                 "text-gray-500"
-              }`}>
-                {isActiveSubscriber ? "Ativa — Renovação automática" :
+              }`} data-testid="text-subscription-status">
+                {isCancelledWithinPaidPeriod ? "Renovação cancelada — ativa até o fim do período" :
+                 isActiveSubscriber ? "Ativa — Renovação automática" :
                  isPendingPayment ? "Aguardando pagamento" :
                  "Cancelada"}
               </span>
             </div>
-            {planData.nextBillingAt && isActiveSubscriber && (
+            {isCancelledWithinPaidPeriod && premiumPeriodEndsAt && (
+              <div className="flex items-center gap-2 text-xs text-amber-700">
+                <Calendar className="w-3.5 h-3.5" />
+                <span>Premium ativo até: {fmtDate(premiumPeriodEndsAt)}</span>
+              </div>
+            )}
+            {planData.nextBillingAt && isActiveSubscriber && !isCancelledWithinPaidPeriod && (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Calendar className="w-3.5 h-3.5" />
                 <span>Próxima cobrança: {fmtDate(planData.nextBillingAt)}</span>
@@ -385,8 +578,8 @@ export default function Subscribe() {
           </div>
         )}
 
-        {/* Price Card */}
-        {!hasPremiumAccess && !isActiveSubscriber && !isGlobalPremiumActive && (
+        {/* Price Card — Web/PWA (Mercado Pago). Nunca mostrado no Android: o preço lá vem da Play. */}
+        {!isAndroid && !hasPremiumAccess && !isActiveSubscriber && !isGlobalPremiumActive && (
           <div className="bg-gradient-to-br from-amber-50 to-amber-100 border border-amber-200 rounded-3xl p-6 mb-6 text-center shadow-sm">
             <p className="text-xs font-black text-amber-700 uppercase tracking-widest mb-1">Valor mensal</p>
             <div className="flex items-baseline justify-center gap-1 mb-1">
@@ -444,8 +637,8 @@ export default function Subscribe() {
           </div>
         )}
 
-        {/* CTA Button */}
-        {showBuyButton && !isGlobalPremiumActive && !hasPremiumAccess && (
+        {/* CTA Button — Web/PWA (Mercado Pago) */}
+        {!isAndroid && showBuyButton && !isGlobalPremiumActive && !hasPremiumAccess && (
           <button
             onClick={handleSubscribe}
             disabled={status === "loading"}
@@ -466,6 +659,28 @@ export default function Subscribe() {
           </button>
         )}
 
+        {/* CTA Button — Android nativo (Google Play Billing), preço vem da Play, nunca hardcoded */}
+        {isAndroid && showBuyButton && !isGlobalPremiumActive && !hasPremiumAccess && (
+          <button
+            onClick={() => handleSubscribeAndroid("monthly")}
+            disabled={androidStatus === "loading"}
+            className="w-full bg-amber-500 hover:bg-amber-600 text-white font-black py-4 rounded-2xl text-base active:scale-95 transition-all shadow-md disabled:opacity-60 flex items-center justify-center gap-2"
+            data-testid="button-subscribe-premium-android"
+          >
+            {androidStatus === "loading" ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                Preparando compra...
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-5 h-5" />
+                Assinar Premium{androidOffers[0] ? ` — ${androidOffers[0].formattedPrice}/mês` : ""}
+              </>
+            )}
+          </button>
+        )}
+
         {/* Message when global premium is active */}
         {hasPremiumAccess && (
           <div className="bg-green-50 border border-green-300 rounded-2xl p-4 text-center">
@@ -475,8 +690,34 @@ export default function Subscribe() {
           </div>
         )}
 
-        {/* Active subscriber — cancel option */}
-        {hasPremiumAccess && (
+        {/* Active subscriber — cancel option. Google Play nunca é cancelado pelo nosso endpoint MP:
+            §13 provider isolation — quem gerencia é sempre a tela nativa da própria Play. */}
+        {hasPremiumAccess && managesSubscriptionViaGooglePlay && (
+          <div className="mt-4">
+            <button
+              onClick={handleManageAndroidSubscription}
+              className="w-full text-muted-foreground text-sm font-medium py-3 border border-gray-200 rounded-2xl active:scale-95 transition-all"
+              data-testid="button-manage-google-play-subscription"
+            >
+              Gerenciar assinatura na Google Play
+            </button>
+            {androidStatus === "error" && androidErrorMsg && (
+              <p className="text-xs font-bold text-red-600 bg-red-50 rounded-xl p-3 mt-2" data-testid="android-manage-error">{androidErrorMsg}</p>
+            )}
+          </div>
+        )}
+        {/* RELEASE-09: já cancelada e ainda dentro do período pago — não há mais o que cancelar,
+            então o botão dá lugar ao estado "renovação cancelada, ativo até DD/MM". */}
+        {hasPremiumAccess && !managesSubscriptionViaGooglePlay && isCancelledWithinPaidPeriod && (
+          <div className="mt-4 bg-amber-50 border border-amber-200 rounded-2xl p-4 text-center" data-testid="card-cancelled-until">
+            <p className="text-sm font-bold text-amber-700">Renovação cancelada</p>
+            <p className="text-xs text-amber-600 mt-1">
+              Seu Premium permanece ativo até {fmtDate(premiumPeriodEndsAt)}.
+            </p>
+          </div>
+        )}
+
+        {hasPremiumAccess && hasPaidSubscription && !managesSubscriptionViaGooglePlay && !isCancelledWithinPaidPeriod && (
           <div className="mt-4">
             {!showCancelConfirm ? (
               <button
@@ -492,8 +733,12 @@ export default function Subscribe() {
                   <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
                   <div>
                     <p className="font-bold text-red-700 text-sm">Tem certeza?</p>
+                    {/* RELEASE-09: o texto precisa refletir o que realmente acontece — a renovação
+                        para, mas o período já pago continua valendo. */}
                     <p className="text-xs text-red-500 mt-1">
-                      Ao cancelar, você voltará para o plano Grátis e perderá acesso aos recursos Premium.
+                      {premiumPeriodEndsAt
+                        ? `Sua assinatura não será renovada. Você continua com o Premium até ${fmtDate(premiumPeriodEndsAt)} e depois volta ao plano Grátis.`
+                        : "Sua assinatura não será renovada e você voltará para o plano Grátis ao fim do período já pago."}
                     </p>
                   </div>
                 </div>
@@ -527,7 +772,7 @@ export default function Subscribe() {
         {/* Security notice */}
         <div className="mt-6 text-center">
           <p className="text-xs text-muted-foreground">
-            🔒 Pagamento seguro pelo Mercado Pago · Cancele quando quiser
+            {isAndroid ? "🔒 Pagamento seguro pela Google Play · Cancele quando quiser" : "🔒 Pagamento seguro pelo Mercado Pago · Cancele quando quiser"}
           </p>
         </div>
       </div>

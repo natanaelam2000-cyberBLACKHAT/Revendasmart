@@ -1,5 +1,6 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from "firebase/app";
-import { getAuth, connectAuthEmulator, Auth, User, setPersistence, browserLocalPersistence } from "firebase/auth";
+import { getAuth, connectAuthEmulator, Auth, User, setPersistence, browserLocalPersistence, onAuthStateChanged } from "firebase/auth";
+import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, terminate, clearIndexedDbPersistence } from "firebase/firestore";
 import { initializeErrorLogging, logError, setUserContext } from "./error-logging";
 import { initializeInternalTelemetry } from "./internal-telemetry";
 import { initializeFirebaseAnalytics } from "./firebase-analytics";
@@ -27,13 +28,98 @@ function shouldUseFirebaseEmulators() {
 }
 
 async function connectFirestoreAndStorageEmulators(firebaseApp: FirebaseApp) {
-  const [{ getFirestore, connectFirestoreEmulator }, { getStorage, connectStorageEmulator }] = await Promise.all([
+  const [{ connectFirestoreEmulator }, { getStorage, connectStorageEmulator }] = await Promise.all([
     import("firebase/firestore"),
     import("firebase/storage"),
   ]);
 
+  // getFirestore(app) aqui devolve a MESMA instância já criada por initializeFirestoreWithOfflinePersistence
+  // (chamada antes, em initializeFirebase) — nunca uma segunda instância sem cache persistente.
   connectFirestoreEmulator(getFirestore(firebaseApp), "127.0.0.1", 8080);
   connectStorageEmulator(getStorage(firebaseApp), "127.0.0.1", 9199);
+}
+
+let firestorePersistenceInitialized = false;
+
+/**
+ * RELEASE-QUALITY-04 §2/§4 — liga a persistência offline do Firestore (IndexedDB) UMA vez, antes de
+ * qualquer `getFirestore(app)` no resto do código (que continua funcionando sem mudar nada, porque
+ * `getFirestore()` sem novos settings devolve a MESMA instância já configurada). Isso é o único passo
+ * necessário para leitura offline (todos os hooks já usam onSnapshot) e escrita offline de
+ * produtos/clientes (já são setDoc direto) funcionarem — o SDK já resolve a fila sozinho.
+ */
+function initializeFirestoreWithOfflinePersistence(firebaseApp: FirebaseApp): void {
+  if (firestorePersistenceInitialized) return;
+  firestorePersistenceInitialized = true;
+  try {
+    initializeFirestore(firebaseApp, {
+      localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+    });
+  } catch (err) {
+    // Só pode acontecer se algo já tiver chamado getFirestore(app) antes disto (ex.: HMR em dev
+    // reexecutando este módulo) — o app continua funcionando, só sem cache persistente até reload.
+    console.warn("[Firebase] Persistent Firestore cache not applied:", err);
+  }
+}
+
+/**
+ * §8 — isolamento por tenant: ao deslogar, apaga o cache local do Firestore (IndexedDB) inteiro para
+ * que nenhum documento do usuário anterior sobreviva num troca de conta no mesmo aparelho. O
+ * isolamento por path (`users/{uid}/...`) já impede a UI de MOSTRAR dado de outro usuário, mas o
+ * arquivo IndexedDB em si é por projeto, não por uid — isto é a camada extra de defesa.
+ */
+/**
+ * Retorna `true` quando o cache foi realmente limpo, `false` quando falhou (ex.: outra aba ainda
+ * segurando o banco IndexedDB, via persistentMultipleTabManager). LGPD §8 (REVENDASMART-LGPD-ANPD-
+ * REMEDIATION-01): antes essa falha só ia para `console.warn` (invisível em produção) e os chamadores
+ * nem checavam o retorno — o cache do usuário anterior podia sobreviver silenciosamente num dispositivo
+ * compartilhado. Agora reporta via `logError` (visível nos logs de produção) para que uma falha real
+ * de isolamento de tenant não passe despercebida.
+ */
+export async function clearFirestoreOfflineCache(): Promise<boolean> {
+  if (!app) return true;
+  try {
+    const db = getFirestore(app);
+    await terminate(db);
+    await clearIndexedDbPersistence(db);
+    return true;
+  } catch (err) {
+    logError("firestore_offline_cache_clear_failed", err instanceof Error ? err.message : String(err), {
+      severity: "error",
+    });
+    return false;
+  } finally {
+    // Reinicia a persistência imediatamente — sem isto, o PRÓXIMO getFirestore(app) (ex.: outro
+    // usuário logando na mesma aba, sem reload de página) criaria uma instância nova SEM cache
+    // persistente, e o próximo logout não teria nada para limpar de propósito.
+    firestorePersistenceInitialized = false;
+    initializeFirestoreWithOfflinePersistence(app);
+  }
+}
+
+let lastKnownAuthUid: string | null | undefined;
+
+/**
+ * LGPD §8 (REVENDASMART-LGPD-ANPD-REMEDIATION-01) — fecha o gap "nenhum caminho de expiração de sessão
+ * limpa o cache offline" achado na auditoria. Os dois pontos de logout manual (`settings.tsx`,
+ * `account-deletion.tsx`) já chamavam `clearFirestoreOfflineCache()` diretamente, mas uma sessão que
+ * cai sozinha (token revogado, refresh token inválido, troca de conta sem logout explícito) nunca
+ * passava por lá. Este listener cobre TODAS as transições de uid — incluindo essas — num único lugar,
+ * em vez de depender de cada tela lembrar de chamar a limpeza.
+ */
+function installOfflineCacheTenantIsolation(auth: Auth): void {
+  onAuthStateChanged(auth, (user) => {
+    const currentUid = user?.uid ?? null;
+    // Primeira chamada (lastKnownAuthUid ainda `undefined`) é só a leitura inicial da sessão — não é
+    // uma transição de usuário, nunca deve limpar nada.
+    if (lastKnownAuthUid !== undefined && lastKnownAuthUid !== null && lastKnownAuthUid !== currentUid) {
+      void clearFirestoreOfflineCache();
+      // Import dinâmico: mock-data.ts é um módulo grande e este caminho só roda numa transição real de
+      // usuário, não no boot do app.
+      void import("./mock-data").then(({ clearAllImagesFromIndexedDb }) => clearAllImagesFromIndexedDb());
+    }
+    lastKnownAuthUid = currentUid;
+  });
 }
 
 function connectFirebaseEmulatorsOnce(firebaseApp: FirebaseApp, auth: Auth) {
@@ -75,9 +161,13 @@ app = getApps().length === 0
   ? initializeApp(firebaseConfig)
   : getApp();
 
+// Precisa vir ANTES de qualquer getFirestore(app) (inclusive o do conector de emulador logo abaixo) —
+// initializeFirestore só pode configurar settings na primeira chamada para esta app.
+initializeFirestoreWithOfflinePersistence(app);
 
 authInstance = getAuth(app);
 connectFirebaseEmulatorsOnce(app, authInstance);
+installOfflineCacheTenantIsolation(authInstance);
 
 // força persistência corretamente
 setPersistence(authInstance, browserLocalPersistence)
@@ -114,12 +204,10 @@ setPersistence(authInstance, browserLocalPersistence)
       console.warn("[Firebase] Firebase Performance Monitoring initialization failed, continuing without it");
     }
 
-    // Initialize Firebase Remote Config
-    try {
-      initializeRemoteConfig(app);
-    } catch (err) {
-      console.warn("[Firebase] Firebase Remote Config initialization failed, continuing without it");
-    }
+    // Initialize Firebase Remote Config. Assíncrono desde RELEASE-QUALITY-02 §7 (o SDK
+    // firebase/remote-config agora é importado sob demanda, não no boot) — a própria função já trata
+    // seus erros internamente e nunca rejeita, então isto continua "fire and forget" como antes.
+    void initializeRemoteConfig(app);
 
     return { app, auth: authInstance, error: null };
   } catch (error: any) {

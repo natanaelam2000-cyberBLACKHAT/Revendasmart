@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, readlinkSync, readdirSync } from "node:fs";
-import { basename, join, relative, resolve, sep } from "node:path";
+import { existsSync, lstatSync, readFileSync, readlinkSync, readdirSync, statSync } from "node:fs";
+import { basename, delimiter, join, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 
 export const ANDROID_PACKAGE_NAME = "com.revendasmart.app";
@@ -11,6 +11,13 @@ export const WEB_BUILD_DIR = "dist/public";
 export const BUILD_MANIFEST_FILE = "build-manifest.json";
 export const DEBUG_APK_RELATIVE_PATH = "android/app/build/outputs/apk/debug/app-debug.apk";
 export const DEBUG_PROVENANCE_RELATIVE_PATH = "android/app/build/outputs/apk/debug/app-debug.provenance.json";
+
+// RELEASE-08: caminhos canônicos dos artefatos de release (AAB + o APK "irmão", buildado com a MESMA
+// signingConfig/buildType, usado só para inspecionar package/versionCode/versionName/debuggable com o
+// aapt — o próprio conteúdo do .aab usa um manifest binário em protobuf que o aapt não lê diretamente).
+export const RELEASE_AAB_RELATIVE_PATH = "android/app/build/outputs/bundle/release/app-release.aab";
+export const RELEASE_APK_RELATIVE_PATH = "android/app/build/outputs/apk/release/app-release.apk";
+export const RELEASE_PROVENANCE_RELATIVE_PATH = "android/app/build/outputs/bundle/release/app-release.provenance.json";
 
 function runGit(args, cwd, encoding = "utf8") {
   const result = spawnSync("git", args, { cwd, encoding, shell: false, maxBuffer: 64 * 1024 * 1024 });
@@ -158,4 +165,117 @@ export function aggregateDirectoryHash(hashMap) {
 
 export function repositoryLabel(root) {
   return basename(root);
+}
+
+// --- Descoberta de ferramentas do Android SDK/JDK (aapt, jar) — compartilhado entre a verificação do
+// APK debug e do AAB/APK de release; extraído aqui para não duplicar a mesma lógica duas vezes. ---
+
+export function normalizeExecutable(value) {
+  return String(value || "").trim().replace(/^['"]|['"]$/g, "");
+}
+
+function executableNames(name) {
+  return process.platform === "win32" ? [`${name}.exe`, `${name}.cmd`, `${name}.bat`, name] : [name];
+}
+
+function executableCandidatesFromPath(name) {
+  const candidates = [];
+  for (const directory of String(process.env.PATH || "").split(delimiter).filter(Boolean)) {
+    for (const executable of executableNames(name)) candidates.push(join(directory, executable));
+  }
+  return candidates;
+}
+
+export function firstExistingExecutable(candidates) {
+  for (const candidate of candidates.map(normalizeExecutable).filter(Boolean)) {
+    if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
+  }
+  return "";
+}
+
+export function resolveJarExecutable() {
+  const javaHome = normalizeExecutable(process.env.JAVA_HOME);
+  const candidate = firstExistingExecutable([
+    javaHome ? join(javaHome, "bin", process.platform === "win32" ? "jar.exe" : "jar") : "",
+    ...executableCandidatesFromPath("jar"),
+  ]);
+  if (!candidate) throw new Error("jar não foi encontrado; configure JAVA_HOME para o JDK usado no build Android.");
+  return candidate;
+}
+
+export function sdkRoots() {
+  return [...new Set([process.env.ANDROID_HOME, process.env.ANDROID_SDK_ROOT].map(normalizeExecutable).filter(Boolean))];
+}
+
+export function aaptCandidates() {
+  const candidates = [process.env.AAPT_PATH];
+  for (const sdkRoot of sdkRoots()) {
+    const buildTools = join(sdkRoot, "build-tools");
+    if (!existsSync(buildTools)) continue;
+    candidates.push(...walkFiles(buildTools)
+      .filter((file) => /[/\\]aapt(?:\.exe)?$/i.test(file))
+      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true })));
+  }
+  candidates.push(...executableCandidatesFromPath("aapt"));
+  return [...new Set(candidates.map(normalizeExecutable).filter(Boolean))];
+}
+
+export function parseAaptPackageName(output) {
+  return String(output || "").match(/^package:\s+name='([^']+)'/m)?.[1] || "";
+}
+
+export function parseAaptVersionCode(output) {
+  return String(output || "").match(/^package:.*versionCode='([^']*)'/m)?.[1] || "";
+}
+
+export function parseAaptVersionName(output) {
+  return String(output || "").match(/^package:.*versionName='([^']*)'/m)?.[1] || "";
+}
+
+/** `aapt dump badging` só imprime a linha "application-debuggable" quando android:debuggable="true". */
+export function aaptBadgingIsDebuggable(output) {
+  return /^application-debuggable$/m.test(String(output || ""));
+}
+
+/** Roda `aapt dump badging` no primeiro `aapt` utilizável encontrado no SDK/PATH. Lança se nenhum
+ * funcionar — nunca finge um resultado. */
+export function inspectApkBadging(apkPath) {
+  let attempted = 0;
+  for (const candidate of aaptCandidates()) {
+    if (!existsSync(candidate)) continue;
+    attempted += 1;
+    const result = spawnSync(candidate, ["dump", "badging", apkPath], {
+      encoding: "utf8",
+      shell: false,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    if (result.status === 0) {
+      const packageName = parseAaptPackageName(result.stdout);
+      if (packageName) {
+        return {
+          packageName,
+          versionCode: parseAaptVersionCode(result.stdout),
+          versionName: parseAaptVersionName(result.stdout),
+          debuggable: aaptBadgingIsDebuggable(result.stdout),
+          inspector: candidate,
+          rawOutput: result.stdout,
+        };
+      }
+    }
+  }
+  throw new Error(`não foi possível inspecionar o package dentro do APK com aapt${attempted ? ` (${attempted} candidato(s) testado(s))` : ""}.`);
+}
+
+/** Extrai um .apk/.aab (ambos são ZIP) usando o `jar` do JDK — evita depender de uma lib de zip nova. */
+export function extractZipArchive(archivePath, outputDirectory) {
+  const result = spawnSync(resolveJarExecutable(), ["xf", resolve(archivePath)], {
+    cwd: outputDirectory,
+    encoding: "utf8",
+    shell: false,
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  if (result.status !== 0) {
+    const detail = String(result.stderr || result.stdout || "").trim();
+    throw new Error(`não foi possível extrair ${archivePath}${detail ? `: ${detail}` : "."}`);
+  }
 }

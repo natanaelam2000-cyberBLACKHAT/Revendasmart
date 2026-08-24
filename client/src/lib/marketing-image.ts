@@ -1,4 +1,9 @@
 import { getMarketingAdImageCandidates, type MarketingAdConfig } from "./marketing-ad";
+import {
+  PRODUCT_IMAGE_COORDINATE_SPACE_VERSION,
+  type CanonicalDecodeMethod,
+  type ProductImageCoordinateSpaceVersion,
+} from "@shared/product-image-coordinate-space";
 
 export const MARKETING_IMAGE_ERROR_MESSAGE =
   "Não foi possível preparar a foto deste produto. Verifique a imagem e tente novamente.";
@@ -13,6 +18,12 @@ export type ResolvedMarketingImage = {
   height: number;
   candidateIndex: number;
   transport: MarketingImageTransport;
+  /**
+   * PRO-07F.2A: metadata canônica do decode (largura/altura já orientadas por EXIF). Opcional para não
+   * quebrar fixtures antigas construídas à mão nos testes; o resolver real abaixo sempre preenche os dois.
+   */
+  decodeMethod?: CanonicalDecodeMethod;
+  coordinateSpaceVersion?: ProductImageCoordinateSpaceVersion;
 };
 
 type SafeImagePayload = {
@@ -225,6 +236,11 @@ export async function resolveMarketingImageCandidates(
       height: dimensions.height,
       candidateIndex,
       transport: payload.transport,
+      // PRO-07F.2A: o decoder padrão (decodeDataUrl, acima) é `new Image()` — o único mecanismo real
+      // usado em produção hoje (mesmo raciocínio de decodeCanonicalProductImage, PRO-07F.1). Um
+      // `dependencies.decodeDataUrl` injetado só existe em teste, nunca troca esse mecanismo real.
+      decodeMethod: "html-image-element",
+      coordinateSpaceVersion: PRODUCT_IMAGE_COORDINATE_SPACE_VERSION,
     };
     if (useSharedCache) {
       resolvedImageCache.set(sourceUrl, resolved);
@@ -245,4 +261,80 @@ export function resolveMarketingProductImage(
   dependencies?: MarketingImageResolverDependencies,
 ) {
   return resolveMarketingImageCandidates(getMarketingAdImageCandidates(config), dependencies);
+}
+
+/**
+ * Fonte de imagem que o Marketing consegue enxergar — os mesmos campos que ProductImageCard já usa
+ * em Produtos, incluindo `imageId`, que aponta para uma foto guardada no IndexedDB local.
+ *
+ * Antes desta função, um produto cujo ÚNICO retrato estava em `imageId` aparecia normalmente na tela
+ * de Produtos mas era invisível para o anúncio: o card saía sem foto (ou falhava), embora o usuário
+ * estivesse vendo a imagem a poucos toques dali.
+ */
+export type MarketingImageSource = {
+  productImageUrl?: unknown;
+  imageUrl?: unknown;
+  photoUrl?: unknown;
+  image?: unknown;
+  thumbnailUrl?: unknown;
+  photo?: unknown;
+  imageId?: unknown;
+};
+
+const asTrimmedString = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+
+/** Existe alguma origem de imagem? Síncrono de propósito: serve para travar botões sem esperar I/O. */
+export function hasMarketingImageSource(source: MarketingImageSource | null | undefined): boolean {
+  if (!source) return false;
+  return Boolean(
+    asTrimmedString(source.productImageUrl) || asTrimmedString(source.imageUrl) || asTrimmedString(source.photoUrl)
+    || asTrimmedString(source.image) || asTrimmedString(source.thumbnailUrl) || asTrimmedString(source.photo)
+    || asTrimmedString(source.imageId),
+  );
+}
+
+/**
+ * Monta a lista de candidatas na ordem de preferência, resolvendo `imageId` no armazenamento local.
+ * A busca por `imageId` nunca derruba o fluxo: se falhar, as demais candidatas seguem valendo.
+ */
+export async function collectMarketingImageCandidates(
+  source: MarketingImageSource | null | undefined,
+  loadStoredImage?: (imageId: string) => Promise<string | null | undefined>,
+): Promise<string[]> {
+  if (!source) return [];
+  // Reaproveita a ordem já estabelecida para os quatro campos clássicos, sem duplicar a regra.
+  const candidates = getMarketingAdImageCandidates({
+    productImageUrl: asTrimmedString(source.productImageUrl),
+    imageUrl: asTrimmedString(source.imageUrl),
+    photoUrl: asTrimmedString(source.photoUrl),
+    image: asTrimmedString(source.image),
+  } as Pick<MarketingAdConfig, "productImageUrl" | "imageUrl" | "photoUrl" | "image">);
+
+  for (const extra of [asTrimmedString(source.thumbnailUrl), asTrimmedString(source.photo)]) {
+    if (extra) candidates.push(extra);
+  }
+
+  const imageId = asTrimmedString(source.imageId);
+  if (imageId) {
+    try {
+      const loader = loadStoredImage ?? (await import("./mock-data")).getImage;
+      const stored = await loader(imageId);
+      const storedUrl = asTrimmedString(stored);
+      if (storedUrl) candidates.push(storedUrl);
+    } catch {
+      /* imagem local indisponível: as outras candidatas continuam valendo */
+    }
+  }
+
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
+
+/** Coleta as candidatas (incluindo imageId) e já devolve a imagem pronta para desenhar no card. */
+export async function resolveMarketingImageSource(
+  source: MarketingImageSource | null | undefined,
+  dependencies?: MarketingImageResolverDependencies,
+): Promise<ResolvedMarketingImage | null> {
+  const candidates = await collectMarketingImageCandidates(source);
+  if (!candidates.length) return null;
+  return resolveMarketingImageCandidates(candidates, dependencies);
 }

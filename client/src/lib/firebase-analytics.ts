@@ -1,5 +1,6 @@
-import { getAnalytics, logEvent as firebaseLogEvent, Analytics } from "firebase/analytics";
+import { getAnalytics, logEvent as firebaseLogEvent, setUserId as firebaseSetUserId, Analytics } from "firebase/analytics";
 import { FirebaseApp } from "firebase/app";
+import { maskId } from "@/lib/safe-logger";
 
 /**
  * FIREBASE ANALYTICS OFFICIAL — WEB
@@ -106,7 +107,7 @@ export interface FirebaseAnalyticsEvents {
     num_items: number;
   };
   catalog_shared: {
-    method: "whatsapp" | "email" | "copy";
+    method: "whatsapp" | "email" | "copy" | "instagram";
     num_recipients?: number;
   };
   ad_text_copied: {
@@ -156,7 +157,13 @@ export function trackAnalyticsEvent<K extends keyof FirebaseAnalyticsEvents>(
 }
 
 /**
- * Set user ID for Firebase Analytics
+ * RELEASE-23: set the Analytics user ID via the real Firebase `setUserId()` API — this previously
+ * logged a custom `"user_id"` event with the RAW Firebase UID as an event parameter instead, which
+ * neither enabled Firebase's actual User-ID reporting (that API expects `setUserId`, not an event)
+ * nor matched this codebase's own standard of never sending an unmasked UID off-device (see
+ * server/logger.ts, client/src/lib/safe-logger.ts). Masked with the same `maskId()` used everywhere
+ * else — still stable per user (so cross-session Analytics segmentation keeps working), never the
+ * raw identifier.
  */
 export function setFirebaseAnalyticsUserId(userId: string): void {
   if (!isInitialized || !analytics) {
@@ -165,7 +172,8 @@ export function setFirebaseAnalyticsUserId(userId: string): void {
   }
 
   try {
-    firebaseLogEvent(analytics, "user_id", { user_id: userId } as any);
+    const masked = maskId(userId);
+    if (masked) firebaseSetUserId(analytics, masked);
   } catch (err) {
     console.error("[FirebaseAnalytics] Failed to set user ID:", err);
   }
