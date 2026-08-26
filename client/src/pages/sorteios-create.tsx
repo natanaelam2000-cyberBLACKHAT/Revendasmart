@@ -3,7 +3,7 @@ import { ChevronDown, ImagePlus, X } from "lucide-react";
 import { apiRequest } from "@/lib/api-client";
 import { getFirebaseAuth } from "@/lib/firebase";
 import { notifyError, notifySuccess } from "@/lib/notify";
-import { uploadImageViaServer } from "@/lib/server-upload";
+import { ServerUploadError, uploadImageViaServer } from "@/lib/server-upload";
 import { DEFAULT_NUMBER_COUNT, DEFAULT_NUMBER_START, MAX_CAMPAIGN_NUMBERS } from "@shared/promotional-campaigns";
 
 /**
@@ -12,7 +12,20 @@ import { DEFAULT_NUMBER_COUNT, DEFAULT_NUMBER_START, MAX_CAMPAIGN_NUMBERS } from
  * custo deste código. Expõe todos os campos do MVP (nenhum escondido para economizar bundle); os menos
  * usados ficam numa seção "Configurações avançadas" colapsável, não removidos.
  */
-const FIELD_CLASS = "rs-input flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm";
+const FIELD_CLASS = "rs-input flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm text-foreground placeholder:text-muted-foreground";
+
+/** PROMOTIONAL-CAMPAIGNS-HOTFIX-01 — mensagens amigáveis por `reason` real do servidor
+ * (`shared/image-validation.ts`), em vez de repassar o código técnico cru (`UPLOAD_REJECTED: ...`)
+ * pro usuário. A causa real ainda vai pro console (`console.error`) para depuração. */
+const UPLOAD_ERROR_MESSAGES: Record<string, string> = {
+  empty: "Selecione uma imagem válida.",
+  "too-large": "A imagem é muito grande (máx. 5MB).",
+  "unsupported-format": "Formato não suportado. Use JPEG, PNG ou WebP.",
+  "mime-mismatch": "Não foi possível identificar o formato da imagem. Tente outra foto.",
+  "corrupt-or-truncated": "A imagem parece corrompida. Tente outra foto.",
+  "invalid-dimensions": "Essa imagem não é válida.",
+  "megapixels-exceeded": "A imagem tem resolução muito alta.",
+};
 
 interface FormState {
   title: string; description: string; prizeName: string; prizeImageUrl: string;
@@ -48,7 +61,13 @@ export default function SorteiosCreate({ onClose, onCreated }: { onClose: () => 
       const result = await uploadImageViaServer({ kind: "campaign-prize", targetId: uploadTargetId.current, blob: file, token });
       setForm((prev) => ({ ...prev, prizeImageUrl: result.downloadUrl }));
     } catch (error) {
-      notifyError(error instanceof Error ? error.message : "Não foi possível enviar a imagem.");
+      if (error instanceof ServerUploadError) {
+        console.error("[sorteios-create] falha no upload da imagem do prêmio", { code: error.code, reason: error.reason });
+        notifyError((error.reason && UPLOAD_ERROR_MESSAGES[error.reason]) || "Não foi possível enviar a imagem. Tente novamente.");
+      } else {
+        console.error("[sorteios-create] falha inesperada no upload da imagem do prêmio", error);
+        notifyError("Não foi possível enviar a imagem. Verifique sua conexão e tente novamente.");
+      }
     } finally {
       setUploading(false);
     }
@@ -130,7 +149,7 @@ export default function SorteiosCreate({ onClose, onCreated }: { onClose: () => 
           </button>
 
           {advancedOpen && (
-            <div className="space-y-3 rounded-xl bg-slate-50 p-3">
+            <div className="space-y-3 rounded-xl bg-secondary/40 p-3">
               <Field label="Data prevista da apuração (opcional)"><input type="date" value={form.drawAt} onChange={set("drawAt")} className={FIELD_CLASS} /></Field>
               <Field label="Valor necessário por participação (R$)"><input type="number" min="1" value={form.spendPerEntry} onChange={set("spendPerEntry")} className={FIELD_CLASS} /></Field>
               <Field label="Quantidade de números"><input type="number" min="1" max={MAX_CAMPAIGN_NUMBERS} step="1" value={form.numberCount} onChange={set("numberCount")} className={FIELD_CLASS} /></Field>
