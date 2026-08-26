@@ -48,10 +48,10 @@ function uploadError(message: string, errorMsg: string, details?: Record<string,
   logError("uploads.log", errorMsg, { message, details });
 }
 
-type UploadKind = "product" | "logo" | "cutout";
+type UploadKind = "product" | "logo" | "cutout" | "campaign-prize";
 
 function isUploadKind(value: unknown): value is UploadKind {
-  return value === "product" || value === "logo" || value === "cutout";
+  return value === "product" || value === "logo" || value === "cutout" || value === "campaign-prize";
 }
 
 /** Só alfanumérico/traço/underscore — nunca aceita `/`, `..` ou qualquer separador de path. */
@@ -77,6 +77,7 @@ function storagePathFor(uid: string, kind: UploadKind, targetId: string | null, 
   const ext = extensionFor(format);
   if (kind === "logo") return `users/${uid}/branding/store-logo.${ext}`;
   if (kind === "cutout") return `users/${uid}/product-cutouts/${targetId}/cutout-v1.png`;
+  if (kind === "campaign-prize") return `users/${uid}/promotional-campaigns/${targetId}/prize.${ext}`;
   return `users/${uid}/products/${targetId}/derived-upload.${ext}`;
 }
 
@@ -202,6 +203,7 @@ const UPLOAD_FORMATS_BY_KIND: Record<UploadKind, readonly string[]> = {
   product: ["image/jpeg", "image/png", "image/webp"],
   logo: ["image/jpeg", "image/png", "image/webp"],
   cutout: ["image/png"],
+  "campaign-prize": ["image/jpeg", "image/png", "image/webp"],
 };
 
 /** RELEASE-18 §7: só permite apagar um path que `storagePathFor` teria produzido para o PRÓPRIO uid

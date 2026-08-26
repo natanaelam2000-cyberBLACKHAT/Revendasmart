@@ -31,8 +31,14 @@ const budgets = [
   { label: 'recharts vendor', pattern: /^vendor-recharts-.*\.js$/, maxKb: 350 },
 ];
 
+// PROMOTIONAL-CAMPAIGNS-01C — orçamento total elevado de 2265 -> 2280 kB, autorizado explicitamente
+// pelo ticket após confirmar que o boot inicial (index.js + vendor chunks pré-carregados) não regrediu
+// materialmente (+0,63 kB / 0,11%): Sorteios Promocionais é admin-only e permanece 100% lazy (nunca
+// referenciado por App.tsx/PrivateRouter fora de `lazy(() => import(...))`), então o excesso de ~11 kB
+// no total somado vem só dos chunks sob demanda de /sorteios e /sorteio/:slug, nunca do caminho crítico
+// do vendedor comum.
 const totalBudgets = {
-  jsKb: 2265,
+  jsKb: 2280,
   jsGzipKb: 700,
 };
 

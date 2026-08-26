@@ -9,11 +9,12 @@ const Login = lazy(() => import("@/pages/login"));
 const Signup = lazy(() => import("@/pages/signup"));
 const PublicCatalog = lazy(() => import("@/pages/public-catalog"));
 const AccountDeletion = lazy(() => import("@/pages/account-deletion"));
+const SorteioPublico = lazy(() => import("@/pages/sorteio-publico"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 const PrivateRouter = lazy(() => import("@/routers/PrivateRouter"));
 
 function isPublicPath(path: string) {
-  return path === "/login" || path === "/signup" || path === "/account-deletion" || path.startsWith("/u/");
+  return path === "/login" || path === "/signup" || path === "/account-deletion" || path.startsWith("/u/") || path.startsWith("/sorteio/");
 }
 
 function PublicRouter() {
@@ -22,6 +23,7 @@ function PublicRouter() {
       <Route path="/login" component={Login} />
       <Route path="/signup" component={Signup} />
       <Route path="/u/:storeSlug" component={PublicCatalog} />
+      <Route path="/sorteio/:campaignSlug" component={SorteioPublico} />
       <Route path="/account-deletion" component={AccountDeletion} />
       <Route component={NotFound} />
     </Switch>

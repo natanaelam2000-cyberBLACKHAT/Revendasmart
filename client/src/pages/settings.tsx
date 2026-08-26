@@ -40,7 +40,7 @@ import { useTheme } from "next-themes";
 import { APPEARANCE_THEME_STORAGE_KEY } from "@/components/ThemeProvider";
 import {
   Store, CreditCard, ClipboardList, Loader2,
-  Download, Save, ChevronRight, Bell, Upload, RefreshCw, Users, Share2, ExternalLink, FileSpreadsheet, QrCode, Copy, Mail, Scale, HelpCircle, ChevronDown, User, KeyRound, LogOut, ArrowLeft, Receipt, Trash2, Monitor, Sun, Moon, Gift, ShieldCheck,
+  Download, Save, ChevronRight, Bell, Upload, RefreshCw, Users, Share2, ExternalLink, FileSpreadsheet, QrCode, Copy, Mail, Scale, HelpCircle, ChevronDown, User, KeyRound, LogOut, ArrowLeft, Receipt, Trash2, Monitor, Sun, Moon, Gift, ShieldCheck, Ticket,
   type LucideIcon
 } from "lucide-react";
 
@@ -1145,9 +1145,28 @@ export default function Settings() {
               o próprio conteúdo só renderiza com isAdmin=true, mesmo que alguém force `?tab=admin` na URL.
               Cada mutação real ainda passa por requireAdmin no servidor de qualquer forma. */}
           {activeTab === 'admin' && isAdmin && (
-            <Suspense fallback={<PageSkeleton variant="cards" />}>
-              <AdminGrantsPanel />
-            </Suspense>
+            <div className="space-y-4">
+              {/* PROMOTIONAL-CAMPAIGNS-01 §4 — ponto de entrada dentro de Administração, nunca na bottom
+                  nav principal. Mesma dupla checagem acima (isAdmin no menu + isAdmin no render). */}
+              <button
+                type="button"
+                onClick={() => setLocation("/sorteios")}
+                className="w-full flex items-center gap-3 rounded-2xl border border-border/60 bg-white p-4 text-left shadow-sm"
+                data-testid="link-sorteios-promocionais"
+              >
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-700">
+                  <Ticket className="h-5 w-5" />
+                </span>
+                <span className="flex-1">
+                  <span className="block text-sm font-black text-foreground">Sorteios Promocionais</span>
+                  <span className="block text-xs text-muted-foreground">Campanhas de sorteio para clientes com compras qualificadas</span>
+                </span>
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              </button>
+              <Suspense fallback={<PageSkeleton variant="cards" />}>
+                <AdminGrantsPanel />
+              </Suspense>
+            </div>
           )}
 
           {activeTab === 'backup' && (

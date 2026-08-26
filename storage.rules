@@ -36,6 +36,14 @@ service firebase.storage {
       allow write: if false;
     }
 
+    // PROMOTIONAL-CAMPAIGNS-01 — imagem do prêmio de um sorteio, path irmão dedicado (mesmo raciocínio
+    // do product-cutouts acima). SERVER_WRITE_ONLY: só `server/uploads.ts` grava aqui, via Admin SDK.
+    // Leitura pública porque a página pública do sorteio (sem login) precisa exibir a imagem do prêmio.
+    match /users/{uid}/promotional-campaigns/{allPaths=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     match /{allPaths=**} {
       allow read, write: if false;
     }

@@ -20,6 +20,7 @@ import { createGoogleMarketingProBackgroundProvider, isGoogleMarketingProCredent
 import { registerAccountDeletionRoutes } from "./account-deletion";
 import { requireAdmin } from "./admin-auth";
 import { registerAdminGrantRoutes, resolveUserEntitlements } from "./admin-grants";
+import { registerPromotionalCampaignRoutes } from "./promotional-campaigns";
 import { getGlobalConfig, setGlobalConfig } from "./subscriptions";
 import { validateFirebaseStorageSetup } from "./firebase-storage-migration";
 import { logError, logInfo, logWarn } from "./logger";
@@ -480,6 +481,10 @@ export async function registerRoutes(
 
   // REVENDASMART-OWNER-ACCESS-02 — concessões internas (Tester/Premium+), sempre atrás de requireAdmin.
   registerAdminGrantRoutes(app, requireAuth);
+
+  // PROMOTIONAL-CAMPAIGNS-01 — Sorteios Promocionais (admin-only); rotas públicas do módulo (leitura da
+  // grade + claim) não usam requireAuth — autorização vem do token da campanha, não de login.
+  registerPromotionalCampaignRoutes(app, requireAuth);
 
   // RELEASE V1 §7 — melhoria real de foto (Premium/admin); entitlement e ownership revalidados na rota.
   registerProductPhotoEnhancementRoutes(app, requireAuth);

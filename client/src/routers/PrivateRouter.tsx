@@ -28,6 +28,7 @@ const Reports = lazy(() => import("@/pages/reports"));
 const Settings = lazy(() => import("@/pages/settings"));
 const SettingsMercadoPago = lazy(() => import("@/pages/settings-mercadopago"));
 const Admin = lazy(() => import("@/pages/admin"));
+const SorteiosAdmin = lazy(() => import("@/pages/sorteios-admin"));
 const Subscribe = lazy(() => import("@/pages/subscribe"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 
@@ -142,6 +143,8 @@ function PrivateRoutes() {
         <Route path="/settings/mercadopago" component={SettingsMercadoPago} />
         <Route path="/subscribe" component={Subscribe} />
         <Route path="/admin" component={Admin} />
+        <Route path="/sorteios" component={SorteiosAdmin} />
+        <Route path="/sorteios/:campaignId" component={SorteiosAdmin} />
         <Route component={NotFound} />
       </Switch>
     </>
