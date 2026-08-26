@@ -53,7 +53,12 @@ steps:
       - '--set-secrets=MERCADOPAGO_ACCESS_TOKEN=revendasmart-mercadopago-access-token:latest,MERCADOPAGO_CLIENT_ID=revendasmart-mercadopago-client-id:latest,MERCADOPAGO_CLIENT_SECRET=revendasmart-mercadopago-client-secret:latest,MERCADOPAGO_TOKEN_ENCRYPTION_KEY=revendasmart-mercadopago-token-encryption-key:latest,MERCADOPAGO_WEBHOOK_SECRET=revendasmart-mercadopago-webhook-secret:latest,FIREBASE_PROJECT_ID=revendasmart-firebase-project-id:latest,FIREBASE_CLIENT_EMAIL=revendasmart-firebase-client-email:latest,FIREBASE_PRIVATE_KEY=revendasmart-firebase-private-key:latest'
       # Non-sensitive env vars (can be plain text). PORT é reservado pelo Cloud Run (setado
       # automaticamente a partir de --port) — incluí-lo aqui faz o deploy falhar.
-      - '--set-env-vars=NODE_ENV=production,FRONTEND_URL=https://revendasmart.vercel.app,PREMIUM_PRICE_BRL=19.9'
+      # PROMOTIONAL-CAMPAIGNS-PROD-BUG-02: FIREBASE_STORAGE_BUCKET nunca foi setado aqui — sem ele,
+      # `admin.storage().bucket()` (server/uploads.ts) não tem como resolver o bucket e todo upload real
+      # falhava com 500 "Bucket name not specified or invalid" (confirmado nos logs de produção, nunca
+      # pego localmente porque os wrappers de dev/emulador sempre setam essa env var manualmente).
+      # Nome real confirmado via `gcloud storage buckets list --project revenda-smart`.
+      - '--set-env-vars=NODE_ENV=production,FRONTEND_URL=https://revendasmart.vercel.app,PREMIUM_PRICE_BRL=19.9,FIREBASE_STORAGE_BUCKET=revenda-smart.firebasestorage.app'
       # APP_BASE_URL and MERCADOPAGO_REDIRECT_URI must be updated after first deploy
       # Use a second deploy step or update manually in Cloud Run console
     id: 'deploy-cloud-run'
