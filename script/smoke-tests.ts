@@ -580,7 +580,9 @@ assert.match(addProduct, /getProductSaveErrorMessage/);
 assert.match(addProduct, /auth_check|plan_limit_read|storage_upload|firestore_create|storage_cleanup/);
 assert.match(addProduct, /Sem conexão|Sua sessão expirou|Limite de produtos atingido|Permissão negada/);
 const productDataBlock = addProduct.slice(addProduct.indexOf("const productData = buildProductCreatePayload"), addProduct.indexOf("saveStage = id ?"));
-assert.doesNotMatch(productDataBlock, /thumbnailUrl|thumbnailStoragePath/);
+// PERFORMANCE-OPTIMIZATION-03: thumbnailUrl/thumbnailStoragePath agora são repassados ao payload
+// (derivados do upload da miniatura acima), nunca como valor literal `undefined`.
+assert.match(productDataBlock, /thumbnailUrl, thumbnailStoragePath/);
 assert.doesNotMatch(productDataBlock, /undefined/);
 const createPayloadFixture = buildProductCreatePayload({
   formData: {
@@ -603,27 +605,45 @@ assert.equal(createPayloadFixture.categoryNormalized, "perfumes");
 assert.equal(createPayloadFixture.barcodeNormalized, "001234");
 assert.equal(createPayloadFixture.searchSchemaVersion, PRODUCT_SEARCH_SCHEMA_VERSION);
 assert.equal(JSON.stringify(createPayloadFixture).includes("undefined"), false);
+// Fixture não passou thumbnailUrl (produto sem miniatura) — o campo continua ausente, nunca gravado como
+// chave vazia/undefined.
 assert.equal(Object.prototype.hasOwnProperty.call(createPayloadFixture, "thumbnailUrl"), false);
 assert.equal(Object.prototype.hasOwnProperty.call(createPayloadFixture, "thumbnailStoragePath"), false);
+const createPayloadWithThumbnailFixture = buildProductCreatePayload({
+  formData: {
+    name: "Perfume Teste", brand: "Natura", origin: "Brasil", category: "Perfumes", costPrice: 10, salePrice: 30, stock: 2,
+    barcode: "001234", description: "desc", imageUrl: "", storagePath: "", extras: {}, isFeatured: false, isOnSale: false,
+    discountPercent: 0, productType: "Cosméticos & Perfumes", gender: "unisex",
+  },
+  productName: "Perfume Teste", normalizedBrand: "Natura", category: "Perfumes", costPrice: 10, salePrice: 30, stock: 2,
+  imageUrl: "https://example.invalid/p.webp", storagePath: "users/test/products/p1/p.webp", activeNicho: "Cosméticos & Perfumes" as any,
+  thumbnailUrl: "https://example.invalid/p-thumb.webp", thumbnailStoragePath: "users/test/product-thumbnails/p1/thumb-v1.webp",
+});
+assert.equal(createPayloadWithThumbnailFixture.thumbnailUrl, "https://example.invalid/p-thumb.webp");
+assert.equal(createPayloadWithThumbnailFixture.thumbnailStoragePath, "users/test/product-thumbnails/p1/thumb-v1.webp");
 const productAllowedFieldsMatch = firestoreRules.match(/function productAllowedFields\(\) \{\s*return \[([\s\S]*?)\];/);
 assert.ok(productAllowedFieldsMatch);
 const productAllowedFields = new Set([...productAllowedFieldsMatch[1].matchAll(/'([^']+)'/g)].map((match) => match[1]));
-for (const key of ["id", "name", "brand", "origin", "category", "productType", "costPrice", "salePrice", "stock", "barcode", "description", "imageUrl", "storagePath", "gender", "extras", "isFeatured", "isOnSale", "discountPercent", "discount", "promotionalPrice", "createdAt", "updatedAt", "nameNormalized", "brandNormalized", "categoryNormalized", "barcodeNormalized", "productTypeNormalized", "searchTokens", "searchSchemaVersion"]) {
+for (const key of ["id", "name", "brand", "origin", "category", "productType", "costPrice", "salePrice", "stock", "barcode", "description", "imageUrl", "storagePath", "thumbnailUrl", "thumbnailStoragePath", "gender", "extras", "isFeatured", "isOnSale", "discountPercent", "discount", "promotionalPrice", "createdAt", "updatedAt", "nameNormalized", "brandNormalized", "categoryNormalized", "barcodeNormalized", "productTypeNormalized", "searchTokens", "searchSchemaVersion"]) {
   assert.ok(productAllowedFields.has(key), `product key not allowed by rules: ${key}`);
 }
-for (const key of ["thumbnailUrl", "thumbnailStoragePath"]) assert.equal(productAllowedFields.has(key), false, `${key} unexpectedly allowed`);
 assert.match(addProduct, /Number\.isFinite\(costPrice\)/);
 assert.match(addProduct, /Number\.isFinite\(salePrice\)/);
 assert.match(addProduct, /Number\.isFinite\(stock\)/);
-assert.match(addProduct, /cleanupUploadedProductImages\(productId, cleanupToken, uploadedPaths\)/);
+assert.match(addProduct, /cleanupUploadedProductImages\(productId, cleanupToken, uploadedAssets\)/);
 assert.match(addProduct, /if \(isSaving\) return/);
 assert.match(mockData, /nameNormalized\?: string/);
 assert.match(firestoreRules, /searchTokens/);
 assert.match(firestoreRules, /searchSchemaVersion/);
 assert.match(catalog, /useProductsData/);
-assert.match(catalog, /useSalesData/);
-assert.match(catalog, /resolveCatalogExperience/);
-assert.match(catalog, /CatalogShowcase/);
+// REVENDASMART-CATALOG-VISUAL-RESTORE-02 — a referência visual correta (confirmada pelo usuário com a
+// arte original e prints antigos reais) é a vitrine de e-commerce com rails horizontais que
+// CatalogShowcase já implementa — não a grade 2 colunas de uma tentativa anterior de restauração, que
+// tinha lido a referência errada. catalog.tsx (aba interna) volta a delegar para CatalogShowcase,
+// igual ao storefront público, só que em modo "seller" (sem carrinho/checkout de cliente).
+assert.match(catalog, /CatalogShowcase/, "aba interna do catálogo usa a mesma vitrine com rails que o storefront público");
+assert.match(catalog, /useSalesData/, "Ofertas do dia\\/Destaques\\/Mais vendidos dependem de sales");
+assert.match(catalog, /resolveCatalogExperience/, "coleções curadas e navegação por nicho vêm de resolveCatalogExperience");
 assert.match(publicCatalog, /toCatalogExperience/);
 assert.match(publicCatalog, /PublicCatalogResponse/);
 assert.match(publicCatalog, /productNicheIds/);
@@ -1541,16 +1561,23 @@ assert.doesNotMatch(catalogShowcase, /Criar anúncio/);
 assert.doesNotMatch(catalogShowcase, /onCreateAd/);
 assert.doesNotMatch(catalog, /marketing\?productId=/);
 
-// 3. Catálogo do revendedor não tem carrinho de cliente: sem "Adicionar ao carrinho" e sem modal de
-// detalhes ao tocar na imagem (era esse o comportamento indesejado). Catálogo público continua com
-// adicionar direto ao carrinho no próprio card, sem precisar passar pelo modal.
-assert.match(catalog, /const NO_CART_QUANTITIES = new Map<string, number>\(\);/);
-assert.match(catalog, /cartQuantities=\{NO_CART_QUANTITIES\}/);
-assert.match(catalog, /cartCount=\{0\}/);
-assert.match(catalog, /onAddToCart=\{noop\}/);
-assert.doesNotMatch(catalog, /onAddToCart=\{addToCart\}/);
+// 3. CATALOG-GOLDEN-RESTORE-05 §1/§3/§7 — no commit histórico (6de2c85) o carrinho de prévia (adicionar,
+// stepper, badge) funcionava em QUALQUER contexto; só o modal de DETALHE ao tocar na imagem (recurso
+// adicionado bem depois) continua exclusivo do storefront público. Restaurado fielmente: catalog.tsx
+// (aba interna) agora tem estado de carrinho real, nunca um placeholder inerte — mas sem reintroduzir
+// checkout paralelo (o "Ver pedido" monta mensagem de WhatsApp, nunca processa pagamento/estoque).
+assert.match(catalog, /interface CartItem \{/);
+assert.match(catalog, /const \[cart, setCart\] = useState<CartItem\[\]>\(\[\]\);/);
+assert.match(catalog, /cartQuantities=\{cartQuantities\}/);
+assert.match(catalog, /cartCount=\{cartCount\}/);
+assert.match(catalog, /onAddToCart=\{addToCart\}/);
+assert.match(catalog, /onOpenCart=\{\(\) => setShowCart\(true\)\}/);
+assert.doesNotMatch(catalog, /api\/payments\/create-link|mercadopago|MercadoPago/i, "carrinho de prévia da aba interna não pode reintroduzir um checkout paralelo");
+assert.match(catalog, /handleSendOrderWhatsApp/, "\"Ver pedido\" na aba interna monta e envia mensagem — não processa pagamento");
+// A página não referencia onSelectProduct/setDetailProduct/CatalogProductDetails diretamente — quem
+// decide isso é CatalogShowcase, internamente, por context.
 assert.match(catalogShowcase, /onSelectProduct=\{context === "public" \? setDetailProduct : undefined\}/);
-assert.match(catalogShowcase, /onAddToCart=\{context === "public" \? onAddToCart : undefined\}/);
+assert.doesNotMatch(catalogShowcase, /onAddToCart=\{context === "public" \? onAddToCart : undefined\}/, "adicionar ao carrinho não é mais exclusivo do storefront público");
 assert.match(catalogShowcase, /\{context === "public" && detailProduct && \(/);
 assert.match(catalogProductTile, /onSelectProduct\?: \(product: Product\) => void/);
 assert.match(catalogProductTile, /onAddToCart\?: \(product: Product\) => void/);
@@ -1562,10 +1589,20 @@ assert.match(catalogProductDetails, /onAddToCart/);
 
 // 4. Seções obrigatórias presentes.
 assert.match(catalogShowcase, /title="Ofertas do dia"/);
-assert.match(catalogShowcase, /title="Recomendados para você"/);
+// CATALOG-VISUAL-RESTORE-02 §5 — a coleção "featured" (isFeatured, flag manual do vendedor, nunca um
+// algoritmo real) só é honestamente "recomendada para você" quando existe um cliente final sendo
+// recomendado — o storefront público. Para o próprio vendedor, o rótulo correto é "Destaques".
+assert.match(catalogShowcase, /title=\{context === "public" \? "Recomendados para você" : "Destaques"\}/);
 assert.match(catalogShowcase, /title="Produtos mais vendidos"/);
 assert.match(catalogShowcase, /CatalogCategoryRail/);
 assert.match(catalogShowcase, /CatalogProductRail/);
+
+// 4b. CATALOG-GOLDEN-RESTORE-05 §1/§8 — barra "Ver pedido" restaurada fielmente do commit histórico
+// (6de2c85), na mesma condição funcional descoberta lá: só context === "public" && cartCount > 0.
+assert.match(catalogShowcase, /\{context === "public" && cartCount > 0 && \(/);
+assert.match(catalogShowcase, /Ver pedido · \{cartCount\} \{cartCount === 1 \? "item" : "itens"\}/, "plural correto em português (\"itens\"), não o \"items\" (inglês) que o commit histórico tinha por engano");
+assert.match(catalogShowcase, /Abrir<\/span>/);
+assert.match(catalogShowcase, /data-testid="button-open-order-bar"/);
 
 // 5. Rolagem horizontal com scroll-snap nos trilhos.
 assert.match(catalogProductRail, /overflow-x-auto/);
@@ -1574,13 +1611,12 @@ assert.match(catalogProductRail, /hide-scrollbar/);
 assert.match(catalogCategoryRail, /overflow-x-auto/);
 assert.match(catalogCategoryRail, /snap-x snap-mandatory/);
 
-// 6 e 7. Modo vendedor mostra Compartilhar e não carrinho; modo público mostra carrinho e não Compartilhar.
-const catalogHeaderSellerBranch = catalogHeader.slice(catalogHeader.indexOf('mode === "seller" ? ('), catalogHeader.indexOf(') : ('));
-const catalogHeaderPublicBranch = catalogHeader.slice(catalogHeader.indexOf(') : ('));
-assert.match(catalogHeaderSellerBranch, /Compartilhar/);
-assert.doesNotMatch(catalogHeaderSellerBranch, /ShoppingCart/);
-assert.match(catalogHeaderPublicBranch, /ShoppingCart/);
-assert.doesNotMatch(catalogHeaderPublicBranch, /Compartilhar/);
+// 6 e 7. CATALOG-GOLDEN-RESTORE-05 §1/§3 — no commit histórico (6de2c85) Compartilhar e Carrinho (com
+// badge) apareciam JUNTOS, em qualquer contexto — restaurado fielmente, sem a troca "seller vê só um,
+// público vê só o outro" que um sprint posterior tinha introduzido.
+assert.match(catalogHeader, /onClick=\{onShareCatalog\}[\s\S]{0,200}Compartilhar/);
+assert.match(catalogHeader, /onClick=\{onOpenCart\}[\s\S]{0,600}ShoppingCart/);
+assert.doesNotMatch(catalogHeader, /mode === "seller" \?/, "carrinho e compartilhar não são mais mutuamente exclusivos por contexto");
 assert.doesNotMatch(catalogShowcase, /onCopyCatalog/);
 assert.doesNotMatch(publicCatalog, /onCopyCatalog/);
 
@@ -1618,9 +1654,13 @@ assert.doesNotMatch(catalogShowcase, /function getPromotionalPrice/);
 assert.match(catalogProductDetails, /import \{ formatCurrency, getPromotionalPrice \} from "@\/lib\/product-pricing"/);
 assert.match(catalogProductDetails, /getPromotionalPrice\(product\)/);
 
-// Componentes pequenos reaproveitados nos dois modos (sem duplicar implementação).
-assert.match(catalog, /CatalogShowcase/);
+// CatalogShowcase é reaproveitado pelos dois contextos (interno e público, REVENDASMART-CATALOG-VISUAL-RESTORE-02)
+// — ProductImageCard (thumbnail-first, fallback para imageUrl) mora dentro de CatalogProductTile, usado
+// por ambos via CatalogShowcase, sem duplicar implementação.
 assert.match(publicCatalog, /CatalogShowcase/);
+assert.match(catalog, /CatalogShowcase/);
+assert.match(catalog, /import \{ ShareCatalogSheet \} from "@\/components\/catalog\/ShareCatalogSheet"/);
+assert.match(catalogProductTile, /import \{ ProductImageCard \} from "@\/components\/ProductImageCard"/);
 assert.doesNotMatch(catalogShowcase, /border border-slate-200 bg-white p-4 shadow-sm/);
 assert.doesNotMatch(catalogProductTile, /border border-slate-200/);
 assert.doesNotMatch(catalogProductTile, /shadow-sm"/);
@@ -1633,16 +1673,17 @@ assert.match(catalogHeader, /\{storeName\}/);
 assert.doesNotMatch(catalogHeader, /storeName\.charAt\(0\)/);
 
 // Sprint "Redesign Conta": botão Compartilhar vive no header (topo), nunca flutuando sobre a grade
-// de produtos; catálogo público continua mostrando o carrinho, nunca o Compartilhar do vendedor.
+// de produtos. CATALOG-GOLDEN-RESTORE-05 reverteu a exclusividade por contexto (ver bloco acima) —
+// Compartilhar e Carrinho aparecem juntos, em qualquer contexto, fielmente ao commit histórico.
 assert.match(catalogShowcase, /<CatalogHeader/);
-assert.match(catalogHeader, /mode === "seller" \?/);
 assert.match(catalogHeader, /onClick=\{onShareCatalog\}[\s\S]{0,120}Compartilhar/);
 assert.doesNotMatch(catalogHeader, /position:\s*fixed|absolute inset/i);
 assert.match(catalogHeader, /onClick=\{onOpenCart\}/);
 
-// 3 e 4. Vendedor mostra Compartilhar; público mostra Carrinho (mesma checagem de branch já usada acima).
-assert.match(catalogHeaderSellerBranch, /Compartilhar/);
-assert.match(catalogHeaderPublicBranch, /ShoppingCart/);
+// 3 e 4. CATALOG-GOLDEN-RESTORE-05: Compartilhar e Carrinho aparecem juntos em qualquer contexto —
+// verificação de exclusividade por branch (catalogHeaderSellerBranch/PublicBranch) não se aplica mais.
+assert.match(catalogHeader, /Compartilhar/);
+assert.match(catalogHeader, /ShoppingCart/);
 
 // 5. Sem seções administrativas (órfãos, sem categoria, fora dos nichos) dentro do catálogo comercial.
 assert.doesNotMatch(catalogShowcase, /data-catalog-orphaned-products/);
@@ -4786,7 +4827,7 @@ assert.doesNotMatch(loginPage, />A<|rs-login-avatar/);
 
 
 // Android/public URL and executive Home guardrails
-assert.match(settings, /buildPublicCatalogUrl\(slug\)/);
+assert.match(settings, /buildPublicAppUrl\(`\/u\/\$\{encodeURIComponent\(slug\)\}`\)/);
 assert.match(clientsPage, /buildPublicCatalogUrl\(slug\)/);
 assert.doesNotMatch(settings, /window\.location\.origin[^\n]+\/u\//);
 assert.doesNotMatch(clientsPage, /window\.location\.origin[^\n]+\/u\//);

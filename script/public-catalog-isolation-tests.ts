@@ -79,6 +79,13 @@ async function run(): Promise<void> {
       body: JSON.stringify(body),
     });
   };
+  const ensureCatalogSlug = async (user: User, pathUid: string) => {
+    const token = await user.getIdToken();
+    return fetch(`${baseUrl}/api/public-catalog/ensure/${pathUid}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    });
+  };
   const catalog = async (slug: string) => fetch(`${baseUrl}/api/public/catalog/${slug}`);
 
   try {
@@ -203,6 +210,83 @@ async function run(): Promise<void> {
     assert.equal(migrateLegacy.status, 200);
     assert.equal((await db.doc("public_catalog_slugs/catalogo-legacy").get()).data()?.ownerUid, legacyUid);
     assert.equal((await db.doc(`user_settings/${legacyUid}`).get()).data()?.uid, undefined);
+
+    const realCase = await createTestUser("placeholder-real-case");
+    const duplicateA = await createTestUser("duplicate-a");
+    const duplicateB = await createTestUser("duplicate-b");
+    const inactive = await createTestUser("inactive-catalog");
+    const accent = await createTestUser("accent-catalog");
+    try {
+      await Promise.all([
+        db.doc(`users/${realCase.user.uid}/products/jbl`).set({ name: "Caixa JBL", salePrice: 499, stock: 2, category: "Eletrônicos" }),
+        db.doc(`users/${duplicateA.user.uid}/products/a`).set({ name: "Produto A", salePrice: 10, stock: 1 }),
+        db.doc(`users/${duplicateB.user.uid}/products/b`).set({ name: "Produto B", salePrice: 20, stock: 1 }),
+        db.doc(`users/${inactive.user.uid}/products/inactive`).set({ name: "Produto inativo", salePrice: 30, stock: 1 }),
+        db.doc(`users/${accent.user.uid}/products/accent`).set({ name: "Produto acento", salePrice: 40, stock: 1 }),
+      ]);
+
+      await db.doc(`user_settings/${realCase.user.uid}`).set({
+        storeName: "Natanael Imports",
+        catalogSlug: "minha-revenda",
+        catalog_slug: "minha-revenda",
+        enablePublicCatalog: true,
+      });
+      const realEnsure = await ensureCatalogSlug(realCase.user, realCase.user.uid);
+      assert.equal(realEnsure.status, 200);
+      const realEnsurePayload = await realEnsure.json() as { slug: string; url: string };
+      assert.equal(realEnsurePayload.slug, "natanael-imports");
+      assert.notEqual(realEnsurePayload.slug, "minha-revenda");
+      assert.match(realEnsurePayload.url, /\/u\/natanael-imports$/);
+      assert.equal((await db.doc("public_catalog_slugs/natanael-imports").get()).data()?.ownerUid, realCase.user.uid);
+      assert.equal((await db.doc("public_catalog_slugs/minha-revenda").get()).exists, false);
+      assert.equal((await catalog(realEnsurePayload.slug)).status, 200);
+      const publicPage = await fetch(`${baseUrl}/u/${realEnsurePayload.slug}`);
+      assert.equal(publicPage.status, 200);
+      assert.match(await publicPage.text(), /Natanael Imports|root/);
+      const repeatedEnsure = await ensureCatalogSlug(realCase.user, realCase.user.uid);
+      assert.equal(repeatedEnsure.status, 200);
+      assert.equal(((await repeatedEnsure.json()) as { slug: string }).slug, realEnsurePayload.slug);
+
+      const renamePreserve = await postSettings(realCase.user, realCase.user.uid, {
+        storeName: "Natanael Imports Franca",
+        enablePublicCatalog: true,
+      });
+      assert.equal(renamePreserve.status, 200);
+      assert.equal((await db.doc(`user_settings/${realCase.user.uid}`).get()).data()?.catalogSlug, "natanael-imports");
+      assert.equal((await catalog("natanael-imports")).status, 200);
+
+      await Promise.all([
+        db.doc(`user_settings/${duplicateA.user.uid}`).set({ storeName: "Natanael Imports", catalogSlug: "minha-revenda", catalog_slug: "minha-revenda", enablePublicCatalog: true }),
+        db.doc(`user_settings/${duplicateB.user.uid}`).set({ storeName: "Natanael Imports", catalogSlug: "minha-revenda", catalog_slug: "minha-revenda", enablePublicCatalog: true }),
+      ]);
+      const duplicateEnsures = await Promise.all([
+        ensureCatalogSlug(duplicateA.user, duplicateA.user.uid),
+        ensureCatalogSlug(duplicateB.user, duplicateB.user.uid),
+      ]);
+      assert.deepEqual(duplicateEnsures.map((response) => response.status), [200, 200]);
+      const duplicateSlugs = await Promise.all(duplicateEnsures.map(async (response) => ((await response.json()) as { slug: string }).slug));
+      assert.equal(new Set(duplicateSlugs).size, 2);
+      assert.ok(duplicateSlugs.includes("natanael-imports-2"));
+      assert.ok(duplicateSlugs.includes("natanael-imports-3"));
+      for (const slug of duplicateSlugs) assert.equal((await catalog(slug)).status, 200);
+
+      await db.doc("public_catalog_slugs/orphan-reservation").set({ ownerUid: "missing-owner", slug: "orphan-reservation" });
+      assert.equal((await catalog("orphan-reservation")).status, 404);
+
+      await Promise.all([
+        db.doc(`user_settings/${inactive.user.uid}`).set({ storeName: "Loja Inativa", catalogSlug: "loja-inativa", catalog_slug: "loja-inativa", enablePublicCatalog: false }),
+        db.doc("public_catalog_slugs/loja-inativa").set({ ownerUid: inactive.user.uid, slug: "loja-inativa" }),
+      ]);
+      assert.equal((await catalog("loja-inativa")).status, 404);
+
+      await db.doc(`user_settings/${accent.user.uid}`).set({ storeName: "Loja São João", catalogSlug: "minha-revenda", catalog_slug: "minha-revenda", enablePublicCatalog: true });
+      const accentEnsure = await ensureCatalogSlug(accent.user, accent.user.uid);
+      assert.equal(accentEnsure.status, 200);
+      assert.equal(((await accentEnsure.json()) as { slug: string }).slug, "loja-sao-joao");
+      assert.equal((await catalog("loja-sao-joao")).status, 200);
+    } finally {
+      await Promise.allSettled([deleteApp(realCase.app), deleteApp(duplicateA.app), deleteApp(duplicateB.app), deleteApp(inactive.app), deleteApp(accent.app)]);
+    }
 
     console.log("Public catalog isolation integration tests passed: ownership, mass assignment, atomic slug uniqueness and legacy compatibility.");
   } finally {

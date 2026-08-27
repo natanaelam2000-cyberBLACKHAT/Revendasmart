@@ -17,7 +17,7 @@ import { clearTelemetryUserId, clearUserContext, getFirebaseIdToken, getFirebase
 import { onAuthStateChanged, signOut, type User as FirebaseAuthUser } from "firebase/auth";
 import { useLocation } from "wouter";
 import { getApiUrl } from "@/lib/api-config";
-import { buildPublicAppUrl, buildPublicCatalogUrl } from "@/lib/public-url";
+import { buildPublicAppUrl } from "@/lib/public-url";
 import { APP_BUILD_ID, APP_VERSION, formatAppBuildId } from "@/lib/build-info";
 import { toCsvRow } from "@/lib/export-security";
 import { QRCodeSVG } from "qrcode.react";
@@ -305,7 +305,7 @@ export default function Settings() {
     try {
       const rawStoreName = String(formSettings?.storeName || "").replace(/\s+/g, " ").trim();
       const normalizedStoreName = rawStoreName || "Minha loja";
-      const catalogSlug = normalizeCatalogSlug(formSettings?.catalogSlug || formSettings?.catalog_slug || normalizedStoreName || "minha-loja");
+      const catalogSlug = normalizeCatalogSlug(formSettings?.catalogSlug || formSettings?.catalog_slug || "");
       // Rótulo da área de pedidos: espaços colapsados e aparados. Se sobrar vazio (ou só espaços), o
       // campo é REMOVIDO do documento em vez de gravado como "" — assim o resolver cai no rótulo padrão
       // e nenhuma conta antiga precisa de migração.
@@ -320,6 +320,11 @@ export default function Settings() {
         featureLabels: normalizedFeatureLabels,
       };
       setFormSettings(normalizedSettings);
+      const settingsPayload: Record<string, unknown> = { ...normalizedSettings };
+      if (!catalogSlug) {
+        delete settingsPayload.catalogSlug;
+        delete settingsPayload.catalog_slug;
+      }
 
       const response = await measureOperation("catalog_settings_save", async () => {
         const token = await getFirebaseIdToken();
@@ -329,7 +334,7 @@ export default function Settings() {
         return await fetch(getApiUrl(`/api/user/settings/${firebaseUid}`), {
           method: "POST",
           headers,
-          body: JSON.stringify(normalizedSettings)
+          body: JSON.stringify(settingsPayload)
         });
       });
 
@@ -344,8 +349,6 @@ export default function Settings() {
           ...normalizedSettings,
           ...returnedSettings,
           storeName: normalizedSettings.storeName,
-          catalogSlug: normalizedSettings.catalogSlug,
-          catalog_slug: normalizedSettings.catalog_slug,
         };
         setSaveMessage("Configurações salvas.");
         notifySuccess("Configurações salvas.");
@@ -391,14 +394,33 @@ export default function Settings() {
     setLocation("/login");
   };
 
-  const handleGenerateLink = () => {
+  const handleGenerateLink = async () => {
+    if (!firebaseUid) {
+      notifyError("Sessão expirada. Faça login novamente.");
+      return;
+    }
     try {
-      const storeName = formSettings?.storeName || "minha-loja";
-      const slug = normalizeCatalogSlug(formSettings?.catalogSlug || formSettings?.catalog_slug || storeName);
-      setFormSettings({ ...formSettings, catalogSlug: slug, catalog_slug: slug });
-      setGeneratedUrl(buildPublicCatalogUrl(slug));
+      const token = await getFirebaseIdToken();
+      if (!token) throw new Error("Authentication token is empty");
+      const response = await fetch(getApiUrl(`/api/public-catalog/ensure/${firebaseUid}`), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const result = await response.json() as { slug?: string };
+      const slug = normalizeCatalogSlug(result.slug || "");
+      if (!slug) throw new Error();
+      const confirmedSettings = {
+        ...formSettings,
+        catalogSlug: slug,
+        catalog_slug: slug,
+        enablePublicCatalog: true,
+      };
+      setFormSettings(confirmedSettings);
+      patchUserSettingsOptimistic(confirmedSettings);
+      setGeneratedUrl(buildPublicAppUrl(`/u/${encodeURIComponent(slug)}`));
     } catch {
-      setSaveMessage("Erro ao gerar link.");
+      notifyError("Erro ao gerar link.");
     }
   };
 

@@ -2,6 +2,9 @@ import { FieldValue } from "firebase-admin/firestore";
 
 const PUBLIC_CATALOG_SLUGS_COLLECTION = "public_catalog_slugs";
 const LEGACY_SLUG_FIELDS = ["catalogSlug", "catalog_slug", "userSlug", "slug"] as const;
+const PLACEHOLDER_STORE_NAMES = new Set(["minha-revenda", "minha-loja"]);
+const PLACEHOLDER_CATALOG_SLUGS = new Set(["minha-revenda", "minha-loja"]);
+const MAX_SLUG_COLLISION_ATTEMPTS = 50;
 
 // RELEASE-02: nenhum destes pode chegar ao Firestore vindo do body do cliente — allowlist por exclusão
 // (blocklist), normalizada (case/underscore-insensível) para pegar tanto aliases camelCase quanto
@@ -59,6 +62,25 @@ export function normalizeCatalogSlug(value: unknown): string {
     .replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
+export function isPlaceholderCatalogSlug(value: unknown): boolean {
+  const slug = normalizeCatalogSlug(value);
+  return !slug || PLACEHOLDER_CATALOG_SLUGS.has(slug);
+}
+
+function isPlaceholderStoreName(value: unknown): boolean {
+  const slug = normalizeCatalogSlug(value);
+  return !slug || PLACEHOLDER_STORE_NAMES.has(slug);
+}
+
+function deriveCatalogSlugBase(settings: Record<string, unknown>, ownerUid: string): string {
+  const storeName = typeof settings.storeName === "string" ? settings.storeName : "";
+  if (!isPlaceholderStoreName(storeName)) {
+    const slug = normalizeCatalogSlug(storeName);
+    if (slug) return slug.slice(0, 72);
+  }
+  return `catalogo-${ownerUid.slice(0, 8).toLowerCase()}`;
+}
+
 export function sanitizePublicSettingsPayload(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).filter(([key]) =>
@@ -87,6 +109,11 @@ function storedSlug(settings: Record<string, unknown>): string | null {
     if (slug) return slug;
   }
   return null;
+}
+
+function storedRealSlug(settings: Record<string, unknown>): string | null {
+  const slug = storedSlug(settings);
+  return slug && !isPlaceholderCatalogSlug(slug) ? slug : null;
 }
 
 export class CatalogSlugConflictError extends Error {
@@ -179,6 +206,93 @@ export async function persistUserSettingsWithCatalogOwnership(input: {
     }
 
     transaction.set(settingsRef, settingsUpdate, { merge: true });
+  });
+}
+
+export async function ensurePublicCatalogSlug(input: {
+  db: any;
+  ownerUid: string;
+}): Promise<{ slug: string; created: boolean }> {
+  const { db, ownerUid } = input;
+  const settingsRef = db.collection("user_settings").doc(ownerUid);
+
+  return db.runTransaction(async (transaction: any) => {
+    const settingsDoc = await transaction.get(settingsRef);
+    const settings = settingsDoc.data() ?? {};
+    const existingRealSlug = storedRealSlug(settings);
+
+    if (existingRealSlug) {
+      const existingRef = db.collection(PUBLIC_CATALOG_SLUGS_COLLECTION).doc(existingRealSlug);
+      const existingReservation = await transaction.get(existingRef);
+      const reservedOwner = existingReservation.exists ? existingReservation.data()?.ownerUid : null;
+      if (existingReservation.exists && reservedOwner !== ownerUid) throw new CatalogSlugConflictError();
+
+      transaction.set(existingRef, {
+        ownerUid,
+        slug: existingRealSlug,
+        updatedAt: FieldValue.serverTimestamp(),
+        ...(existingReservation.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
+      }, { merge: true });
+      transaction.set(settingsRef, {
+        catalogSlug: existingRealSlug,
+        catalog_slug: existingRealSlug,
+        enablePublicCatalog: true,
+        userSlug: FieldValue.delete(),
+        slug: FieldValue.delete(),
+      }, { merge: true });
+      return { slug: existingRealSlug, created: !existingReservation.exists };
+    }
+
+    const previousSlug = storedSlug(settings);
+    const baseSlug = deriveCatalogSlugBase(settings, ownerUid);
+    let selectedSlug: string | null = null;
+    let selectedRef: any = null;
+    let selectedReservation: any = null;
+
+    for (let index = 0; index < MAX_SLUG_COLLISION_ATTEMPTS; index += 1) {
+      const suffix = index === 0 ? "" : `-${index + 1}`;
+      const candidate = `${baseSlug.slice(0, 80 - suffix.length)}${suffix}`;
+      const candidateRef = db.collection(PUBLIC_CATALOG_SLUGS_COLLECTION).doc(candidate);
+      const candidateReservation = await transaction.get(candidateRef);
+      const reservedOwner = candidateReservation.exists ? candidateReservation.data()?.ownerUid : null;
+      if (candidateReservation.exists && reservedOwner !== ownerUid) continue;
+
+      const legacyOwners = await findLegacyOwners(transaction, db.collection("user_settings"), candidate);
+      if (Array.from(legacyOwners).some((legacyOwner) => legacyOwner !== ownerUid)) continue;
+
+      selectedSlug = candidate;
+      selectedRef = candidateRef;
+      selectedReservation = candidateReservation;
+      break;
+    }
+
+    if (!selectedSlug || !selectedRef) throw new CatalogSlugConflictError();
+
+    let previousRef: any = null;
+    let previousReservation: any = null;
+    if (previousSlug && previousSlug !== selectedSlug) {
+      previousRef = db.collection(PUBLIC_CATALOG_SLUGS_COLLECTION).doc(previousSlug);
+      previousReservation = await transaction.get(previousRef);
+    }
+
+    transaction.set(selectedRef, {
+      ownerUid,
+      slug: selectedSlug,
+      updatedAt: FieldValue.serverTimestamp(),
+      ...(selectedReservation?.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
+    }, { merge: true });
+    if (previousRef && previousReservation?.exists && previousReservation.data()?.ownerUid === ownerUid) {
+      transaction.delete(previousRef);
+    }
+    transaction.set(settingsRef, {
+      catalogSlug: selectedSlug,
+      catalog_slug: selectedSlug,
+      enablePublicCatalog: true,
+      userSlug: FieldValue.delete(),
+      slug: FieldValue.delete(),
+    }, { merge: true });
+
+    return { slug: selectedSlug, created: true };
   });
 }
 

@@ -55,6 +55,7 @@ import { REFERRAL_REWARD_LIMIT, isReferralCodeFormat } from "../shared/monetizat
 import {
   CatalogSlugConflictError,
   InvalidCatalogSlugError,
+  ensurePublicCatalogSlug,
   normalizeCatalogSlug,
   persistUserSettingsWithCatalogOwnership,
   resolvePublicCatalogSettingsDoc,
@@ -1155,7 +1156,7 @@ export async function registerRoutes(
     try {
       const catalog = await loadPublicCatalogSettings(getRouteParam(req, "storeSlug"));
       if (!catalog) return next();
-      const indexPath = [path.resolve(__dirname || ".", "public/index.html"), path.resolve(process.cwd(), "dist/public/index.html"), path.resolve(".", "dist/public/index.html")]
+      const indexPath = [path.resolve(process.cwd(), "dist/public/index.html"), path.resolve(".", "dist/public/index.html"), path.resolve(process.cwd(), "public/index.html")]
         .find((candidate) => fs.existsSync(candidate));
       if (!indexPath) return next();
       const storeName = catalog.store.name;
@@ -1209,6 +1210,39 @@ export async function registerRoutes(
         msg,
         { userId, errorName: error instanceof Error ? error.name : "UnknownError" }
       );
+    }
+  });
+
+  // POST /api/public-catalog/ensure/:userId — autoridade server-side para o link público.
+  // O frontend nunca deve prometer `/u/:slug` sem esta confirmação: aqui o servidor lê o estado atual,
+  // preserva slug real existente, troca placeholders como "minha-revenda" por um slug derivado do nome
+  // real da loja e reserva `public_catalog_slugs/{slug}` de forma transacional.
+  app.post("/api/public-catalog/ensure/:userId", requireAuth, requireOwnership, async (req, res) => {
+    const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+    try {
+      if (!userId) return res.status(400).json({ error: "userId required" });
+
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+      const ensureResult = await ensurePublicCatalogSlug({ db, ownerUid: userId });
+      const updatedDoc = await db.collection("user_settings").doc(userId).get();
+      const settings = updatedDoc.exists ? updatedDoc.data() : {};
+
+      return res.json({
+        success: true,
+        slug: ensureResult.slug,
+        url: `https://revendasmart.vercel.app/u/${encodeURIComponent(ensureResult.slug)}`,
+        settings,
+      });
+    } catch (error) {
+      if (error instanceof CatalogSlugConflictError) {
+        return res.status(409).json({ error: error.message });
+      }
+      if (error instanceof InvalidCatalogSlugError) {
+        return res.status(400).json({ error: error.message });
+      }
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      return errorResponse(res, 500, "PUBLIC_CATALOG_SLUG_ENSURE_FAILED", msg, { userId });
     }
   });
 
@@ -1289,6 +1323,10 @@ export async function registerRoutes(
       
       routeInfo(`[/api/user/settings POST] Saving to Firestore: user_settings/${userId}`);
       await persistUserSettingsWithCatalogOwnership({ db, ownerUid: userId, payload: body });
+      const catalogEnabled = body.enablePublicCatalog ?? body.catalogEnabled ?? body.catalog_enabled;
+      if (catalogEnabled === true) {
+        await ensurePublicCatalogSlug({ db, ownerUid: userId });
+      }
       routeInfo("[/api/user/settings POST] Successfully saved to Firestore");
 
       // ============ REFERRAL CONVERSION ATTRIBUTION (if new referral was applied) ============
