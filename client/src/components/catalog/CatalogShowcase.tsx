@@ -265,9 +265,18 @@ export function CatalogShowcase({
       <main className="mx-auto max-w-6xl space-y-6 pb-28 pt-4">
         <NicheSelector experience={experience} activeNicheId={activeNicheId} onChange={(nicheId) => { setActiveNicheId(nicheId); onCategoryChange("todos"); }} />
 
-        <CatalogProductRail title="Ofertas do dia" products={offersProducts} showPrice={showPrice} showStock={showStock} onSelectProduct={context === "public" ? setDetailProduct : undefined} onAddToCart={context === "public" ? onAddToCart : undefined} onUpdateQuantity={onUpdateQuantity} cartQuantities={cartQuantities} />
-        <CatalogProductRail title="Recomendados para você" products={recommendedProducts} showPrice={showPrice} showStock={showStock} onSelectProduct={context === "public" ? setDetailProduct : undefined} onAddToCart={context === "public" ? onAddToCart : undefined} onUpdateQuantity={onUpdateQuantity} cartQuantities={cartQuantities} />
-        <CatalogProductRail title="Produtos mais vendidos" products={bestSellerProducts} showPrice={showPrice} showStock={showStock} onSelectProduct={context === "public" ? setDetailProduct : undefined} onAddToCart={context === "public" ? onAddToCart : undefined} onUpdateQuantity={onUpdateQuantity} cartQuantities={cartQuantities} />
+        {/* CATALOG-GOLDEN-RESTORE-05 §1/§3 — no commit histórico (6de2c85) o botão/stepper de adicionar
+            era incondicional (funcionava em qualquer contexto); só o modal de DETALHE ao tocar na
+            imagem (onSelectProduct, um recurso adicionado bem depois) continua exclusivo do storefront
+            público — nada disso existia no golden commit para nenhum contexto. */}
+        <CatalogProductRail title="Ofertas do dia" products={offersProducts} showPrice={showPrice} showStock={showStock} onSelectProduct={context === "public" ? setDetailProduct : undefined} onAddToCart={onAddToCart} onUpdateQuantity={onUpdateQuantity} cartQuantities={cartQuantities} />
+        {/* CATALOG-VISUAL-RESTORE-02 §5 — a coleção vem de `isFeatured` (flag manual do vendedor,
+            catalog-experience.ts), nunca de um algoritmo de recomendação real. "Recomendados para
+            você" é um rótulo honesto só quando existe alguém sendo recomendado PARA (o cliente final,
+            no storefront público). Para o próprio vendedor vendo sua vitrine, o rótulo correto é
+            "Destaques" — mesma coleção, sem fingir personalização que não existe. */}
+        <CatalogProductRail title={context === "public" ? "Recomendados para você" : "Destaques"} products={recommendedProducts} showPrice={showPrice} showStock={showStock} onSelectProduct={context === "public" ? setDetailProduct : undefined} onAddToCart={onAddToCart} onUpdateQuantity={onUpdateQuantity} cartQuantities={cartQuantities} />
+        <CatalogProductRail title="Produtos mais vendidos" products={bestSellerProducts} showPrice={showPrice} showStock={showStock} onSelectProduct={context === "public" ? setDetailProduct : undefined} onAddToCart={onAddToCart} onUpdateQuantity={onUpdateQuantity} cartQuantities={cartQuantities} />
 
         {categoryOptions.length > 0 && (
           <CatalogCategoryRail categories={categoryOptions} selectedCategory={effectiveCategory} onSelectCategory={onCategoryChange} />
@@ -287,7 +296,7 @@ export function CatalogShowcase({
                   showPrice={showPrice}
                   showStock={showStock}
                   onSelectProduct={context === "public" ? setDetailProduct : undefined}
-                  onAddToCart={context === "public" ? onAddToCart : undefined}
+                  onAddToCart={onAddToCart}
                   onUpdateQuantity={onUpdateQuantity}
                   cartQuantity={cartQuantities.get(product.id) || 0}
                 />
