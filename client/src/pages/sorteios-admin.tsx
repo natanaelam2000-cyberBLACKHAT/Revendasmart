@@ -5,7 +5,7 @@ import { Layout } from "@/components/layout";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { useAdminAccess } from "@/hooks/useAdminAccess";
 import { useClientsLiteData } from "@/hooks/useClientsLiteData";
-import { apiRequest } from "@/lib/api-client";
+import { apiRequest, ApiError } from "@/lib/api-client";
 import { notifyError, notifySuccess } from "@/lib/notify";
 import type { PromotionalCampaign, PromotionalCampaignStatus } from "@shared/promotional-campaigns";
 
@@ -216,6 +216,11 @@ function CampaignDetail({ campaignId }: { campaignId: string }) {
       notifySuccess("Status atualizado.");
       await load();
     } catch (error) {
+      if (error instanceof ApiError) {
+        console.error("[sorteios-admin] falha ao mudar status da campanha", { status, httpStatus: error.status, code: error.code, requestId: error.requestId });
+      } else {
+        console.error("[sorteios-admin] falha inesperada ao mudar status da campanha", { status, error });
+      }
       notifyError(error instanceof Error ? error.message : "Não foi possível atualizar o status.");
     } finally {
       setChangingStatus(false);
@@ -235,7 +240,19 @@ function CampaignDetail({ campaignId }: { campaignId: string }) {
         </button>
 
         <div className={CARD}>
-          {campaign.prizeImageUrl && <img src={campaign.prizeImageUrl} alt={campaign.prizeName} className="mb-3 h-28 w-full rounded-xl object-cover" />}
+          {campaign.prizeImageUrl ? (
+            <div className="mb-3 flex aspect-[4/3] w-full items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-secondary/50 to-secondary/10 p-3">
+              <img src={campaign.prizeImageUrl} alt={campaign.prizeName} className="h-full w-full object-contain" />
+            </div>
+          ) : (
+            <div
+              className="mb-3 flex aspect-[4/3] w-full flex-col items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-secondary/50 to-secondary/10"
+              data-testid="placeholder-no-prize-image"
+            >
+              <Ticket className="h-8 w-8 text-muted-foreground/50" />
+              <p className="px-6 text-center text-xs font-bold text-muted-foreground">Nenhuma imagem de divulgação enviada</p>
+            </div>
+          )}
           <h1 className="text-lg font-black text-foreground">{campaign.title}</h1>
           <p className="text-sm text-muted-foreground">{campaign.prizeName}</p>
           {campaign.description && <p className="mt-1 text-xs text-muted-foreground">{campaign.description}</p>}
