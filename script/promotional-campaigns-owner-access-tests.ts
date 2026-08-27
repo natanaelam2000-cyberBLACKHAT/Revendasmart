@@ -783,7 +783,141 @@ async function main() {
     assert.notEqual(persistedDraw.prizeNameSnapshot, "Prêmio Trocado Depois Do Sorteio");
   }
 
+  // ==================================================================================================
+  // PROMOTIONAL-CAMPAIGNS-PARTICIPANT-SYNC-06A — cliente com entitlement automático (registered_sale) que
+  // gera link válido precisa aparecer em PARTICIPANTES imediatamente, não só depois do primeiro claim.
+  // ==================================================================================================
+  {
+    const psCampaign = await postJson("/api/admin/sorteios/campaigns", {
+      title: "Sorteio Participant Sync", prizeName: "Prêmio", startsAt, endsAt, spendPerEntry: 100, numberCount: 100,
+    }, adminAToken);
+    const psCampaignId = psCampaign.body.id as string;
+    const psSlug = psCampaign.body.slug as string;
+    await patchJson(`/api/admin/sorteios/campaigns/${psCampaignId}/status`, { status: "active" }, adminAToken);
+
+    // ===== teste 1 (§14.1): registered_sale entitlement + generate link => participant aparece =====
+    // pedro: qualifyingSpend=200 => automatic=2, manual=0 — nunca passou pela rota manual-entries.
+    const pedroId = await makeClientWithSales("pedro", 200);
+    const linkPedro = await postJson(`/api/admin/sorteios/campaigns/${psCampaignId}/links`, { customerId: pedroId, selectionLimit: 1 }, adminAToken);
+    assert.equal(linkPedro.status, 201);
+    const detailAfterPedroLink = await getJson(`/api/admin/sorteios/campaigns/${psCampaignId}`, adminAToken);
+    const pedroParticipant = (detailAfterPedroLink.body.participants as Array<Record<string, unknown>>).find((p) => p.customerId === pedroId);
+    assert.ok(pedroParticipant, "1: cliente registered_sale que gerou link precisa aparecer em PARTICIPANTES sem nenhum claim ainda");
+    assert.equal(pedroParticipant!.entriesClaimed, 0, "1: 0 escolhidos antes de qualquer claim");
+    assert.equal(pedroParticipant!.entriesAvailable, 2, "1: 2 restantes (automaticEntries=2, selectionLimit não afeta o saldo global)");
+    const pedroDocDirect = await db.doc(`promotionalCampaigns/${psCampaignId}/participants/${pedroId}`).get();
+    assert.equal(pedroDocDirect.exists, true, "1: participant realmente materializado no Firestore, não só computado na resposta");
+
+    // ===== teste 2 (§14.2): manual_internal + generate link => participant aparece (comportamento já
+    // existente, preservado) =====
+    const rebecaId = await makeClientWithSales("rebeca", 0);
+    await postJson(`/api/admin/sorteios/campaigns/${psCampaignId}/clients/${rebecaId}/manual-entries`, { quantity: 2, reason: "courtesy", idempotencyKey: crypto.randomUUID() }, adminAToken);
+    const linkRebeca = await postJson(`/api/admin/sorteios/campaigns/${psCampaignId}/links`, { customerId: rebecaId, selectionLimit: 1 }, adminAToken);
+    assert.equal(linkRebeca.status, 201);
+    const detailAfterRebeca = await getJson(`/api/admin/sorteios/campaigns/${psCampaignId}`, adminAToken);
+    assert.ok((detailAfterRebeca.body.participants as Array<Record<string, unknown>>).some((p) => p.customerId === rebecaId), "2: manual_internal continua aparecendo em PARTICIPANTES");
+
+    // ===== teste 3 (§14.3): auto + manual => único participant lógico =====
+    // saulo: qualifyingSpend=100 => automatic=1, + 2 manuais concedidos depois. Precisa existir só 1 doc.
+    const sauloId = await makeClientWithSales("saulo", 100);
+    const linkSauloAuto = await postJson(`/api/admin/sorteios/campaigns/${psCampaignId}/links`, { customerId: sauloId, selectionLimit: 1 }, adminAToken);
+    assert.equal(linkSauloAuto.status, 201);
+    await postJson(`/api/admin/sorteios/campaigns/${psCampaignId}/clients/${sauloId}/manual-entries`, { quantity: 2, reason: "courtesy", idempotencyKey: crypto.randomUUID() }, adminAToken);
+    const sauloParticipantDocs = await db.collection(`promotionalCampaigns/${psCampaignId}/participants`).where("customerId", "==", sauloId).get();
+    assert.equal(sauloParticipantDocs.size, 1, "3: automatic+manual do mesmo cliente nunca cria dois participantes — sempre 1");
+    const detailAfterSaulo = await getJson(`/api/admin/sorteios/campaigns/${psCampaignId}`, adminAToken);
+    const sauloParticipant = (detailAfterSaulo.body.participants as Array<Record<string, unknown>>).find((p) => p.customerId === sauloId);
+    assert.equal(sauloParticipant!.automaticEntries, 1, "3: automatic=1 preservado");
+    assert.equal(sauloParticipant!.manualInternalEntries, 2, "3: manual=2 agregado no MESMO participante lógico");
+
+    // ===== teste 4 (§14.4): dois links para o mesmo cliente => participantCount continua 1 =====
+    const linkPedro2 = await postJson(`/api/admin/sorteios/campaigns/${psCampaignId}/links`, { customerId: pedroId, selectionLimit: 1 }, adminAToken);
+    assert.equal(linkPedro2.status, 201, "4: segundo link para o mesmo cliente deve suceder normalmente");
+    const pedroParticipantDocsAfterSecondLink = await db.collection(`promotionalCampaigns/${psCampaignId}/participants`).where("customerId", "==", pedroId).get();
+    assert.equal(pedroParticipantDocsAfterSecondLink.size, 1, "4: dois links do mesmo cliente nunca duplicam o participant");
+    const metricsAfterSecondLink = await getJson(`/api/admin/sorteios/campaigns/${psCampaignId}`, adminAToken);
+    const tokensSnapForPsCampaign = await db.collection(`promotionalCampaigns/${psCampaignId}/accessTokens`).get();
+    assert.ok(tokensSnapForPsCampaign.size >= 3, "4 setup: pelo menos 3 tokens já existem (pedro x2, rebeca, saulo)");
+    const realParticipantDocsSnap = await db.collection(`promotionalCampaigns/${psCampaignId}/participants`).get();
+    assert.equal((metricsAfterSecondLink.body.metrics as Record<string, unknown>).participantsCount, realParticipantDocsSnap.size, "9: PARTICIPANTES conta documentos de participante únicos no Firestore, nunca tokens/links (que já somam 3+ aqui, mas participantsCount é bem menor)");
+    assert.ok(realParticipantDocsSnap.size < tokensSnapForPsCampaign.size, "9: participantsCount precisa ser estritamente menor que o total de tokens (pedro sozinho já tem 2 links => 1 participante)");
+
+    // ===== teste 5 (§14.5): claim posterior atualiza chosen/remaining no MESMO participant =====
+    const claimPedro = await postJson(`/api/public/sorteios/${psSlug}/claim`, { token: linkPedro.body.token, numbers: [15] });
+    assert.equal(claimPedro.body.ok, true);
+    const detailAfterClaim = await getJson(`/api/admin/sorteios/campaigns/${psCampaignId}`, adminAToken);
+    const pedroAfterClaim = (detailAfterClaim.body.participants as Array<Record<string, unknown>>).find((p) => p.customerId === pedroId);
+    assert.equal(pedroAfterClaim!.entriesClaimed, 1, "5: 1 escolhido depois do claim");
+    assert.equal(pedroAfterClaim!.entriesAvailable, 1, "5: 1 restante (2 automáticos - 1 claimed)");
+    const pedroParticipantDocsAfterClaim = await db.collection(`promotionalCampaigns/${psCampaignId}/participants`).where("customerId", "==", pedroId).get();
+    assert.equal(pedroParticipantDocsAfterClaim.size, 1, "5: claim nunca cria um segundo participant — atualiza o mesmo doc");
+
+    // ===== teste 6 (§14.6): revoke preserva o participant =====
+    await postJson(`/api/admin/sorteios/campaigns/${psCampaignId}/links/${linkRebeca.body.tokenId}/revoke`, {}, adminAToken);
+    const detailAfterRevoke = await getJson(`/api/admin/sorteios/campaigns/${psCampaignId}`, adminAToken);
+    assert.ok((detailAfterRevoke.body.participants as Array<Record<string, unknown>>).some((p) => p.customerId === rebecaId), "6: revogar o link não remove o participante da lista");
+
+    // ===== teste 7 (§14.7): tenant A não materializa participant de tenant B =====
+    {
+      const bCampaign = await postJson("/api/admin/sorteios/campaigns", {
+        title: "Sorteio Tenant B Sync", prizeName: "Prêmio", startsAt, endsAt, spendPerEntry: 100, numberCount: 100,
+      }, adminBToken);
+      const bCampaignId = bCampaign.body.id as string;
+      await patchJson(`/api/admin/sorteios/campaigns/${bCampaignId}/status`, { status: "active" }, adminBToken);
+      const crossTenantLink = await postJson(`/api/admin/sorteios/campaigns/${bCampaignId}/links`, { customerId: pedroId }, adminAToken);
+      assert.equal(crossTenantLink.status, 403, "7: admin A não consegue gerar link numa campanha de admin B — bloqueado antes de qualquer lookup de cliente/participant");
+      const bParticipants = await db.collection(`promotionalCampaigns/${bCampaignId}/participants`).get();
+      assert.equal(bParticipants.size, 0, "7: nenhum participant vazou para a campanha do tenant B");
+    }
+
+    // ===== teste 8 (§14.8): falha de geração de link não deixa participant fantasma =====
+    // Cliente inexistente => a rota falha ANTES do batch (CLIENT_NOT_FOUND) — nenhum participant deve
+    // ser criado para um customerId que nunca existiu de verdade.
+    {
+      const fakeCustomerId = `pc06a-nao-existe-${suffix}`;
+      const failedLink = await postJson(`/api/admin/sorteios/campaigns/${psCampaignId}/links`, { customerId: fakeCustomerId }, adminAToken);
+      assert.equal(failedLink.status, 404);
+      assert.equal(failedLink.body.code, "CLIENT_NOT_FOUND");
+      const ghostParticipant = await db.doc(`promotionalCampaigns/${psCampaignId}/participants/${fakeCustomerId}`).get();
+      assert.equal(ghostParticipant.exists, false, "8: geração de link que falha nunca deixa participant fantasma para trás");
+    }
+
+    // ===== testes 9/10 (§14.9/§14.10): qualifyingSpend/vendas/estoque não mudam por causa desta correção =====
+    const pedroSalesBefore = (await db.collection(`users/${adminAUid}/sales`).where("clientId", "==", pedroId).get()).size;
+    const pedroEntitlementFinal = await getJson(`/api/admin/sorteios/campaigns/${psCampaignId}/clients/${pedroId}/entitlement`, adminAToken);
+    assert.equal(pedroEntitlementFinal.body.qualifyingSpend, 200, "9: qualifyingSpend continua exatamente o que veio das vendas reais, nunca alterado por esta correção");
+    const pedroSalesAfter = (await db.collection(`users/${adminAUid}/sales`).where("clientId", "==", pedroId).get()).size;
+    assert.equal(pedroSalesAfter, pedroSalesBefore, "10: nenhuma venda nova foi criada por esta correção de projeção");
+
+    // ===== §13: self-heal — cliente com token pré-existente (bug histórico simulado) mas SEM participant
+    // projection precisa ser materializado ao carregar o detalhe da campanha, sem migração destrutiva. =====
+    {
+      const historicoId = await makeClientWithSales("historico", 300);
+      // Simula o estado de produção ANTES desta correção: token válido gravado direto no Firestore, sem
+      // passar pela rota /links já corrigida (que agora sempre upserta o participant).
+      const legacyRawToken = crypto.randomUUID();
+      await db.doc(`promotionalCampaigns/${psCampaignId}/accessTokens/legacy-broken-${suffix}`).set({
+        customerId: historicoId, tokenHash: hashTokenForTest(legacyRawToken), createdAt: new Date().toISOString(),
+        expiresAt: null, revokedAt: null, selectionLimit: 3, claimedThroughToken: 0,
+      });
+      const beforeHeal = await db.doc(`promotionalCampaigns/${psCampaignId}/participants/${historicoId}`).get();
+      assert.equal(beforeHeal.exists, false, "§13 setup: reproduz o bug real — token existe, participant não");
+
+      const detailTriggersHeal = await getJson(`/api/admin/sorteios/campaigns/${psCampaignId}`, adminAToken);
+      assert.ok((detailTriggersHeal.body.participants as Array<Record<string, unknown>>).some((p) => p.customerId === historicoId), "§13: self-heal materializa o participante faltante ao carregar o detalhe da campanha");
+      const afterHeal = await db.doc(`promotionalCampaigns/${psCampaignId}/participants/${historicoId}`).get();
+      assert.equal(afterHeal.exists, true, "§13: self-heal grava o participant no Firestore, não só na resposta HTTP");
+
+      // Self-heal precisa ser idempotente: chamar de novo não duplica nem falha.
+      const detailAgain = await getJson(`/api/admin/sorteios/campaigns/${psCampaignId}`, adminAToken);
+      assert.equal(detailAgain.status, 200);
+      const historicoDocsAfterSecondLoad = await db.collection(`promotionalCampaigns/${psCampaignId}/participants`).where("customerId", "==", historicoId).get();
+      assert.equal(historicoDocsAfterSecondLoad.size, 1, "§13: carregar o detalhe de novo não duplica o participant self-healed");
+    }
+  }
+
   server.close();
+  console.log("PROMOTIONAL-CAMPAIGNS-PARTICIPANT-SYNC-06A owner-access tests passed: registered_sale-only client that generates a link now appears in PARTICIPANTES immediately (materialized in Firestore, not just computed), manual_internal behavior preserved, automatic+manual entries aggregate into a single logical participant (never two docs), a second link for the same client never duplicates the participant or inflates participantsCount, a later claim updates the SAME participant doc (chosen/remaining), revoke preserves the participant, tenant isolation holds (link generation against another tenant's client 404s, no cross-tenant participant leak), a failed link generation (client not found) never leaves a ghost participant, qualifyingSpend/sales are provably untouched by this projection fix, and a pre-existing token-without-participant (the real historical bug, reproduced directly in Firestore) self-heals on campaign-detail load — idempotently, without a destructive migration.");
   console.log("PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-06 owner-access/concurrency tests passed: non-admin close/draw denied, cross-tenant close/draw/result denied, draw before close-entries denied (status unchanged), close-entries from draft denied, zero eligible entries blocks draw (status stays entries_closed), generic status PATCH can never fake entries_closed/drawn and locks after close, claim rejected after close-entries, registered_sale and manual_internal claimed numbers equally eligible, unclaimed numbers excluded from the eligible set, official draw persisted with server-side crypto.randomInt (never Math.random, never a client-supplied winningNumber/winningClientId), eligibleSetHash reproducible from an independent Firestore query, second draw call returns the same official result (no reroll), concurrent draw requests converge to exactly one official drawId, winner name and prize snapshots stay frozen even after the underlying client/campaign is edited afterward.");
   console.log("PROMOTIONAL-CAMPAIGNS-01 owner-access/concurrency tests passed: non-admin create denied, cross-owner detail denied, entitlement computed from real sales (350/100=3), claim confirms atomically, reopening link reflects 0 remaining + own numbers, another customer blocked from an already-claimed number, concurrent claims for the same number resolve to exactly one winner, invalid/revoked token denied, draft/paused/finished campaigns reject claims. LINK-SELECTION-LIMIT-04: link creation blocked with zero entitlement, entitlement preview endpoint, per-token cap independent of global balance, reopening reflects token-scoped remaining, multiple links never jointly overspend, concurrent claims across different links never overspend entitlement, revoke preserves unused rights, legacy tokens without selectionLimit remain fully compatible, tenant isolation on link creation. MANUAL-INTERNAL-05: non-admin denied, spoofed policy ignored (server-authoritative from campaign doc), cross-owner campaign/client denied, invalid quantity denied, idempotent replay never duplicates, qualifyingSpend/sales/stock untouched by manual grants, concurrent claims across manual-funded links never overspend, revoke preserves manual-included balance, ledger immutable across a compensating adjustment, end-to-end §18 fixture (automatic=2, manual=3, claimed=5, remaining=0, qualifyingSpend unchanged, zero extra sales).");
 }

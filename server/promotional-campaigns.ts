@@ -307,8 +307,9 @@ export function registerPromotionalCampaignRoutes(
       // §27: owner isolation — mesmo admin, uma campanha de outro owner é invisível, não só "sem botão".
       if (campaign.ownerId !== actorUid) return sendSorteioError(res, 403, "FORBIDDEN");
 
-      const [participantsSnap, qualifiedSalesTotal] = await Promise.all([
+      const [initialParticipantsSnap, tokensSnap, qualifiedSalesTotal] = await Promise.all([
         participantsRef(campaignId).get(),
+        tokensRef(campaignId).get(),
         (async () => {
           const salesSnap = await db().collection("users").doc(actorUid).collection("sales")
             .where("date", ">=", campaign.startsAt).where("date", "<=", campaign.endsAt).get();
@@ -318,6 +319,29 @@ export function registerPromotionalCampaignRoutes(
           }, 0);
         })(),
       ]);
+
+      // PROMOTIONAL-CAMPAIGNS-PARTICIPANT-SYNC-06A §13 — self-heal progressivo: campanhas criadas antes
+      // desta correção podem ter clientes com token/link válido mas sem participant projection (o bug
+      // real). Nunca uma migração ampla — só materializa, ao carregar o detalhe, quem já provou ter um
+      // link emitido e ainda está faltando. `merge:true` é seguro mesmo sob concorrência (nunca duplica,
+      // nunca sobrescreve entriesClaimed/claimedNumbers de quem já existe).
+      const existingParticipantIds = new Set(initialParticipantsSnap.docs.map((doc) => doc.id));
+      const missingParticipantIds = new Set<string>();
+      for (const tokenDoc of tokensSnap.docs) {
+        const tokenCustomerId = tokenDoc.data().customerId as string | undefined;
+        if (tokenCustomerId && !existingParticipantIds.has(tokenCustomerId)) missingParticipantIds.add(tokenCustomerId);
+      }
+      let participantsSnap = initialParticipantsSnap;
+      if (missingParticipantIds.size > 0) {
+        const healBatch = db().batch();
+        const healedAt = new Date().toISOString();
+        for (const missingId of Array.from(missingParticipantIds)) {
+          healBatch.set(participantsRef(campaignId).doc(missingId), { customerId: missingId, updatedAt: healedAt }, { merge: true });
+        }
+        await healBatch.commit();
+        logInfo("promotional_campaigns.participants_self_healed", { campaignId, actorUid, count: missingParticipantIds.size });
+        participantsSnap = await participantsRef(campaignId).get();
+      }
 
       const clientRefs = participantsSnap.docs.map((doc) => db().collection("users").doc(actorUid).collection("clients").doc(doc.id));
       const clientSnaps = clientRefs.length ? await db().getAll(...clientRefs) : [];
@@ -545,7 +569,16 @@ export function registerPromotionalCampaignRoutes(
       const rawToken = crypto.randomBytes(32).toString("base64url");
       const tokenRef = tokensRef(campaignId).doc();
       const now = new Date().toISOString();
-      await tokenRef.set({
+      // PROMOTIONAL-CAMPAIGNS-PARTICIPANT-SYNC-06A — ROOT CAUSE do bug real: esta rota nunca upsertava o
+      // participant, então um cliente cujo direito vem só de registered_sale (nunca passou pela rota de
+      // manual-entries, que já fazia esse upsert) ficava com link válido e claim funcionando, mas invisível
+      // na lista PARTICIPANTES até o primeiro claim. `merge:true` num id determinístico (customerId) nunca
+      // duplica, mesmo gerando vários links para o mesmo cliente (§6), e nunca sobrescreve
+      // entriesClaimed/claimedNumbers se o participante já existir. Batch (não transaction) porque não há
+      // leitura dependente aqui — as duas escritas só precisam ser atômicas entre si (§11: nunca token
+      // criado com participant perdido por falha subsequente).
+      const batch = db().batch();
+      batch.set(tokenRef, {
         customerId,
         tokenHash: hashToken(rawToken),
         createdAt: now,
@@ -554,6 +587,8 @@ export function registerPromotionalCampaignRoutes(
         selectionLimit,
         claimedThroughToken: 0,
       });
+      batch.set(participantsRef(campaignId).doc(customerId), { customerId, updatedAt: now }, { merge: true });
+      await batch.commit();
       logInfo("promotional_campaigns.link_created", { campaignId, actorUid, tokenId: tokenRef.id, selectionLimit });
       return res.status(201).json({
         tokenId: tokenRef.id,
