@@ -580,9 +580,7 @@ assert.match(addProduct, /getProductSaveErrorMessage/);
 assert.match(addProduct, /auth_check|plan_limit_read|storage_upload|firestore_create|storage_cleanup/);
 assert.match(addProduct, /Sem conexão|Sua sessão expirou|Limite de produtos atingido|Permissão negada/);
 const productDataBlock = addProduct.slice(addProduct.indexOf("const productData = buildProductCreatePayload"), addProduct.indexOf("saveStage = id ?"));
-// PERFORMANCE-OPTIMIZATION-03: thumbnailUrl/thumbnailStoragePath agora são repassados ao payload
-// (derivados do upload da miniatura acima), nunca como valor literal `undefined`.
-assert.match(productDataBlock, /thumbnailUrl, thumbnailStoragePath/);
+assert.doesNotMatch(productDataBlock, /thumbnailUrl|thumbnailStoragePath/);
 assert.doesNotMatch(productDataBlock, /undefined/);
 const createPayloadFixture = buildProductCreatePayload({
   formData: {
@@ -609,18 +607,6 @@ assert.equal(JSON.stringify(createPayloadFixture).includes("undefined"), false);
 // chave vazia/undefined.
 assert.equal(Object.prototype.hasOwnProperty.call(createPayloadFixture, "thumbnailUrl"), false);
 assert.equal(Object.prototype.hasOwnProperty.call(createPayloadFixture, "thumbnailStoragePath"), false);
-const createPayloadWithThumbnailFixture = buildProductCreatePayload({
-  formData: {
-    name: "Perfume Teste", brand: "Natura", origin: "Brasil", category: "Perfumes", costPrice: 10, salePrice: 30, stock: 2,
-    barcode: "001234", description: "desc", imageUrl: "", storagePath: "", extras: {}, isFeatured: false, isOnSale: false,
-    discountPercent: 0, productType: "Cosméticos & Perfumes", gender: "unisex",
-  },
-  productName: "Perfume Teste", normalizedBrand: "Natura", category: "Perfumes", costPrice: 10, salePrice: 30, stock: 2,
-  imageUrl: "https://example.invalid/p.webp", storagePath: "users/test/products/p1/p.webp", activeNicho: "Cosméticos & Perfumes" as any,
-  thumbnailUrl: "https://example.invalid/p-thumb.webp", thumbnailStoragePath: "users/test/product-thumbnails/p1/thumb-v1.webp",
-});
-assert.equal(createPayloadWithThumbnailFixture.thumbnailUrl, "https://example.invalid/p-thumb.webp");
-assert.equal(createPayloadWithThumbnailFixture.thumbnailStoragePath, "users/test/product-thumbnails/p1/thumb-v1.webp");
 const productAllowedFieldsMatch = firestoreRules.match(/function productAllowedFields\(\) \{\s*return \[([\s\S]*?)\];/);
 assert.ok(productAllowedFieldsMatch);
 const productAllowedFields = new Set([...productAllowedFieldsMatch[1].matchAll(/'([^']+)'/g)].map((match) => match[1]));
@@ -630,7 +616,7 @@ for (const key of ["id", "name", "brand", "origin", "category", "productType", "
 assert.match(addProduct, /Number\.isFinite\(costPrice\)/);
 assert.match(addProduct, /Number\.isFinite\(salePrice\)/);
 assert.match(addProduct, /Number\.isFinite\(stock\)/);
-assert.match(addProduct, /cleanupUploadedProductImages\(productId, cleanupToken, uploadedAssets\)/);
+assert.match(addProduct, /cleanupUploadedProductImages\(productId, cleanupToken, uploadedPaths\)/);
 assert.match(addProduct, /if \(isSaving\) return/);
 assert.match(mockData, /nameNormalized\?: string/);
 assert.match(firestoreRules, /searchTokens/);
@@ -1597,12 +1583,10 @@ assert.match(catalogShowcase, /title="Produtos mais vendidos"/);
 assert.match(catalogShowcase, /CatalogCategoryRail/);
 assert.match(catalogShowcase, /CatalogProductRail/);
 
-// 4b. CATALOG-GOLDEN-RESTORE-05 §1/§8 — barra "Ver pedido" restaurada fielmente do commit histórico
-// (6de2c85), na mesma condição funcional descoberta lá: só context === "public" && cartCount > 0.
-assert.match(catalogShowcase, /\{context === "public" && cartCount > 0 && \(/);
-assert.match(catalogShowcase, /Ver pedido · \{cartCount\} \{cartCount === 1 \? "item" : "itens"\}/, "plural correto em português (\"itens\"), não o \"items\" (inglês) que o commit histórico tinha por engano");
-assert.match(catalogShowcase, /Abrir<\/span>/);
-assert.match(catalogShowcase, /data-testid="button-open-order-bar"/);
+// 4b. RELEASE-CHECKOUT-03 §1/§3 — a barra flutuante "Ver pedido" foi removida do storefront público
+// por ser redundante com o botão+badge do carrinho já presente no cabeçalho (CatalogHeader). Ver
+// script/checkout-payment-tests.ts para a asserção completa desse contrato.
+assert.doesNotMatch(catalogShowcase, /Ver pedido/, "barra flutuante \"Ver pedido\" permanece removida do storefront público (RELEASE-CHECKOUT-03)");
 
 // 5. Rolagem horizontal com scroll-snap nos trilhos.
 assert.match(catalogProductRail, /overflow-x-auto/);
