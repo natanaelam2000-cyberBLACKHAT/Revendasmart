@@ -1,13 +1,13 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { useLocation, useParams } from "wouter";
-import { Ticket, Plus, ChevronRight, ArrowLeft, Share2, Copy, Play, Pause, CheckCircle2, Ban } from "lucide-react";
+import { Ticket, Plus, Minus, ChevronRight, ArrowLeft, Share2, Copy, Play, Pause, CheckCircle2, Ban } from "lucide-react";
 import { Layout } from "@/components/layout";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { useAdminAccess } from "@/hooks/useAdminAccess";
 import { useClientsLiteData } from "@/hooks/useClientsLiteData";
 import { apiRequest, ApiError } from "@/lib/api-client";
 import { notifyError, notifySuccess } from "@/lib/notify";
-import type { PromotionalCampaign, PromotionalCampaignStatus } from "@shared/promotional-campaigns";
+import type { PromotionalCampaign, PromotionalCampaignStatus, PromotionalEntitlement } from "@shared/promotional-campaigns";
 
 /**
  * PROMOTIONAL-CAMPAIGNS-01B §2 — listagem + detalhe/participantes/link num único chunk (evita pagar
@@ -127,18 +127,40 @@ const STATUS_ACTIONS: { status: PromotionalCampaignStatus; label: string; icon: 
 function GenerateLinkSection({ campaignId }: { campaignId: string }) {
   const { clients } = useClientsLiteData();
   const [customerId, setCustomerId] = useState("");
+  const [entitlement, setEntitlement] = useState<PromotionalEntitlement | null>(null);
+  const [loadingEntitlement, setLoadingEntitlement] = useState(false);
+  const [selectionLimit, setSelectionLimit] = useState(1);
   const [generating, setGenerating] = useState(false);
   const [link, setLink] = useState<{ tokenId: string; url: string } | null>(null);
   const [revoking, setRevoking] = useState(false);
   const [revoked, setRevoked] = useState(false);
 
+  // PROMOTIONAL-CAMPAIGNS-LINK-SELECTION-LIMIT-04 §8 — o admin precisa ver quantos direitos o cliente já
+  // possui ANTES de gerar o link, para decidir quantos deste total o link libera. Isso é só leitura —
+  // não cria nem reserva nada (gerar o link em si também não reserva, ver server/promotional-campaigns.ts).
+  useEffect(() => {
+    setEntitlement(null);
+    setLink(null);
+    setRevoked(false);
+    if (!customerId) return;
+    setLoadingEntitlement(true);
+    apiRequest<PromotionalEntitlement>(`/api/admin/sorteios/campaigns/${campaignId}/clients/${customerId}/entitlement`, { auth: true })
+      .then((result) => {
+        setEntitlement(result);
+        setSelectionLimit(Math.max(1, result.entriesAvailable));
+      })
+      .catch((error) => notifyError(error instanceof Error ? error.message : "Não foi possível carregar os direitos do cliente."))
+      .finally(() => setLoadingEntitlement(false));
+  }, [campaignId, customerId]);
+
   const handleGenerate = async () => {
     if (!customerId) { notifyError("Selecione um cliente."); return; }
+    if (!entitlement || entitlement.entriesAvailable <= 0) { notifyError("Este cliente não possui participações disponíveis."); return; }
     setGenerating(true);
     setLink(null);
     setRevoked(false);
     try {
-      const result = await apiRequest<{ tokenId: string; path: string }>(`/api/admin/sorteios/campaigns/${campaignId}/links`, { auth: true, method: "POST", body: { customerId } });
+      const result = await apiRequest<{ tokenId: string; path: string }>(`/api/admin/sorteios/campaigns/${campaignId}/links`, { auth: true, method: "POST", body: { customerId, selectionLimit } });
       setLink({ tokenId: result.tokenId, url: `${window.location.origin}${result.path}` });
     } catch (error) {
       notifyError(error instanceof Error ? error.message : "Não foi possível gerar o link.");
@@ -175,7 +197,36 @@ function GenerateLinkSection({ campaignId }: { campaignId: string }) {
         <option value="">Selecione um cliente…</option>
         {clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}
       </select>
-      <button type="button" onClick={handleGenerate} disabled={generating} data-testid="button-generate-link" className="flex w-full items-center justify-center rounded-full bg-primary py-2.5 text-xs font-black text-white disabled:opacity-60">
+
+      {loadingEntitlement && <p className="text-xs text-muted-foreground">Carregando direitos do cliente…</p>}
+
+      {entitlement && !loadingEntitlement && (
+        entitlement.entriesAvailable > 0 ? (
+          <div className="space-y-2 rounded-xl bg-secondary/40 p-3" data-testid="section-customer-entitlement">
+            <div className="flex justify-between text-xs">
+              <span className="text-muted-foreground">Compras qualificadas</span>
+              <span className="font-bold text-foreground">{formatBRL(entitlement.qualifyingSpend)}</span>
+            </div>
+            <div className="flex justify-between text-xs">
+              <span className="text-muted-foreground">Direitos disponíveis</span>
+              <span className="font-bold text-foreground" data-testid="text-entries-available">{entitlement.entriesAvailable}</span>
+            </div>
+            <div className="space-y-1.5 pt-1">
+              <span className="text-xs font-bold text-foreground">Quantidade liberada neste link</span>
+              <div className="flex items-center justify-center gap-4">
+                <button type="button" onClick={() => setSelectionLimit((value) => Math.max(1, value - 1))} disabled={selectionLimit <= 1} aria-label="Diminuir quantidade" data-testid="button-selection-limit-decrease" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white shadow-sm active:scale-95 disabled:opacity-30"><Minus className="h-4 w-4" /></button>
+                <span className="w-10 text-center text-3xl font-black text-foreground" data-testid="text-selection-limit">{selectionLimit}</span>
+                <button type="button" onClick={() => setSelectionLimit((value) => Math.min(entitlement.entriesAvailable, value + 1))} disabled={selectionLimit >= entitlement.entriesAvailable} aria-label="Aumentar quantidade" data-testid="button-selection-limit-increase" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white shadow-sm active:scale-95 disabled:opacity-30"><Plus className="h-4 w-4" /></button>
+              </div>
+            </div>
+            <p className="text-center text-[11px] text-muted-foreground">Este link permitirá escolher até {selectionLimit} {selectionLimit === 1 ? "número" : "números"}.</p>
+          </div>
+        ) : (
+          <p className="text-xs font-bold text-amber-700" data-testid="text-no-entries-available">Este cliente não possui participações disponíveis.</p>
+        )
+      )}
+
+      <button type="button" onClick={handleGenerate} disabled={generating || !entitlement || entitlement.entriesAvailable <= 0} data-testid="button-generate-link" className="flex w-full items-center justify-center rounded-full bg-primary py-2.5 text-xs font-black text-white disabled:opacity-60">
         {generating ? "Gerando…" : "Gerar link"}
       </button>
       {link && !revoked && (

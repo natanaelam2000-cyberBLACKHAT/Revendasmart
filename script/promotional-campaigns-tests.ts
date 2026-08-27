@@ -10,11 +10,14 @@ import {
   calculateAvailableEntries,
   calculateEarnedEntries,
   calculateEntitlement,
+  calculateMaxSelectable,
+  calculateTokenRemaining,
   formatCampaignNumber,
   isCampaignPubliclyClaimable,
   MAX_CAMPAIGN_NUMBERS,
   validateClaimPayloadShape,
   validateNumberCount,
+  validateSelectionLimit,
 } from "../shared/promotional-campaigns";
 
 function run(): void {
@@ -107,7 +110,30 @@ function run(): void {
   assert.equal(formatCampaignNumber(10), "10");
   assert.equal(formatCampaignNumber(250), "250");
 
-  console.log("PROMOTIONAL-CAMPAIGNS-01 pure-function tests passed: entries calculation exact per ticket table, accumulated spend, remaining-until-next-entry, entitlement composite scenario, number formatting, claim payload shape validation (exceeds/duplicate/out-of-range/empty/valid), status+period gate.");
+  // ===== PROMOTIONAL-CAMPAIGNS-LINK-SELECTION-LIMIT-04 — validação pura de selectionLimit (testes C/D/E/F
+  // do ticket: nunca cria direitos, só decide quantos dos já existentes um link libera) =====
+  assert.equal(validateSelectionLimit(3, 5), 3, "dentro do range => válido");
+  assert.equal(validateSelectionLimit(5, 5), 5, "no limite exato do saldo disponível => válido");
+  assert.equal(validateSelectionLimit(6, 5), null, "C: limit > available => reject");
+  assert.equal(validateSelectionLimit(0, 5), null, "D: limit=0 => reject");
+  assert.equal(validateSelectionLimit(-1, 5), null, "E: limit negativo => reject");
+  assert.equal(validateSelectionLimit(2.5, 5), null, "F: limit decimal => reject");
+  assert.equal(validateSelectionLimit("abc", 5), null, "não numérico => reject");
+  assert.equal(validateSelectionLimit(1, 0), null, "sem saldo disponível => nenhum valor é válido");
+
+  // ===== calculateTokenRemaining / calculateMaxSelectable — teto por token nunca isolado do saldo global =====
+  assert.equal(calculateTokenRemaining(null, 0), null, "link legado (sem selectionLimit) => sem teto próprio");
+  assert.equal(calculateTokenRemaining(3, 0), 3, "teto=3, nada usado ainda => 3 restantes");
+  assert.equal(calculateTokenRemaining(3, 1), 2, "teto=3, 1 já usado neste token => 2 restantes");
+  assert.equal(calculateTokenRemaining(3, 3), 0, "teto=3, todos os 3 já usados neste token => 0 restantes");
+  assert.equal(calculateTokenRemaining(3, 5), 0, "nunca fica negativo mesmo com dado inconsistente");
+
+  assert.equal(calculateMaxSelectable(5, null), 5, "link legado => capado só pelo saldo global");
+  assert.equal(calculateMaxSelectable(5, 3), 3, "teto do token (3) é menor que o saldo global (5) => 3");
+  assert.equal(calculateMaxSelectable(2, 4), 2, "H: saldo global (2) é menor que o teto do token (4) => 2 — nunca confia isoladamente no token");
+  assert.equal(calculateMaxSelectable(0, 4), 0, "saldo global zerado => 0 mesmo com teto de token positivo");
+
+  console.log("PROMOTIONAL-CAMPAIGNS-01 pure-function tests passed: entries calculation exact per ticket table, accumulated spend, remaining-until-next-entry, entitlement composite scenario, number formatting, claim payload shape validation (exceeds/duplicate/out-of-range/empty/valid), status+period gate, link selection limit validation, token-remaining/max-selectable never trust either cap in isolation.");
 }
 
 run();

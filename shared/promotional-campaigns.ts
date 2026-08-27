@@ -77,6 +77,14 @@ export interface PromotionalAccessToken {
   readonly createdAt: string;
   readonly expiresAt: string | null;
   readonly revokedAt: string | null;
+  /**
+   * PROMOTIONAL-CAMPAIGNS-LINK-SELECTION-LIMIT-04 — quantos dos direitos JÁ EXISTENTES do cliente este
+   * link específico pode consumir (nunca cria direitos novos). `null` = link legado, criado antes desta
+   * feature — sem teto próprio, capado só pelo saldo global (comportamento idêntico ao anterior).
+   */
+  readonly selectionLimit: number | null;
+  /** Quantos números já foram confirmados especificamente através DESTE token (nunca reseta). */
+  readonly claimedThroughToken: number;
 }
 
 export interface PromotionalEntitlement {
@@ -131,6 +139,33 @@ export function calculateAmountUntilNextEntry(qualifyingSpend: number, spendPerE
   if (remainder === 0 && qualifyingSpend > 0) return 0;
   const missing = spendPerEntry - remainder;
   return Math.round(missing * 100) / 100;
+}
+
+/**
+ * PROMOTIONAL-CAMPAIGNS-LINK-SELECTION-LIMIT-04 — valida `selectionLimit` ao gerar um link: inteiro,
+ * 1 <= valor <= direitos disponíveis do cliente NO MOMENTO da criação. Nunca cria direitos — só decide
+ * quantos dos já existentes este link específico poderá consumir. Retorna null se inválido.
+ */
+export function validateSelectionLimit(value: unknown, entriesAvailable: number): number | null {
+  const num = Number(value);
+  if (!Number.isFinite(num) || !Number.isInteger(num)) return null;
+  if (num < 1 || num > entriesAvailable) return null;
+  return num;
+}
+
+/** Quantos deste token específico ainda podem ser usados. `null` = link legado, sem teto próprio. */
+export function calculateTokenRemaining(selectionLimit: number | null, claimedThroughToken: number): number | null {
+  if (selectionLimit === null) return null;
+  return Math.max(0, selectionLimit - claimedThroughToken);
+}
+
+/**
+ * O teto real de uma claim através de um token específico: o menor valor entre o saldo GLOBAL do
+ * cliente (pode ter mudado desde a criação do link) e o que resta do teto próprio do token. Nunca
+ * confia isoladamente em um dos dois — protege contra múltiplos links somados excederem o saldo real.
+ */
+export function calculateMaxSelectable(entriesAvailable: number, tokenRemaining: number | null): number {
+  return tokenRemaining === null ? entriesAvailable : Math.min(entriesAvailable, tokenRemaining);
 }
 
 export function calculateEntitlement(qualifyingSpend: number, spendPerEntry: number, entriesAlreadyClaimed: number): PromotionalEntitlement {

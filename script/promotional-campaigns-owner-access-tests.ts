@@ -5,6 +5,7 @@
  * produção — não uma reimplementação de teste.
  */
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import http from "node:http";
 import express from "express";
 import { initializeApp } from "firebase/app";
@@ -162,9 +163,11 @@ async function main() {
   }
 
   // ===== I: outro cliente (Maria) não consegue escolher um número já claimed por João =====
+  // A venda precisa existir ANTES da geração do link: LINK-SELECTION-LIMIT-04 passou a exigir
+  // entriesAvailable > 0 no momento de gerar o link (teste G do novo ticket).
+  await db.doc(`users/${adminAUid}/sales/pc01-sale-maria`).set({ id: "pc01-sale-maria", clientId: clientMariaId, total: 500, totalPrice: 500, date: saleDate, products: [] });
   const linkMaria = await postJson(`/api/admin/sorteios/campaigns/${campaignId}/links`, { customerId: clientMariaId }, adminAToken);
   const tokenMaria = linkMaria.body.token as string;
-  await db.doc(`users/${adminAUid}/sales/pc01-sale-maria`).set({ id: "pc01-sale-maria", clientId: clientMariaId, total: 500, totalPrice: 500, date: saleDate, products: [] });
   {
     const { body } = await postJson(`/api/public/sorteios/${campaignSlug}/claim`, { token: tokenMaria, numbers: [38] });
     assert.equal(body.ok, false, "I: número já claimed por outro cliente precisa ser DENY");
@@ -195,7 +198,10 @@ async function main() {
     const invalid = await getJson(`/api/public/sorteios/${campaignSlug}?t=token-que-nao-existe`);
     assert.equal(invalid.status, 403, "K: token inválido precisa ser DENY");
 
-    const linkToRevoke = await postJson(`/api/admin/sorteios/campaigns/${campaignId}/links`, { customerId: clientJoaoId }, adminAToken);
+    // clientMariaId (não clientJoaoId): João já esgotou seus 3 direitos no teste G — LINK-SELECTION-LIMIT-04
+    // passou a exigir entriesAvailable > 0 para gerar um link, então precisamos de um cliente com saldo.
+    const linkToRevoke = await postJson(`/api/admin/sorteios/campaigns/${campaignId}/links`, { customerId: clientMariaId }, adminAToken);
+    assert.equal(linkToRevoke.status, 201, "K: geração do link a ser revogado deve suceder (cliente ainda tem saldo)");
     await postJson(`/api/admin/sorteios/campaigns/${campaignId}/links/${linkToRevoke.body.tokenId}/revoke`, {}, adminAToken);
     const revokedClaim = await postJson(`/api/public/sorteios/${campaignSlug}/claim`, { token: linkToRevoke.body.token, numbers: [70] });
     assert.equal(revokedClaim.body.ok, false, "K: token revogado precisa ser DENY");
@@ -222,8 +228,178 @@ async function main() {
     assert.equal(finishedClaim.body.denyReason, "CAMPAIGN_NOT_ACTIVE", "L: finished precisa recusar claim");
   }
 
+  // ==================================================================================================
+  // PROMOTIONAL-CAMPAIGNS-LINK-SELECTION-LIMIT-04 — admin escolhe quantos dos direitos JÁ EXISTENTES
+  // um link específico libera; nunca cria direitos novos; servidor é autoridade sobre o teto real.
+  // ==================================================================================================
+  function hashTokenForTest(rawToken: string): string {
+    return crypto.createHash("sha256").update(rawToken).digest("hex");
+  }
+  async function makeClientWithSales(name: string, saleTotal: number): Promise<string> {
+    const id = `pc04-client-${name}-${suffix}`;
+    await db.doc(`users/${adminAUid}/clients/${id}`).set({ id, name, phone: null });
+    if (saleTotal > 0) {
+      await db.doc(`users/${adminAUid}/sales/pc04-sale-${name}-${suffix}`).set({
+        id: `pc04-sale-${name}-${suffix}`, clientId: id, total: saleTotal, totalPrice: saleTotal, date: saleDate, products: [],
+      });
+    }
+    return id;
+  }
+
+  const limitCampaign = await postJson("/api/admin/sorteios/campaigns", {
+    title: "Sorteio Selection Limit", prizeName: "Prêmio", startsAt, endsAt, spendPerEntry: 100, numberCount: 100,
+  }, adminAToken);
+  const limitCampaignId = limitCampaign.body.id as string;
+  const limitSlug = limitCampaign.body.slug as string;
+  await patchJson(`/api/admin/sorteios/campaigns/${limitCampaignId}/status`, { status: "active" }, adminAToken);
+
+  // ===== M (ticket §12 test G): cliente sem available => link não pode ser criado =====
+  {
+    const semVendasId = await makeClientWithSales("sem-vendas", 0);
+    const { status, body } = await postJson(`/api/admin/sorteios/campaigns/${limitCampaignId}/links`, { customerId: semVendasId }, adminAToken);
+    assert.equal(status, 400, "M: cliente sem direitos disponíveis não pode ter link criado");
+    assert.equal(body.code, "NO_ENTRIES_AVAILABLE");
+  }
+
+  // ===== N: endpoint de preview de entitlement (usado pela UI admin ANTES de gerar o link) =====
+  {
+    const carlaId = await makeClientWithSales("carla", 500);
+    const { status, body } = await getJson(`/api/admin/sorteios/campaigns/${limitCampaignId}/clients/${carlaId}/entitlement`, adminAToken);
+    assert.equal(status, 200, "N: preview de entitlement deve suceder");
+    assert.equal(body.qualifyingSpend, 500);
+    assert.equal(body.entriesEarned, 5);
+    assert.equal(body.entriesAvailable, 5, "N: R$500/R$100 = 5 direitos, nenhum ainda usado");
+
+    // ===== N2 (ticket §12 testes A/B): limit=3 de um available=5; uso parcial; reabertura =====
+    const link1 = await postJson(`/api/admin/sorteios/campaigns/${limitCampaignId}/links`, { customerId: carlaId, selectionLimit: 3 }, adminAToken);
+    assert.equal(link1.status, 201);
+    assert.equal(link1.body.selectionLimit, 3);
+    const tokenCarla1 = link1.body.token as string;
+
+    {
+      const view = await getJson(`/api/public/sorteios/${limitSlug}?t=${tokenCarla1}`);
+      assert.equal(view.body.entriesAvailable, 3, "N2: teto do link (3) é menor que o saldo global (5) => 3");
+    }
+
+    const claim1 = await postJson(`/api/public/sorteios/${limitSlug}/claim`, { token: tokenCarla1, numbers: [1] });
+    assert.equal(claim1.body.ok, true, "N2: primeira claim (1 número) deve confirmar");
+
+    {
+      // B: available global agora 4, token remaining agora 2 => min = 2
+      const view = await getJson(`/api/public/sorteios/${limitSlug}?t=${tokenCarla1}`);
+      assert.equal(view.body.entriesAvailable, 2, "N2/B: token remaining=2 após usar 1 dos 3 liberados neste link");
+    }
+
+    const claim2 = await postJson(`/api/public/sorteios/${limitSlug}/claim`, { token: tokenCarla1, numbers: [2, 3] });
+    assert.equal(claim2.body.ok, true, "N2: segunda claim (2 números) deve confirmar, completando o teto do token");
+
+    {
+      // A: global remaining=2, token remaining=0 => min = 0
+      const view = await getJson(`/api/public/sorteios/${limitSlug}?t=${tokenCarla1}`);
+      assert.equal(view.body.entriesAvailable, 0, "N2/A: token esgotado (0), mesmo com saldo global ainda em 2");
+    }
+
+    const claim3 = await postJson(`/api/public/sorteios/${limitSlug}/claim`, { token: tokenCarla1, numbers: [4] });
+    assert.equal(claim3.body.ok, false, "N2: quarto número pelo MESMO link precisa ser recusado — teto do token esgotado");
+    assert.equal(claim3.body.denyReason, "EXCEEDS_AVAILABLE_ENTRIES");
+
+    // Novo link sem selectionLimit explícito => default é o saldo ATUAL (2), nunca o original (5)
+    const link2 = await postJson(`/api/admin/sorteios/campaigns/${limitCampaignId}/links`, { customerId: carlaId }, adminAToken);
+    assert.equal(link2.body.selectionLimit, 2, "N2: default do novo link é o saldo global restante (2), não o original (5)");
+    const view2 = await getJson(`/api/public/sorteios/${limitSlug}?t=${link2.body.token}`);
+    assert.equal(view2.body.entriesAvailable, 2);
+  }
+
+  // ===== O (ticket §12 test H): dois links simultâneos nunca somam mais que o saldo real =====
+  {
+    const diegoId = await makeClientWithSales("diego", 500); // available = 5
+    const linkA = await postJson(`/api/admin/sorteios/campaigns/${limitCampaignId}/links`, { customerId: diegoId, selectionLimit: 3 }, adminAToken);
+    const linkB = await postJson(`/api/admin/sorteios/campaigns/${limitCampaignId}/links`, { customerId: diegoId, selectionLimit: 4 }, adminAToken);
+    assert.equal(linkA.status, 201);
+    assert.equal(linkB.status, 201, "O: os dois links PODEM existir — gerar link não reserva/consome nada");
+
+    const claimA = await postJson(`/api/public/sorteios/${limitSlug}/claim`, { token: linkA.body.token, numbers: [10, 11, 12] });
+    assert.equal(claimA.body.ok, true, "O: claim de 3 via link A (teto 3) deve confirmar");
+
+    const claimBOver = await postJson(`/api/public/sorteios/${limitSlug}/claim`, { token: linkB.body.token, numbers: [13, 14, 15] });
+    assert.equal(claimBOver.body.ok, false, "O: link B pede 3, mas só resta 2 de saldo GLOBAL real — precisa recusar mesmo com teto próprio de 4");
+    assert.equal(claimBOver.body.denyReason, "EXCEEDS_AVAILABLE_ENTRIES");
+
+    const claimB = await postJson(`/api/public/sorteios/${limitSlug}/claim`, { token: linkB.body.token, numbers: [13, 14] });
+    assert.equal(claimB.body.ok, true, "O: claim de 2 via link B (o que realmente resta) deve confirmar");
+
+    const participantSnap = await db.doc(`promotionalCampaigns/${limitCampaignId}/participants/${diegoId}`).get();
+    assert.equal(participantSnap.data()?.entriesClaimed, 5, "O: total confirmado através dos dois links juntos nunca excede os 5 direitos reais");
+  }
+
+  // ===== P (ticket §12 test I): claims concorrentes nunca causam overspend de entitlement =====
+  {
+    const elisId = await makeClientWithSales("elis", 200); // available = 2
+    const linkP1 = await postJson(`/api/admin/sorteios/campaigns/${limitCampaignId}/links`, { customerId: elisId }, adminAToken); // default limit = 2
+    const linkP2 = await postJson(`/api/admin/sorteios/campaigns/${limitCampaignId}/links`, { customerId: elisId }, adminAToken); // default limit = 2
+
+    const [raceA, raceB] = await Promise.all([
+      postJson(`/api/public/sorteios/${limitSlug}/claim`, { token: linkP1.body.token, numbers: [20, 21] }),
+      postJson(`/api/public/sorteios/${limitSlug}/claim`, { token: linkP2.body.token, numbers: [22, 23] }),
+    ]);
+    const oks = [raceA, raceB].filter((r) => r.body.ok === true);
+    const denies = [raceA, raceB].filter((r) => r.body.ok === false);
+    assert.equal(oks.length, 1, "P: só uma das duas claims concorrentes (2+2 pedidos, 2 disponíveis) pode confirmar por completo");
+    assert.equal(denies.length, 1, "P: a outra precisa ser recusada por completo — nunca uma confirmação parcial que causaria overspend");
+    assert.equal(denies[0].body.denyReason, "EXCEEDS_AVAILABLE_ENTRIES");
+
+    const participantSnap = await db.doc(`promotionalCampaigns/${limitCampaignId}/participants/${elisId}`).get();
+    assert.equal(participantSnap.data()?.entriesClaimed, 2, "P: exatamente 2 confirmados no total — nunca mais do que o saldo real, mesmo sob concorrência real");
+  }
+
+  // ===== Q (ticket §12 test J): revogar um link preserva os direitos NÃO utilizados por ele =====
+  {
+    const fabioId = await makeClientWithSales("fabio", 500); // available = 5
+    const linkToRevoke = await postJson(`/api/admin/sorteios/campaigns/${limitCampaignId}/links`, { customerId: fabioId, selectionLimit: 3 }, adminAToken);
+    const claimBeforeRevoke = await postJson(`/api/public/sorteios/${limitSlug}/claim`, { token: linkToRevoke.body.token, numbers: [30] });
+    assert.equal(claimBeforeRevoke.body.ok, true);
+    // global remaining = 4 (5 - 1); os 2 restantes do teto deste link (3 - 1) NUNCA foram consumidos.
+
+    await postJson(`/api/admin/sorteios/campaigns/${limitCampaignId}/links/${linkToRevoke.body.tokenId}/revoke`, {}, adminAToken);
+    const claimAfterRevoke = await postJson(`/api/public/sorteios/${limitSlug}/claim`, { token: linkToRevoke.body.token, numbers: [31] });
+    assert.equal(claimAfterRevoke.body.ok, false, "Q: link revogado precisa continuar bloqueado");
+    assert.equal(claimAfterRevoke.body.denyReason, "REVOKED_TOKEN");
+
+    // Novo link reflete o saldo GLOBAL real (4) — nada do teto do link revogado ficou "preso".
+    const newLink = await postJson(`/api/admin/sorteios/campaigns/${limitCampaignId}/links`, { customerId: fabioId }, adminAToken);
+    assert.equal(newLink.body.selectionLimit, 4, "Q: revogar preserva o saldo NÃO utilizado — disponível para um novo link");
+  }
+
+  // ===== R (ticket §12 test K): link LEGADO (criado antes desta feature, sem selectionLimit) continua
+  // funcionando exatamente como antes — capado só pelo saldo global. =====
+  {
+    const gustavoId = await makeClientWithSales("gustavo", 300); // available = 3
+    const legacyRawToken = crypto.randomBytes(32).toString("base64url");
+    await db.collection(`promotionalCampaigns/${limitCampaignId}/accessTokens`).add({
+      customerId: gustavoId,
+      tokenHash: hashTokenForTest(legacyRawToken),
+      createdAt: new Date().toISOString(),
+      expiresAt: null,
+      revokedAt: null,
+      // Deliberadamente SEM selectionLimit/claimedThroughToken — simula um token criado antes desta feature.
+    });
+
+    const view = await getJson(`/api/public/sorteios/${limitSlug}?t=${legacyRawToken}`);
+    assert.equal(view.body.entriesAvailable, 3, "R: link legado sem selectionLimit é capado só pelo saldo global (3)");
+
+    const claim = await postJson(`/api/public/sorteios/${limitSlug}/claim`, { token: legacyRawToken, numbers: [40, 41, 42] });
+    assert.equal(claim.body.ok, true, "R: claim completa através de um link legado precisa continuar funcionando");
+  }
+
+  // ===== S (ticket §12 test L): tenant isolation — admin B não gera link numa campanha de admin A =====
+  {
+    const { status, body } = await postJson(`/api/admin/sorteios/campaigns/${limitCampaignId}/links`, { customerId: clientJoaoId }, adminBToken);
+    assert.equal(status, 403, "S: admin B não pode gerar link numa campanha que não é dele");
+    assert.equal(body.code, "FORBIDDEN");
+  }
+
   server.close();
-  console.log("PROMOTIONAL-CAMPAIGNS-01 owner-access/concurrency tests passed: non-admin create denied, cross-owner detail denied, entitlement computed from real sales (350/100=3), claim confirms atomically, reopening link reflects 0 remaining + own numbers, another customer blocked from an already-claimed number, concurrent claims for the same number resolve to exactly one winner, invalid/revoked token denied, draft/paused/finished campaigns reject claims.");
+  console.log("PROMOTIONAL-CAMPAIGNS-01 owner-access/concurrency tests passed: non-admin create denied, cross-owner detail denied, entitlement computed from real sales (350/100=3), claim confirms atomically, reopening link reflects 0 remaining + own numbers, another customer blocked from an already-claimed number, concurrent claims for the same number resolve to exactly one winner, invalid/revoked token denied, draft/paused/finished campaigns reject claims. LINK-SELECTION-LIMIT-04: link creation blocked with zero entitlement, entitlement preview endpoint, per-token cap independent of global balance, reopening reflects token-scoped remaining, multiple links never jointly overspend, concurrent claims across different links never overspend entitlement, revoke preserves unused rights, legacy tokens without selectionLimit remain fully compatible, tenant isolation on link creation.");
 }
 
 main().catch((error) => {

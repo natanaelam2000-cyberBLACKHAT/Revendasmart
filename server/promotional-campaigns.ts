@@ -24,6 +24,8 @@ import { requireAdmin } from "./admin-auth";
 import { logInfo, logWarn } from "./logger";
 import {
   calculateEntitlement,
+  calculateMaxSelectable,
+  calculateTokenRemaining,
   DEFAULT_NUMBER_COUNT,
   DEFAULT_NUMBER_START,
   generateCampaignSlug,
@@ -32,6 +34,7 @@ import {
   isPromotionalCampaignStatus,
   validateClaimPayloadShape,
   validateNumberCount,
+  validateSelectionLimit,
   type PromotionalCampaignStatus,
 } from "../shared/promotional-campaigns";
 
@@ -42,6 +45,7 @@ const SORTEIO_ERROR_MESSAGES = {
   CAMPAIGN_NOT_FOUND: "Sorteio não encontrado.",
   CLIENT_NOT_FOUND: "Cliente não encontrado.",
   TOKEN_CREATE_FAILED: "Não foi possível gerar o link. Tente novamente.",
+  NO_ENTRIES_AVAILABLE: "Este cliente não possui participações disponíveis.",
   SERVER_ERROR: "Ocorreu um erro temporário. Tente novamente.",
 } as const;
 type SorteioErrorCode = keyof typeof SORTEIO_ERROR_MESSAGES;
@@ -100,6 +104,21 @@ async function computeQualifyingSpend(ownerId: string, customerId: string, start
     if (Number.isFinite(value)) totalCents += Math.round(value * 100);
   }
   return totalCents / 100;
+}
+
+/** Entitlement GLOBAL atual do cliente (não escopado a nenhum token/link específico). */
+async function computeCustomerEntitlement(
+  ownerId: string,
+  campaignId: string,
+  customerId: string,
+  campaign: FirebaseFirestore.DocumentData,
+) {
+  const [participantSnap, qualifyingSpend] = await Promise.all([
+    participantsRef(campaignId).doc(customerId).get(),
+    computeQualifyingSpend(ownerId, customerId, campaign.startsAt, campaign.endsAt),
+  ]);
+  const entriesAlreadyClaimed = participantSnap.exists ? Number(participantSnap.data()?.entriesClaimed ?? 0) : 0;
+  return calculateEntitlement(qualifyingSpend, campaign.spendPerEntry, entriesAlreadyClaimed);
 }
 
 function sanitizePositiveNumber(value: unknown): number | null {
@@ -300,6 +319,30 @@ export function registerPromotionalCampaignRoutes(
     }
   });
 
+  // ===== GET .../clients/:customerId/entitlement — direitos ATUAIS do cliente, para o admin ver antes
+  // de decidir quanto liberar num link (não cria nem reserva nada — só leitura). =====
+  app.get("/api/admin/sorteios/campaigns/:campaignId/clients/:customerId/entitlement", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    const actorUid = (req as Request & { firebaseUid?: string }).firebaseUid;
+    if (!actorUid) return sendSorteioError(res, 401, "UNAUTHORIZED");
+    const campaignId = String(req.params.campaignId);
+    const customerId = String(req.params.customerId);
+    try {
+      const campaignSnap = await campaignsRef().doc(campaignId).get();
+      if (!campaignSnap.exists) return sendSorteioError(res, 404, "CAMPAIGN_NOT_FOUND");
+      const campaign = campaignSnap.data()!;
+      if (campaign.ownerId !== actorUid) return sendSorteioError(res, 403, "FORBIDDEN");
+
+      const clientSnap = await db().collection("users").doc(actorUid).collection("clients").doc(customerId).get();
+      if (!clientSnap.exists) return sendSorteioError(res, 404, "CLIENT_NOT_FOUND");
+
+      const entitlement = await computeCustomerEntitlement(actorUid, campaignId, customerId, campaign);
+      return res.status(200).json(entitlement);
+    } catch (error) {
+      logWarn("promotional_campaigns.entitlement_failed", { message: error instanceof Error ? error.message : String(error) });
+      return sendSorteioError(res, 500, "SERVER_ERROR");
+    }
+  });
+
   // ===== POST /api/admin/sorteios/campaigns/:campaignId/links — gera link individual (campanha + cliente) =====
   app.post("/api/admin/sorteios/campaigns/:campaignId/links", requireAuth, requireAdmin, async (req: Request, res: Response) => {
     const actorUid = (req as Request & { firebaseUid?: string }).firebaseUid;
@@ -316,6 +359,19 @@ export function registerPromotionalCampaignRoutes(
       const clientSnap = await db().collection("users").doc(actorUid).collection("clients").doc(customerId).get();
       if (!clientSnap.exists) return sendSorteioError(res, 404, "CLIENT_NOT_FOUND");
 
+      // PROMOTIONAL-CAMPAIGNS-LINK-SELECTION-LIMIT-04 — o link NUNCA cria ou reserva direitos: só decide
+      // um teto (selectionLimit) para quantos dos direitos JÁ EXISTENTES este link específico libera.
+      // Sem valor enviado, o default é o saldo atual inteiro (comportamento idêntico ao anterior à esta
+      // feature). Recalcular aqui é deliberado — o admin pode ter aberto a tela há um tempo.
+      const entitlement = await computeCustomerEntitlement(actorUid, campaignId, customerId, campaign);
+      if (entitlement.entriesAvailable <= 0) return sendSorteioError(res, 400, "NO_ENTRIES_AVAILABLE");
+
+      const rawSelectionLimit = req.body?.selectionLimit;
+      const selectionLimit = rawSelectionLimit === undefined || rawSelectionLimit === null
+        ? entitlement.entriesAvailable
+        : validateSelectionLimit(rawSelectionLimit, entitlement.entriesAvailable);
+      if (selectionLimit === null) return sendSorteioError(res, 400, "VALIDATION_ERROR", { field: "selectionLimit" });
+
       const rawToken = crypto.randomBytes(32).toString("base64url");
       const tokenRef = tokensRef(campaignId).doc();
       const now = new Date().toISOString();
@@ -325,13 +381,16 @@ export function registerPromotionalCampaignRoutes(
         createdAt: now,
         expiresAt: null,
         revokedAt: null,
+        selectionLimit,
+        claimedThroughToken: 0,
       });
-      logInfo("promotional_campaigns.link_created", { campaignId, actorUid, tokenId: tokenRef.id });
+      logInfo("promotional_campaigns.link_created", { campaignId, actorUid, tokenId: tokenRef.id, selectionLimit });
       return res.status(201).json({
         tokenId: tokenRef.id,
         slug: campaign.slug,
         token: rawToken,
         path: `/sorteio/${campaign.slug}?t=${rawToken}`,
+        selectionLimit,
       });
     } catch (error) {
       logWarn("promotional_campaigns.link_create_failed", { message: error instanceof Error ? error.message : String(error) });
@@ -384,6 +443,15 @@ export function registerPromotionalCampaignRoutes(
       const entriesAlreadyClaimed = participantSnap.exists ? Number(participantSnap.data()?.entriesClaimed ?? 0) : 0;
       const entitlement = calculateEntitlement(qualifyingSpend, campaign.spendPerEntry, entriesAlreadyClaimed);
 
+      // PROMOTIONAL-CAMPAIGNS-LINK-SELECTION-LIMIT-04 — o que este link específico ainda libera pode ser
+      // MENOR que o saldo global do cliente (o admin pode ter limitado o link, ou o cliente pode ter
+      // outro link com saldo já consumido). `selectionLimit` ausente no documento (link legado, criado
+      // antes desta feature) normaliza para `null` = sem teto próprio, capado só pelo saldo global.
+      const tokenSelectionLimit = typeof tokenData.selectionLimit === "number" ? tokenData.selectionLimit : null;
+      const tokenClaimedThroughToken = Number(tokenData.claimedThroughToken ?? 0);
+      const tokenRemaining = calculateTokenRemaining(tokenSelectionLimit, tokenClaimedThroughToken);
+      const maxSelectable = calculateMaxSelectable(entitlement.entriesAvailable, tokenRemaining);
+
       // §16/§26: público nunca sabe QUEM escolheu — só se o número está livre, ou "claimed" (bloqueado),
       // ou é um dos SEUS PRÓPRIOS números (mine: true), nunca customerId/telefone de terceiros.
       const claimedByOthers = new Map<number, boolean>();
@@ -409,7 +477,9 @@ export function registerPromotionalCampaignRoutes(
           numberEnd: campaign.numberEnd,
         },
         claimable: isCampaignPubliclyClaimable({ status: campaign.status, startsAt: campaign.startsAt, endsAt: campaign.endsAt }),
-        entriesAvailable: entitlement.entriesAvailable,
+        // Escopado a ESTE link/token — nunca o saldo global bruto (que pode incluir direitos reservados
+        // a outros links do mesmo cliente). Ver comentário acima sobre maxSelectable.
+        entriesAvailable: maxSelectable,
         myNumbers: Array.from(myNumbers).sort((a, b) => a - b),
         numbers,
       });
@@ -443,10 +513,15 @@ export function registerPromotionalCampaignRoutes(
 
         const tokenQuerySnap = await transaction.get(tokensRef(campaignId).where("tokenHash", "==", tokenHash).limit(1));
         if (tokenQuerySnap.empty) return { ok: false as const, denyReason: "INVALID_TOKEN" as const };
-        const tokenData = tokenQuerySnap.docs[0].data();
+        const tokenDoc = tokenQuerySnap.docs[0];
+        const tokenData = tokenDoc.data();
         if (tokenData.revokedAt) return { ok: false as const, denyReason: "REVOKED_TOKEN" as const };
         if (tokenData.expiresAt && Date.now() > Date.parse(tokenData.expiresAt)) return { ok: false as const, denyReason: "EXPIRED_TOKEN" as const };
         const customerId = tokenData.customerId as string;
+        // PROMOTIONAL-CAMPAIGNS-LINK-SELECTION-LIMIT-04 — `selectionLimit` ausente (link legado) normaliza
+        // para null = sem teto próprio, comportamento idêntico ao anterior a esta feature.
+        const tokenSelectionLimit = typeof tokenData.selectionLimit === "number" ? tokenData.selectionLimit : null;
+        const tokenClaimedThroughToken = Number(tokenData.claimedThroughToken ?? 0);
 
         if (!isCampaignPubliclyClaimable({ status: campaign.status, startsAt: campaign.startsAt, endsAt: campaign.endsAt })) {
           return { ok: false as const, denyReason: campaign.status !== "active" ? "CAMPAIGN_NOT_ACTIVE" as const : "OUTSIDE_CAMPAIGN_PERIOD" as const };
@@ -471,11 +546,18 @@ export function registerPromotionalCampaignRoutes(
         const entriesAlreadyClaimed = participantSnap.exists ? Number(participantSnap.data()?.entriesClaimed ?? 0) : 0;
         const entitlement = calculateEntitlement(qualifyingSpend, campaign.spendPerEntry, entriesAlreadyClaimed);
 
+        // O teto real desta claim é o MENOR entre o saldo global (recalculado fresco, nunca confiado do
+        // client) e o que resta do teto próprio deste token — nunca um dos dois isoladamente. Protege
+        // contra múltiplos links do mesmo cliente juntos excederem o saldo real (concorrência incluída,
+        // já que toda esta leitura acontece dentro da mesma transação Firestore).
+        const tokenRemaining = calculateTokenRemaining(tokenSelectionLimit, tokenClaimedThroughToken);
+        const maxSelectable = calculateMaxSelectable(entitlement.entriesAvailable, tokenRemaining);
+
         const shapeError = validateClaimPayloadShape({
           numbers,
           numberStart: campaign.numberStart,
           numberEnd: campaign.numberEnd,
-          entriesAvailable: entitlement.entriesAvailable,
+          entriesAvailable: maxSelectable,
         });
         if (shapeError) return { ok: false as const, denyReason: shapeError };
 
@@ -498,6 +580,8 @@ export function registerPromotionalCampaignRoutes(
           claimedNumbers: [...previousClaimed, ...numbers],
           updatedAt: now,
         }, { merge: true });
+        // Consumo específico DESTE token — nunca reseta, mesmo que o cliente tenha outros links.
+        transaction.update(tokenDoc.ref, { claimedThroughToken: tokenClaimedThroughToken + numbers.length });
 
         return { ok: true as const, claimedNumbers: numbers };
       });

@@ -119,7 +119,7 @@ export default function SorteioPublico() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+      <div className="flex min-h-screen items-center justify-center bg-background">
         <Ticket className="h-8 w-8 animate-pulse text-primary" />
       </div>
     );
@@ -127,7 +127,7 @@ export default function SorteioPublico() {
 
   if (loadError || !view) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+      <div className="flex min-h-screen items-center justify-center bg-background px-4">
         <div className="text-center">
           <Ticket className="mx-auto mb-3 h-10 w-10 text-muted-foreground" />
           <p className="text-sm font-bold text-muted-foreground">{loadError ?? "Sorteio indisponível."}</p>
@@ -139,7 +139,7 @@ export default function SorteioPublico() {
   const { campaign } = view;
 
   return (
-    <div className="min-h-screen bg-slate-50 pb-28">
+    <div className="min-h-screen bg-background pb-28">
       <div className="mx-auto max-w-md px-4 py-6">
         {campaign.prizeImageUrl && (
           <img src={campaign.prizeImageUrl} alt={campaign.prizeName} className="mb-4 aspect-square w-full rounded-3xl object-cover" />
@@ -177,8 +177,15 @@ export default function SorteioPublico() {
         )}
 
         <div className="mt-4 flex items-center justify-between">
-          <p className="text-xs font-bold text-muted-foreground">
-            Você tem {view.entriesAvailable} {view.entriesAvailable === 1 ? "direito disponível" : "direitos disponíveis"}
+          {/* PROMOTIONAL-CAMPAIGNS-LINK-SELECTION-LIMIT-04 §9 — entriesAvailable aqui já é escopado a
+              ESTE link (server/promotional-campaigns.ts calcula o menor entre saldo global e o teto
+              próprio do token); nunca linguagem técnica ("direitos"/"entitlement") na UI pública. */}
+          <p className="text-xs font-bold text-muted-foreground" data-testid="text-selectable-count">
+            {view.entriesAvailable === 0 && view.myNumbers.length > 0
+              ? "Você não possui mais escolhas disponíveis neste link"
+              : view.myNumbers.length > 0
+                ? `Você ainda pode escolher ${view.entriesAvailable} ${view.entriesAvailable === 1 ? "número" : "números"} neste link`
+                : `Você pode escolher ${view.entriesAvailable} ${view.entriesAvailable === 1 ? "número" : "números"}`}
           </p>
           {view.entriesAvailable > 0 && (
             <p className="text-xs font-black text-foreground" data-testid="text-selection-count">
@@ -190,7 +197,7 @@ export default function SorteioPublico() {
         <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-bold text-muted-foreground" data-testid="legend-number-states">
           <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-md border border-border/60 bg-white" /> Disponível</span>
           <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-md border border-primary bg-primary" /> Selecionado</span>
-          <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-md bg-slate-200" /> Indisponível</span>
+          <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-md bg-secondary" /> Indisponível</span>
         </div>
 
         <div className="mt-2 grid grid-cols-6 gap-2 sm:grid-cols-8">
@@ -209,11 +216,11 @@ export default function SorteioPublico() {
                 className={[
                   "flex h-11 min-w-11 items-center justify-center rounded-xl border text-sm font-black transition-colors",
                   status === "claimed"
-                    ? "cursor-not-allowed border-transparent bg-slate-200 text-slate-400"
+                    ? "cursor-not-allowed border-transparent bg-secondary text-muted-foreground"
                     : isSelected
                       ? "border-primary bg-primary text-white"
                       : disabled
-                        ? "cursor-not-allowed border-border/40 bg-white text-slate-300"
+                        ? "cursor-not-allowed border-border/40 bg-white text-muted-foreground/40"
                         : "border-border/60 bg-white text-foreground active:scale-95",
                 ].join(" ")}
               >
