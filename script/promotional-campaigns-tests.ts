@@ -5,7 +5,9 @@
  * `npm run test:owner-access` (mesmo padrão de `owner-access-02-tests.ts`).
  */
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import {
+  buildEligibleEntries,
   calculateAmountUntilNextEntry,
   calculateAvailableEntries,
   calculateEarnedEntries,
@@ -13,10 +15,15 @@ import {
   calculateEntitlementWithManualGrants,
   calculateMaxSelectable,
   calculateTokenRemaining,
+  canonicalEligibleSetString,
+  countDistinctParticipants,
   formatCampaignNumber,
+  isCampaignClosable,
+  isCampaignDrawable,
   isCampaignPubliclyClaimable,
   isEntitlementPolicy,
   isManualGrantReason,
+  isPromotionalCampaignStatus,
   MAX_CAMPAIGN_NUMBERS,
   validateClaimPayloadShape,
   validateManualGrantQuantity,
@@ -190,6 +197,68 @@ function run(): void {
   }
 
   console.log("PROMOTIONAL-CAMPAIGNS-01 pure-function tests passed: entries calculation exact per ticket table, accumulated spend, remaining-until-next-entry, entitlement composite scenario, number formatting, claim payload shape validation (exceeds/duplicate/out-of-range/empty/valid), status+period gate, link selection limit validation, token-remaining/max-selectable never trust either cap in isolation, manual-internal policy/quantity validation, manual-grant entitlement composition (automatic+manual, qualifyingSpend untouched, REGISTERED_SALES_ONLY ignores manual).");
+
+  // ===== PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-06 §24 — motor de apuração (funções puras) =====
+
+  // status/transições
+  assert.equal(isPromotionalCampaignStatus("entries_closed"), true);
+  assert.equal(isPromotionalCampaignStatus("drawn"), true);
+  assert.equal(isPromotionalCampaignStatus("bogus"), false);
+  assert.equal(isCampaignClosable("active"), true, "§3: active pode encerrar");
+  assert.equal(isCampaignClosable("paused"), true, "§3: paused pode encerrar");
+  assert.equal(isCampaignClosable("draft"), false);
+  assert.equal(isCampaignClosable("entries_closed"), false, "não encerra de novo");
+  assert.equal(isCampaignClosable("drawn"), false);
+  assert.equal(isCampaignDrawable("entries_closed"), true, "§8: só sorteia depois de encerrar");
+  assert.equal(isCampaignDrawable("active"), false);
+  assert.equal(isCampaignDrawable("paused"), false);
+  assert.equal(isCampaignDrawable("drawn"), false, "não sorteia de novo");
+
+  // §24.1/§24.2 — campanha com 5 números claimed, snapshot contém exatamente 5
+  {
+    const eligible = buildEligibleEntries([
+      { number: 18, customerId: "joao" },
+      { number: 7, customerId: "moises" },
+      { number: 39, customerId: "moises" },
+      { number: 2, customerId: "ana" },
+      { number: 91, customerId: "moises" },
+    ]);
+    assert.equal(eligible.length, 5, "§24.2: snapshot contém exatamente os 5 números claimed");
+    assert.deepEqual(eligible.map((e) => e.number), [2, 7, 18, 39, 91], "§17: sempre ordenado crescente, nunca a ordem de leitura do Firestore");
+    assert.equal(countDistinctParticipants(eligible), 3, "§5: Moises tem 3 chances mas é 1 participante — 3 clientes distintos no total");
+  }
+
+  // §24.3 — unclaimed não entra: buildEligibleEntries só recebe o que já foi filtrado como claimed pelo
+  // chamador (server); aqui confirmamos que a função não inventa entradas além do que foi passado.
+  {
+    const eligible = buildEligibleEntries([{ number: 5, customerId: "moises" }]);
+    assert.equal(eligible.length, 1);
+  }
+
+  // §24.4/§24.5 — origem (manual_internal vs registered_sale) não altera a elegibilidade: a função nem
+  // recebe a origem como input, só number+customerId — prova estrutural de que a apuração é cega à origem.
+  {
+    const eligible = buildEligibleEntries([
+      { number: 1, customerId: "cliente-venda-registrada" },
+      { number: 2, customerId: "cliente-manual-internal" },
+    ]);
+    assert.equal(eligible.length, 2, "§22: manual_internal e registered_sale são igualmente elegíveis");
+  }
+
+  // §24.14 — eligibleSetHash determinístico: mesmo conjunto (em qualquer ordem de entrada) => mesmo hash.
+  {
+    const setA = buildEligibleEntries([{ number: 7, customerId: "moises" }, { number: 2, customerId: "ana" }, { number: 18, customerId: "joao" }]);
+    const setB = buildEligibleEntries([{ number: 18, customerId: "joao" }, { number: 7, customerId: "moises" }, { number: 2, customerId: "ana" }]);
+    const hashA = crypto.createHash("sha256").update(canonicalEligibleSetString(setA)).digest("hex");
+    const hashB = crypto.createHash("sha256").update(canonicalEligibleSetString(setB)).digest("hex");
+    assert.equal(hashA, hashB, "§17: mesmo conjunto elegível => mesmo eligibleSetHash, independente da ordem de leitura");
+
+    const setC = buildEligibleEntries([{ number: 7, customerId: "moises" }, { number: 2, customerId: "ana" }, { number: 19, customerId: "joao" }]);
+    const hashC = crypto.createHash("sha256").update(canonicalEligibleSetString(setC)).digest("hex");
+    assert.notEqual(hashA, hashC, "conjunto diferente (19 em vez de 18) produz hash diferente — o hash é sensível ao conteúdo real");
+  }
+
+  console.log("PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-06 pure-function tests passed: status transitions (closable/drawable), eligible-set construction (sorted, origin-blind, distinct-participant count), eligibleSetHash deterministic and content-sensitive.");
 }
 
 run();

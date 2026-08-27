@@ -7,7 +7,14 @@
  * partir das vendas reais — o cliente nunca envia esse valor como verdade.
  */
 
-export type PromotionalCampaignStatus = "draft" | "active" | "paused" | "finished";
+/**
+ * PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-06 — "entries_closed" e "drawn" são novos estados intermediários
+ * entre "paused"/"active" e "finished": encerrar participações NUNCA escolhe vencedor (§3), e realizar o
+ * sorteio NUNCA é reversível por uma simples troca de status (§10/§11) — por isso ambos só são atingíveis
+ * pelas rotas dedicadas `close-entries`/`draw`, nunca pelo PATCH genérico de status. "finished" continua
+ * existindo para compatibilidade com o fluxo legado (campanhas que nunca usarão o motor de apuração).
+ */
+export type PromotionalCampaignStatus = "draft" | "active" | "paused" | "entries_closed" | "drawn" | "finished";
 
 /**
  * PROMOTIONAL-CAMPAIGNS-MANUAL-INTERNAL-05 — Sorteios Promocionais é admin-only hoje, então toda
@@ -109,6 +116,10 @@ export interface PromotionalCampaign {
   readonly winningNumber: number | null;
   readonly resultSource: string | null;
   readonly finishedAt: string | null;
+  /** PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-06 — quando as participações foram encerradas (`close-entries`).
+   * `null` em campanhas que nunca passaram por esse estado (inclui todas as campanhas anteriores a esta
+   * feature). */
+  readonly entriesClosedAt: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -288,7 +299,75 @@ export function formatCampaignNumber(value: number): string {
 }
 
 export function isPromotionalCampaignStatus(value: unknown): value is PromotionalCampaignStatus {
-  return value === "draft" || value === "active" || value === "paused" || value === "finished";
+  return (
+    value === "draft" || value === "active" || value === "paused" ||
+    value === "entries_closed" || value === "drawn" || value === "finished"
+  );
+}
+
+/** Encerrar participações só faz sentido enquanto a campanha ainda aceita claims. */
+export function isCampaignClosable(status: PromotionalCampaignStatus): boolean {
+  return status === "active" || status === "paused";
+}
+
+/** Só pode sortear depois de encerrar — nunca a partir de active/paused/draft/finished. */
+export function isCampaignDrawable(status: PromotionalCampaignStatus): boolean {
+  return status === "entries_closed";
+}
+
+/**
+ * PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-06 — cada número CLAIMED vira exatamente uma entrada elegível na
+ * apuração; a origem do direito (venda registrada ou concessão manual interna) já decidiu no momento do
+ * claim se o número podia ser escolhido — a apuração só olha para o que já está claimed, nunca reconsulta
+ * a origem (§5/§22). Ordenado por número crescente para nunca depender da ordem de retorno do Firestore
+ * (§17) — pré-requisito para `eligibleSetHash` ser determinístico.
+ */
+export interface EligibleEntry {
+  readonly number: number;
+  readonly clientId: string;
+}
+
+export function buildEligibleEntries(claimedNumbers: readonly { number: number; customerId: string }[]): EligibleEntry[] {
+  return claimedNumbers
+    .map((entry) => ({ number: entry.number, clientId: entry.customerId }))
+    .sort((a, b) => a.number - b.number);
+}
+
+/**
+ * Serialização canônica do conjunto elegível — entrada de `computeEligibleSetHash` (SHA-256, calculado no
+ * servidor com `node:crypto`; esta função fica no shared/pure porque não depende de Node). Reordena
+ * sempre por número, então o hash nunca muda por causa da ordem de leitura do Firestore — só muda se o
+ * CONJUNTO em si mudar.
+ */
+export function canonicalEligibleSetString(entries: readonly EligibleEntry[]): string {
+  return [...entries]
+    .sort((a, b) => a.number - b.number)
+    .map((entry) => `${entry.number}:${entry.clientId}`)
+    .join("|");
+}
+
+export function countDistinctParticipants(entries: readonly EligibleEntry[]): number {
+  return new Set(entries.map((entry) => entry.clientId)).size;
+}
+
+/** Resultado oficial da apuração — persistido uma única vez por campanha (§8/§10), nunca editado depois. */
+export interface OfficialDrawResult {
+  readonly drawId: string;
+  readonly campaignId: string;
+  readonly campaignOwnerId: string;
+  readonly closedAt: string | null;
+  readonly drawnAt: string;
+  readonly eligibleNumberCount: number;
+  readonly participantCount: number;
+  readonly algorithm: string;
+  readonly algorithmVersion: number;
+  readonly eligibleSetHash: string;
+  readonly winningNumber: number;
+  readonly winningClientId: string;
+  readonly winnerDisplayNameSnapshot: string;
+  readonly prizeNameSnapshot: string;
+  readonly prizeImageUrlSnapshot: string | null;
+  readonly createdBy: string;
 }
 
 export function isPromotionalAllocationMode(value: unknown): value is PromotionalAllocationMode {

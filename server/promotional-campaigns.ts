@@ -23,12 +23,17 @@ import { getFirebaseAdmin } from "./firebase-admin-init";
 import { requireAdmin } from "./admin-auth";
 import { logInfo, logWarn } from "./logger";
 import {
+  buildEligibleEntries,
   calculateEntitlementWithManualGrants,
   calculateMaxSelectable,
   calculateTokenRemaining,
+  canonicalEligibleSetString,
+  countDistinctParticipants,
   DEFAULT_NUMBER_COUNT,
   DEFAULT_NUMBER_START,
   generateCampaignSlug,
+  isCampaignClosable,
+  isCampaignDrawable,
   isCampaignPubliclyClaimable,
   isEntitlementPolicy,
   isManualGrantReason,
@@ -39,6 +44,7 @@ import {
   validateNumberCount,
   validateSelectionLimit,
   type EntitlementPolicy,
+  type OfficialDrawResult,
   type PromotionalCampaignStatus,
 } from "../shared/promotional-campaigns";
 
@@ -52,6 +58,13 @@ const SORTEIO_ERROR_MESSAGES = {
   NO_ENTRIES_AVAILABLE: "Este cliente não possui participações disponíveis.",
   MANUAL_GRANT_NOT_ALLOWED: "Este sorteio não permite concessão manual de participações.",
   MANUAL_GRANT_FAILED: "Não foi possível conceder as participações. Tente novamente.",
+  CAMPAIGN_NOT_CLOSABLE: "Só é possível encerrar participações de uma campanha ativa ou pausada.",
+  CAMPAIGN_LOCKED_BY_DRAW: "Esta campanha já encerrou participações ou já foi sorteada — o status não pode mais ser alterado por aqui.",
+  CLOSE_ENTRIES_FAILED: "Não foi possível encerrar as participações. Tente novamente.",
+  CAMPAIGN_NOT_CLOSED: "Encerre as participações antes de realizar o sorteio.",
+  NO_ELIGIBLE_ENTRIES: "Nenhum número foi escolhido nesta campanha — não há como sortear.",
+  DRAW_FAILED: "Não foi possível realizar o sorteio. Tente novamente.",
+  RESULT_FAILED: "Não foi possível carregar o resultado. Tente novamente.",
   SERVER_ERROR: "Ocorreu um erro temporário. Tente novamente.",
 } as const;
 type SorteioErrorCode = keyof typeof SORTEIO_ERROR_MESSAGES;
@@ -82,6 +95,19 @@ function tokensRef(campaignId: string) {
  */
 function entitlementEventsRef(campaignId: string, customerId: string) {
   return participantsRef(campaignId).doc(customerId).collection("entitlementEvents");
+}
+/**
+ * PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-06 — a apuração oficial fica SEMPRE no mesmo id de documento
+ * ("official"): a proteção contra "sortear de novo até gostar do vencedor" (§8) não depende de nenhum
+ * idempotencyKey enviado pelo cliente, depende só deste documento existir ou não — a primeira transação
+ * que conseguir criá-lo vence; qualquer chamada depois (mesmo concorrente) só lê o resultado já gravado.
+ */
+function officialDrawRef(campaignId: string) {
+  return campaignsRef().doc(campaignId).collection("draws").doc("official");
+}
+/** Log de auditoria imutável em nível de campanha — nunca editado/apagado (§18). */
+function auditEventsRef(campaignId: string) {
+  return campaignsRef().doc(campaignId).collection("auditEvents");
 }
 
 function hashToken(rawToken: string): string {
@@ -228,6 +254,7 @@ export function registerPromotionalCampaignRoutes(
         winningNumber: null,
         resultSource: null,
         finishedAt: null,
+        entriesClosedAt: null,
         createdAt: now,
         updatedAt: now,
       };
@@ -366,11 +393,21 @@ export function registerPromotionalCampaignRoutes(
     const campaignId = String(req.params.campaignId);
     const { status } = req.body ?? {};
     if (!isPromotionalCampaignStatus(status)) return sendSorteioError(res, 400, "VALIDATION_ERROR", { field: "status" });
+    // PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-06 — "entries_closed"/"drawn" só são atingíveis pelas rotas
+    // dedicadas (close-entries/draw), que constroem o snapshot elegível e o resultado oficial. Aceitar
+    // esses valores aqui deixaria um admin "pular" a apuração real só trocando o status. Pelo mesmo
+    // motivo, uma campanha já encerrada/sorteada não aceita mais NENHUMA troca por este PATCH genérico —
+    // não existe "reabrir" simples nesta rodada (§11).
+    if (status === "entries_closed" || status === "drawn") return sendSorteioError(res, 400, "VALIDATION_ERROR", { field: "status" });
     try {
       const ref = campaignsRef().doc(campaignId);
       const snap = await ref.get();
       if (!snap.exists) return sendSorteioError(res, 404, "CAMPAIGN_NOT_FOUND");
       if (snap.data()!.ownerId !== actorUid) return sendSorteioError(res, 403, "FORBIDDEN");
+      const currentStatus = snap.data()!.status as PromotionalCampaignStatus;
+      if (currentStatus === "entries_closed" || currentStatus === "drawn") {
+        return sendSorteioError(res, 400, "CAMPAIGN_LOCKED_BY_DRAW");
+      }
       const now = new Date().toISOString();
       await ref.update({
         status,
@@ -546,6 +583,145 @@ export function registerPromotionalCampaignRoutes(
     } catch (error) {
       logWarn("promotional_campaigns.link_revoke_failed", { message: error instanceof Error ? error.message : String(error) });
       return sendSorteioError(res, 500, "SERVER_ERROR");
+    }
+  });
+
+  // ===== POST .../close-entries — encerra participações (admin-only). NUNCA escolhe vencedor (§3): só
+  // bloqueia novos claims. Servidor é a autoridade — o mesmo bloqueio já é imposto pela transação de
+  // claim, que relê o status da campanha de dentro da própria transação (isCampaignPubliclyClaimable
+  // exige status "active"), então uma claim concorrente perde a corrida contra este fechamento mesmo sem
+  // nenhum código extra aqui. =====
+  app.post("/api/admin/sorteios/campaigns/:campaignId/close-entries", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    const actorUid = (req as Request & { firebaseUid?: string }).firebaseUid;
+    if (!actorUid) return sendSorteioError(res, 401, "UNAUTHORIZED");
+    const campaignId = String(req.params.campaignId);
+    try {
+      const campaignRef = campaignsRef().doc(campaignId);
+      const preSnap = await campaignRef.get();
+      if (!preSnap.exists) return sendSorteioError(res, 404, "CAMPAIGN_NOT_FOUND");
+      if (preSnap.data()!.ownerId !== actorUid) return sendSorteioError(res, 403, "FORBIDDEN");
+
+      const result = await db().runTransaction(async (transaction) => {
+        const snap = await transaction.get(campaignRef);
+        const campaign = snap.data()!;
+        if (campaign.status === "entries_closed") {
+          return { ok: true as const, alreadyClosed: true, entriesClosedAt: campaign.entriesClosedAt as string };
+        }
+        if (!isCampaignClosable(campaign.status)) return { ok: false as const, code: "CAMPAIGN_NOT_CLOSABLE" as const };
+        const now = new Date().toISOString();
+        transaction.update(campaignRef, { status: "entries_closed", entriesClosedAt: now, updatedAt: now });
+        transaction.set(auditEventsRef(campaignId).doc(), {
+          type: "ENTRIES_CLOSED", campaignId, actor: actorUid, timestamp: now,
+        });
+        return { ok: true as const, alreadyClosed: false, entriesClosedAt: now };
+      });
+
+      if (!result.ok) return sendSorteioError(res, 400, result.code);
+      logInfo("promotional_campaigns.entries_closed", { campaignId, actorUid, alreadyClosed: result.alreadyClosed });
+      return res.status(200).json({ success: true, status: "entries_closed", entriesClosedAt: result.entriesClosedAt });
+    } catch (error) {
+      logWarn("promotional_campaigns.close_entries_failed", { message: error instanceof Error ? error.message : String(error) });
+      return sendSorteioError(res, 500, "CLOSE_ENTRIES_FAILED");
+    }
+  });
+
+  // ===== POST .../draw — apuração oficial (admin-only). Este é o ÚNICO lugar em todo o sistema que
+  // decide um vencedor: crypto.randomInt (não Math.random — §7), nunca aceita nenhum valor vindo do corpo
+  // da requisição (§15/§21 — o corpo desta rota nem é lido, então um `winningNumber` injetado é
+  // simplesmente ignorado, nunca validado nem próximo de influenciar o resultado). =====
+  app.post("/api/admin/sorteios/campaigns/:campaignId/draw", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    const actorUid = (req as Request & { firebaseUid?: string }).firebaseUid;
+    if (!actorUid) return sendSorteioError(res, 401, "UNAUTHORIZED");
+    const campaignId = String(req.params.campaignId);
+    try {
+      const campaignRef = campaignsRef().doc(campaignId);
+      const preSnap = await campaignRef.get();
+      if (!preSnap.exists) return sendSorteioError(res, 404, "CAMPAIGN_NOT_FOUND");
+      if (preSnap.data()!.ownerId !== actorUid) return sendSorteioError(res, 403, "FORBIDDEN");
+      const drawRef = officialDrawRef(campaignId);
+
+      const result = await db().runTransaction(async (transaction) => {
+        // ---- LEITURAS (todas antes de qualquer escrita) ----
+        const [campaignSnap, existingDrawSnap] = await Promise.all([transaction.get(campaignRef), transaction.get(drawRef)]);
+        const campaign = campaignSnap.data()!;
+        // §8/§9 — a primeira apuração oficial já persistida GANHA para sempre; qualquer chamada depois
+        // (mesmo concorrente, mesmo repetida) só devolve o mesmo resultado, nunca escreve de novo.
+        if (existingDrawSnap.exists) {
+          return { ok: true as const, alreadyDrawn: true, draw: existingDrawSnap.data() as OfficialDrawResult };
+        }
+        if (!isCampaignDrawable(campaign.status)) return { ok: false as const, code: "CAMPAIGN_NOT_CLOSED" as const };
+
+        const claimedNumbersSnap = await transaction.get(numbersRef(campaignId).where("status", "==", "claimed"));
+        const eligible = buildEligibleEntries(
+          claimedNumbersSnap.docs.map((doc) => ({ number: Number(doc.id), customerId: doc.data().customerId as string })),
+        );
+        if (eligible.length === 0) return { ok: false as const, code: "NO_ELIGIBLE_ENTRIES" as const };
+
+        const eligibleSetHash = crypto.createHash("sha256").update(canonicalEligibleSetString(eligible)).digest("hex");
+        // §7 — crypto.randomInt é um gerador criptograficamente seguro do Node; Math.random() nunca é
+        // usado para decidir o vencedor em nenhum ponto deste arquivo.
+        const winnerIndex = crypto.randomInt(eligible.length);
+        const winner = eligible[winnerIndex];
+
+        const winnerClientSnap = await transaction.get(db().collection("users").doc(campaign.ownerId).collection("clients").doc(winner.clientId));
+        const winnerDisplayNameSnapshot = (winnerClientSnap.data()?.name as string | undefined) ?? "Cliente removido";
+
+        const now = new Date().toISOString();
+        const draw: OfficialDrawResult = {
+          drawId: crypto.randomUUID(),
+          campaignId,
+          campaignOwnerId: campaign.ownerId,
+          closedAt: (campaign.entriesClosedAt as string | null) ?? null,
+          drawnAt: now,
+          eligibleNumberCount: eligible.length,
+          participantCount: countDistinctParticipants(eligible),
+          algorithm: "crypto.randomInt",
+          algorithmVersion: 1,
+          eligibleSetHash,
+          winningNumber: winner.number,
+          winningClientId: winner.clientId,
+          winnerDisplayNameSnapshot,
+          prizeNameSnapshot: campaign.prizeName as string,
+          prizeImageUrlSnapshot: (campaign.prizeImageUrl as string | null) ?? null,
+          createdBy: actorUid,
+        };
+
+        // ---- ESCRITAS (só depois de TODAS as leituras acima) ----
+        transaction.set(drawRef, draw);
+        transaction.update(campaignRef, {
+          status: "drawn", winningNumber: draw.winningNumber, resultSource: "internal_admin_draw", updatedAt: now,
+        });
+        transaction.set(auditEventsRef(campaignId).doc(), {
+          type: "DRAW_EXECUTED", campaignId, actor: actorUid, timestamp: now, drawId: draw.drawId,
+        });
+
+        return { ok: true as const, alreadyDrawn: false, draw };
+      });
+
+      if (!result.ok) return sendSorteioError(res, 400, result.code);
+      logInfo("promotional_campaigns.draw_executed", { campaignId, actorUid, alreadyDrawn: result.alreadyDrawn, drawId: result.draw.drawId });
+      return res.status(result.alreadyDrawn ? 200 : 201).json({ alreadyDrawn: result.alreadyDrawn, draw: result.draw });
+    } catch (error) {
+      logWarn("promotional_campaigns.draw_failed", { message: error instanceof Error ? error.message : String(error) });
+      return sendSorteioError(res, 500, "DRAW_FAILED");
+    }
+  });
+
+  // ===== GET .../result — resultado oficial da apuração (admin-only nesta rodada — §20). =====
+  app.get("/api/admin/sorteios/campaigns/:campaignId/result", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    const actorUid = (req as Request & { firebaseUid?: string }).firebaseUid;
+    if (!actorUid) return sendSorteioError(res, 401, "UNAUTHORIZED");
+    const campaignId = String(req.params.campaignId);
+    try {
+      const campaignSnap = await campaignsRef().doc(campaignId).get();
+      if (!campaignSnap.exists) return sendSorteioError(res, 404, "CAMPAIGN_NOT_FOUND");
+      const campaign = campaignSnap.data()!;
+      if (campaign.ownerId !== actorUid) return sendSorteioError(res, 403, "FORBIDDEN");
+      const drawSnap = await officialDrawRef(campaignId).get();
+      return res.status(200).json({ status: campaign.status as PromotionalCampaignStatus, draw: drawSnap.exists ? (drawSnap.data() as OfficialDrawResult) : null });
+    } catch (error) {
+      logWarn("promotional_campaigns.result_failed", { message: error instanceof Error ? error.message : String(error) });
+      return sendSorteioError(res, 500, "RESULT_FAILED");
     }
   });
 

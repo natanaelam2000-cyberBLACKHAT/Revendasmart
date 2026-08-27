@@ -8,7 +8,7 @@ import { useClientsLiteData } from "@/hooks/useClientsLiteData";
 import { apiRequest, ApiError } from "@/lib/api-client";
 import { notifyError, notifySuccess } from "@/lib/notify";
 import { formatCampaignNumber, MANUAL_GRANT_REASONS, MANUAL_GRANT_REASON_LABELS } from "@shared/promotional-campaigns";
-import type { EntitlementPolicy, ManualGrantReason, PromotionalCampaign, PromotionalCampaignStatus, PromotionalEntitlement } from "@shared/promotional-campaigns";
+import type { EntitlementPolicy, ManualGrantReason, OfficialDrawResult, PromotionalCampaign, PromotionalCampaignStatus, PromotionalEntitlement } from "@shared/promotional-campaigns";
 
 /**
  * PROMOTIONAL-CAMPAIGNS-01B §2 — listagem + detalhe/participantes/link num único chunk (evita pagar
@@ -24,10 +24,14 @@ const SorteiosCreate = lazy(() => import("./sorteios-create"));
 const CARD = "rounded-2xl border border-border/60 bg-white p-4";
 const LABEL = "text-xs font-black uppercase tracking-wide text-muted-foreground";
 const STEPPER_BUTTON_CLASS = "flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white shadow-sm active:scale-95 disabled:opacity-30";
-const STATUS_LABEL: Record<PromotionalCampaignStatus, string> = { draft: "Rascunho", active: "Ativo", paused: "Pausado", finished: "Finalizado" };
+const STATUS_LABEL: Record<PromotionalCampaignStatus, string> = {
+  draft: "Rascunho", active: "Ativo", paused: "Pausado",
+  entries_closed: "Participações encerradas", drawn: "Sorteado", finished: "Finalizado",
+};
 const STATUS_COLOR: Record<PromotionalCampaignStatus, string> = {
   draft: "bg-slate-100 text-slate-700", active: "bg-emerald-100 text-emerald-700",
-  paused: "bg-amber-100 text-amber-700", finished: "bg-slate-200 text-slate-600",
+  paused: "bg-amber-100 text-amber-700", entries_closed: "bg-sky-100 text-sky-700",
+  drawn: "bg-violet-100 text-violet-700", finished: "bg-slate-200 text-slate-600",
 };
 function formatDateRange(startsAt: string, endsAt: string): string {
   const fmt = (iso: string) => new Date(iso).toLocaleDateString("pt-BR");
@@ -325,11 +329,18 @@ function CampaignDetail({ campaignId }: { campaignId: string }) {
   const [data, setData] = useState<DetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [changingStatus, setChangingStatus] = useState(false);
+  const [draw, setDraw] = useState<OfficialDrawResult | null>(null);
+  const [pipelineBusy, setPipelineBusy] = useState(false);
 
   const load = async () => {
     setLoading(true);
     try {
-      setData(await apiRequest<DetailResponse>(`/api/admin/sorteios/campaigns/${campaignId}`, { auth: true }));
+      const detail = await apiRequest<DetailResponse>(`/api/admin/sorteios/campaigns/${campaignId}`, { auth: true });
+      setData(detail);
+      if (detail.campaign.status === "drawn") {
+        const result = await apiRequest<{ draw: OfficialDrawResult | null }>(`/api/admin/sorteios/campaigns/${campaignId}/result`, { auth: true });
+        setDraw(result.draw);
+      }
     } catch (error) {
       notifyError(error instanceof Error ? error.message : "Não foi possível carregar a campanha.");
     } finally {
@@ -337,6 +348,22 @@ function CampaignDetail({ campaignId }: { campaignId: string }) {
     }
   };
   useEffect(() => { void load(); }, [campaignId]);
+
+  const runPipelineAction = async (confirmText: string, path: string, successText: string, failText: string) => {
+    if (!window.confirm(confirmText)) return;
+    setPipelineBusy(true);
+    try {
+      await apiRequest(`/api/admin/sorteios/campaigns/${campaignId}/${path}`, { auth: true, method: "POST" });
+      notifySuccess(successText);
+      await load();
+    } catch (error) {
+      notifyError(error instanceof Error ? error.message : failText);
+    } finally {
+      setPipelineBusy(false);
+    }
+  };
+  const handleCloseEntries = () => runPipelineAction("Depois de encerrar, os clientes não poderão escolher novos números.", "close-entries", "Participações encerradas.", "Não foi possível encerrar as participações.");
+  const handleDraw = () => runPipelineAction("Esta ação realizará a apuração oficial da campanha.", "draw", "Sorteio realizado.", "Não foi possível realizar o sorteio.");
 
   const handleStatusChange = async (status: PromotionalCampaignStatus) => {
     setChangingStatus(true);
@@ -390,13 +417,43 @@ function CampaignDetail({ campaignId }: { campaignId: string }) {
               Restam apenas {metrics.numbersAvailable} números disponíveis.
             </p>
           )}
-          <div className="mt-3 flex flex-wrap gap-2">
-            {STATUS_ACTIONS.filter((action) => action.status !== campaign.status).map(({ status, label, icon: Icon }) => (
-              <button key={status} type="button" disabled={changingStatus} onClick={() => handleStatusChange(status)} data-testid={`button-status-${status}`} className="flex items-center gap-1.5 rounded-full border border-border/60 px-3 py-1.5 text-xs font-bold disabled:opacity-60">
-                <Icon className="h-3.5 w-3.5" /> {label}
+          {/* PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-06 — os botões genéricos (Ativar/Pausar/Finalizar) só fazem
+            * sentido antes de entrar no motor de apuração; uma vez "entries_closed"/"drawn" só as ações
+            * dedicadas abaixo (Encerrar/Sortear) decidem o próximo passo (§11 — sem "reabrir" simples). */}
+          {(campaign.status === "draft" || campaign.status === "active" || campaign.status === "paused") && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {STATUS_ACTIONS.filter((action) => action.status !== campaign.status).map(({ status, label, icon: Icon }) => (
+                <button key={status} type="button" disabled={changingStatus} onClick={() => handleStatusChange(status)} data-testid={`button-status-${status}`} className="flex items-center gap-1.5 rounded-full border border-border/60 px-3 py-1.5 text-xs font-bold disabled:opacity-60">
+                  <Icon className="h-3.5 w-3.5" /> {label}
+                </button>
+              ))}
+            </div>
+          )}
+          {(campaign.status === "active" || campaign.status === "paused") && (
+            <div className="mt-3">
+              <button type="button" disabled={pipelineBusy} onClick={handleCloseEntries} data-testid="button-close-entries" className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-xs font-black text-white disabled:opacity-60">
+                <Ban className="h-3.5 w-3.5" /> Encerrar participações
               </button>
-            ))}
-          </div>
+            </div>
+          )}
+          {campaign.status === "entries_closed" && (
+            <div className="mt-3 rounded-xl bg-sky-100 p-3">
+              <p className="text-xs font-black text-sky-700">Participações encerradas</p>
+              <p className="text-xs text-sky-700">{metrics.numbersClaimed} números elegíveis</p>
+              <p className="text-xs text-sky-700">{metrics.participantsCount} participantes</p>
+              <button type="button" disabled={pipelineBusy} onClick={handleDraw} data-testid="button-draw-campaign" className="mt-2 flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-xs font-black text-white disabled:opacity-60">
+                <Ticket className="h-3.5 w-3.5" /> Realizar sorteio
+              </button>
+            </div>
+          )}
+          {campaign.status === "drawn" && draw && (
+            <div className="mt-3 rounded-xl bg-violet-100 p-4 text-center" data-testid="draw-result">
+              <p className="text-[10px] font-black uppercase tracking-wide text-violet-700">Número sorteado</p>
+              <p className="text-3xl font-black text-violet-700" data-testid="text-winning-number">{formatCampaignNumber(draw.winningNumber)}</p>
+              <p className="text-sm font-bold text-violet-700" data-testid="text-winner-name">{draw.winnerDisplayNameSnapshot}</p>
+              <p className="text-xs text-violet-700">{draw.prizeNameSnapshot}</p>
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">

@@ -44,8 +44,14 @@ const budgets = [
 // de otimizar o custo real (+3.16 kB -> +2.21 kB, medido isolado contra origin/main) sem cortar UX:
 // dedup de EntitlementRow/STEPPER_BUTTON_CLASS. Boot inicial confirmado bit-a-bit idêntico antes/depois
 // (484529 bytes nos dois): o custo inteiro cai nos chunks lazy de /sorteios, nunca no caminho crítico.
+// PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-06 — elevado 2281 -> 2284 kB (menor inteiro que comporta 2283,20 kB
+// medido isolado contra origin/main), autorizado condicionalmente à confirmação de que o boot inicial
+// não regrediu — confirmado: 484529 bytes idênticos antes/depois. Custo real já otimizado antes de pedir
+// o aumento (CSS: reuso dos tons sky-100/violet-100/bg-primary já gerados, delta zerado; JS: dedup de
+// handleCloseEntries/handleDraw num único runPipelineAction, +2.63 kB -> +2.45 kB). Todo o custo cai nos
+// chunks lazy de /sorteios (close-entries/draw/result), nunca no caminho crítico do vendedor comum.
 const totalBudgets = {
-  jsKb: 2281,
+  jsKb: 2284,
   jsGzipKb: 700,
 };
 

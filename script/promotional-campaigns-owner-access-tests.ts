@@ -10,6 +10,7 @@ import http from "node:http";
 import express from "express";
 import { initializeApp } from "firebase/app";
 import { connectAuthEmulator, getAuth, signInWithEmailAndPassword } from "firebase/auth";
+import { buildEligibleEntries, canonicalEligibleSetString } from "../shared/promotional-campaigns";
 
 process.env.FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "demo-revendasmart";
 process.env.FIREBASE_STORAGE_BUCKET = process.env.FIREBASE_STORAGE_BUCKET || "demo-revendasmart.appspot.com";
@@ -583,7 +584,207 @@ async function main() {
     assert.equal(salesAfterMoises, salesBeforeMoises, "DD: nenhuma venda adicional foi criada pela concessão manual");
   }
 
+  // ==================================================================================================
+  // PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-06 — motor de apuração: close-entries / draw / result.
+  // Reseta a janela do rate limiter público (30 req/60s por IP, compartilhada por todos os testes deste
+  // arquivo) antes deste bloco, mesmo padrão já usado antes do bloco MANUAL-INTERNAL-05.
+  // ==================================================================================================
+  await new Promise((resolve) => setTimeout(resolve, 61_000));
+
+  async function createCampaign(title: string, numberCount = 100): Promise<{ id: string; slug: string }> {
+    const created = await postJson("/api/admin/sorteios/campaigns", {
+      title, prizeName: "Prêmio Secure Draw", startsAt, endsAt, spendPerEntry: 100, numberCount,
+    }, adminAToken);
+    assert.equal(created.status, 201);
+    return { id: created.body.id as string, slug: created.body.slug as string };
+  }
+
+  // ===== EE/FF: non-admin close/draw -> 403 =====
+  {
+    const { id: campaignId } = await createCampaign("Sorteio Secure Draw EE");
+    await patchJson(`/api/admin/sorteios/campaigns/${campaignId}/status`, { status: "active" }, adminAToken);
+    const closeDenied = await postJson(`/api/admin/sorteios/campaigns/${campaignId}/close-entries`, {}, regularToken);
+    assert.equal(closeDenied.status, 403, "EE: non-admin close-entries precisa ser DENY");
+    const drawDenied = await postJson(`/api/admin/sorteios/campaigns/${campaignId}/draw`, {}, regularToken);
+    assert.equal(drawDenied.status, 403, "FF: non-admin draw precisa ser DENY");
+  }
+
+  // ===== GG/HH/II: cross-tenant close/draw/result -> DENY =====
+  {
+    const { id: campaignId } = await createCampaign("Sorteio Secure Draw GG");
+    await patchJson(`/api/admin/sorteios/campaigns/${campaignId}/status`, { status: "active" }, adminAToken);
+    const closeDenied = await postJson(`/api/admin/sorteios/campaigns/${campaignId}/close-entries`, {}, adminBToken);
+    assert.equal(closeDenied.status, 403, "GG: cross-tenant close-entries precisa ser DENY");
+    const drawDenied = await postJson(`/api/admin/sorteios/campaigns/${campaignId}/draw`, {}, adminBToken);
+    assert.equal(drawDenied.status, 403, "HH: cross-tenant draw precisa ser DENY");
+    const resultDenied = await getJson(`/api/admin/sorteios/campaigns/${campaignId}/result`, adminBToken);
+    assert.equal(resultDenied.status, 403, "II: cross-tenant result precisa ser DENY");
+  }
+
+  // ===== JJ: draw antes de close -> CAMPAIGN_NOT_CLOSED, status não muda =====
+  {
+    const { id: campaignId } = await createCampaign("Sorteio Secure Draw JJ");
+    await patchJson(`/api/admin/sorteios/campaigns/${campaignId}/status`, { status: "active" }, adminAToken);
+    const drawTooEarly = await postJson(`/api/admin/sorteios/campaigns/${campaignId}/draw`, {}, adminAToken);
+    assert.equal(drawTooEarly.status, 400, "JJ: sortear antes de encerrar precisa ser rejeitado");
+    assert.equal(drawTooEarly.body.code, "CAMPAIGN_NOT_CLOSED");
+    const snap = await db.doc(`promotionalCampaigns/${campaignId}`).get();
+    assert.equal(snap.data()?.status, "active", "JJ: campanha continua active — draw rejeitado não muda o status");
+  }
+
+  // ===== KK: close a partir de draft -> CAMPAIGN_NOT_CLOSABLE =====
+  {
+    const { id: campaignId } = await createCampaign("Sorteio Secure Draw KK");
+    const closeFromDraft = await postJson(`/api/admin/sorteios/campaigns/${campaignId}/close-entries`, {}, adminAToken);
+    assert.equal(closeFromDraft.status, 400, "KK: encerrar uma campanha draft precisa ser rejeitado");
+    assert.equal(closeFromDraft.body.code, "CAMPAIGN_NOT_CLOSABLE");
+  }
+
+  // ===== LL (§24.7): zero candidatos elegíveis bloqueia o sorteio; status NÃO vira drawn =====
+  {
+    const { id: campaignId } = await createCampaign("Sorteio Secure Draw LL");
+    await patchJson(`/api/admin/sorteios/campaigns/${campaignId}/status`, { status: "active" }, adminAToken);
+    const close = await postJson(`/api/admin/sorteios/campaigns/${campaignId}/close-entries`, {}, adminAToken);
+    assert.equal(close.status, 200);
+    assert.equal(close.body.status, "entries_closed");
+    const drawEmpty = await postJson(`/api/admin/sorteios/campaigns/${campaignId}/draw`, {}, adminAToken);
+    assert.equal(drawEmpty.status, 400, "LL: sortear sem nenhum número claimed precisa ser rejeitado");
+    assert.equal(drawEmpty.body.code, "NO_ELIGIBLE_ENTRIES");
+    const snap = await db.doc(`promotionalCampaigns/${campaignId}`).get();
+    assert.equal(snap.data()?.status, "entries_closed", "LL: campanha permanece entries_closed, nunca vira drawn sem candidatos");
+  }
+
+  // ===== UU: PATCH genérico de status nunca aceita entries_closed/drawn, e trava depois de encerrado =====
+  {
+    const { id: campaignId } = await createCampaign("Sorteio Secure Draw UU");
+    await patchJson(`/api/admin/sorteios/campaigns/${campaignId}/status`, { status: "active" }, adminAToken);
+    const patchToClosed = await patchJson(`/api/admin/sorteios/campaigns/${campaignId}/status`, { status: "entries_closed" }, adminAToken);
+    assert.equal(patchToClosed.status, 400, "UU: PATCH não pode fingir entries_closed sem passar pelo motor de apuração");
+    const patchToDrawn = await patchJson(`/api/admin/sorteios/campaigns/${campaignId}/status`, { status: "drawn" }, adminAToken);
+    assert.equal(patchToDrawn.status, 400, "UU: PATCH não pode fingir drawn sem passar pelo motor de apuração");
+    await postJson(`/api/admin/sorteios/campaigns/${campaignId}/close-entries`, {}, adminAToken);
+    const patchAfterClose = await patchJson(`/api/admin/sorteios/campaigns/${campaignId}/status`, { status: "paused" }, adminAToken);
+    assert.equal(patchAfterClose.status, 400, "UU: depois de entries_closed, o PATCH genérico fica travado — sem reabrir simples");
+    assert.equal(patchAfterClose.body.code, "CAMPAIGN_LOCKED_BY_DRAW");
+  }
+
+  // ===== MM/NN/OO/PP/QQ/SS/TT (§24.3/4/5/8/9/10/11/12/13/14/17): fluxo completo com 5 números claimed,
+  // origem mista (venda registrada + concessão manual interna), depois close -> claim negado -> draw ->
+  // segunda chamada idempotente -> concorrência -> snapshot imutável mesmo após editar nome/prêmio. =====
+  {
+    const { id: campaignId, slug } = await createCampaign("Sorteio Secure Draw Completo", 100);
+    await patchJson(`/api/admin/sorteios/campaigns/${campaignId}/status`, { status: "active" }, adminAToken);
+
+    // registered_sale: rafael (R$300 => 3 automáticos)
+    const rafaelId = await makeClientWithSales("rafael", 300);
+    const linkRafael = await postJson(`/api/admin/sorteios/campaigns/${campaignId}/links`, { customerId: rafaelId }, adminAToken);
+    const claimRafael = await postJson(`/api/public/sorteios/${slug}/claim`, { token: linkRafael.body.token, numbers: [10, 25, 40] });
+    assert.equal(claimRafael.body.ok, true);
+
+    // manual_internal: teodora (0 vendas, 2 concedidos manualmente)
+    const teodoraId = await makeClientWithSales("teodora", 0);
+    await postJson(`/api/admin/sorteios/campaigns/${campaignId}/clients/${teodoraId}/manual-entries`, { quantity: 2, reason: "courtesy", idempotencyKey: crypto.randomUUID() }, adminAToken);
+    const linkTeodora = await postJson(`/api/admin/sorteios/campaigns/${campaignId}/links`, { customerId: teodoraId, selectionLimit: 2 }, adminAToken);
+    const claimTeodora = await postJson(`/api/public/sorteios/${slug}/claim`, { token: linkTeodora.body.token, numbers: [55, 70] });
+    assert.equal(claimTeodora.body.ok, true, "SS: número claimed por manual_internal precisa confirmar normalmente");
+
+    // §24.3: número 80 NUNCA é escolhido — precisa continuar unclaimed, fora do conjunto elegível.
+    const eligibleClaimedNumbers = [10, 25, 40, 55, 70];
+
+    // ===== NN: encerrar participações =====
+    const close = await postJson(`/api/admin/sorteios/campaigns/${campaignId}/close-entries`, {}, adminAToken);
+    assert.equal(close.status, 200);
+    assert.equal(close.body.status, "entries_closed");
+    assert.ok(close.body.entriesClosedAt, "NN: entriesClosedAt precisa ser persistido");
+
+    // ===== MM (§17 do ticket original + §24.17 aqui): claim depois de encerrado é negado =====
+    const claimAfterClose = await postJson(`/api/public/sorteios/${slug}/claim`, { token: linkRafael.body.token, numbers: [80] });
+    assert.equal(claimAfterClose.body.ok, false, "MM: claim depois de close-entries precisa ser negado");
+    assert.equal(claimAfterClose.body.denyReason, "CAMPAIGN_NOT_ACTIVE");
+    const numberEightySnap = await db.doc(`promotionalCampaigns/${campaignId}/numbers/80`).get();
+    assert.equal(numberEightySnap.exists, false, "§24.3: 80 nunca foi claimed, continua fora do Firestore/fora do conjunto elegível");
+
+    // §16 do ticket original: claim CONCORRENTE após fechamento também precisa ser rejeitado — não só uma
+    // chamada isolada. Duas claims disparadas em paralelo de verdade contra números nunca usados (81/82).
+    {
+      const [concurrentA, concurrentB] = await Promise.all([
+        postJson(`/api/public/sorteios/${slug}/claim`, { token: linkRafael.body.token, numbers: [81] }),
+        postJson(`/api/public/sorteios/${slug}/claim`, { token: linkTeodora.body.token, numbers: [82] }),
+      ]);
+      assert.equal(concurrentA.body.ok, false, "§16: claim concorrente após close-entries precisa ser negada (A)");
+      assert.equal(concurrentA.body.denyReason, "CAMPAIGN_NOT_ACTIVE");
+      assert.equal(concurrentB.body.ok, false, "§16: claim concorrente após close-entries precisa ser negada (B)");
+      assert.equal(concurrentB.body.denyReason, "CAMPAIGN_NOT_ACTIVE");
+    }
+
+    // ===== RR (§15/§21 — §24.18): corpo com winningNumber forjado é totalmente ignorado =====
+    const drawResponse = await postJson(`/api/admin/sorteios/campaigns/${campaignId}/draw`, { winningNumber: 999999, winningClientId: "hacker" }, adminAToken);
+    assert.equal(drawResponse.status, 201, "OO: primeira apuração deve suceder");
+    const draw = drawResponse.body.draw as Record<string, unknown>;
+    assert.equal(drawResponse.body.alreadyDrawn, false);
+
+    // ===== OO: resultado persistido, usa só o conjunto elegível, hash correto =====
+    assert.equal(draw.eligibleNumberCount, 5, "OO/§24.2: exatamente os 5 números claimed, nada mais");
+    assert.equal(draw.participantCount, 2, "OO/§24: rafael + teodora = 2 participantes distintos (rafael tem 3 chances, teodora 2)");
+    assert.ok(eligibleClaimedNumbers.includes(draw.winningNumber as number), "OO/§24.8: o vencedor precisa vir do conjunto elegível — 80 nunca poderia ganhar mesmo forjado no corpo");
+    assert.notEqual(draw.winningNumber, 999999, "RR/§24.18: winningNumber forjado no corpo nunca é usado");
+    assert.equal(draw.algorithm, "crypto.randomInt");
+    assert.notEqual(draw.winningClientId, "hacker", "RR: winningClientId forjado no corpo nunca é usado");
+
+    // §24.14 end-to-end: recomputar o hash localmente a partir do MESMO conjunto elegível (via query direta
+    // ao Firestore) precisa bater com o hash persistido pelo servidor — prova que o algoritmo real do
+    // servidor (não só a função pura isolada) é determinístico.
+    const claimedSnap = await db.collection(`promotionalCampaigns/${campaignId}/numbers`).where("status", "==", "claimed").get();
+    const recomputedEligible = buildEligibleEntries(claimedSnap.docs.map((doc) => ({ number: Number(doc.id), customerId: doc.data().customerId as string })));
+    const recomputedHash = crypto.createHash("sha256").update(canonicalEligibleSetString(recomputedEligible)).digest("hex");
+    assert.equal(draw.eligibleSetHash, recomputedHash, "§24.14: eligibleSetHash persistido precisa bater com o recomputado a partir do MESMO conjunto elegível");
+
+    const campaignAfterDraw = await db.doc(`promotionalCampaigns/${campaignId}`).get();
+    assert.equal(campaignAfterDraw.data()?.status, "drawn", "OO: campanha vira drawn após a apuração");
+    assert.equal(campaignAfterDraw.data()?.winningNumber, draw.winningNumber);
+
+    // ===== PP (§24.10): segunda chamada de draw NÃO gera novo vencedor — devolve o mesmo resultado =====
+    const secondDraw = await postJson(`/api/admin/sorteios/campaigns/${campaignId}/draw`, {}, adminAToken);
+    assert.equal(secondDraw.status, 200, "PP: segunda chamada não cria (201), só devolve (200)");
+    assert.equal(secondDraw.body.alreadyDrawn, true);
+    assert.equal((secondDraw.body.draw as Record<string, unknown>).drawId, draw.drawId, "PP: mesmo drawId, nunca um segundo sorteio oficial");
+    assert.equal((secondDraw.body.draw as Record<string, unknown>).winningNumber, draw.winningNumber, "PP: mesmo vencedor sempre");
+
+    // ===== QQ (§24.11): duas requisições de draw concorrentes contra uma NOVA campanha — só 1 resultado
+    // oficial nasce, nunca dois drawIds diferentes. =====
+    {
+      const { id: raceCampaignId, slug: raceSlug } = await createCampaign("Sorteio Secure Draw QQ");
+      await patchJson(`/api/admin/sorteios/campaigns/${raceCampaignId}/status`, { status: "active" }, adminAToken);
+      const ursulaId = await makeClientWithSales("ursula", 500);
+      const linkUrsula = await postJson(`/api/admin/sorteios/campaigns/${raceCampaignId}/links`, { customerId: ursulaId }, adminAToken);
+      await postJson(`/api/public/sorteios/${raceSlug}/claim`, { token: linkUrsula.body.token, numbers: [3, 4] });
+      await postJson(`/api/admin/sorteios/campaigns/${raceCampaignId}/close-entries`, {}, adminAToken);
+      const [raceA, raceB] = await Promise.all([
+        postJson(`/api/admin/sorteios/campaigns/${raceCampaignId}/draw`, {}, adminAToken),
+        postJson(`/api/admin/sorteios/campaigns/${raceCampaignId}/draw`, {}, adminAToken),
+      ]);
+      const drawIdA = (raceA.body.draw as Record<string, unknown>).drawId;
+      const drawIdB = (raceB.body.draw as Record<string, unknown>).drawId;
+      assert.equal(drawIdA, drawIdB, "QQ: duas requisições concorrentes de draw resultam em exatamente 1 drawId oficial");
+      const officialSnap = await db.collection(`promotionalCampaigns/${raceCampaignId}/draws`).get();
+      assert.equal(officialSnap.size, 1, "QQ: apenas 1 documento de apuração oficial persistido, nunca 2");
+    }
+
+    // ===== TT (§24.12/§24.13): editar nome do cliente e o prêmio DEPOIS do sorteio não altera o snapshot
+    // histórico já persistido. =====
+    await db.doc(`users/${adminAUid}/clients/${draw.winningClientId}`).update({ name: "Nome Alterado Depois Do Sorteio" });
+    await db.doc(`promotionalCampaigns/${campaignId}`).update({ prizeName: "Prêmio Trocado Depois Do Sorteio" });
+    const resultAfterEdits = await getJson(`/api/admin/sorteios/campaigns/${campaignId}/result`, adminAToken);
+    assert.equal(resultAfterEdits.status, 200);
+    const persistedDraw = resultAfterEdits.body.draw as Record<string, unknown>;
+    assert.equal(persistedDraw.winnerDisplayNameSnapshot, draw.winnerDisplayNameSnapshot, "TT/§24.12: nome do vencedor no resultado histórico não muda mesmo com o cliente renomeado depois");
+    assert.notEqual(persistedDraw.winnerDisplayNameSnapshot, "Nome Alterado Depois Do Sorteio");
+    assert.equal(persistedDraw.prizeNameSnapshot, draw.prizeNameSnapshot, "TT/§24.13: prêmio do resultado histórico não muda mesmo com a campanha editada depois");
+    assert.notEqual(persistedDraw.prizeNameSnapshot, "Prêmio Trocado Depois Do Sorteio");
+  }
+
   server.close();
+  console.log("PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-06 owner-access/concurrency tests passed: non-admin close/draw denied, cross-tenant close/draw/result denied, draw before close-entries denied (status unchanged), close-entries from draft denied, zero eligible entries blocks draw (status stays entries_closed), generic status PATCH can never fake entries_closed/drawn and locks after close, claim rejected after close-entries, registered_sale and manual_internal claimed numbers equally eligible, unclaimed numbers excluded from the eligible set, official draw persisted with server-side crypto.randomInt (never Math.random, never a client-supplied winningNumber/winningClientId), eligibleSetHash reproducible from an independent Firestore query, second draw call returns the same official result (no reroll), concurrent draw requests converge to exactly one official drawId, winner name and prize snapshots stay frozen even after the underlying client/campaign is edited afterward.");
   console.log("PROMOTIONAL-CAMPAIGNS-01 owner-access/concurrency tests passed: non-admin create denied, cross-owner detail denied, entitlement computed from real sales (350/100=3), claim confirms atomically, reopening link reflects 0 remaining + own numbers, another customer blocked from an already-claimed number, concurrent claims for the same number resolve to exactly one winner, invalid/revoked token denied, draft/paused/finished campaigns reject claims. LINK-SELECTION-LIMIT-04: link creation blocked with zero entitlement, entitlement preview endpoint, per-token cap independent of global balance, reopening reflects token-scoped remaining, multiple links never jointly overspend, concurrent claims across different links never overspend entitlement, revoke preserves unused rights, legacy tokens without selectionLimit remain fully compatible, tenant isolation on link creation. MANUAL-INTERNAL-05: non-admin denied, spoofed policy ignored (server-authoritative from campaign doc), cross-owner campaign/client denied, invalid quantity denied, idempotent replay never duplicates, qualifyingSpend/sales/stock untouched by manual grants, concurrent claims across manual-funded links never overspend, revoke preserves manual-included balance, ledger immutable across a compensating adjustment, end-to-end §18 fixture (automatic=2, manual=3, claimed=5, remaining=0, qualifyingSpend unchanged, zero extra sales).");
 }
 
