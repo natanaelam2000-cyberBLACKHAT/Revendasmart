@@ -23,7 +23,8 @@ service cloud.firestore {
       return [
         'id', 'name', 'brand', 'origin', 'category', 'productType',
         'costPrice', 'salePrice', 'stock', 'barcode', 'description',
-        'imageUrl', 'storagePath', 'imageId', 'photoUrl', 'image', 'photo',
+        'imageUrl', 'storagePath', 'thumbnailUrl', 'thumbnailStoragePath',
+        'imageId', 'photoUrl', 'image', 'photo',
         'gender', 'lastSoldDate', 'extras', 'isFeatured', 'isOnSale',
         'discountPercent', 'discount', 'promotionalPrice', 'createdAt', 'updatedAt',
         'nameNormalized', 'brandNormalized', 'categoryNormalized',
@@ -64,80 +65,141 @@ service cloud.firestore {
           || (cutout.downloadUrl is string && cutout.downloadUrl.size() <= 2048 && !cutout.downloadUrl.matches('(?i)^data:.*')));
     }
 
+    // PERFORMANCE-OPTIMIZATION-03B — Firestore Rules limita CADA função a no máximo 10 `let` por corpo
+    // (erro real de compilação, medido ao vivo: "Maximum allowed variable count of 10"). Isso força a
+    // validação do produto a ser dividida em funções auxiliares menores em vez de uma função só — cada
+    // campo ainda é lido do documento UMA VEZ (via `let`, não `request.resource.data.get(...)` repetido
+    // 2-3x por campo como no contrato anterior), o que É a mesma comparação de sempre, só sem reavaliar
+    // o mesmo `.get()` várias vezes. Isso abriu orçamento real dentro do limite de 1000 expressões (também
+    // medido ao vivo) para validar thumbnailUrl/thumbnailStoragePath de verdade, em vez de deixá-los sem
+    // checagem de tipo/tamanho/origem como na rodada anterior. Nenhuma garantia pré-existente mudou.
+    function isValidProductCoreFields(data) {
+      let name = data.name;
+      let salePrice = data.salePrice;
+      let costPrice = data.get('costPrice', 0);
+      let stock = data.get('stock', 0);
+      let brand = data.get('brand', '');
+      let origin = data.get('origin', '');
+      let category = data.get('category', '');
+      let productType = data.get('productType', '');
+      let barcode = data.get('barcode', '');
+      let description = data.get('description', '');
+      return name is string && name.size() > 0 && name.size() <= 180
+        && salePrice is number && salePrice > 0 && salePrice <= 1000000
+        && costPrice is number && costPrice >= 0 && costPrice <= 1000000
+        && stock is number && stock >= 0 && stock <= 1000000
+        && brand is string && brand.size() <= 100
+        && origin is string && origin.size() <= 80
+        && category is string && category.size() <= 100
+        && productType is string && productType.size() <= 80
+        && barcode is string && barcode.size() <= 80
+        && description is string && description.size() <= 2000;
+    }
+
+    // Diferente de imageUrl/storagePath/photoUrl/image/photo (que aceitam qualquer string dentro do
+    // limite de tamanho — contrato mais antigo, mais frouxo, que não é desta rodada mexer):
+    // thumbnailUrl/thumbnailStoragePath são campos NOVOS e entram já com o contrato mais forte que dá
+    // para pagar no orçamento — path obrigatoriamente dentro do namespace do PRÓPRIO uid+productId
+    // (thumbnailStoragePath nunca aponta pra outro tenant nem para outro produto — extensão travada em
+    // .webp/.jpg, as únicas que compressImage() realmente produz) e thumbnailUrl trava bucket EXATO +
+    // uid EXATO + productId EXATO + objeto EXATO (nunca outro bucket, nunca um asset de outro
+    // uid/produto/arquivo do MESMO bucket, nunca vira carregador de URL externa arbitrária no catálogo
+    // público) — formato idêntico ao que buildPublicDownloadUrl() (server/uploads.ts) de fato produz:
+    // https://firebasestorage.googleapis.com/v0/b/{bucket}/o/{encodeURIComponent(storagePath)}?alt=media
+    //
+    // PERFORMANCE-OPTIMIZATION-03C — dois buckets são aceitos porque são os dois ÚNICOS confirmados por
+    // leitura de configuração real deste projeto (não um chute): `revenda-smart.firebasestorage.app` é
+    // VITE_FIREBASE_STORAGE_BUCKET em .env/.env.local (o bucket real do client/produção); e
+    // `demo-revendasmart.appspot.com` é o bucket do Firebase Emulator Suite local, usado consistentemente
+    // por `script/firebase-emulator-tests.ts` (`${PROJECT_ID}.appspot.com`, PROJECT_ID="demo-revendasmart")
+    // e por todos os `script/dev-*-qa.ts` desta base — travar só no bucket de produção quebraria todo o
+    // fluxo de QA/teste local que este projeto já usa. `FIREBASE_STORAGE_BUCKET` (server, sem prefixo
+    // VITE_) não está em NENHUM arquivo de config deste repositório — é um secret operacional (Cloud
+    // Run/Secret Manager) fora do meu alcance de leitura. Se esse secret de produção divergir do bucket
+    // client confirmado acima, uploads de thumbnail reais passariam a ser recusados por esta Rule
+    // (thumbnail vira ausente, imageUrl principal não é afetado) — confirmar o valor real do secret
+    // ANTES de publicar esta regra é responsabilidade de quem autorizar o deploy, não algo que eu possa
+    // verificar sem acesso a produção.
+    function isValidProductImageFields(data, uid, productId) {
+      let imageUrl = data.get('imageUrl', '');
+      let storagePath = data.get('storagePath', '');
+      let thumbnailUrl = data.get('thumbnailUrl', '');
+      let thumbnailStoragePath = data.get('thumbnailStoragePath', '');
+      let imageId = data.get('imageId', '');
+      let photoUrl = data.get('photoUrl', '');
+      let image = data.get('image', '');
+      let photo = data.get('photo', '');
+      let isCanonicalJpgThumbPath = thumbnailStoragePath == 'users/' + uid + '/product-thumbnails/' + productId + '/thumb-v1.jpg';
+      let isCanonicalWebpThumbPath = thumbnailStoragePath == 'users/' + uid + '/product-thumbnails/' + productId + '/thumb-v1.webp';
+      return imageUrl is string && imageUrl.size() <= 2000
+        && storagePath is string && storagePath.size() <= 1000
+        && thumbnailUrl is string && thumbnailUrl.size() <= 2000
+        && thumbnailStoragePath is string && thumbnailStoragePath.size() <= 500
+        && (thumbnailStoragePath == '' || isCanonicalJpgThumbPath || isCanonicalWebpThumbPath)
+        // Coerência: thumbnailUrl e thumbnailStoragePath são sempre gravados JUNTOS ou NUNCA (ver
+        // add-product.tsx) — um sem o outro é um estado que a app nunca produz legitimamente.
+        && (thumbnailUrl == '') == (thumbnailStoragePath == '')
+        && (thumbnailUrl == '' || thumbnailUrl.matches(
+              '^https://firebasestorage\\.googleapis\\.com/v0/b/(revenda-smart\\.firebasestorage\\.app|demo-revendasmart\\.appspot\\.com)/o/users%2F'
+              + uid + '%2Fproduct-thumbnails%2F' + productId
+              + (isCanonicalJpgThumbPath ? '%2Fthumb-v1\\.jpg\\?alt=media$' : '%2Fthumb-v1\\.webp\\?alt=media$')
+            ))
+        && imageId is string && imageId.size() <= 200
+        && photoUrl is string && photoUrl.size() <= 2000
+        && image is string && image.size() <= 2000
+        && photo is string && photo.size() <= 2000;
+    }
+
+    function isValidProductMetaFields(data) {
+      let gender = data.get('gender', '');
+      let lastSoldDate = data.get('lastSoldDate', '');
+      let extras = data.get('extras', {});
+      let isFeatured = data.get('isFeatured', false);
+      let isOnSale = data.get('isOnSale', false);
+      let discountPercent = data.get('discountPercent', 0);
+      let discount = data.get('discount', 0);
+      let promotionalPrice = data.get('promotionalPrice', 0);
+      return gender is string && gender.size() <= 40
+        && lastSoldDate is string && lastSoldDate.size() <= 80
+        && extras is map
+        && isFeatured is bool
+        && isOnSale is bool
+        && discountPercent is number && discountPercent >= 0 && discountPercent <= 100
+        && discount is number && discount >= 0
+        && promotionalPrice is number && promotionalPrice >= 0;
+    }
+
+    function isValidProductSearchFields(data) {
+      let nameNormalized = data.get('nameNormalized', '');
+      let brandNormalized = data.get('brandNormalized', '');
+      let categoryNormalized = data.get('categoryNormalized', '');
+      let barcodeNormalized = data.get('barcodeNormalized', '');
+      let productTypeNormalized = data.get('productTypeNormalized', '');
+      let searchTokens = data.get('searchTokens', []);
+      let searchSchemaVersion = data.get('searchSchemaVersion', 0);
+      return nameNormalized is string && nameNormalized.size() <= 180
+        && brandNormalized is string && brandNormalized.size() <= 120
+        && categoryNormalized is string && categoryNormalized.size() <= 120
+        && barcodeNormalized is string && barcodeNormalized.size() <= 100
+        && productTypeNormalized is string && productTypeNormalized.size() <= 100
+        && searchTokens is list && searchTokens.size() <= 16
+        && searchSchemaVersion is number && searchSchemaVersion >= 0 && searchSchemaVersion <= 10;
+    }
+
     function isValidProductCreate(uid, productId) {
-      let keys = request.resource.data.keys();
+      let data = request.resource.data;
+      let keys = data.keys();
       // Valide o shape aninhado antes da allowlist ampla do produto: dois `hasOnly` consecutivos são o
       // principal custo de avaliação, e um cutout inválido deve falhar sem pagar o segundo.
       return (!keys.hasAny(['approvedCutout'])
-          || isValidApprovedProductCutout(request.resource.data.approvedCutout, uid, productId))
+          || isValidApprovedProductCutout(data.approvedCutout, uid, productId))
         && keys.hasOnly(productAllowedFields())
         && keys.hasAll(['name', 'salePrice'])
-        && request.resource.data.get('id', productId) == productId
-        && request.resource.data.name is string
-        && request.resource.data.name.size() > 0
-        && request.resource.data.name.size() <= 180
-        && request.resource.data.salePrice is number
-        && request.resource.data.salePrice > 0
-        && request.resource.data.salePrice <= 1000000
-        && request.resource.data.get('costPrice', 0) is number
-        && request.resource.data.get('costPrice', 0) >= 0
-        && request.resource.data.get('costPrice', 0) <= 1000000
-        && request.resource.data.get('stock', 0) is number
-        && request.resource.data.get('stock', 0) >= 0
-        && request.resource.data.get('stock', 0) <= 1000000
-        && request.resource.data.get('brand', '') is string
-        && request.resource.data.get('brand', '').size() <= 100
-        && request.resource.data.get('origin', '') is string
-        && request.resource.data.get('origin', '').size() <= 80
-        && request.resource.data.get('category', '') is string
-        && request.resource.data.get('category', '').size() <= 100
-        && request.resource.data.get('productType', '') is string
-        && request.resource.data.get('productType', '').size() <= 80
-        && request.resource.data.get('barcode', '') is string
-        && request.resource.data.get('barcode', '').size() <= 80
-        && request.resource.data.get('description', '') is string
-        && request.resource.data.get('description', '').size() <= 2000
-        && request.resource.data.get('imageUrl', '') is string
-        && request.resource.data.get('imageUrl', '').size() <= 2000
-        && request.resource.data.get('storagePath', '') is string
-        && request.resource.data.get('storagePath', '').size() <= 1000
-        && request.resource.data.get('imageId', '') is string
-        && request.resource.data.get('imageId', '').size() <= 200
-        && request.resource.data.get('photoUrl', '') is string
-        && request.resource.data.get('photoUrl', '').size() <= 2000
-        && request.resource.data.get('image', '') is string
-        && request.resource.data.get('image', '').size() <= 2000
-        && request.resource.data.get('photo', '') is string
-        && request.resource.data.get('photo', '').size() <= 2000
-        && request.resource.data.get('gender', '') is string
-        && request.resource.data.get('gender', '').size() <= 40
-        && request.resource.data.get('lastSoldDate', '') is string
-        && request.resource.data.get('lastSoldDate', '').size() <= 80
-        && request.resource.data.get('extras', {}) is map
-        && request.resource.data.get('isFeatured', false) is bool
-        && request.resource.data.get('isOnSale', false) is bool
-        && request.resource.data.get('discountPercent', 0) is number
-        && request.resource.data.get('discountPercent', 0) >= 0
-        && request.resource.data.get('discountPercent', 0) <= 100
-        && request.resource.data.get('discount', 0) is number
-        && request.resource.data.get('discount', 0) >= 0
-        && request.resource.data.get('promotionalPrice', 0) is number
-        && request.resource.data.get('promotionalPrice', 0) >= 0
-        && request.resource.data.get('nameNormalized', '') is string
-        && request.resource.data.get('nameNormalized', '').size() <= 180
-        && request.resource.data.get('brandNormalized', '') is string
-        && request.resource.data.get('brandNormalized', '').size() <= 120
-        && request.resource.data.get('categoryNormalized', '') is string
-        && request.resource.data.get('categoryNormalized', '').size() <= 120
-        && request.resource.data.get('barcodeNormalized', '') is string
-        && request.resource.data.get('barcodeNormalized', '').size() <= 100
-        && request.resource.data.get('productTypeNormalized', '') is string
-        && request.resource.data.get('productTypeNormalized', '').size() <= 100
-        && request.resource.data.get('searchTokens', []) is list
-        && request.resource.data.get('searchTokens', []).size() <= 16
-        && request.resource.data.get('searchSchemaVersion', 0) is number
-        && request.resource.data.get('searchSchemaVersion', 0) >= 0
-        && request.resource.data.get('searchSchemaVersion', 0) <= 10;
+        && data.get('id', productId) == productId
+        && isValidProductCoreFields(data)
+        && isValidProductImageFields(data, uid, productId)
+        && isValidProductMetaFields(data)
+        && isValidProductSearchFields(data);
     }
 
     function isValidProductUpdate(uid, productId) {
@@ -145,7 +207,7 @@ service cloud.firestore {
       let keys = request.resource.data.keys();
       // Trocar qualquer referência da foto original invalida o cutout derivado. Fail-closed: a troca
       // deve remover approvedCutout; um novo cutout pode ser anexado depois, já derivado do novo asset.
-      return (!changed.hasAny(['imageUrl', 'storagePath', 'imageId', 'photoUrl', 'image', 'photo'])
+      return (!changed.hasAny(['imageUrl', 'storagePath', 'thumbnailUrl', 'thumbnailStoragePath', 'imageId', 'photoUrl', 'image', 'photo'])
           || !keys.hasAny(['approvedCutout']))
         // O estado final de um update obedece exatamente ao mesmo contrato do create. Isso preserva
         // todos os limites anteriores sem repetir dezenas de `changed.hasAny(...)` caros.
