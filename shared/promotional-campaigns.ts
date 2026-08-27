@@ -9,6 +9,60 @@
 
 export type PromotionalCampaignStatus = "draft" | "active" | "paused" | "finished";
 
+/**
+ * PROMOTIONAL-CAMPAIGNS-MANUAL-INTERNAL-05 — Sorteios Promocionais é admin-only hoje, então toda
+ * campanha nasce com policy INTERNAL_ADMIN (direitos de vendas registradas + concessão manual interna).
+ * Se o recurso for liberado a usuários comuns no futuro, campanhas públicas nascerão com
+ * REGISTERED_SALES_ONLY (só vendas registradas, concessão manual bloqueada mesmo no backend) — um único
+ * motor de entitlement, a policy é que decide quais fontes contam, nunca dois sistemas separados.
+ */
+export type EntitlementPolicy = "INTERNAL_ADMIN" | "REGISTERED_SALES_ONLY";
+
+export function isEntitlementPolicy(value: unknown): value is EntitlementPolicy {
+  return value === "INTERNAL_ADMIN" || value === "REGISTERED_SALES_ONLY";
+}
+
+export type EntitlementEventType = "MANUAL_INTERNAL_GRANT" | "MANUAL_INTERNAL_ADJUSTMENT";
+
+/** Motivos rápidos para a UI — não burocrático, `note` livre cobre o resto. */
+export const MANUAL_GRANT_REASONS = [
+  "external_magazine_sale",
+  "unregistered_purchase",
+  "courtesy",
+  "manual_adjustment",
+  "other",
+] as const;
+export type ManualGrantReason = typeof MANUAL_GRANT_REASONS[number];
+
+export function isManualGrantReason(value: unknown): value is ManualGrantReason {
+  return (MANUAL_GRANT_REASONS as readonly string[]).includes(value as string);
+}
+
+export const MANUAL_GRANT_REASON_LABELS: Record<ManualGrantReason, string> = {
+  external_magazine_sale: "Venda externa / revista",
+  unregistered_purchase: "Compra não registrada",
+  courtesy: "Cortesia",
+  manual_adjustment: "Ajuste manual",
+  other: "Outro",
+};
+
+/**
+ * Evento IMUTÁVEL de auditoria — nunca editado nem apagado. Uma correção posterior soma um NOVO evento
+ * compensatório (amount negativo), preservando o histórico completo. A soma dos `amount` de todos os
+ * eventos de um participante é `manualInternalEntries`. Vendas registradas não geram evento aqui — a
+ * própria coleção `sales` já é a fonte de auditoria dessa origem, recalculada fresca a cada leitura.
+ */
+export interface EntitlementEvent {
+  readonly id: string;
+  readonly customerId: string;
+  readonly type: EntitlementEventType;
+  readonly amount: number;
+  readonly reason: ManualGrantReason | null;
+  readonly note: string | null;
+  readonly createdAt: string;
+  readonly createdBy: string;
+}
+
 /** Toda campanha NOVA começa em 1 — não existe número 00/0 (PROMOTIONAL-CAMPAIGNS-02). */
 export const DEFAULT_NUMBER_START = 1;
 export const DEFAULT_NUMBER_COUNT = 100;
@@ -48,6 +102,9 @@ export interface PromotionalCampaign {
   readonly numberStart: number;
   readonly numberEnd: number;
   readonly allocationMode: PromotionalAllocationMode;
+  /** PROMOTIONAL-CAMPAIGNS-MANUAL-INTERNAL-05 — ausente em campanhas criadas antes desta feature; nesse
+   * caso o servidor trata como INTERNAL_ADMIN (era o único modo existente). */
+  readonly entitlementPolicy: EntitlementPolicy;
   /** Reservado para uma fase futura — nenhum algoritmo de sorteio é implementado neste MVP. */
   readonly winningNumber: number | null;
   readonly resultSource: string | null;
@@ -89,10 +146,15 @@ export interface PromotionalAccessToken {
 
 export interface PromotionalEntitlement {
   readonly qualifyingSpend: number;
+  /** Total = automaticEntries + manualInternalEntries (mantém o significado histórico do campo). */
   readonly entriesEarned: number;
   readonly entriesAlreadyClaimed: number;
   readonly entriesAvailable: number;
   readonly amountUntilNextEntry: number;
+  /** floor(qualifyingSpend / spendPerEntry) — sempre derivado de vendas reais, nunca da policy. */
+  readonly automaticEntries: number;
+  /** Soma dos EntitlementEvent do participante; sempre 0 sob policy REGISTERED_SALES_ONLY. */
+  readonly manualInternalEntries: number;
 }
 
 export interface PromotionalClaimRequest {
@@ -168,8 +230,38 @@ export function calculateMaxSelectable(entriesAvailable: number, tokenRemaining:
   return tokenRemaining === null ? entriesAvailable : Math.min(entriesAvailable, tokenRemaining);
 }
 
+/** Entitlement puramente automático (manualInternalEntries=0) — usado onde concessão manual não se aplica. */
 export function calculateEntitlement(qualifyingSpend: number, spendPerEntry: number, entriesAlreadyClaimed: number): PromotionalEntitlement {
-  const entriesEarned = calculateEarnedEntries(qualifyingSpend, spendPerEntry);
+  const automaticEntries = calculateEarnedEntries(qualifyingSpend, spendPerEntry);
+  const entriesAvailable = calculateAvailableEntries(automaticEntries, entriesAlreadyClaimed);
+  return {
+    qualifyingSpend,
+    entriesEarned: automaticEntries,
+    entriesAlreadyClaimed,
+    entriesAvailable,
+    amountUntilNextEntry: calculateAmountUntilNextEntry(qualifyingSpend, spendPerEntry),
+    automaticEntries,
+    manualInternalEntries: 0,
+  };
+}
+
+/**
+ * PROMOTIONAL-CAMPAIGNS-MANUAL-INTERNAL-05 — entitlement ciente de policy: sob INTERNAL_ADMIN, soma
+ * concessões manuais aos direitos automáticos; sob REGISTERED_SALES_ONLY, ignora qualquer
+ * manualInternalEntries (defesa em profundidade — a rota de concessão já bloqueia a origem, isto
+ * garante que mesmo um evento remanescente nunca conta sob a policy pública).
+ */
+export function calculateEntitlementWithManualGrants(input: {
+  readonly qualifyingSpend: number;
+  readonly spendPerEntry: number;
+  readonly manualInternalEntries: number;
+  readonly entriesAlreadyClaimed: number;
+  readonly policy: EntitlementPolicy;
+}): PromotionalEntitlement {
+  const { qualifyingSpend, spendPerEntry, entriesAlreadyClaimed, policy } = input;
+  const automaticEntries = calculateEarnedEntries(qualifyingSpend, spendPerEntry);
+  const manualInternalEntries = policy === "INTERNAL_ADMIN" ? Math.max(0, input.manualInternalEntries) : 0;
+  const entriesEarned = automaticEntries + manualInternalEntries;
   const entriesAvailable = calculateAvailableEntries(entriesEarned, entriesAlreadyClaimed);
   return {
     qualifyingSpend,
@@ -177,7 +269,17 @@ export function calculateEntitlement(qualifyingSpend: number, spendPerEntry: num
     entriesAlreadyClaimed,
     entriesAvailable,
     amountUntilNextEntry: calculateAmountUntilNextEntry(qualifyingSpend, spendPerEntry),
+    automaticEntries,
+    manualInternalEntries,
   };
+}
+
+/** Valida a quantidade de uma concessão manual: inteiro > 0 (correções usam eventos negativos à parte). */
+export function validateManualGrantQuantity(value: unknown): number | null {
+  const num = Number(value);
+  if (!Number.isFinite(num) || !Number.isInteger(num)) return null;
+  if (num <= 0) return null;
+  return num;
 }
 
 /** "0" -> "00", "7" -> "07", "100" -> "100" — sempre 2 dígitos mínimos; internamente é sempre integer. */

@@ -10,12 +10,16 @@ import {
   calculateAvailableEntries,
   calculateEarnedEntries,
   calculateEntitlement,
+  calculateEntitlementWithManualGrants,
   calculateMaxSelectable,
   calculateTokenRemaining,
   formatCampaignNumber,
   isCampaignPubliclyClaimable,
+  isEntitlementPolicy,
+  isManualGrantReason,
   MAX_CAMPAIGN_NUMBERS,
   validateClaimPayloadShape,
+  validateManualGrantQuantity,
   validateNumberCount,
   validateSelectionLimit,
 } from "../shared/promotional-campaigns";
@@ -133,7 +137,59 @@ function run(): void {
   assert.equal(calculateMaxSelectable(2, 4), 2, "H: saldo global (2) é menor que o teto do token (4) => 2 — nunca confia isoladamente no token");
   assert.equal(calculateMaxSelectable(0, 4), 0, "saldo global zerado => 0 mesmo com teto de token positivo");
 
-  console.log("PROMOTIONAL-CAMPAIGNS-01 pure-function tests passed: entries calculation exact per ticket table, accumulated spend, remaining-until-next-entry, entitlement composite scenario, number formatting, claim payload shape validation (exceeds/duplicate/out-of-range/empty/valid), status+period gate, link selection limit validation, token-remaining/max-selectable never trust either cap in isolation.");
+  // ===== PROMOTIONAL-CAMPAIGNS-MANUAL-INTERNAL-05 — policy/quantity validation =====
+  assert.equal(isEntitlementPolicy("INTERNAL_ADMIN"), true);
+  assert.equal(isEntitlementPolicy("REGISTERED_SALES_ONLY"), true);
+  assert.equal(isEntitlementPolicy("SOMETHING_ELSE"), false);
+  assert.equal(isEntitlementPolicy(undefined), false);
+
+  assert.equal(isManualGrantReason("external_magazine_sale"), true);
+  assert.equal(isManualGrantReason("courtesy"), true);
+  assert.equal(isManualGrantReason("bogus"), false);
+
+  assert.equal(validateManualGrantQuantity(3), 3);
+  assert.equal(validateManualGrantQuantity(0), null, "6: quantity=0 => reject");
+  assert.equal(validateManualGrantQuantity(-1), null, "5: quantity negativo => reject");
+  assert.equal(validateManualGrantQuantity(1.5), null, "7: quantity decimal => reject");
+  assert.equal(validateManualGrantQuantity("abc"), null, "não numérico => reject");
+
+  // ===== calculateEntitlementWithManualGrants — §18 fixture exata do ticket =====
+  // Moises: qualifyingSpend=200, spendPerEntry=100 => automatic=2; manual=3 concedidos => total=5.
+  {
+    const entitlement = calculateEntitlementWithManualGrants({
+      qualifyingSpend: 200, spendPerEntry: 100, manualInternalEntries: 3, entriesAlreadyClaimed: 0, policy: "INTERNAL_ADMIN",
+    });
+    assert.equal(entitlement.automaticEntries, 2, "§18: automatic = floor(200/100) = 2");
+    assert.equal(entitlement.manualInternalEntries, 3, "§18: manual concedido = 3");
+    assert.equal(entitlement.entriesEarned, 5, "§18: total = automatic + manual = 5");
+    assert.equal(entitlement.entriesAvailable, 5, "§18: nada ainda escolhido => 5 disponíveis");
+    assert.equal(entitlement.qualifyingSpend, 200, "§4 REGRA CRÍTICA: qualifyingSpend nunca muda por causa da concessão manual");
+  }
+  // Depois de escolher os 5 números: available = 0.
+  {
+    const entitlement = calculateEntitlementWithManualGrants({
+      qualifyingSpend: 200, spendPerEntry: 100, manualInternalEntries: 3, entriesAlreadyClaimed: 5, policy: "INTERNAL_ADMIN",
+    });
+    assert.equal(entitlement.entriesAvailable, 0, "§18: claimed=5 == earned=5 => 0 disponíveis");
+  }
+  // REGISTERED_SALES_ONLY — manual_internal é sempre ignorado, mesmo que o evento exista (defesa em profundidade, §2/§13).
+  {
+    const entitlement = calculateEntitlementWithManualGrants({
+      qualifyingSpend: 200, spendPerEntry: 100, manualInternalEntries: 3, entriesAlreadyClaimed: 0, policy: "REGISTERED_SALES_ONLY",
+    });
+    assert.equal(entitlement.manualInternalEntries, 0, "REGISTERED_SALES_ONLY: manual nunca conta, mesmo com evento existente");
+    assert.equal(entitlement.entriesEarned, 2, "REGISTERED_SALES_ONLY: total = só automatic");
+  }
+  // manualInternalEntries negativo (ajuste compensatório futuro) nunca deixa o total ficar negativo.
+  {
+    const entitlement = calculateEntitlementWithManualGrants({
+      qualifyingSpend: 0, spendPerEntry: 100, manualInternalEntries: -5, entriesAlreadyClaimed: 0, policy: "INTERNAL_ADMIN",
+    });
+    assert.equal(entitlement.manualInternalEntries, 0, "ajuste líquido negativo nunca produz manualInternalEntries negativo exposto");
+    assert.equal(entitlement.entriesAvailable, 0);
+  }
+
+  console.log("PROMOTIONAL-CAMPAIGNS-01 pure-function tests passed: entries calculation exact per ticket table, accumulated spend, remaining-until-next-entry, entitlement composite scenario, number formatting, claim payload shape validation (exceeds/duplicate/out-of-range/empty/valid), status+period gate, link selection limit validation, token-remaining/max-selectable never trust either cap in isolation, manual-internal policy/quantity validation, manual-grant entitlement composition (automatic+manual, qualifyingSpend untouched, REGISTERED_SALES_ONLY ignores manual).");
 }
 
 run();

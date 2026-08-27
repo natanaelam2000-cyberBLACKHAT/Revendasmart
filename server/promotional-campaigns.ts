@@ -23,18 +23,22 @@ import { getFirebaseAdmin } from "./firebase-admin-init";
 import { requireAdmin } from "./admin-auth";
 import { logInfo, logWarn } from "./logger";
 import {
-  calculateEntitlement,
+  calculateEntitlementWithManualGrants,
   calculateMaxSelectable,
   calculateTokenRemaining,
   DEFAULT_NUMBER_COUNT,
   DEFAULT_NUMBER_START,
   generateCampaignSlug,
   isCampaignPubliclyClaimable,
+  isEntitlementPolicy,
+  isManualGrantReason,
   isPromotionalAllocationMode,
   isPromotionalCampaignStatus,
   validateClaimPayloadShape,
+  validateManualGrantQuantity,
   validateNumberCount,
   validateSelectionLimit,
+  type EntitlementPolicy,
   type PromotionalCampaignStatus,
 } from "../shared/promotional-campaigns";
 
@@ -46,6 +50,8 @@ const SORTEIO_ERROR_MESSAGES = {
   CLIENT_NOT_FOUND: "Cliente não encontrado.",
   TOKEN_CREATE_FAILED: "Não foi possível gerar o link. Tente novamente.",
   NO_ENTRIES_AVAILABLE: "Este cliente não possui participações disponíveis.",
+  MANUAL_GRANT_NOT_ALLOWED: "Este sorteio não permite concessão manual de participações.",
+  MANUAL_GRANT_FAILED: "Não foi possível conceder as participações. Tente novamente.",
   SERVER_ERROR: "Ocorreu um erro temporário. Tente novamente.",
 } as const;
 type SorteioErrorCode = keyof typeof SORTEIO_ERROR_MESSAGES;
@@ -68,6 +74,14 @@ function participantsRef(campaignId: string) {
 }
 function tokensRef(campaignId: string) {
   return campaignsRef().doc(campaignId).collection("accessTokens");
+}
+/**
+ * PROMOTIONAL-CAMPAIGNS-MANUAL-INTERNAL-05 — ledger IMUTÁVEL por participante: nunca editado/apagado,
+ * só recebe novos eventos (uma correção soma um evento compensatório). Aninhado sob o participante
+ * (não top-level) porque toda leitura já acontece no escopo de um customerId conhecido.
+ */
+function entitlementEventsRef(campaignId: string, customerId: string) {
+  return participantsRef(campaignId).doc(customerId).collection("entitlementEvents");
 }
 
 function hashToken(rawToken: string): string {
@@ -106,6 +120,21 @@ async function computeQualifyingSpend(ownerId: string, customerId: string, start
   return totalCents / 100;
 }
 
+/** Campanhas criadas antes desta feature não têm o campo — INTERNAL_ADMIN era o único modo existente. */
+function resolveEntitlementPolicy(campaign: FirebaseFirestore.DocumentData): EntitlementPolicy {
+  return isEntitlementPolicy(campaign.entitlementPolicy) ? campaign.entitlementPolicy : "INTERNAL_ADMIN";
+}
+
+async function computeManualInternalEntries(campaignId: string, customerId: string): Promise<number> {
+  const snapshot = await entitlementEventsRef(campaignId, customerId).get();
+  let total = 0;
+  for (const doc of snapshot.docs) {
+    const amount = Number(doc.data().amount ?? 0);
+    if (Number.isFinite(amount)) total += amount;
+  }
+  return total;
+}
+
 /** Entitlement GLOBAL atual do cliente (não escopado a nenhum token/link específico). */
 async function computeCustomerEntitlement(
   ownerId: string,
@@ -113,12 +142,19 @@ async function computeCustomerEntitlement(
   customerId: string,
   campaign: FirebaseFirestore.DocumentData,
 ) {
-  const [participantSnap, qualifyingSpend] = await Promise.all([
+  const [participantSnap, qualifyingSpend, manualInternalEntries] = await Promise.all([
     participantsRef(campaignId).doc(customerId).get(),
     computeQualifyingSpend(ownerId, customerId, campaign.startsAt, campaign.endsAt),
+    computeManualInternalEntries(campaignId, customerId),
   ]);
   const entriesAlreadyClaimed = participantSnap.exists ? Number(participantSnap.data()?.entriesClaimed ?? 0) : 0;
-  return calculateEntitlement(qualifyingSpend, campaign.spendPerEntry, entriesAlreadyClaimed);
+  return calculateEntitlementWithManualGrants({
+    qualifyingSpend,
+    spendPerEntry: campaign.spendPerEntry,
+    manualInternalEntries,
+    entriesAlreadyClaimed,
+    policy: resolveEntitlementPolicy(campaign),
+  });
 }
 
 function sanitizePositiveNumber(value: unknown): number | null {
@@ -186,6 +222,9 @@ export function registerPromotionalCampaignRoutes(
         numberStart: DEFAULT_NUMBER_START,
         numberEnd: DEFAULT_NUMBER_START + numberCount - 1,
         allocationMode,
+        // PROMOTIONAL-CAMPAIGNS-MANUAL-INTERNAL-05 — Sorteios é 100% admin-only hoje; toda campanha nasce
+        // INTERNAL_ADMIN. Uma futura versão pública criaria campanhas com REGISTERED_SALES_ONLY aqui.
+        entitlementPolicy: "INTERNAL_ADMIN" as EntitlementPolicy,
         winningNumber: null,
         resultSource: null,
         finishedAt: null,
@@ -255,16 +294,43 @@ export function registerPromotionalCampaignRoutes(
 
       const clientRefs = participantsSnap.docs.map((doc) => db().collection("users").doc(actorUid).collection("clients").doc(doc.id));
       const clientSnaps = clientRefs.length ? await db().getAll(...clientRefs) : [];
+      const policy = resolveEntitlementPolicy(campaign);
       const participants = await Promise.all(participantsSnap.docs.map(async (doc, index) => {
         const participant = doc.data();
         const client = clientSnaps[index]?.data();
-        const qualifyingSpend = await computeQualifyingSpend(actorUid, doc.id, campaign.startsAt, campaign.endsAt);
-        const entitlement = calculateEntitlement(qualifyingSpend, campaign.spendPerEntry, participant.entriesClaimed ?? 0);
+        const [qualifyingSpend, eventsSnap] = await Promise.all([
+          computeQualifyingSpend(actorUid, doc.id, campaign.startsAt, campaign.endsAt),
+          entitlementEventsRef(campaignId, doc.id).orderBy("createdAt", "asc").get(),
+        ]);
+        // §11 — histórico expansível: cada evento manual fica visível individualmente (nunca só a soma),
+        // preservado mesmo depois de um ajuste compensatório futuro.
+        const manualEvents = eventsSnap.docs.map((eventDoc) => {
+          const data = eventDoc.data();
+          return {
+            id: eventDoc.id,
+            type: data.type as string,
+            amount: Number(data.amount ?? 0),
+            reason: (data.reason as string | null) ?? null,
+            note: (data.note as string | null) ?? null,
+            createdAt: data.createdAt as string,
+          };
+        });
+        const manualInternalEntries = manualEvents.reduce((sum, event) => sum + event.amount, 0);
+        const entitlement = calculateEntitlementWithManualGrants({
+          qualifyingSpend,
+          spendPerEntry: campaign.spendPerEntry,
+          manualInternalEntries,
+          entriesAlreadyClaimed: participant.entriesClaimed ?? 0,
+          policy,
+        });
         return {
           customerId: doc.id,
           clientName: client?.name ?? "Cliente removido",
           clientPhone: client?.phone ?? null,
           qualifyingSpend,
+          automaticEntries: entitlement.automaticEntries,
+          manualInternalEntries: entitlement.manualInternalEntries,
+          manualEvents,
           entriesClaimed: participant.entriesClaimed ?? 0,
           claimedNumbers: participant.claimedNumbers ?? [],
           entriesAvailable: entitlement.entriesAvailable,
@@ -340,6 +406,73 @@ export function registerPromotionalCampaignRoutes(
     } catch (error) {
       logWarn("promotional_campaigns.entitlement_failed", { message: error instanceof Error ? error.message : String(error) });
       return sendSorteioError(res, 500, "SERVER_ERROR");
+    }
+  });
+
+  // ===== POST .../clients/:customerId/manual-entries — concessão manual interna (INTERNAL_ADMIN only) =====
+  // PROMOTIONAL-CAMPAIGNS-MANUAL-INTERNAL-05 — cobre o caso real de venda externa/revista nunca
+  // registrada no RevendaSmart: o admin libera participações sem precisar cadastrar uma venda fictícia.
+  // NUNCA toca qualifyingSpend/sales/estoque — é um evento de auditoria à parte, somado ao entitlement
+  // só sob a policy INTERNAL_ADMIN (nunca sob REGISTERED_SALES_ONLY, mesmo que o request tente).
+  app.post("/api/admin/sorteios/campaigns/:campaignId/clients/:customerId/manual-entries", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    const actorUid = (req as Request & { firebaseUid?: string }).firebaseUid;
+    if (!actorUid) return sendSorteioError(res, 401, "UNAUTHORIZED");
+    const campaignId = String(req.params.campaignId);
+    const customerId = String(req.params.customerId);
+    const body = req.body ?? {};
+
+    const quantity = validateManualGrantQuantity(body.quantity);
+    if (quantity === null) return sendSorteioError(res, 400, "VALIDATION_ERROR", { field: "quantity" });
+    const reason = isManualGrantReason(body.reason) ? body.reason : null;
+    const note = typeof body.note === "string" ? body.note.trim().slice(0, 500) : null;
+    // Idempotência no mesmo padrão já usado em server/sale-finalize-transaction.ts: o CLIENTE gera o id
+    // (não o servidor), reenviar o mesmo id nunca duplica o evento — só devolve o resultado já gravado.
+    const idempotencyKey = typeof body.idempotencyKey === "string" ? body.idempotencyKey.trim() : "";
+    if (!idempotencyKey) return sendSorteioError(res, 400, "VALIDATION_ERROR", { field: "idempotencyKey" });
+
+    try {
+      const campaignSnap = await campaignsRef().doc(campaignId).get();
+      if (!campaignSnap.exists) return sendSorteioError(res, 404, "CAMPAIGN_NOT_FOUND");
+      const campaign = campaignSnap.data()!;
+      if (campaign.ownerId !== actorUid) return sendSorteioError(res, 403, "FORBIDDEN");
+
+      // §2/§7: a policy vem SOMENTE do documento da campanha (server-authoritative) — nada no corpo da
+      // requisição pode fingir ser INTERNAL_ADMIN. Sob REGISTERED_SALES_ONLY, concessão manual é negada
+      // mesmo para um admin, porque essa policy representa "só vendas reais contam" por definição.
+      if (resolveEntitlementPolicy(campaign) !== "INTERNAL_ADMIN") {
+        return sendSorteioError(res, 403, "MANUAL_GRANT_NOT_ALLOWED");
+      }
+
+      const clientSnap = await db().collection("users").doc(actorUid).collection("clients").doc(customerId).get();
+      if (!clientSnap.exists) return sendSorteioError(res, 404, "CLIENT_NOT_FOUND");
+
+      const eventRef = entitlementEventsRef(campaignId, customerId).doc(idempotencyKey);
+      const participantRef = participantsRef(campaignId).doc(customerId);
+      await db().runTransaction(async (transaction) => {
+        const existing = await transaction.get(eventRef);
+        if (existing.exists) return; // replay do mesmo idempotencyKey — não duplica
+        transaction.set(eventRef, {
+          customerId,
+          type: "MANUAL_INTERNAL_GRANT",
+          amount: quantity,
+          reason,
+          note,
+          createdAt: new Date().toISOString(),
+          createdBy: actorUid,
+        });
+        // Sem isto, um cliente que só recebeu concessão manual (nunca fez claim) não aparece na lista de
+        // PARTICIPANTES — subcoleções não materializam o documento pai sozinhas no Firestore. `merge`
+        // nunca sobrescreve entriesClaimed/claimedNumbers se o participante já existir por ter escolhido
+        // números antes.
+        transaction.set(participantRef, { customerId, updatedAt: new Date().toISOString() }, { merge: true });
+      });
+
+      const entitlement = await computeCustomerEntitlement(actorUid, campaignId, customerId, campaign);
+      logInfo("promotional_campaigns.manual_entries_granted", { campaignId, customerId, actorUid, quantity, reason });
+      return res.status(201).json({ eventId: idempotencyKey, quantity, entitlement });
+    } catch (error) {
+      logWarn("promotional_campaigns.manual_entries_failed", { message: error instanceof Error ? error.message : String(error) });
+      return sendSorteioError(res, 500, "MANUAL_GRANT_FAILED");
     }
   });
 
@@ -435,13 +568,20 @@ export function registerPromotionalCampaignRoutes(
       if (tokenData.revokedAt) return sendSorteioError(res, 403, "FORBIDDEN");
       const customerId = tokenData.customerId as string;
 
-      const [participantSnap, numbersSnap, qualifyingSpend] = await Promise.all([
+      const [participantSnap, numbersSnap, qualifyingSpend, manualInternalEntries] = await Promise.all([
         participantsRef(campaignId).doc(customerId).get(),
         numbersRef(campaignId).get(),
         computeQualifyingSpend(campaign.ownerId, customerId, campaign.startsAt, campaign.endsAt),
+        computeManualInternalEntries(campaignId, customerId),
       ]);
       const entriesAlreadyClaimed = participantSnap.exists ? Number(participantSnap.data()?.entriesClaimed ?? 0) : 0;
-      const entitlement = calculateEntitlement(qualifyingSpend, campaign.spendPerEntry, entriesAlreadyClaimed);
+      const entitlement = calculateEntitlementWithManualGrants({
+        qualifyingSpend,
+        spendPerEntry: campaign.spendPerEntry,
+        manualInternalEntries,
+        entriesAlreadyClaimed,
+        policy: resolveEntitlementPolicy(campaign),
+      });
 
       // PROMOTIONAL-CAMPAIGNS-LINK-SELECTION-LIMIT-04 — o que este link específico ainda libera pode ser
       // MENOR que o saldo global do cliente (o admin pode ter limitado o link, ou o cliente pode ter
@@ -544,7 +684,22 @@ export function registerPromotionalCampaignRoutes(
         }
         const qualifyingSpend = qualifyingSpendCents / 100;
         const entriesAlreadyClaimed = participantSnap.exists ? Number(participantSnap.data()?.entriesClaimed ?? 0) : 0;
-        const entitlement = calculateEntitlement(qualifyingSpend, campaign.spendPerEntry, entriesAlreadyClaimed);
+
+        // PROMOTIONAL-CAMPAIGNS-MANUAL-INTERNAL-05 — lido DENTRO da mesma transação (não antes dela) para
+        // que uma concessão manual concorrente nunca fique fora da leitura que decide o teto desta claim.
+        const manualEventsQuerySnap = await transaction.get(entitlementEventsRef(campaignId, customerId));
+        let manualInternalEntries = 0;
+        for (const doc of manualEventsQuerySnap.docs) {
+          const amount = Number(doc.data().amount ?? 0);
+          if (Number.isFinite(amount)) manualInternalEntries += amount;
+        }
+        const entitlement = calculateEntitlementWithManualGrants({
+          qualifyingSpend,
+          spendPerEntry: campaign.spendPerEntry,
+          manualInternalEntries,
+          entriesAlreadyClaimed,
+          policy: resolveEntitlementPolicy(campaign),
+        });
 
         // O teto real desta claim é o MENOR entre o saldo global (recalculado fresco, nunca confiado do
         // client) e o que resta do teto próprio deste token — nunca um dos dois isoladamente. Protege

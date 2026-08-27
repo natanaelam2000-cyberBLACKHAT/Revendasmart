@@ -235,6 +235,9 @@ async function main() {
   function hashTokenForTest(rawToken: string): string {
     return crypto.createHash("sha256").update(rawToken).digest("hex");
   }
+  function entitlementEventsRefForTest(firestore: FirebaseFirestore.Firestore, campaignId: string, customerId: string) {
+    return firestore.collection(`promotionalCampaigns/${campaignId}/participants/${customerId}/entitlementEvents`);
+  }
   async function makeClientWithSales(name: string, saleTotal: number): Promise<string> {
     const id = `pc04-client-${name}-${suffix}`;
     await db.doc(`users/${adminAUid}/clients/${id}`).set({ id, name, phone: null });
@@ -398,8 +401,190 @@ async function main() {
     assert.equal(body.code, "FORBIDDEN");
   }
 
+  // ==================================================================================================
+  // PROMOTIONAL-CAMPAIGNS-MANUAL-INTERNAL-05 — concessão manual interna (venda externa/revista nunca
+  // registrada), sem criar venda fictícia, auditável, server-authoritative.
+  //
+  // publicSorteioRateLimit (server/promotional-campaigns.ts) é 30 req/60s por IP, compartilhado entre
+  // GET view e POST claim de TODOS os testes deste arquivo (todos batem do mesmo "IP" local). Os blocos
+  // acima (G-S) já usam boa parte desse orçamento na mesma janela — não é seguro simplesmente confiar em
+  // sobrar espaço. Aguardar a janela reabrir aqui é mais correto do que afrouxar o rate limit real só
+  // para o teste passar (isso mascararia o comportamento de produção, não o testaria).
+  // ==================================================================================================
+  await new Promise((resolve) => setTimeout(resolve, 61_000));
+
+  const manualCampaign = await postJson("/api/admin/sorteios/campaigns", {
+    title: "Sorteio Manual Internal", prizeName: "Prêmio", startsAt, endsAt, spendPerEntry: 100, numberCount: 100,
+  }, adminAToken);
+  const manualCampaignId = manualCampaign.body.id as string;
+  const manualSlug = manualCampaign.body.slug as string;
+  assert.equal(manualCampaign.body.entitlementPolicy, "INTERNAL_ADMIN", "toda campanha nasce INTERNAL_ADMIN — único modo existente hoje");
+  await patchJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/status`, { status: "active" }, adminAToken);
+
+  // ===== T (§15 test 1): usuário não-admin tentando manual grant => 403 =====
+  {
+    const helenaId = await makeClientWithSales("helena", 0);
+    const { status } = await postJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/clients/${helenaId}/manual-entries`, { quantity: 1, idempotencyKey: crypto.randomUUID() }, regularToken);
+    assert.equal(status, 403, "T: não-admin concedendo manual precisa ser DENY");
+  }
+
+  // ===== U (§15 test 2): spoof de policy no corpo é ignorado — servidor só confia no campo salvo na campanha =====
+  {
+    const publicPolicyCampaignRef = db.collection("promotionalCampaigns").doc();
+    await publicPolicyCampaignRef.set({
+      id: publicPolicyCampaignRef.id, ownerId: adminAUid, slug: `future-public-${suffix}`, title: "Futuro Público",
+      description: "", prizeName: "x", prizeImageUrl: null, status: "active", startsAt, endsAt, drawAt: null,
+      spendPerEntry: 100, numberStart: 1, numberEnd: 100, allocationMode: "customer_choice",
+      entitlementPolicy: "REGISTERED_SALES_ONLY", winningNumber: null, resultSource: null, finishedAt: null,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    });
+    const irisId = await makeClientWithSales("iris", 0);
+    const { status, body } = await postJson(
+      `/api/admin/sorteios/campaigns/${publicPolicyCampaignRef.id}/clients/${irisId}/manual-entries`,
+      { quantity: 5, policy: "INTERNAL_ADMIN", isInternal: true, idempotencyKey: crypto.randomUUID() },
+      adminAToken,
+    );
+    assert.equal(status, 403, "U: REGISTERED_SALES_ONLY nega concessão manual mesmo com policy/isInternal forjados no corpo");
+    assert.equal(body.code, "MANUAL_GRANT_NOT_ALLOWED");
+  }
+
+  // ===== V (§15 test 3): admin B tentando conceder numa campanha de admin A => 403 =====
+  {
+    const { status } = await postJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/clients/${clientJoaoId}/manual-entries`, { quantity: 1, idempotencyKey: crypto.randomUUID() }, adminBToken);
+    assert.equal(status, 403, "V: cross-owner na campanha precisa ser DENY");
+  }
+
+  // ===== W (§15 test 4): admin A tentando conceder para cliente de admin B => DENY (cliente não existe no tenant de A) =====
+  {
+    const clientOfBId = `pc05-client-of-b-${suffix}`;
+    await db.doc(`users/${adminBUid}/clients/${clientOfBId}`).set({ id: clientOfBId, name: "Cliente de B", phone: null });
+    const { status } = await postJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/clients/${clientOfBId}/manual-entries`, { quantity: 1, idempotencyKey: crypto.randomUUID() }, adminAToken);
+    assert.equal(status, 404, "W: cliente de outro tenant não é encontrado no escopo de admin A");
+  }
+
+  // ===== X (§15 tests 5/6/7): quantity negativo/zero/decimal => DENY =====
+  {
+    const julioId = await makeClientWithSales("julio", 0);
+    for (const quantity of [-1, 0, 1.5]) {
+      const { status, body } = await postJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/clients/${julioId}/manual-entries`, { quantity, idempotencyKey: crypto.randomUUID() }, adminAToken);
+      assert.equal(status, 400, `X: quantity=${quantity} precisa ser DENY`);
+      assert.equal(body.code, "VALIDATION_ERROR");
+    }
+  }
+
+  // ===== Y (§15 test 8): idempotência — reenviar a MESMA idempotencyKey nunca duplica a concessão =====
+  {
+    const karenId = await makeClientWithSales("karen", 0);
+    const key = crypto.randomUUID();
+    const first = await postJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/clients/${karenId}/manual-entries`, { quantity: 3, reason: "courtesy", idempotencyKey: key }, adminAToken);
+    assert.equal(first.status, 201);
+    const firstEntitlement = first.body.entitlement as { manualInternalEntries: number };
+    assert.equal(firstEntitlement.manualInternalEntries, 3);
+    const replay = await postJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/clients/${karenId}/manual-entries`, { quantity: 3, reason: "courtesy", idempotencyKey: key }, adminAToken);
+    assert.equal(replay.status, 201, "Y: replay do mesmo idempotencyKey continua respondendo OK");
+    const replayEntitlement = replay.body.entitlement as { manualInternalEntries: number };
+    assert.equal(replayEntitlement.manualInternalEntries, 3, "Y: replay NÃO soma de novo — continua 3, nunca 6");
+  }
+
+  // ===== Z (§15 tests 9/10/11): concessão manual não altera qualifyingSpend, não cria venda, não mexe em estoque =====
+  {
+    const laraId = await makeClientWithSales("lara", 0);
+    const salesBefore = (await db.collection(`users/${adminAUid}/sales`).where("clientId", "==", laraId).get()).size;
+    const before = await getJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/clients/${laraId}/entitlement`, adminAToken);
+    await postJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/clients/${laraId}/manual-entries`, { quantity: 4, reason: "external_magazine_sale", idempotencyKey: crypto.randomUUID() }, adminAToken);
+    const after = await getJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/clients/${laraId}/entitlement`, adminAToken);
+    const salesAfter = (await db.collection(`users/${adminAUid}/sales`).where("clientId", "==", laraId).get()).size;
+    assert.equal(after.body.qualifyingSpend, before.body.qualifyingSpend, "Z/9: qualifyingSpend não muda por causa de concessão manual");
+    assert.equal(salesAfter, salesBefore, "Z/10: nenhuma venda foi criada");
+    assert.equal((after.body as { manualInternalEntries: number }).manualInternalEntries, 4);
+    // Z/11: não existe nenhum caminho de escrita a produtos/estoque nesta rota — nada a decrementar.
+  }
+
+  // ===== AA (§15 test 12 / ticket §10): globalRemaining=3 via manual; dois links (2+2) nunca consomem 4 =====
+  {
+    const marcoId = await makeClientWithSales("marco", 0);
+    await postJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/clients/${marcoId}/manual-entries`, { quantity: 3, reason: "courtesy", idempotencyKey: crypto.randomUUID() }, adminAToken);
+    const linkAA1 = await postJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/links`, { customerId: marcoId, selectionLimit: 2 }, adminAToken);
+    const linkAA2 = await postJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/links`, { customerId: marcoId, selectionLimit: 2 }, adminAToken);
+    const [raceAA1, raceAA2] = await Promise.all([
+      postJson(`/api/public/sorteios/${manualSlug}/claim`, { token: linkAA1.body.token, numbers: [50, 51] }),
+      postJson(`/api/public/sorteios/${manualSlug}/claim`, { token: linkAA2.body.token, numbers: [52, 53] }),
+    ]);
+    const okCount = [raceAA1, raceAA2].filter((r) => r.body.ok === true).length;
+    const participantSnap = await db.doc(`promotionalCampaigns/${manualCampaignId}/participants/${marcoId}`).get();
+    const claimed = Number(participantSnap.data()?.entriesClaimed ?? 0);
+    assert.ok(claimed <= 3, "AA: nunca consome mais que os 3 direitos reais (2 automáticos+manuais somados, mesmo com 2 links de 2)");
+    assert.ok(okCount >= 1, "AA: pelo menos uma das claims confirma");
+  }
+
+  // ===== BB (§15 test 13): revoke preserva entitlement global (incluindo manual) não utilizado =====
+  {
+    const nadiaId = await makeClientWithSales("nadia", 0);
+    await postJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/clients/${nadiaId}/manual-entries`, { quantity: 3, reason: "courtesy", idempotencyKey: crypto.randomUUID() }, adminAToken);
+    const linkToRevokeBB = await postJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/links`, { customerId: nadiaId, selectionLimit: 2 }, adminAToken);
+    await postJson(`/api/public/sorteios/${manualSlug}/claim`, { token: linkToRevokeBB.body.token, numbers: [60] });
+    await postJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/links/${linkToRevokeBB.body.tokenId}/revoke`, {}, adminAToken);
+    const newLinkBB = await postJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/links`, { customerId: nadiaId }, adminAToken);
+    assert.equal(newLinkBB.body.selectionLimit, 2, "BB: saldo global (3 manuais - 1 usado = 2) preservado após revoke, incluindo a parte manual");
+  }
+
+  // ===== CC (§15 test 14): ajuste NUNCA apaga o histórico anterior — ledger imutável e somável =====
+  {
+    const oscarId = await makeClientWithSales("oscar", 0);
+    // A rota real de concessão também faz este upsert (ver server/promotional-campaigns.ts) — replicado
+    // aqui porque este teste escreve os eventos DIRETO no Firestore (não existe endpoint de ajuste ainda).
+    await db.doc(`promotionalCampaigns/${manualCampaignId}/participants/${oscarId}`).set({ customerId: oscarId, updatedAt: new Date().toISOString() }, { merge: true });
+    const grantRef = entitlementEventsRefForTest(db, manualCampaignId, oscarId).doc();
+    await grantRef.set({ customerId: oscarId, type: "MANUAL_INTERNAL_GRANT", amount: 3, reason: "external_magazine_sale", note: null, createdAt: new Date().toISOString(), createdBy: adminAUid });
+    const adjustmentRef = entitlementEventsRefForTest(db, manualCampaignId, oscarId).doc();
+    await adjustmentRef.set({ customerId: oscarId, type: "MANUAL_INTERNAL_ADJUSTMENT", amount: -1, reason: "manual_adjustment", note: "quantidade errada", createdAt: new Date().toISOString(), createdBy: adminAUid });
+    const grantStillThere = await grantRef.get();
+    assert.equal(grantStillThere.exists, true, "CC: evento original de concessão continua existindo — o ajuste não apagou nada");
+    assert.equal(grantStillThere.data()?.amount, 3, "CC: valor original do evento preservado");
+    const detail = await getJson(`/api/admin/sorteios/campaigns/${manualCampaignId}`, adminAToken);
+    const oscarRow = (detail.body.participants as { customerId: string; manualInternalEntries: number; manualEvents: unknown[] }[])
+      .find((p) => p.customerId === oscarId);
+    assert.ok(oscarRow, "CC: participante aparece na listagem mesmo sem ter feito claim ainda");
+    assert.equal(oscarRow!.manualInternalEntries, 2, "CC: soma líquida = 3 - 1 = 2");
+    assert.equal(oscarRow!.manualEvents.length, 2, "CC: os DOIS eventos continuam visíveis no histórico, nenhum foi apagado");
+  }
+
+  // ===== DD (ticket §18 — fixture obrigatória ponta a ponta) =====
+  {
+    const moisesId = await makeClientWithSales("moises", 200); // qualifyingSpend = R$200, spendPerEntry = 100 => automatic = 2
+    const salesBeforeMoises = (await db.collection(`users/${adminAUid}/sales`).where("clientId", "==", moisesId).get()).size;
+
+    const entitlementBefore = await getJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/clients/${moisesId}/entitlement`, adminAToken);
+    assert.equal(entitlementBefore.body.automaticEntries, 2, "DD: R$200/R$100 = 2 automáticos");
+    assert.equal(entitlementBefore.body.entriesAvailable, 2);
+
+    // Admin quer liberar 5 => diferença de 3 precisa virar concessão manual antes do link nascer.
+    const desired = 5;
+    const manualNeeded = desired - (entitlementBefore.body.entriesAvailable as number);
+    assert.equal(manualNeeded, 3);
+    const grantDD = await postJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/clients/${moisesId}/manual-entries`, { quantity: manualNeeded, reason: "external_magazine_sale", note: "venda por revista", idempotencyKey: crypto.randomUUID() }, adminAToken);
+    assert.equal(grantDD.status, 201);
+
+    const linkDD = await postJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/links`, { customerId: moisesId, selectionLimit: desired }, adminAToken);
+    assert.equal(linkDD.status, 201);
+    assert.equal(linkDD.body.selectionLimit, 5, "DD: link libera exatamente os 5 pedidos (2 automáticos + 3 manuais)");
+
+    const claimDD = await postJson(`/api/public/sorteios/${manualSlug}/claim`, { token: linkDD.body.token, numbers: [7, 18, 39, 62, 91] });
+    assert.equal(claimDD.body.ok, true, "DD: claim dos 5 números confirma");
+
+    const finalEntitlement = await getJson(`/api/admin/sorteios/campaigns/${manualCampaignId}/clients/${moisesId}/entitlement`, adminAToken);
+    assert.equal(finalEntitlement.body.automaticEntries, 2, "DD esperado: automatic = 2");
+    assert.equal(finalEntitlement.body.manualInternalEntries, 3, "DD esperado: manual = 3");
+    assert.equal(finalEntitlement.body.entriesAlreadyClaimed, 5, "DD esperado: claimed = 5");
+    assert.equal(finalEntitlement.body.entriesAvailable, 0, "DD esperado: remaining = 0");
+    assert.equal(finalEntitlement.body.qualifyingSpend, 200, "DD esperado: qualifyingSpend = R$200, nunca alterado");
+
+    const salesAfterMoises = (await db.collection(`users/${adminAUid}/sales`).where("clientId", "==", moisesId).get()).size;
+    assert.equal(salesAfterMoises, salesBeforeMoises, "DD: nenhuma venda adicional foi criada pela concessão manual");
+  }
+
   server.close();
-  console.log("PROMOTIONAL-CAMPAIGNS-01 owner-access/concurrency tests passed: non-admin create denied, cross-owner detail denied, entitlement computed from real sales (350/100=3), claim confirms atomically, reopening link reflects 0 remaining + own numbers, another customer blocked from an already-claimed number, concurrent claims for the same number resolve to exactly one winner, invalid/revoked token denied, draft/paused/finished campaigns reject claims. LINK-SELECTION-LIMIT-04: link creation blocked with zero entitlement, entitlement preview endpoint, per-token cap independent of global balance, reopening reflects token-scoped remaining, multiple links never jointly overspend, concurrent claims across different links never overspend entitlement, revoke preserves unused rights, legacy tokens without selectionLimit remain fully compatible, tenant isolation on link creation.");
+  console.log("PROMOTIONAL-CAMPAIGNS-01 owner-access/concurrency tests passed: non-admin create denied, cross-owner detail denied, entitlement computed from real sales (350/100=3), claim confirms atomically, reopening link reflects 0 remaining + own numbers, another customer blocked from an already-claimed number, concurrent claims for the same number resolve to exactly one winner, invalid/revoked token denied, draft/paused/finished campaigns reject claims. LINK-SELECTION-LIMIT-04: link creation blocked with zero entitlement, entitlement preview endpoint, per-token cap independent of global balance, reopening reflects token-scoped remaining, multiple links never jointly overspend, concurrent claims across different links never overspend entitlement, revoke preserves unused rights, legacy tokens without selectionLimit remain fully compatible, tenant isolation on link creation. MANUAL-INTERNAL-05: non-admin denied, spoofed policy ignored (server-authoritative from campaign doc), cross-owner campaign/client denied, invalid quantity denied, idempotent replay never duplicates, qualifyingSpend/sales/stock untouched by manual grants, concurrent claims across manual-funded links never overspend, revoke preserves manual-included balance, ledger immutable across a compensating adjustment, end-to-end §18 fixture (automatic=2, manual=3, claimed=5, remaining=0, qualifyingSpend unchanged, zero extra sales).");
 }
 
 main().catch((error) => {

@@ -40,8 +40,12 @@ const budgets = [
 // referenciado por App.tsx/PrivateRouter fora de `lazy(() => import(...))`), então o excesso de ~11 kB
 // no total somado vem só dos chunks sob demanda de /sorteios e /sorteio/:slug, nunca do caminho crítico
 // do vendedor comum.
+// PROMOTIONAL-CAMPAIGNS-MANUAL-INTERNAL-05 — elevado 2280 -> 2281 kB, autorizado explicitamente depois
+// de otimizar o custo real (+3.16 kB -> +2.21 kB, medido isolado contra origin/main) sem cortar UX:
+// dedup de EntitlementRow/STEPPER_BUTTON_CLASS. Boot inicial confirmado bit-a-bit idêntico antes/depois
+// (484529 bytes nos dois): o custo inteiro cai nos chunks lazy de /sorteios, nunca no caminho crítico.
 const totalBudgets = {
-  jsKb: 2280,
+  jsKb: 2281,
   jsGzipKb: 700,
 };
 

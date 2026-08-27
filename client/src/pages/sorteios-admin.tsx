@@ -7,7 +7,8 @@ import { useAdminAccess } from "@/hooks/useAdminAccess";
 import { useClientsLiteData } from "@/hooks/useClientsLiteData";
 import { apiRequest, ApiError } from "@/lib/api-client";
 import { notifyError, notifySuccess } from "@/lib/notify";
-import type { PromotionalCampaign, PromotionalCampaignStatus, PromotionalEntitlement } from "@shared/promotional-campaigns";
+import { formatCampaignNumber, MANUAL_GRANT_REASONS, MANUAL_GRANT_REASON_LABELS } from "@shared/promotional-campaigns";
+import type { EntitlementPolicy, ManualGrantReason, PromotionalCampaign, PromotionalCampaignStatus, PromotionalEntitlement } from "@shared/promotional-campaigns";
 
 /**
  * PROMOTIONAL-CAMPAIGNS-01B §2 — listagem + detalhe/participantes/link num único chunk (evita pagar
@@ -22,6 +23,7 @@ const SorteiosCreate = lazy(() => import("./sorteios-create"));
 
 const CARD = "rounded-2xl border border-border/60 bg-white p-4";
 const LABEL = "text-xs font-black uppercase tracking-wide text-muted-foreground";
+const STEPPER_BUTTON_CLASS = "flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white shadow-sm active:scale-95 disabled:opacity-30";
 const STATUS_LABEL: Record<PromotionalCampaignStatus, string> = { draft: "Rascunho", active: "Ativo", paused: "Pausado", finished: "Finalizado" };
 const STATUS_COLOR: Record<PromotionalCampaignStatus, string> = {
   draft: "bg-slate-100 text-slate-700", active: "bg-emerald-100 text-emerald-700",
@@ -108,8 +110,12 @@ function CampaignList() {
   );
 }
 
+interface ManualEntitlementEvent {
+  id: string; type: string; amount: number; reason: ManualGrantReason | null; note: string | null; createdAt: string;
+}
 interface Participant {
   customerId: string; clientName: string; clientPhone: string | null; qualifyingSpend: number;
+  automaticEntries: number; manualInternalEntries: number; manualEvents: ManualEntitlementEvent[];
   entriesClaimed: number; claimedNumbers: number[]; entriesAvailable: number;
 }
 interface Metrics {
@@ -124,16 +130,30 @@ const STATUS_ACTIONS: { status: PromotionalCampaignStatus; label: string; icon: 
   { status: "finished", label: "Finalizar", icon: CheckCircle2 },
 ];
 
-function GenerateLinkSection({ campaignId }: { campaignId: string }) {
+/** Linha label/valor reaproveitada entre o resumo de entitlement e o detalhe do participante — evita
+ * repetir as mesmas classes Tailwind em cada linha (peso no bundle, não só legibilidade). */
+function EntitlementRow({ label, value, testId, dense }: { label: string; value: React.ReactNode; testId?: string; dense?: boolean }) {
+  return (
+    <div className={`flex justify-between${dense ? "" : " text-xs"}`}>
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-bold text-foreground" data-testid={testId}>{value}</span>
+    </div>
+  );
+}
+
+function GenerateLinkSection({ campaignId, entitlementPolicy }: { campaignId: string; entitlementPolicy: EntitlementPolicy }) {
   const { clients } = useClientsLiteData();
   const [customerId, setCustomerId] = useState("");
   const [entitlement, setEntitlement] = useState<PromotionalEntitlement | null>(null);
   const [loadingEntitlement, setLoadingEntitlement] = useState(false);
   const [selectionLimit, setSelectionLimit] = useState(1);
+  const [manualReason, setManualReason] = useState<ManualGrantReason>(MANUAL_GRANT_REASONS[0]);
   const [generating, setGenerating] = useState(false);
   const [link, setLink] = useState<{ tokenId: string; url: string } | null>(null);
   const [revoking, setRevoking] = useState(false);
   const [revoked, setRevoked] = useState(false);
+
+  const canGrantManual = entitlementPolicy === "INTERNAL_ADMIN";
 
   // PROMOTIONAL-CAMPAIGNS-LINK-SELECTION-LIMIT-04 §8 — o admin precisa ver quantos direitos o cliente já
   // possui ANTES de gerar o link, para decidir quantos deste total o link libera. Isso é só leitura —
@@ -153,13 +173,27 @@ function GenerateLinkSection({ campaignId }: { campaignId: string }) {
       .finally(() => setLoadingEntitlement(false));
   }, [campaignId, customerId]);
 
+  // PROMOTIONAL-CAMPAIGNS-MANUAL-INTERNAL-05 §7/§8 — quando o admin pede mais do que o saldo já
+  // existente (automático + manual já concedido), a diferença precisa virar uma concessão manual
+  // ANTES do link nascer com um teto que dependa dela. Um único clique ("Gerar link") faz as duas
+  // chamadas em sequência — nunca telas separadas — mas o servidor grava a concessão de forma durável
+  // (idempotente) antes de emitir o token, exatamente como o ticket exige.
+  const manualNeeded = canGrantManual && entitlement ? Math.max(0, selectionLimit - entitlement.entriesAvailable) : 0;
+
   const handleGenerate = async () => {
     if (!customerId) { notifyError("Selecione um cliente."); return; }
-    if (!entitlement || entitlement.entriesAvailable <= 0) { notifyError("Este cliente não possui participações disponíveis."); return; }
+    if (!entitlement) { notifyError("Aguarde o carregamento dos direitos do cliente."); return; }
+    if (!canGrantManual && entitlement.entriesAvailable <= 0) { notifyError("Este cliente não possui participações disponíveis."); return; }
     setGenerating(true);
     setLink(null);
     setRevoked(false);
     try {
+      if (manualNeeded > 0) {
+        await apiRequest(`/api/admin/sorteios/campaigns/${campaignId}/clients/${customerId}/manual-entries`, {
+          auth: true, method: "POST",
+          body: { quantity: manualNeeded, reason: manualReason, idempotencyKey: crypto.randomUUID() },
+        });
+      }
       const result = await apiRequest<{ tokenId: string; path: string }>(`/api/admin/sorteios/campaigns/${campaignId}/links`, { auth: true, method: "POST", body: { customerId, selectionLimit } });
       setLink({ tokenId: result.tokenId, url: `${window.location.origin}${result.path}` });
     } catch (error) {
@@ -201,32 +235,41 @@ function GenerateLinkSection({ campaignId }: { campaignId: string }) {
       {loadingEntitlement && <p className="text-xs text-muted-foreground">Carregando direitos do cliente…</p>}
 
       {entitlement && !loadingEntitlement && (
-        entitlement.entriesAvailable > 0 ? (
+        entitlement.entriesAvailable > 0 || canGrantManual ? (
           <div className="space-y-2 rounded-xl bg-secondary/40 p-3" data-testid="section-customer-entitlement">
-            <div className="flex justify-between text-xs">
-              <span className="text-muted-foreground">Compras qualificadas</span>
-              <span className="font-bold text-foreground">{formatBRL(entitlement.qualifyingSpend)}</span>
-            </div>
-            <div className="flex justify-between text-xs">
-              <span className="text-muted-foreground">Direitos disponíveis</span>
-              <span className="font-bold text-foreground" data-testid="text-entries-available">{entitlement.entriesAvailable}</span>
-            </div>
+            <EntitlementRow label="Compras qualificadas" value={formatBRL(entitlement.qualifyingSpend)} />
+            {canGrantManual && (
+              <>
+                <EntitlementRow label="Direitos automáticos" value={entitlement.automaticEntries} testId="text-automatic-entries" />
+                <EntitlementRow label="Direitos manuais" value={entitlement.manualInternalEntries} testId="text-manual-entries" />
+              </>
+            )}
+            <EntitlementRow label="Disponíveis" value={entitlement.entriesAvailable} testId="text-entries-available" />
             <div className="space-y-1.5 pt-1">
               <span className="text-xs font-bold text-foreground">Quantidade liberada neste link</span>
               <div className="flex items-center justify-center gap-4">
-                <button type="button" onClick={() => setSelectionLimit((value) => Math.max(1, value - 1))} disabled={selectionLimit <= 1} aria-label="Diminuir quantidade" data-testid="button-selection-limit-decrease" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white shadow-sm active:scale-95 disabled:opacity-30"><Minus className="h-4 w-4" /></button>
+                <button type="button" onClick={() => setSelectionLimit((value) => Math.max(1, value - 1))} disabled={selectionLimit <= 1} aria-label="Diminuir quantidade" data-testid="button-selection-limit-decrease" className={STEPPER_BUTTON_CLASS}><Minus className="h-4 w-4" /></button>
                 <span className="w-10 text-center text-3xl font-black text-foreground" data-testid="text-selection-limit">{selectionLimit}</span>
-                <button type="button" onClick={() => setSelectionLimit((value) => Math.min(entitlement.entriesAvailable, value + 1))} disabled={selectionLimit >= entitlement.entriesAvailable} aria-label="Aumentar quantidade" data-testid="button-selection-limit-increase" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white shadow-sm active:scale-95 disabled:opacity-30"><Plus className="h-4 w-4" /></button>
+                <button type="button" onClick={() => setSelectionLimit((value) => canGrantManual ? value + 1 : Math.min(entitlement.entriesAvailable, value + 1))} disabled={!canGrantManual && selectionLimit >= entitlement.entriesAvailable} aria-label="Aumentar quantidade" data-testid="button-selection-limit-increase" className={STEPPER_BUTTON_CLASS}><Plus className="h-4 w-4" /></button>
               </div>
             </div>
             <p className="text-center text-[11px] text-muted-foreground">Este link permitirá escolher até {selectionLimit} {selectionLimit === 1 ? "número" : "números"}.</p>
+
+            {manualNeeded > 0 && (
+              <div className="space-y-2 rounded-xl border border-primary/20 bg-primary/5 p-2.5" data-testid="section-manual-grant">
+                <p className="text-xs font-bold text-primary">Serão adicionadas {manualNeeded} {manualNeeded === 1 ? "participação manual" : "participações manuais"}.</p>
+                <select value={manualReason} onChange={(event) => setManualReason(event.target.value as ManualGrantReason)} className="rs-input flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-xs" data-testid="select-manual-grant-reason">
+                  {MANUAL_GRANT_REASONS.map((reason) => <option key={reason} value={reason}>{MANUAL_GRANT_REASON_LABELS[reason]}</option>)}
+                </select>
+              </div>
+            )}
           </div>
         ) : (
           <p className="text-xs font-bold text-amber-700" data-testid="text-no-entries-available">Este cliente não possui participações disponíveis.</p>
         )
       )}
 
-      <button type="button" onClick={handleGenerate} disabled={generating || !entitlement || entitlement.entriesAvailable <= 0} data-testid="button-generate-link" className="flex w-full items-center justify-center rounded-full bg-primary py-2.5 text-xs font-black text-white disabled:opacity-60">
+      <button type="button" onClick={handleGenerate} disabled={generating || !entitlement || (!canGrantManual && entitlement.entriesAvailable <= 0)} data-testid="button-generate-link" className="flex w-full items-center justify-center rounded-full bg-primary py-2.5 text-xs font-black text-white disabled:opacity-60">
         {generating ? "Gerando…" : "Gerar link"}
       </button>
       {link && !revoked && (
@@ -238,6 +281,41 @@ function GenerateLinkSection({ campaignId }: { campaignId: string }) {
         </div>
       )}
       {revoked && <p className="text-[11px] font-bold text-rose-700" data-testid="text-link-revoked">Link revogado — gere um novo se precisar.</p>}
+    </div>
+  );
+}
+
+/** PROMOTIONAL-CAMPAIGNS-MANUAL-INTERNAL-05 §11 — card principal fica compacto; detalhe (automáticos vs
+ * manuais, números, histórico de concessões) só aparece se o admin pedir, sem poluir a lista. */
+function ParticipantRow({ participant }: { participant: Participant }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="py-2.5" data-testid={`row-participant-${participant.customerId}`}>
+      <button type="button" onClick={() => setExpanded((value) => !value)} className="flex w-full items-center justify-between text-left">
+        <span className="text-sm font-black text-foreground">{participant.clientName}</span>
+        <span className="text-[11px] font-bold text-muted-foreground">{participant.entriesClaimed} escolhidos · {participant.entriesAvailable} restantes</span>
+      </button>
+      {expanded && (
+        <div className="mt-1.5 space-y-1 rounded-xl bg-secondary/30 p-2.5 text-[11px]" data-testid={`detail-participant-${participant.customerId}`}>
+          {participant.clientPhone && <div className="text-muted-foreground">{participant.clientPhone}</div>}
+          <EntitlementRow dense label="Compras qualificadas" value={formatBRL(participant.qualifyingSpend)} />
+          <EntitlementRow dense label="Automáticos" value={participant.automaticEntries} />
+          {participant.manualInternalEntries !== 0 && <EntitlementRow dense label="Manuais" value={participant.manualInternalEntries} />}
+          {participant.claimedNumbers.length > 0 && (
+            <div className="flex justify-between gap-2"><span className="shrink-0 text-muted-foreground">Números</span><span className="text-right font-bold text-foreground">{participant.claimedNumbers.slice().sort((a, b) => a - b).map(formatCampaignNumber).join(" · ")}</span></div>
+          )}
+          {participant.manualEvents.length > 0 && (
+            <div className="space-y-0.5 border-t border-border/40 pt-1.5">
+              {participant.manualEvents.map((event) => (
+                <div key={event.id} className="flex justify-between gap-2 text-muted-foreground">
+                  <span>{event.amount > 0 ? `+${event.amount}` : event.amount} {event.reason ? MANUAL_GRANT_REASON_LABELS[event.reason] : "Ajuste"}</span>
+                  <span>{new Date(event.createdAt).toLocaleDateString("pt-BR")}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -336,28 +414,13 @@ function CampaignDetail({ campaignId }: { campaignId: string }) {
           ))}
         </div>
 
-        <GenerateLinkSection campaignId={campaignId} />
+        <GenerateLinkSection campaignId={campaignId} entitlementPolicy={campaign.entitlementPolicy ?? "INTERNAL_ADMIN"} />
 
         <div className={CARD}>
           <h3 className={`mb-3 ${LABEL}`}>Participantes</h3>
           {participants.length === 0 && <p className="text-xs text-muted-foreground">Nenhum participante ainda.</p>}
           <div className="divide-y divide-border/50">
-            {participants.map((participant) => (
-              <div key={participant.customerId} className="py-2.5" data-testid={`row-participant-${participant.customerId}`}>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-black text-foreground">{participant.clientName}</span>
-                  <span className="text-xs text-muted-foreground">{formatBRL(participant.qualifyingSpend)}</span>
-                </div>
-                {participant.clientPhone && <div className="text-[11px] text-muted-foreground">{participant.clientPhone}</div>}
-                <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
-                  <span className="font-bold text-foreground">Direitos: {participant.entriesClaimed}</span>
-                  {participant.claimedNumbers.length > 0 && (
-                    <span className="text-muted-foreground">Números: {participant.claimedNumbers.slice().sort((a, b) => a - b).join(", ")}</span>
-                  )}
-                  <span className="text-muted-foreground">Restantes: {participant.entriesAvailable}</span>
-                </div>
-              </div>
-            ))}
+            {participants.map((participant) => <ParticipantRow key={participant.customerId} participant={participant} />)}
           </div>
         </div>
       </div>
