@@ -69,3 +69,67 @@ export async function confirmServiceBookingHold(
     },
   });
 }
+
+/** SERV-BOOK-02 — wrappers finos, mesmo padrão acima: nenhuma transaction/resolução de lock no client. */
+export type ReleaseServiceBookingHoldResponse = {
+  action: "release_hold";
+  holdId: string;
+  idempotentReplay: boolean;
+};
+
+export type CancelServiceBookingResponse = {
+  action: "cancel_booking";
+  bookingId: string;
+  workId: string;
+  cancelledAt: string;
+  idempotentReplay: boolean;
+};
+
+export type RescheduleServiceBookingResponse = {
+  action: "reschedule_booking";
+  bookingId: string;
+  workId: string;
+  startAt: string;
+  endAt: string;
+  idempotentReplay: boolean;
+};
+
+export async function releaseServiceBookingHold(
+  holdId: string,
+  input: { idempotencyKey?: string } = {},
+): Promise<ReleaseServiceBookingHoldResponse> {
+  return await apiRequest<ReleaseServiceBookingHoldResponse>(`/api/services/bookings/holds/${encodeURIComponent(holdId)}/release`, {
+    method: "POST",
+    auth: true,
+    body: {
+      idempotencyKey: input.idempotencyKey ?? generateIdempotencyKey("service-booking-release"),
+    },
+  });
+}
+
+export async function cancelServiceBooking(
+  bookingId: string,
+  input: { idempotencyKey?: string } = {},
+): Promise<CancelServiceBookingResponse> {
+  return await apiRequest<CancelServiceBookingResponse>(`/api/services/bookings/${encodeURIComponent(bookingId)}/cancel`, {
+    method: "POST",
+    auth: true,
+    body: {
+      idempotencyKey: input.idempotencyKey ?? generateIdempotencyKey("service-booking-cancel"),
+    },
+  });
+}
+
+export async function rescheduleServiceBooking(
+  bookingId: string,
+  input: { startAt: string; idempotencyKey?: string },
+): Promise<RescheduleServiceBookingResponse> {
+  return await apiRequest<RescheduleServiceBookingResponse>(`/api/services/bookings/${encodeURIComponent(bookingId)}/reschedule`, {
+    method: "POST",
+    auth: true,
+    body: {
+      startAt: input.startAt,
+      idempotencyKey: input.idempotencyKey ?? generateIdempotencyKey("service-booking-reschedule"),
+    },
+  });
+}

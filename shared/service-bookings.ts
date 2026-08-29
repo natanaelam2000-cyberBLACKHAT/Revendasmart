@@ -45,8 +45,10 @@ export class ServiceBookingsDomainError extends Error {
 /**
  * §5 — status mínimo suficiente: nunca persistimos "expired". Expiração é sempre DERIVADA comparando
  * `expiresAt` com o relógio do servidor no momento da leitura (§10) — nunca um terceiro status gravado.
+ * SERV-BOOK-02 adiciona "released" (liberação voluntária, §5-7) — um estado terminal irmão de
+ * "confirmed", nunca alcançável a partir dele (§7: hold confirmado nunca é released).
  */
-export type BookingHoldStatus = "active" | "confirmed";
+export type BookingHoldStatus = "active" | "confirmed" | "released";
 
 export type BookingHold = {
   readonly id: EntityId;
@@ -64,10 +66,12 @@ export type BookingHold = {
    * key diferente da idempotency original) devolva o MESMO Booking/Work em vez de duplicar (§16/§26). */
   readonly confirmedBookingId?: EntityId;
   readonly confirmedWorkId?: EntityId;
+  /** Preenchido atomicamente só na liberação (SERV-BOOK-02 §5). */
+  readonly releasedAt?: IsoUtcString;
 };
 
-/** V1 só cria Bookings já confirmados — não há estado "pending" neste ticket (sem reagendamento/cancel). */
-export type BookingStatus = "confirmed";
+/** SERV-BOOK-02 §8-12 adiciona "cancelled" — nunca deletado (§27), só muda de status, como ServiceWork. */
+export type BookingStatus = "confirmed" | "cancelled";
 /** Único valor em V1 (sem fluxo público ainda, §19) — união já existe para não exigir redesenho depois. */
 export type BookingSource = "manual";
 
@@ -83,6 +87,12 @@ export type Booking = {
   readonly status: BookingStatus;
   readonly source: BookingSource;
   readonly createdAt: IsoUtcString;
+  /** SERV-BOOK-02 — Booking nasceu (SERV-BOOK-01) só com createdAt; reagendar/cancelar são mutações reais
+   * do fato operacional, então passam a exigir updatedAt, mesmo padrão de Service/ServiceWork/Quote.
+   * `updatedAt === createdAt` no momento da criação (mesmo padrão já usado em ServiceWork/Quote). */
+  readonly updatedAt: IsoUtcString;
+  /** Preenchido atomicamente só no cancelamento (SERV-BOOK-02 §8-12), nunca noutro momento. */
+  readonly cancelledAt?: IsoUtcString;
 };
 
 export type ScheduleLockOwnerType = "hold" | "booking";
@@ -163,7 +173,7 @@ export function assertValidBookingHold(hold: BookingHold): BookingHold {
   assertEntityId(hold.resourceId, "bookingHold.resourceId");
   if (typeof hold.customerId !== "undefined") assertEntityId(hold.customerId, "bookingHold.customerId");
   assertValidBookingInterval(hold.startAt, hold.endAt);
-  if (hold.status !== "active" && hold.status !== "confirmed") {
+  if (hold.status !== "active" && hold.status !== "confirmed" && hold.status !== "released") {
     throw new ServiceBookingsDomainError("INVALID_BOOKING_HOLD", "bookingHold.status is invalid.");
   }
   assertIsoUtcString(hold.expiresAt, "bookingHold.expiresAt");
@@ -173,11 +183,21 @@ export function assertValidBookingHold(hold: BookingHold): BookingHold {
   }
   if (typeof hold.confirmedBookingId !== "undefined") assertEntityId(hold.confirmedBookingId, "bookingHold.confirmedBookingId");
   if (typeof hold.confirmedWorkId !== "undefined") assertEntityId(hold.confirmedWorkId, "bookingHold.confirmedWorkId");
+  if (typeof hold.releasedAt !== "undefined") assertIsoUtcString(hold.releasedAt, "bookingHold.releasedAt");
   if (hold.status === "confirmed" && (!hold.confirmedBookingId || !hold.confirmedWorkId)) {
     throw new ServiceBookingsDomainError("INVALID_BOOKING_HOLD", "confirmed bookingHold must contain confirmedBookingId/confirmedWorkId.");
   }
-  if (hold.status === "active" && (hold.confirmedBookingId || hold.confirmedWorkId)) {
-    throw new ServiceBookingsDomainError("INVALID_BOOKING_HOLD", "active bookingHold cannot contain confirmedBookingId/confirmedWorkId.");
+  if (hold.status === "confirmed" && typeof hold.releasedAt !== "undefined") {
+    throw new ServiceBookingsDomainError("INVALID_BOOKING_HOLD", "confirmed bookingHold cannot contain releasedAt — a confirmed hold is never released (§7).");
+  }
+  if (hold.status === "released" && typeof hold.releasedAt === "undefined") {
+    throw new ServiceBookingsDomainError("INVALID_BOOKING_HOLD", "released bookingHold must contain releasedAt.");
+  }
+  if (hold.status === "released" && (hold.confirmedBookingId || hold.confirmedWorkId)) {
+    throw new ServiceBookingsDomainError("INVALID_BOOKING_HOLD", "released bookingHold cannot contain confirmedBookingId/confirmedWorkId.");
+  }
+  if (hold.status === "active" && (hold.confirmedBookingId || hold.confirmedWorkId || typeof hold.releasedAt !== "undefined")) {
+    throw new ServiceBookingsDomainError("INVALID_BOOKING_HOLD", "active bookingHold cannot contain confirmedBookingId/confirmedWorkId/releasedAt.");
   }
   return hold;
 }
@@ -190,14 +210,45 @@ export function assertValidBooking(booking: Booking): Booking {
   if (typeof booking.customerId !== "undefined") assertEntityId(booking.customerId, "booking.customerId");
   assertEntityId(booking.workId, "booking.workId");
   assertValidBookingInterval(booking.startAt, booking.endAt);
-  if (booking.status !== "confirmed") {
+  if (booking.status !== "confirmed" && booking.status !== "cancelled") {
     throw new ServiceBookingsDomainError("INVALID_BOOKING", "booking.status is invalid.");
   }
   if (booking.source !== "manual") {
     throw new ServiceBookingsDomainError("INVALID_BOOKING", "booking.source is invalid.");
   }
   assertIsoUtcString(booking.createdAt, "booking.createdAt");
+  assertIsoUtcString(booking.updatedAt, "booking.updatedAt");
+  if (typeof booking.cancelledAt !== "undefined") assertIsoUtcString(booking.cancelledAt, "booking.cancelledAt");
+  if (booking.status === "cancelled" && typeof booking.cancelledAt === "undefined") {
+    throw new ServiceBookingsDomainError("INVALID_BOOKING", "cancelled booking must contain cancelledAt.");
+  }
+  if (booking.status === "confirmed" && typeof booking.cancelledAt !== "undefined") {
+    throw new ServiceBookingsDomainError("INVALID_BOOKING", "confirmed booking cannot contain cancelledAt.");
+  }
   return booking;
+}
+
+/**
+ * SERV-BOOK-02 §16 — classifica os segmentos de um reagendamento em 3 grupos: `sharedSegments` (já
+ * pertencem ao próprio Booking e continuam pertencendo — NUNCA tratados como conflito), `releasedSegments`
+ * (pertenciam ao intervalo antigo e deixaram de ser necessários) e `acquiredSegments` (precisam ser
+ * validados/adquiridos porque são novos). Exemplo do ticket: 10:00–10:30 -> 10:15–10:45 => shared =
+ * [10:15,10:20,10:25], released = [10:00,10:05,10:10], acquired = [10:30,10:35,10:40].
+ */
+export type ScheduleSegmentDiff = {
+  readonly sharedSegments: readonly IsoUtcString[];
+  readonly releasedSegments: readonly IsoUtcString[];
+  readonly acquiredSegments: readonly IsoUtcString[];
+};
+
+export function diffScheduleSegments(oldSegments: readonly string[], newSegments: readonly string[]): ScheduleSegmentDiff {
+  const oldSet = new Set(oldSegments);
+  const newSet = new Set(newSegments);
+  return {
+    sharedSegments: newSegments.filter((segment) => oldSet.has(segment)),
+    releasedSegments: oldSegments.filter((segment) => !newSet.has(segment)),
+    acquiredSegments: newSegments.filter((segment) => !oldSet.has(segment)),
+  };
 }
 
 export function assertValidScheduleLock(lock: ScheduleLock): ScheduleLock {

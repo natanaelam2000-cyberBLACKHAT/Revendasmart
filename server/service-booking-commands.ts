@@ -28,6 +28,7 @@ import {
   assertValidBookingInterval,
   assertValidScheduleLock,
   computeScheduleSegments,
+  diffScheduleSegments,
   isSegmentAvailableForHold,
   type Booking,
   type BookingHold,
@@ -57,24 +58,52 @@ type ConfirmHoldResult = {
   idempotentReplay: boolean;
 };
 
-export type ServiceBookingCommandResult = CreateHoldResult | ConfirmHoldResult;
+type ReleaseHoldResult = {
+  action: "release_hold";
+  holdId: string;
+  idempotentReplay: boolean;
+};
+
+type CancelBookingResult = {
+  action: "cancel_booking";
+  bookingId: string;
+  workId: string;
+  cancelledAt: IsoUtcString;
+  idempotentReplay: boolean;
+};
+
+type RescheduleBookingResult = {
+  action: "reschedule_booking";
+  bookingId: string;
+  workId: string;
+  startAt: IsoUtcString;
+  endAt: IsoUtcString;
+  idempotentReplay: boolean;
+};
+
+export type ServiceBookingCommandResult = CreateHoldResult | ConfirmHoldResult | ReleaseHoldResult | CancelBookingResult | RescheduleBookingResult;
 type ServiceBookingCommandAction = ServiceBookingCommandResult["action"];
 
 /** Resultado interno da transaction de createHold — "conflict" nunca escapa para o chamador HTTP como um
  * CreateHoldResult; a rota traduz para 409 SEGMENT_UNAVAILABLE antes de responder (§F: abortar tudo, sem
  * lock parcial, sem hold parcial — a transaction simplesmente não escreve nada nesse caminho). */
 type CreateHoldOutcome = CreateHoldResult | { readonly action: "create_hold"; readonly conflict: true };
+/** Mesma ideia para reschedule: "conflict" nunca vira RescheduleBookingResult — a rota traduz para 409
+ * SEGMENT_UNAVAILABLE (§18: horário antigo/locks/Work preservados intactos, transaction all-or-nothing). */
+type RescheduleBookingOutcome = RescheduleBookingResult | { readonly action: "reschedule_booking"; readonly conflict: true };
 
 type BookingIdempotencyRecord = {
   key: string;
   tenantUid: string;
   action: ServiceBookingCommandAction;
-  serviceId: string;
-  resourceId: string;
+  serviceId?: string;
+  resourceId?: string;
   startAt?: IsoUtcString;
-  holdId: string;
+  endAt?: IsoUtcString;
+  holdId?: string;
   bookingId?: string;
   workId?: string;
+  cancelledAt?: IsoUtcString;
   createdAt: string;
 };
 
@@ -86,7 +115,11 @@ export class ServiceBookingCommandError extends Error {
     | "SERVICE_NOT_BOOKABLE"
     | "SEGMENT_UNAVAILABLE"
     | "HOLD_EXPIRED"
+    | "HOLD_RELEASED"
+    | "HOLD_ALREADY_CONFIRMED"
     | "LOCK_OWNERSHIP_LOST"
+    | "WORK_NOT_CANCELABLE"
+    | "BOOKING_NOT_RESCHEDULABLE"
     | "IDEMPOTENCY_CONFLICT";
 
   constructor(code: ServiceBookingCommandError["code"], message: string) {
@@ -103,7 +136,11 @@ const COMMAND_ERROR_MESSAGES = {
   SERVICE_NOT_BOOKABLE: "Este serviço não pode ser reservado no momento.",
   SEGMENT_UNAVAILABLE: "Este horário não está mais disponível.",
   HOLD_EXPIRED: "Esta reserva temporária expirou. Solicite um novo horário.",
+  HOLD_RELEASED: "Esta reserva temporária já foi liberada.",
+  HOLD_ALREADY_CONFIRMED: "Esta reserva já foi confirmada e não pode mais ser liberada.",
   LOCK_OWNERSHIP_LOST: "Esta reserva temporária perdeu a posse do horário. Solicite um novo.",
+  WORK_NOT_CANCELABLE: "Este atendimento não pode mais ser cancelado.",
+  BOOKING_NOT_RESCHEDULABLE: "Este agendamento não pode mais ser reagendado.",
   IDEMPOTENCY_CONFLICT: "A mesma chave não pode ser reutilizada em outra operação.",
 } as const;
 
@@ -161,6 +198,18 @@ function parseHold(value: unknown): BookingHold {
 }
 function parseLock(value: unknown): ScheduleLock {
   return assertValidScheduleLock(value as ScheduleLock);
+}
+function parseBooking(value: unknown): Booking {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ServiceBookingCommandError("NOT_FOUND", "Booking inválido.");
+  }
+  return assertValidBooking(value as Booking);
+}
+function parseServiceWorkDoc(value: unknown): ServiceWork {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ServiceBookingCommandError("NOT_FOUND", "Atendimento inválido.");
+  }
+  return assertValidServiceWork(value as ServiceWork);
 }
 
 function validateIdempotencyKey(value: unknown): string {
@@ -252,7 +301,7 @@ function ensureCreateReplayCompatible(
   if (typeof existing.holdId !== "string") {
     throw new ServiceBookingCommandError("IDEMPOTENCY_CONFLICT", "Registro de idempotência incompleto.");
   }
-  return { action: "create_hold", holdId: existing.holdId, serviceId: expected.serviceId, resourceId: expected.resourceId, startAt: expected.startAt!, endAt: "", expiresAt: "", idempotentReplay: true };
+  return { action: "create_hold", holdId: existing.holdId, serviceId: expected.serviceId ?? "", resourceId: expected.resourceId ?? "", startAt: expected.startAt ?? "", endAt: "", expiresAt: "", idempotentReplay: true };
 }
 
 function ensureConfirmReplayCompatible(
@@ -272,7 +321,7 @@ function ensureConfirmReplayCompatible(
   }
   return {
     action: "confirm_hold",
-    holdId: expected.holdId,
+    holdId: expected.holdId ?? "",
     bookingId: existing.bookingId,
     workId: existing.workId,
     serviceId: existing.serviceId ?? "",
@@ -394,6 +443,13 @@ export async function confirmServiceBookingHoldCommand(
       return result;
     }
 
+    // SERV-BOOK-02 §26 — se a liberação (release) já venceu a corrida contra esta confirmação, o hold
+    // está definitivamente encerrado: nunca confirmar sobre um hold já released, mesmo que o caller ainda
+    // possua o holdId (mesma defesa em profundidade do §7).
+    if (hold.status === "released") {
+      throw new ServiceBookingCommandError("HOLD_RELEASED", "Esta reserva temporária já foi liberada.");
+    }
+
     const serverNowIso = new Date().toISOString();
     if (Date.parse(hold.expiresAt) <= Date.parse(serverNowIso)) {
       throw new ServiceBookingCommandError("HOLD_EXPIRED", "Esta reserva temporária expirou.");
@@ -447,6 +503,7 @@ export async function confirmServiceBookingHoldCommand(
       status: "confirmed",
       source: "manual",
       createdAt: serverNowIso,
+      updatedAt: serverNowIso,
     });
     const confirmedHold: BookingHold = assertValidBookingHold({
       ...hold,
@@ -478,6 +535,280 @@ export async function confirmServiceBookingHoldCommand(
   });
 }
 
+/**
+ * SERV-BOOK-02 §5-7 — libera voluntariamente um Hold ainda ativo antes do TTL de 5 minutos, devolvendo os
+ * segmentos imediatamente. Nunca libera locks de um Hold já confirmado (§7) e nunca apaga lock pertencente
+ * a outro owner (§5 passo 6) — só remove exatamente os locks que ainda pertencem a ESTE holdId.
+ */
+export async function releaseServiceBookingHoldCommand(
+  db: Firestore,
+  uid: string,
+  holdId: string,
+  idempotencyKey: string,
+): Promise<ReleaseHoldResult> {
+  return await db.runTransaction(async (tx: Transaction): Promise<ReleaseHoldResult> => {
+    const idemRef = bookingIdempotencyRef(db, uid, idempotencyKey);
+    const idemSnap = await tx.get(idemRef);
+    if (idemSnap.exists) {
+      const existing = idemSnap.data() as Partial<BookingIdempotencyRecord>;
+      if (existing.key !== idempotencyKey || existing.tenantUid !== uid || existing.action !== "release_hold" || existing.holdId !== holdId) {
+        throw new ServiceBookingCommandError("IDEMPOTENCY_CONFLICT", "idempotencyKey já usada com outros dados.");
+      }
+      return { action: "release_hold", holdId, idempotentReplay: true };
+    }
+
+    const holdDocRef = bookingHoldRef(db, uid, holdId);
+    const holdSnap = await tx.get(holdDocRef);
+    if (!holdSnap.exists) throw new ServiceBookingCommandError("NOT_FOUND", "Reserva temporária não encontrada.");
+    const hold = parseHold(holdSnap.data());
+    if (hold.tenantUid !== uid) throw new ServiceBookingCommandError("NOT_FOUND", "Reserva temporária não encontrada.");
+
+    // §7 — hold já confirmado nunca é liberado, mesmo que o caller ainda possua o holdId: os locks agora
+    // pertencem ao Booking, não mais ao Hold.
+    if (hold.status === "confirmed") {
+      throw new ServiceBookingCommandError("HOLD_ALREADY_CONFIRMED", "Esta reserva já foi confirmada e não pode mais ser liberada.");
+    }
+
+    const serverNowIso = new Date().toISOString();
+    const result: ReleaseHoldResult = { action: "release_hold", holdId, idempotentReplay: false };
+
+    // §6/R2 — já released (idempotência estrutural do próprio estado, mesmo sob uma key nova): nada a
+    // liberar de novo, nunca reprocessa locks.
+    if (hold.status === "released") {
+      tx.create(idemRef, { key: idempotencyKey, tenantUid: uid, action: "release_hold", holdId, createdAt: serverNowIso } satisfies BookingIdempotencyRecord);
+      return result;
+    }
+
+    const segments = computeScheduleSegments(hold.startAt, hold.endAt);
+    const lockRefs = segments.map((segmentStartAt) => scheduleLockRef(db, uid, hold.resourceId, segmentStartAt));
+    const lockSnaps = lockRefs.length ? await tx.getAll(...lockRefs) : [];
+
+    // §6 — segura mesmo se hold.expiresAt <= serverNow (hold logicamente expirado): liberar é sempre
+    // idempotente e nunca falha de forma a manter um segmento bloqueado artificialmente.
+    const releasedHold: BookingHold = assertValidBookingHold({ ...hold, status: "released", releasedAt: serverNowIso });
+    tx.set(holdDocRef, omitUndefined(releasedHold as unknown as Record<string, unknown>));
+
+    for (let i = 0; i < lockSnaps.length; i += 1) {
+      const lockSnap = lockSnaps[i];
+      if (!lockSnap.exists) continue;
+      const lock = parseLock(lockSnap.data());
+      // Nunca apaga lock pertencente a outro owner (§5 passo 6) — só libera o que ainda é deste hold.
+      if (lock.ownerType === "hold" && lock.ownerId === holdId) {
+        tx.delete(lockRefs[i]);
+      }
+    }
+
+    tx.create(idemRef, { key: idempotencyKey, tenantUid: uid, action: "release_hold", holdId, createdAt: serverNowIso } satisfies BookingIdempotencyRecord);
+    return result;
+  });
+}
+
+/**
+ * SERV-BOOK-02 §8-12/§27-28 — cancela um Booking confirmado, atomicamente com o ServiceWork relacionado e
+ * a liberação dos locks. NUNCA cria Refund, NUNCA altera Payment/refundedTotalCents — o domínio financeiro
+ * é inteiramente independente (§10). Booking nunca é deletado, só muda de status (§27), mesmo padrão já
+ * usado por ServiceWork.
+ */
+export async function cancelServiceBookingCommand(
+  db: Firestore,
+  uid: string,
+  bookingId: string,
+  idempotencyKey: string,
+): Promise<CancelBookingResult> {
+  return await db.runTransaction(async (tx: Transaction): Promise<CancelBookingResult> => {
+    const idemRef = bookingIdempotencyRef(db, uid, idempotencyKey);
+    const idemSnap = await tx.get(idemRef);
+    if (idemSnap.exists) {
+      const existing = idemSnap.data() as Partial<BookingIdempotencyRecord>;
+      if (existing.key !== idempotencyKey || existing.tenantUid !== uid || existing.action !== "cancel_booking" || existing.bookingId !== bookingId) {
+        throw new ServiceBookingCommandError("IDEMPOTENCY_CONFLICT", "idempotencyKey já usada com outros dados.");
+      }
+      if (typeof existing.workId !== "string" || typeof existing.cancelledAt !== "string") {
+        throw new ServiceBookingCommandError("IDEMPOTENCY_CONFLICT", "Registro de idempotência incompleto.");
+      }
+      return { action: "cancel_booking", bookingId, workId: existing.workId, cancelledAt: existing.cancelledAt, idempotentReplay: true };
+    }
+
+    const bookingDocRef = bookingRef(db, uid, bookingId);
+    const bookingSnap = await tx.get(bookingDocRef);
+    if (!bookingSnap.exists) throw new ServiceBookingCommandError("NOT_FOUND", "Agendamento não encontrado.");
+    const booking = parseBooking(bookingSnap.data());
+    if (booking.tenantUid !== uid) throw new ServiceBookingCommandError("NOT_FOUND", "Agendamento não encontrado.");
+
+    const serverNowIso = new Date().toISOString();
+
+    // §12/C2 — cancelar um Booking já cancelado (mesmo com key nova) devolve o estado já existente, nunca
+    // tenta liberar locks/mutar o Work de novo.
+    if (booking.status === "cancelled") {
+      const cancelledAt = booking.cancelledAt ?? serverNowIso;
+      const result: CancelBookingResult = { action: "cancel_booking", bookingId, workId: booking.workId, cancelledAt, idempotentReplay: false };
+      tx.create(idemRef, { key: idempotencyKey, tenantUid: uid, action: "cancel_booking", bookingId, workId: booking.workId, cancelledAt, createdAt: serverNowIso } satisfies BookingIdempotencyRecord);
+      return result;
+    }
+
+    const workDocRef = serviceWorkRef(db, uid, booking.workId);
+    const workSnap = await tx.get(workDocRef);
+    if (!workSnap.exists) throw new ServiceBookingCommandError("NOT_FOUND", "Atendimento não encontrado.");
+    const work = parseServiceWorkDoc(workSnap.data());
+
+    // §9/§19/C5/C6 — política V1: só cancela via Booking enquanto o Work ainda não começou a ser
+    // executado. Isto NÃO altera as transições aprovadas de ServiceWork (que continuam permitindo
+    // in_progress -> cancelled por outras vias, ex. cancelServiceWorkCommand) — é uma regra adicional,
+    // mais estrita, específica deste comando de cancelamento via Booking.
+    if (work.status !== "planned") {
+      throw new ServiceBookingCommandError("WORK_NOT_CANCELABLE", "Este atendimento não pode mais ser cancelado.");
+    }
+
+    const segments = computeScheduleSegments(booking.startAt, booking.endAt);
+    const lockRefs = segments.map((segmentStartAt) => scheduleLockRef(db, uid, booking.resourceId, segmentStartAt));
+    const lockSnaps = lockRefs.length ? await tx.getAll(...lockRefs) : [];
+
+    // §10 — NUNCA toca financialSummary/ServicePaymentRecord/ServiceRefundRecord: só status/timing
+    // operacional do Work, exatamente os campos que cancelServiceWorkCommand também tocaria.
+    const cancelledBooking: Booking = assertValidBooking({ ...booking, status: "cancelled", updatedAt: serverNowIso, cancelledAt: serverNowIso });
+    const cancelledWork: ServiceWork = assertValidServiceWork({ ...work, status: "cancelled", updatedAt: serverNowIso, cancelledAt: serverNowIso });
+
+    const result: CancelBookingResult = { action: "cancel_booking", bookingId, workId: booking.workId, cancelledAt: serverNowIso, idempotentReplay: false };
+
+    tx.set(bookingDocRef, omitUndefined(cancelledBooking as unknown as Record<string, unknown>));
+    tx.set(workDocRef, omitUndefined(cancelledWork as unknown as Record<string, unknown>));
+    for (let i = 0; i < lockSnaps.length; i += 1) {
+      const lockSnap = lockSnaps[i];
+      if (!lockSnap.exists) continue;
+      const lock = parseLock(lockSnap.data());
+      if (lock.ownerType === "booking" && lock.ownerId === bookingId) {
+        tx.delete(lockRefs[i]);
+      }
+    }
+    tx.create(idemRef, {
+      key: idempotencyKey, tenantUid: uid, action: "cancel_booking", bookingId, workId: booking.workId,
+      cancelledAt: serverNowIso, createdAt: serverNowIso,
+    } satisfies BookingIdempotencyRecord);
+
+    return result;
+  });
+}
+
+/**
+ * SERV-BOOK-02 §13-21 — reagenda um Booking confirmado para um novo startAt (resourceId/serviceId/
+ * bookingId/workId permanecem inalterados, §13). endAt é sempre derivado de Service.durationMinutes, nunca
+ * aceito do cliente (§14, mesma regra do createHold). Segmentos compartilhados com o intervalo antigo
+ * nunca são tratados como conflito (§16) — só os segmentos realmente novos precisam ser validados/
+ * adquiridos, e o horário antigo só é liberado depois que o novo já foi garantido na MESMA transaction
+ * (§18: all-or-nothing, nunca perde o slot antigo numa falha).
+ */
+export async function rescheduleServiceBookingCommand(
+  db: Firestore,
+  uid: string,
+  bookingId: string,
+  newStartAtInput: string,
+  idempotencyKey: string,
+): Promise<RescheduleBookingOutcome> {
+  return await db.runTransaction(async (tx: Transaction): Promise<RescheduleBookingOutcome> => {
+    const idemRef = bookingIdempotencyRef(db, uid, idempotencyKey);
+    const idemSnap = await tx.get(idemRef);
+    if (idemSnap.exists) {
+      const existing = idemSnap.data() as Partial<BookingIdempotencyRecord>;
+      // §21 — fingerprint: bookingId + startAt alvo (endAt é sempre derivado do mesmo startAt+duração do
+      // Service, então comparar startAt já garante o mesmo intervalo final).
+      if (
+        existing.key !== idempotencyKey || existing.tenantUid !== uid || existing.action !== "reschedule_booking"
+        || existing.bookingId !== bookingId || existing.startAt !== newStartAtInput
+      ) {
+        throw new ServiceBookingCommandError("IDEMPOTENCY_CONFLICT", "idempotencyKey já usada com outros dados.");
+      }
+      if (typeof existing.workId !== "string" || typeof existing.endAt !== "string") {
+        throw new ServiceBookingCommandError("IDEMPOTENCY_CONFLICT", "Registro de idempotência incompleto.");
+      }
+      return { action: "reschedule_booking", bookingId, workId: existing.workId, startAt: newStartAtInput, endAt: existing.endAt, idempotentReplay: true };
+    }
+
+    const bookingDocRef = bookingRef(db, uid, bookingId);
+    const bookingSnap = await tx.get(bookingDocRef);
+    if (!bookingSnap.exists) throw new ServiceBookingCommandError("NOT_FOUND", "Agendamento não encontrado.");
+    const booking = parseBooking(bookingSnap.data());
+    if (booking.tenantUid !== uid) throw new ServiceBookingCommandError("NOT_FOUND", "Agendamento não encontrado.");
+
+    // §20/S7 — Booking cancelado nunca reagenda, deterministicamente.
+    if (booking.status !== "confirmed") {
+      throw new ServiceBookingCommandError("BOOKING_NOT_RESCHEDULABLE", "Este agendamento não pode mais ser reagendado.");
+    }
+
+    const workDocRef = serviceWorkRef(db, uid, booking.workId);
+    const serviceDocRef = serviceRef(db, uid, booking.serviceId);
+    const [workSnap, serviceSnap] = await Promise.all([tx.get(workDocRef), tx.get(serviceDocRef)]);
+    if (!workSnap.exists) throw new ServiceBookingCommandError("NOT_FOUND", "Atendimento não encontrado.");
+    const work = parseServiceWorkDoc(workSnap.data());
+    if (!serviceSnap.exists) throw new ServiceBookingCommandError("NOT_FOUND", "Serviço não encontrado.");
+    const service = parseService(serviceSnap.data());
+
+    // §19/S8/S9 — mesma política V1 do cancel: só reagenda enquanto o Work ainda não começou.
+    if (work.status !== "planned") {
+      throw new ServiceBookingCommandError("BOOKING_NOT_RESCHEDULABLE", "Este agendamento não pode mais ser reagendado.");
+    }
+
+    const durationMinutes = resolveBookableServiceDuration(service);
+    const newStartAt = validateStartAt(newStartAtInput);
+    const newEndAt = new Date(Date.parse(newStartAt) + durationMinutes * 60_000).toISOString();
+    const { startAt: validNewStart, endAt: validNewEnd } = assertValidBookingInterval(newStartAt, newEndAt);
+
+    const oldSegments = computeScheduleSegments(booking.startAt, booking.endAt);
+    const newSegments = computeScheduleSegments(validNewStart, validNewEnd);
+    const { sharedSegments, releasedSegments, acquiredSegments } = diffScheduleSegments(oldSegments, newSegments);
+
+    // §15 passo 9 — união de TODOS os segmentos envolvidos, uma única leitura, sempre antes de qualquer
+    // escrita nesta transaction.
+    const unionSegments = Array.from(new Set([...oldSegments, ...newSegments]));
+    const lockRefs = unionSegments.map((segmentStartAt) => scheduleLockRef(db, uid, booking.resourceId, segmentStartAt));
+    const lockSnaps = lockRefs.length ? await tx.getAll(...lockRefs) : [];
+    const lockSnapBySegment = new Map<string, (typeof lockSnaps)[number]>();
+    for (let i = 0; i < unionSegments.length; i += 1) lockSnapBySegment.set(unionSegments[i], lockSnaps[i]);
+
+    const serverNowIso = new Date().toISOString();
+
+    // §17/§18 — target ocupado por outro Booking ou Hold ativo de outro owner => aborta TUDO, sem tocar
+    // no horário antigo (a transaction ainda não escreveu nada até aqui).
+    for (const segment of acquiredSegments) {
+      const lockSnap = lockSnapBySegment.get(segment);
+      const lock = lockSnap?.exists ? parseLock(lockSnap.data()) : undefined;
+      if (!isSegmentAvailableForHold(lock, serverNowIso)) {
+        return { action: "reschedule_booking", conflict: true };
+      }
+    }
+    // §16 — segmentos compartilhados precisam continuar pertencendo a este mesmo Booking (checagem
+    // defensiva; por construção são os próprios locks do Booking sendo reagendado).
+    for (const segment of sharedSegments) {
+      const lockSnap = lockSnapBySegment.get(segment);
+      const lock = lockSnap?.exists ? parseLock(lockSnap.data()) : undefined;
+      if (!lock || lock.ownerType !== "booking" || lock.ownerId !== bookingId) {
+        throw new ServiceBookingCommandError("LOCK_OWNERSHIP_LOST", "Um dos horários deste agendamento não está mais garantido.");
+      }
+    }
+
+    const rescheduledBooking: Booking = assertValidBooking({ ...booking, startAt: validNewStart, endAt: validNewEnd, updatedAt: serverNowIso });
+
+    const result: RescheduleBookingOutcome = {
+      action: "reschedule_booking", bookingId, workId: booking.workId, startAt: validNewStart, endAt: validNewEnd, idempotentReplay: false,
+    };
+
+    tx.set(bookingDocRef, omitUndefined(rescheduledBooking as unknown as Record<string, unknown>));
+    for (const segment of acquiredSegments) {
+      const ref = scheduleLockRef(db, uid, booking.resourceId, segment);
+      const lockDoc: ScheduleLock = assertValidScheduleLock({ tenantUid: uid, resourceId: booking.resourceId, segmentStartAt: segment, ownerType: "booking", ownerId: bookingId });
+      tx.set(ref, omitUndefined(lockDoc as unknown as Record<string, unknown>));
+    }
+    for (const segment of releasedSegments) {
+      tx.delete(scheduleLockRef(db, uid, booking.resourceId, segment));
+    }
+    tx.create(idemRef, {
+      key: idempotencyKey, tenantUid: uid, action: "reschedule_booking", bookingId, workId: booking.workId,
+      startAt: newStartAtInput, endAt: validNewEnd, createdAt: serverNowIso,
+    } satisfies BookingIdempotencyRecord);
+
+    return result;
+  });
+}
+
 function sendServiceBookingCommandError(res: Response, status: number, code: keyof typeof COMMAND_ERROR_MESSAGES): void {
   res.status(status).json({ code, message: COMMAND_ERROR_MESSAGES[code] });
 }
@@ -485,7 +816,11 @@ function statusForError(code: ServiceBookingCommandError["code"]): number {
   if (code === "UNAUTHENTICATED") return 401;
   if (code === "NOT_FOUND") return 404;
   if (code === "IDEMPOTENCY_CONFLICT") return 409;
-  if (code === "SEGMENT_UNAVAILABLE" || code === "HOLD_EXPIRED" || code === "LOCK_OWNERSHIP_LOST") return 409;
+  if (
+    code === "SEGMENT_UNAVAILABLE" || code === "HOLD_EXPIRED" || code === "HOLD_RELEASED"
+    || code === "HOLD_ALREADY_CONFIRMED" || code === "LOCK_OWNERSHIP_LOST"
+    || code === "WORK_NOT_CANCELABLE" || code === "BOOKING_NOT_RESCHEDULABLE"
+  ) return 409;
   return 400;
 }
 
@@ -546,6 +881,84 @@ export function registerServiceBookingRoutes(
       }
       logError("service_booking.confirm_failed", error, { requestId: req.requestId, holdId: req.params.holdId });
       res.status(500).json({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível confirmar a reserva agora." });
+    }
+  });
+
+  app.post("/api/services/bookings/holds/:holdId/release", requireAuth, async (req, res) => {
+    const uid = (req as Request & { firebaseUid?: string }).firebaseUid;
+    if (!uid) { sendServiceBookingCommandError(res, 401, "UNAUTHENTICATED"); return; }
+    try {
+      const holdId = validateRouteEntityId(req.params.holdId, "holdId");
+      const idempotencyKey = validateIdempotencyKey(req.body?.idempotencyKey);
+      const result = await releaseServiceBookingHoldCommand(db_(), uid, holdId, idempotencyKey);
+      logInfo("service_booking.hold_released", { requestId: req.requestId, holdId, idempotent: result.idempotentReplay });
+      res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof ServiceBookingCommandError) {
+        logWarn("service_booking.release_rejected", { requestId: req.requestId, holdId: req.params.holdId, code: error.code });
+        sendServiceBookingCommandError(res, statusForError(error.code), error.code);
+        return;
+      }
+      if (error instanceof ServiceBookingsDomainError) {
+        sendServiceBookingCommandError(res, 400, "INVALID_PAYLOAD");
+        return;
+      }
+      logError("service_booking.release_failed", error, { requestId: req.requestId, holdId: req.params.holdId });
+      res.status(500).json({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível liberar a reserva agora." });
+    }
+  });
+
+  app.post("/api/services/bookings/:bookingId/cancel", requireAuth, async (req, res) => {
+    const uid = (req as Request & { firebaseUid?: string }).firebaseUid;
+    if (!uid) { sendServiceBookingCommandError(res, 401, "UNAUTHENTICATED"); return; }
+    try {
+      const bookingId = validateRouteEntityId(req.params.bookingId, "bookingId");
+      const idempotencyKey = validateIdempotencyKey(req.body?.idempotencyKey);
+      const result = await cancelServiceBookingCommand(db_(), uid, bookingId, idempotencyKey);
+      logInfo("service_booking.cancelled", { requestId: req.requestId, bookingId, workId: result.workId, idempotent: result.idempotentReplay });
+      res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof ServiceBookingCommandError) {
+        logWarn("service_booking.cancel_rejected", { requestId: req.requestId, bookingId: req.params.bookingId, code: error.code });
+        sendServiceBookingCommandError(res, statusForError(error.code), error.code);
+        return;
+      }
+      if (error instanceof ServiceBookingsDomainError) {
+        sendServiceBookingCommandError(res, 400, "INVALID_PAYLOAD");
+        return;
+      }
+      logError("service_booking.cancel_failed", error, { requestId: req.requestId, bookingId: req.params.bookingId });
+      res.status(500).json({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível cancelar o agendamento agora." });
+    }
+  });
+
+  app.post("/api/services/bookings/:bookingId/reschedule", requireAuth, async (req, res) => {
+    const uid = (req as Request & { firebaseUid?: string }).firebaseUid;
+    if (!uid) { sendServiceBookingCommandError(res, 401, "UNAUTHENTICATED"); return; }
+    try {
+      const bookingId = validateRouteEntityId(req.params.bookingId, "bookingId");
+      const startAt = typeof req.body?.startAt === "string" ? req.body.startAt : "";
+      const idempotencyKey = validateIdempotencyKey(req.body?.idempotencyKey);
+      const outcome = await rescheduleServiceBookingCommand(db_(), uid, bookingId, startAt, idempotencyKey);
+      if ("conflict" in outcome) {
+        logWarn("service_booking.reschedule_conflict", { requestId: req.requestId, bookingId });
+        sendServiceBookingCommandError(res, 409, "SEGMENT_UNAVAILABLE");
+        return;
+      }
+      logInfo("service_booking.rescheduled", { requestId: req.requestId, bookingId, workId: outcome.workId, idempotent: outcome.idempotentReplay });
+      res.status(200).json(outcome);
+    } catch (error) {
+      if (error instanceof ServiceBookingCommandError) {
+        logWarn("service_booking.reschedule_rejected", { requestId: req.requestId, bookingId: req.params.bookingId, code: error.code });
+        sendServiceBookingCommandError(res, statusForError(error.code), error.code);
+        return;
+      }
+      if (error instanceof ServiceBookingsDomainError) {
+        sendServiceBookingCommandError(res, 400, "INVALID_PAYLOAD");
+        return;
+      }
+      logError("service_booking.reschedule_failed", error, { requestId: req.requestId, bookingId: req.params.bookingId });
+      res.status(500).json({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível reagendar agora." });
     }
   });
 }

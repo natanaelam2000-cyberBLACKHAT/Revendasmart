@@ -17,6 +17,7 @@ import {
 } from "firebase/firestore";
 import { initializeFirebaseAdmin } from "../server/firebase-admin-init";
 import { registerServiceBookingRoutes } from "../server/service-booking-commands";
+import { recordServicePaymentCommand } from "../server/service-payment-commands";
 import {
   BOOKING_HOLD_TTL_MINUTES,
   SCHEDULE_LOCK_GRANULARITY_MINUTES,
@@ -25,6 +26,7 @@ import {
   assertValidBookingInterval,
   assertValidScheduleLock,
   computeScheduleSegments,
+  diffScheduleSegments,
   isAlignedToLockGrid,
   isExpired,
   isSegmentAvailableForHold,
@@ -104,14 +106,37 @@ function runDomainTests() {
     id: "booking-1", tenantUid: "uid-1", serviceId: "svc-1", resourceId: "res-1", workId: "work-1",
     startAt: "2026-08-29T10:00:00.000Z", endAt: "2026-08-29T10:30:00.000Z",
     status: "confirmed" as const, source: "manual" as const, createdAt: "2026-08-29T10:00:00.000Z",
+    updatedAt: "2026-08-29T10:00:00.000Z",
   };
   assertValidBooking(validBooking);
+  assert.throws(() => assertValidBooking({ ...validBooking, status: "cancelled" }), ServiceBookingsDomainError, "cancelled sem cancelledAt deve falhar");
+  assertValidBooking({ ...validBooking, status: "cancelled", cancelledAt: "2026-08-29T11:00:00.000Z" });
+  assert.throws(() => assertValidBooking({ ...validBooking, cancelledAt: "2026-08-29T11:00:00.000Z" }), ServiceBookingsDomainError, "confirmed com cancelledAt deve falhar");
+
+  // SERV-BOOK-02 — Hold "released": exige releasedAt, proíbe confirmedBookingId/confirmedWorkId.
+  assert.throws(() => assertValidBookingHold({ ...validHold, status: "released" }), ServiceBookingsDomainError, "released sem releasedAt deve falhar");
+  assertValidBookingHold({ ...validHold, status: "released", releasedAt: "2026-08-29T10:04:00.000Z" });
+  assert.throws(
+    () => assertValidBookingHold({ ...validHold, status: "released", releasedAt: "2026-08-29T10:04:00.000Z", confirmedBookingId: "booking-1" }),
+    ServiceBookingsDomainError,
+    "released não pode carregar confirmedBookingId",
+  );
+
+  // SERV-BOOK-02 — diffScheduleSegments: caso do §16 (10:00-10:30 => 10:15-10:45).
+  {
+    const oldSegments = computeScheduleSegments("2026-08-29T10:00:00.000Z", "2026-08-29T10:30:00.000Z");
+    const newSegments = computeScheduleSegments("2026-08-29T10:15:00.000Z", "2026-08-29T10:45:00.000Z");
+    const diff = diffScheduleSegments(oldSegments, newSegments);
+    assert.deepEqual(diff.sharedSegments, ["2026-08-29T10:15:00.000Z", "2026-08-29T10:20:00.000Z", "2026-08-29T10:25:00.000Z"]);
+    assert.deepEqual(diff.releasedSegments, ["2026-08-29T10:00:00.000Z", "2026-08-29T10:05:00.000Z", "2026-08-29T10:10:00.000Z"]);
+    assert.deepEqual(diff.acquiredSegments, ["2026-08-29T10:30:00.000Z", "2026-08-29T10:35:00.000Z", "2026-08-29T10:40:00.000Z"]);
+  }
 
   const validLock = { tenantUid: "uid-1", resourceId: "res-1", segmentStartAt: "2026-08-29T10:00:00.000Z", ownerType: "hold" as const, ownerId: "hold-1", expiresAt: "2026-08-29T10:05:00.000Z" };
   assertValidScheduleLock(validLock);
   assert.throws(() => assertValidScheduleLock({ ...validLock, ownerType: "booking" }), ServiceBookingsDomainError, "booking-owned lock não pode carregar expiresAt");
 
-  console.log("Services booking pure-function tests passed: segmentation (6 segments, boundary exclusive), interval rejection (start>=end), 5-minute grid alignment, HOLD_TTL/lock granularity constants, logical expiration (expiresAt<=now, never physical deletion), segment availability (free/hold-expired => available, booking/hold-active => unavailable), hold/booking/lock validators.");
+  console.log("Services booking pure-function tests passed: segmentation (6 segments, boundary exclusive), interval rejection (start>=end), 5-minute grid alignment, HOLD_TTL/lock granularity constants, logical expiration (expiresAt<=now, never physical deletion), segment availability (free/hold-expired => available, booking/hold-active => unavailable), hold/booking/lock validators, SERV-BOOK-02 cancelled-Booking/released-Hold shape validation, and diffScheduleSegments for the §16 shared/released/acquired worked example.");
 }
 
 // ====================================================================================================
@@ -170,6 +195,54 @@ function validService(id: string, tenantUid: string, overrides: Record<string, u
 async function seedService(uid: string, id: string, overrides: Record<string, unknown> = {}) {
   const db = initializeFirebaseAdmin().firestore();
   await db.doc(`users/${uid}/services/${id}`).set(validService(id, uid, overrides));
+}
+
+// SERV-BOOK-02 — atalho para fixtures de cancel/reschedule: cria Service + Hold + confirm via HTTP real
+// (nunca escreve Booking/Work diretamente), devolvendo os ids necessários para os testes seguintes.
+async function seedConfirmedBooking(
+  baseUrl: string, uid: string, serviceId: string, resourceId: string, startAt: string, keyPrefix: string,
+) {
+  await seedService(uid, serviceId, { durationMinutes: 30 });
+  const hold = await postJson(baseUrl, "/api/services/bookings/holds", {
+    serviceId, resourceId, startAt, idempotencyKey: `${keyPrefix}-hold`,
+  }, uid);
+  assert.equal(hold.status, 200, `seedConfirmedBooking(${keyPrefix}): hold falhou — ${JSON.stringify(hold.body)}`);
+  const confirm = await postJson(baseUrl, `/api/services/bookings/holds/${hold.body.holdId}/confirm`, { idempotencyKey: `${keyPrefix}-confirm` }, uid);
+  assert.equal(confirm.status, 200, `seedConfirmedBooking(${keyPrefix}): confirm falhou — ${JSON.stringify(confirm.body)}`);
+  return {
+    bookingId: confirm.body.bookingId as string,
+    workId: confirm.body.workId as string,
+    holdId: hold.body.holdId as string,
+    startAt: hold.body.startAt as string,
+    endAt: hold.body.endAt as string,
+  };
+}
+
+// SERV-BOOK-02 §34 — invariante global: por resource, cada segmento tem no máximo 1 owner, e todo
+// Booking confirmado tem o conjunto completo de locks correspondente ao seu intervalo persistido.
+async function auditNoOverlapInvariant(db: FirebaseFirestore.Firestore, uid: string, resourceId: string) {
+  const lockSnaps = await db.collection(`users/${uid}/scheduleLocks`).where("resourceId", "==", resourceId).get();
+  const bySegment = new Map<string, Set<string>>();
+  for (const lockDoc of lockSnaps.docs) {
+    const data = lockDoc.data();
+    if (!bySegment.has(data.segmentStartAt)) bySegment.set(data.segmentStartAt, new Set());
+    bySegment.get(data.segmentStartAt)!.add(`${data.ownerType}:${data.ownerId}`);
+  }
+  for (const [segment, owners] of bySegment) {
+    assert.equal(owners.size, 1, `DUPLICATE_ACTIVE_SEGMENT_OWNERS: ${uid}/${resourceId}/${segment} tem ${owners.size} owners`);
+  }
+  const bookingsSnap = await db.collection(`users/${uid}/bookings`).where("resourceId", "==", resourceId).where("status", "==", "confirmed").get();
+  for (const bookingDoc of bookingsSnap.docs) {
+    const booking = bookingDoc.data();
+    const segments = computeScheduleSegments(booking.startAt, booking.endAt);
+    for (const segment of segments) {
+      const owners = bySegment.get(segment);
+      assert.ok(
+        owners && owners.has(`booking:${bookingDoc.id}`),
+        `ACTIVE_BOOKING_WITHOUT_COMPLETE_LOCK_SET: booking ${bookingDoc.id} não tem lock para o segmento ${segment}`,
+      );
+    }
+  }
 }
 
 async function runCommandTests() {
@@ -428,6 +501,369 @@ async function runCommandTests() {
     }
 
     console.log("Services booking command tests (HTTP + emulator) passed: valid hold creates hold+6 locks, same-slot concurrency (1 success/1 conflict), partial overlap conflict, boundary adjacency allowed, different resources same time allowed, expired hold segments reusable without waiting for physical TTL delete, confirm creates exactly 1 Booking + 1 zero-financial Work with no Payment (origin=booking, locks converted to booking ownership without expiresAt), confirm rejected when hold expired, confirm rejected when lock ownership was lost, concurrent confirms of the same hold converge to 1 Booking/1 Work, create-hold and confirm-hold are idempotent (stable replay), incompatible payload under the same idempotency key is rejected, a 10-way concurrent race for the same interval yields exactly 1 winner, and the final persisted state never has two owners on the same tenant+resource+segment (the central capacity=1 invariant).");
+
+    // ====================================================================================================
+    // SERV-BOOK-02 §31 — RELEASE HOLD (R1-R5).
+    // ====================================================================================================
+
+    // R1 — release válido libera TODOS os locks do hold e marca status=released.
+    {
+      const uid = tenantUid();
+      await seedService(uid, "svc-r1");
+      const hold = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-r1", resourceId: "res-r1", startAt: "2026-08-30T09:00:00.000Z", idempotencyKey: "r1-hold" }, uid);
+      assert.equal(hold.status, 200);
+      const release = await postJson(harness.baseUrl, `/api/services/bookings/holds/${hold.body.holdId}/release`, { idempotencyKey: "r1-release" }, uid);
+      assert.equal(release.status, 200, JSON.stringify(release.body));
+      assert.equal(release.body.action, "release_hold");
+      const lockSnaps = await db.collection(`users/${uid}/scheduleLocks`).where("ownerId", "==", hold.body.holdId).get();
+      assert.equal(lockSnaps.size, 0, "R1: release deve liberar todos os locks do hold");
+      const holdAfter = await db.doc(`users/${uid}/bookingHolds/${hold.body.holdId}`).get();
+      assert.equal(holdAfter.data()?.status, "released");
+      assert.equal(typeof holdAfter.data()?.releasedAt, "string");
+    }
+
+    // R2 — release repetido (key nova) é seguro, nunca um erro estrutural.
+    {
+      const uid = tenantUid();
+      await seedService(uid, "svc-r2");
+      const hold = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-r2", resourceId: "res-r2", startAt: "2026-08-30T09:00:00.000Z", idempotencyKey: "r2-hold" }, uid);
+      const first = await postJson(harness.baseUrl, `/api/services/bookings/holds/${hold.body.holdId}/release`, { idempotencyKey: "r2-release-1" }, uid);
+      const second = await postJson(harness.baseUrl, `/api/services/bookings/holds/${hold.body.holdId}/release`, { idempotencyKey: "r2-release-2" }, uid);
+      assert.equal(first.status, 200);
+      assert.equal(second.status, 200, "R2: release repetido (key diferente) deve ser idempotente, não um erro");
+    }
+
+    // R3 — release de hold já confirmado NUNCA libera os locks do booking correspondente.
+    {
+      const uid = tenantUid();
+      const booking = await seedConfirmedBooking(harness.baseUrl, uid, "svc-r3", "res-r3", "2026-08-30T09:00:00.000Z", "r3");
+      const release = await postJson(harness.baseUrl, `/api/services/bookings/holds/${booking.holdId}/release`, { idempotencyKey: "r3-release" }, uid);
+      assert.equal(release.status, 409);
+      assert.equal(release.body?.code, "HOLD_ALREADY_CONFIRMED");
+      const lockSnaps = await db.collection(`users/${uid}/scheduleLocks`).where("ownerId", "==", booking.bookingId).get();
+      assert.equal(lockSnaps.size, 6, "R3: locks do booking devem permanecer intactos");
+    }
+
+    // R4 — release de hold logicamente expirado continua seguro e não deixa lock permanente.
+    {
+      const uid = tenantUid();
+      await seedService(uid, "svc-r4");
+      const hold = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-r4", resourceId: "res-r4", startAt: "2026-08-30T09:00:00.000Z", idempotencyKey: "r4-hold" }, uid);
+      await db.doc(`users/${uid}/bookingHolds/${hold.body.holdId}`).update({ expiresAt: "2020-01-01T00:00:00.000Z" });
+      const release = await postJson(harness.baseUrl, `/api/services/bookings/holds/${hold.body.holdId}/release`, { idempotencyKey: "r4-release" }, uid);
+      assert.equal(release.status, 200, "R4: release de hold expirado deve permanecer seguro");
+      const lockSnaps = await db.collection(`users/${uid}/scheduleLocks`).where("ownerId", "==", hold.body.holdId).get();
+      assert.equal(lockSnaps.size, 0);
+    }
+
+    // R5 — release vs confirm concorrentes: estado final coerente (nunca Booking sem locks, nunca lock órfão).
+    {
+      const uid = tenantUid();
+      await seedService(uid, "svc-r5");
+      const hold = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-r5", resourceId: "res-r5", startAt: "2026-08-30T09:00:00.000Z", idempotencyKey: "r5-hold" }, uid);
+      const [release, confirm] = await Promise.all([
+        postJson(harness.baseUrl, `/api/services/bookings/holds/${hold.body.holdId}/release`, { idempotencyKey: "r5-release" }, uid),
+        postJson(harness.baseUrl, `/api/services/bookings/holds/${hold.body.holdId}/confirm`, { idempotencyKey: "r5-confirm" }, uid),
+      ]);
+      const holdAfter = await db.doc(`users/${uid}/bookingHolds/${hold.body.holdId}`).get();
+      const finalStatus = holdAfter.data()?.status;
+      assert.ok(finalStatus === "released" || finalStatus === "confirmed", `R5: estado final deve ser released ou confirmed, obtido ${finalStatus}`);
+      const lockSnaps = await db.collection(`users/${uid}/scheduleLocks`).where("resourceId", "==", "res-r5").get();
+      if (finalStatus === "confirmed") {
+        assert.equal(confirm.status, 200);
+        assert.equal(lockSnaps.size, 6, "R5: confirm venceu — booking deve ter todos os locks");
+        for (const l of lockSnaps.docs) assert.equal(l.data().ownerType, "booking");
+      } else {
+        assert.equal(release.status, 200);
+        assert.equal(lockSnaps.size, 0, "R5: release venceu — nenhum lock deve sobrar");
+      }
+      await auditNoOverlapInvariant(db, uid, "res-r5");
+    }
+
+    // ====================================================================================================
+    // SERV-BOOK-02 §32 — CANCEL BOOKING (C1-C7).
+    // ====================================================================================================
+
+    // C1 — cancel de Booking confirmado + Work planned => Booking cancelled + Work cancelled + 0 locks.
+    {
+      const uid = tenantUid();
+      const booking = await seedConfirmedBooking(harness.baseUrl, uid, "svc-c1", "res-c1", "2026-08-30T10:00:00.000Z", "c1");
+      const cancel = await postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/cancel`, { idempotencyKey: "c1-cancel" }, uid);
+      assert.equal(cancel.status, 200, JSON.stringify(cancel.body));
+      const bookingAfter = await db.doc(`users/${uid}/bookings/${booking.bookingId}`).get();
+      assert.equal(bookingAfter.data()?.status, "cancelled");
+      assert.equal(typeof bookingAfter.data()?.cancelledAt, "string");
+      const workAfter = await db.doc(`users/${uid}/serviceWorks/${booking.workId}`).get();
+      assert.equal(workAfter.data()?.status, "cancelled");
+      const lockSnaps = await db.collection(`users/${uid}/scheduleLocks`).where("ownerId", "==", booking.bookingId).get();
+      assert.equal(lockSnaps.size, 0);
+    }
+
+    // C2 — cancel idempotente: replay (mesma key) devolve o mesmo cancelledAt; key nova sobre já cancelado é segura e determinística.
+    {
+      const uid = tenantUid();
+      const booking = await seedConfirmedBooking(harness.baseUrl, uid, "svc-c2", "res-c2", "2026-08-30T10:00:00.000Z", "c2");
+      const first = await postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/cancel`, { idempotencyKey: "c2-cancel-1" }, uid);
+      const retry = await postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/cancel`, { idempotencyKey: "c2-cancel-1" }, uid);
+      assert.equal(first.status, 200);
+      assert.equal(retry.status, 200);
+      assert.equal(retry.body.cancelledAt, first.body.cancelledAt);
+      const differentKey = await postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/cancel`, { idempotencyKey: "c2-cancel-2" }, uid);
+      assert.equal(differentKey.status, 200, "C2: key nova sobre booking já cancelado deve ser determinística, não recriar nada");
+      assert.equal(differentKey.body.cancelledAt, first.body.cancelledAt);
+    }
+
+    // C3/C4 — cancel NUNCA cria Refund e NUNCA altera os fatos financeiros já registrados (Payment/financialSummary).
+    {
+      const uid = tenantUid();
+      const booking = await seedConfirmedBooking(harness.baseUrl, uid, "svc-c34", "res-c34", "2026-08-30T10:00:00.000Z", "c34");
+      const payment = await recordServicePaymentCommand(db, uid, booking.workId, 5000, "pix", "c34-payment-key");
+      const cancel = await postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/cancel`, { idempotencyKey: "c34-cancel" }, uid);
+      assert.equal(cancel.status, 200, JSON.stringify(cancel.body));
+      const paymentAfter = await db.doc(`users/${uid}/serviceWorks/${booking.workId}/payments/${payment.paymentId}`).get();
+      assert.equal(paymentAfter.data()?.amountCents, 5000);
+      assert.equal(paymentAfter.data()?.refundedTotalCents, 0, "C4: cancel não altera o fato de Payment");
+      const refundsSnap = await db.collection(`users/${uid}/serviceWorks/${booking.workId}/payments/${payment.paymentId}/refunds`).get();
+      assert.equal(refundsSnap.size, 0, "C3: cancel nunca cria Refund");
+      const workAfter = await db.doc(`users/${uid}/serviceWorks/${booking.workId}`).get();
+      assert.deepEqual(workAfter.data()?.financialSummary, { grossReceivedCents: 5000, refundedTotalCents: 0, netReceivedCents: 5000 }, "financialSummary preservado — cancel não mexe no domínio financeiro");
+    }
+
+    // C5 — cancel de Work in_progress é rejeitado (nunca cancelamento silencioso de serviço já iniciado).
+    {
+      const uid = tenantUid();
+      const booking = await seedConfirmedBooking(harness.baseUrl, uid, "svc-c5", "res-c5", "2026-08-30T10:00:00.000Z", "c5");
+      await db.doc(`users/${uid}/serviceWorks/${booking.workId}`).update({ status: "in_progress", startedAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z" });
+      const cancel = await postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/cancel`, { idempotencyKey: "c5-cancel" }, uid);
+      assert.equal(cancel.status, 409);
+      assert.equal(cancel.body?.code, "WORK_NOT_CANCELABLE");
+    }
+
+    // C6 — cancel de Work completed é rejeitado.
+    {
+      const uid = tenantUid();
+      const booking = await seedConfirmedBooking(harness.baseUrl, uid, "svc-c6", "res-c6", "2026-08-30T10:00:00.000Z", "c6");
+      await db.doc(`users/${uid}/serviceWorks/${booking.workId}`).update({ status: "completed", startedAt: "2026-08-30T10:00:00.000Z", completedAt: "2026-08-30T10:05:00.000Z", updatedAt: "2026-08-30T10:05:00.000Z" });
+      const cancel = await postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/cancel`, { idempotencyKey: "c6-cancel" }, uid);
+      assert.equal(cancel.status, 409);
+      assert.equal(cancel.body?.code, "WORK_NOT_CANCELABLE");
+    }
+
+    // C7 — double cancel concorrente: 1 cancelamento lógico, sem erro estrutural, sem duplicar efeito.
+    {
+      const uid = tenantUid();
+      const booking = await seedConfirmedBooking(harness.baseUrl, uid, "svc-c7", "res-c7", "2026-08-30T10:00:00.000Z", "c7");
+      const [a, b] = await Promise.all([
+        postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/cancel`, { idempotencyKey: "c7-cancel-a" }, uid),
+        postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/cancel`, { idempotencyKey: "c7-cancel-b" }, uid),
+      ]);
+      assert.equal(a.status, 200);
+      assert.equal(b.status, 200);
+      const lockSnaps = await db.collection(`users/${uid}/scheduleLocks`).where("resourceId", "==", "res-c7").get();
+      assert.equal(lockSnaps.size, 0, "C7: locks liberados exatamente uma vez, nunca efeito duplicado");
+    }
+
+    console.log("Services booking release/cancel tests (R1-R5, C1-C7) passed: hold release frees all locks and marks released, repeated release is idempotent, release of an already-confirmed hold is rejected and leaves booking locks untouched, release of an expired hold stays safe with zero leaked locks, release-vs-confirm race converges to one coherent final state, booking cancel produces cancelled Booking + cancelled Work + zero locks, cancel is idempotent (same key replay and a fresh key over an already-cancelled booking both return the existing cancelledAt without recreating anything), cancel never creates a Refund and never alters existing Payment facts or financialSummary, cancel of in_progress/completed Work is rejected (never a silent cancellation of already-executed work), and concurrent double-cancel never duplicates the effect.");
+
+    // ====================================================================================================
+    // SERV-BOOK-02 §33 — RESCHEDULE BOOKING (S1-S12) + §22-24 concorrência adicional.
+    // ====================================================================================================
+
+    // S1 — reagendamento simples: novo intervalo persistido, endAt recalculado, locks antigos liberados/novos adquiridos.
+    {
+      const uid = tenantUid();
+      const booking = await seedConfirmedBooking(harness.baseUrl, uid, "svc-s1", "res-s1", "2026-08-30T10:00:00.000Z", "s1");
+      const reschedule = await postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/reschedule`, { startAt: "2026-08-30T11:00:00.000Z", idempotencyKey: "s1-resched" }, uid);
+      assert.equal(reschedule.status, 200, JSON.stringify(reschedule.body));
+      assert.equal(reschedule.body.bookingId, booking.bookingId, "S1: bookingId preservado");
+      assert.equal(reschedule.body.workId, booking.workId, "S1: workId preservado");
+      assert.equal(reschedule.body.startAt, "2026-08-30T11:00:00.000Z");
+      assert.equal(reschedule.body.endAt, "2026-08-30T11:30:00.000Z", "S1: endAt recalculado pelo servidor a partir do Service");
+      const oldLocks = await db.collection(`users/${uid}/scheduleLocks`).where("resourceId", "==", "res-s1").where("segmentStartAt", "==", "2026-08-30T10:00:00.000Z").get();
+      assert.equal(oldLocks.size, 0, "S1: segmento antigo totalmente liberado");
+      const newLock = await db.doc(`users/${uid}/scheduleLocks/res-s1__2026-08-30T11-00-00-000Z`).get();
+      assert.equal(newLock.data()?.ownerId, booking.bookingId);
+      await auditNoOverlapInvariant(db, uid, "res-s1");
+    }
+
+    // S2 — self-overlap (§16 worked example): segmentos compartilhados com o próprio Booking nunca são conflito.
+    {
+      const uid = tenantUid();
+      const booking = await seedConfirmedBooking(harness.baseUrl, uid, "svc-s2", "res-s2", "2026-08-30T10:00:00.000Z", "s2");
+      const reschedule = await postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/reschedule`, { startAt: "2026-08-30T10:15:00.000Z", idempotencyKey: "s2-resched" }, uid);
+      assert.equal(reschedule.status, 200, JSON.stringify(reschedule.body));
+      const sharedLock = await db.doc(`users/${uid}/scheduleLocks/res-s2__2026-08-30T10-15-00-000Z`).get();
+      assert.equal(sharedLock.data()?.ownerId, booking.bookingId, "S2: segmento compartilhado (10:15) mantido sob o mesmo booking");
+      const releasedLock = await db.doc(`users/${uid}/scheduleLocks/res-s2__2026-08-30T10-00-00-000Z`).get();
+      assert.equal(releasedLock.exists, false, "S2: segmento old-only (10:00) liberado");
+      const acquiredLock = await db.doc(`users/${uid}/scheduleLocks/res-s2__2026-08-30T10-30-00-000Z`).get();
+      assert.equal(acquiredLock.data()?.ownerId, booking.bookingId, "S2: segmento new-only (10:30) adquirido");
+      await auditNoOverlapInvariant(db, uid, "res-s2");
+    }
+
+    // S3 — target ocupado por outro Booking: reject, horário antigo e locks antigos preservados (§18 all-or-nothing).
+    {
+      const uid = tenantUid();
+      const bookingA = await seedConfirmedBooking(harness.baseUrl, uid, "svc-s3a", "res-s3", "2026-08-30T09:00:00.000Z", "s3a");
+      const bookingB = await seedConfirmedBooking(harness.baseUrl, uid, "svc-s3b", "res-s3", "2026-08-30T11:00:00.000Z", "s3b");
+      const reschedule = await postJson(harness.baseUrl, `/api/services/bookings/${bookingB.bookingId}/reschedule`, { startAt: "2026-08-30T09:00:00.000Z", idempotencyKey: "s3-resched" }, uid);
+      assert.equal(reschedule.status, 409);
+      assert.equal(reschedule.body?.code, "SEGMENT_UNAVAILABLE");
+      const bookingBAfter = await db.doc(`users/${uid}/bookings/${bookingB.bookingId}`).get();
+      assert.equal(bookingBAfter.data()?.startAt, "2026-08-30T11:00:00.000Z", "S3: horário antigo preservado após falha");
+      const oldLocks = await db.collection(`users/${uid}/scheduleLocks`).where("ownerId", "==", bookingB.bookingId).get();
+      assert.equal(oldLocks.size, 6, "S3: locks antigos nunca liberados antes de garantir o novo horário");
+      void bookingA;
+    }
+
+    // S4 — target ocupado por Hold ativo de outro owner: reject.
+    {
+      const uid = tenantUid();
+      const booking = await seedConfirmedBooking(harness.baseUrl, uid, "svc-s4", "res-s4", "2026-08-30T09:00:00.000Z", "s4");
+      await seedService(uid, "svc-s4b");
+      const activeHold = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-s4b", resourceId: "res-s4", startAt: "2026-08-30T11:00:00.000Z", idempotencyKey: "s4-active-hold" }, uid);
+      assert.equal(activeHold.status, 200);
+      const reschedule = await postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/reschedule`, { startAt: "2026-08-30T11:00:00.000Z", idempotencyKey: "s4-resched" }, uid);
+      assert.equal(reschedule.status, 409);
+      assert.equal(reschedule.body?.code, "SEGMENT_UNAVAILABLE");
+    }
+
+    // S5 — target ocupado por Hold logicamente expirado: pode ser reaproveitado com sucesso.
+    {
+      const uid = tenantUid();
+      const booking = await seedConfirmedBooking(harness.baseUrl, uid, "svc-s5", "res-s5", "2026-08-30T09:00:00.000Z", "s5");
+      await seedService(uid, "svc-s5b");
+      const expiredHold = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-s5b", resourceId: "res-s5", startAt: "2026-08-30T11:00:00.000Z", idempotencyKey: "s5-active-hold" }, uid);
+      assert.equal(expiredHold.status, 200);
+      await db.doc(`users/${uid}/bookingHolds/${expiredHold.body.holdId}`).update({ expiresAt: "2020-01-01T00:00:00.000Z" });
+      const staleLocks = await db.collection(`users/${uid}/scheduleLocks`).where("ownerId", "==", expiredHold.body.holdId).get();
+      await Promise.all(staleLocks.docs.map((d) => d.ref.update({ expiresAt: "2020-01-01T00:00:00.000Z" })));
+      const reschedule = await postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/reschedule`, { startAt: "2026-08-30T11:00:00.000Z", idempotencyKey: "s5-resched" }, uid);
+      assert.equal(reschedule.status, 200, "S5: target ocupado só por hold expirado deve ser reaproveitável");
+    }
+
+    // S6 — boundary adjacency: novo início exatamente onde outro Booking termina é permitido.
+    {
+      const uid = tenantUid();
+      const bookingOther = await seedConfirmedBooking(harness.baseUrl, uid, "svc-s6a", "res-s6", "2026-08-30T09:00:00.000Z", "s6a");
+      const bookingMine = await seedConfirmedBooking(harness.baseUrl, uid, "svc-s6b", "res-s6", "2026-08-30T13:00:00.000Z", "s6b");
+      const reschedule = await postJson(harness.baseUrl, `/api/services/bookings/${bookingMine.bookingId}/reschedule`, { startAt: bookingOther.endAt, idempotencyKey: "s6-resched" }, uid);
+      assert.equal(reschedule.status, 200, "S6: início exatamente no fim do outro booking deve ser permitido");
+    }
+
+    // S7 — Booking já cancelado nunca é reagendável.
+    {
+      const uid = tenantUid();
+      const booking = await seedConfirmedBooking(harness.baseUrl, uid, "svc-s7", "res-s7", "2026-08-30T10:00:00.000Z", "s7");
+      await postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/cancel`, { idempotencyKey: "s7-cancel" }, uid);
+      const reschedule = await postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/reschedule`, { startAt: "2026-08-30T12:00:00.000Z", idempotencyKey: "s7-resched" }, uid);
+      assert.equal(reschedule.status, 409);
+      assert.equal(reschedule.body?.code, "BOOKING_NOT_RESCHEDULABLE");
+    }
+
+    // S8 — Work in_progress: reject.
+    {
+      const uid = tenantUid();
+      const booking = await seedConfirmedBooking(harness.baseUrl, uid, "svc-s8", "res-s8", "2026-08-30T10:00:00.000Z", "s8");
+      await db.doc(`users/${uid}/serviceWorks/${booking.workId}`).update({ status: "in_progress", startedAt: "2026-08-30T10:00:00.000Z", updatedAt: "2026-08-30T10:00:00.000Z" });
+      const reschedule = await postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/reschedule`, { startAt: "2026-08-30T12:00:00.000Z", idempotencyKey: "s8-resched" }, uid);
+      assert.equal(reschedule.status, 409);
+      assert.equal(reschedule.body?.code, "BOOKING_NOT_RESCHEDULABLE");
+    }
+
+    // S9 — Work completed: reject.
+    {
+      const uid = tenantUid();
+      const booking = await seedConfirmedBooking(harness.baseUrl, uid, "svc-s9", "res-s9", "2026-08-30T10:00:00.000Z", "s9");
+      await db.doc(`users/${uid}/serviceWorks/${booking.workId}`).update({ status: "completed", startedAt: "2026-08-30T10:00:00.000Z", completedAt: "2026-08-30T10:05:00.000Z", updatedAt: "2026-08-30T10:05:00.000Z" });
+      const reschedule = await postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/reschedule`, { startAt: "2026-08-30T12:00:00.000Z", idempotencyKey: "s9-resched" }, uid);
+      assert.equal(reschedule.status, 409);
+      assert.equal(reschedule.body?.code, "BOOKING_NOT_RESCHEDULABLE");
+    }
+
+    // S10 — replay (mesma key + mesmo target) devolve exatamente o mesmo resultado, sem duplicar.
+    {
+      const uid = tenantUid();
+      const booking = await seedConfirmedBooking(harness.baseUrl, uid, "svc-s10", "res-s10", "2026-08-30T10:00:00.000Z", "s10");
+      const first = await postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/reschedule`, { startAt: "2026-08-30T14:00:00.000Z", idempotencyKey: "s10-resched" }, uid);
+      const retry = await postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/reschedule`, { startAt: "2026-08-30T14:00:00.000Z", idempotencyKey: "s10-resched" }, uid);
+      assert.equal(first.status, 200);
+      assert.equal(retry.status, 200);
+      assert.equal(retry.body.bookingId, first.body.bookingId);
+      assert.equal(retry.body.workId, first.body.workId);
+      assert.equal(retry.body.startAt, first.body.startAt);
+      assert.equal(retry.body.endAt, first.body.endAt);
+      assert.equal(retry.body.idempotentReplay, true, "S10: retry deve ser sinalizado como replay idempotente");
+    }
+
+    // S11 — mesma key + target diferente => IDEMPOTENCY_CONFLICT.
+    {
+      const uid = tenantUid();
+      const booking = await seedConfirmedBooking(harness.baseUrl, uid, "svc-s11", "res-s11", "2026-08-30T10:00:00.000Z", "s11");
+      const first = await postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/reschedule`, { startAt: "2026-08-30T15:00:00.000Z", idempotencyKey: "s11-resched" }, uid);
+      assert.equal(first.status, 200);
+      const different = await postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/reschedule`, { startAt: "2026-08-30T16:00:00.000Z", idempotencyKey: "s11-resched" }, uid);
+      assert.equal(different.status, 409);
+      assert.equal(different.body?.code, "IDEMPOTENCY_CONFLICT");
+    }
+
+    // S12 (§22) — 2 Bookings tentando reagendar para o mesmo target simultaneamente: success<=1, perdedor mantém slot original.
+    {
+      const uid = tenantUid();
+      const bookingA = await seedConfirmedBooking(harness.baseUrl, uid, "svc-s12a", "res-s12", "2026-08-30T09:00:00.000Z", "s12a");
+      const bookingB = await seedConfirmedBooking(harness.baseUrl, uid, "svc-s12b", "res-s12", "2026-08-30T11:00:00.000Z", "s12b");
+      const [a, b] = await Promise.all([
+        postJson(harness.baseUrl, `/api/services/bookings/${bookingA.bookingId}/reschedule`, { startAt: "2026-08-30T15:00:00.000Z", idempotencyKey: "s12-resched-a" }, uid),
+        postJson(harness.baseUrl, `/api/services/bookings/${bookingB.bookingId}/reschedule`, { startAt: "2026-08-30T15:00:00.000Z", idempotencyKey: "s12-resched-b" }, uid),
+      ]);
+      const successCount = [a, b].filter((r) => r.status === 200).length;
+      assert.ok(successCount <= 1, "S12: no máximo 1 sucesso para o mesmo target");
+      if (a.status !== 200) {
+        const doc = await db.doc(`users/${uid}/bookings/${bookingA.bookingId}`).get();
+        assert.equal(doc.data()?.startAt, "2026-08-30T09:00:00.000Z", "S12: perdedor A mantém slot original integralmente");
+      }
+      if (b.status !== 200) {
+        const doc = await db.doc(`users/${uid}/bookings/${bookingB.bookingId}`).get();
+        assert.equal(doc.data()?.startAt, "2026-08-30T11:00:00.000Z", "S12: perdedor B mantém slot original integralmente");
+      }
+      await auditNoOverlapInvariant(db, uid, "res-s12");
+    }
+
+    // §23 — Hold vs reschedule para o mesmo target: exatamente um dos dois vence o segmento.
+    {
+      const uid = tenantUid();
+      const booking = await seedConfirmedBooking(harness.baseUrl, uid, "svc-hvr", "res-hvr", "2026-08-30T09:00:00.000Z", "hvr");
+      await seedService(uid, "svc-hvr2");
+      const [reschedule, hold] = await Promise.all([
+        postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/reschedule`, { startAt: "2026-08-30T17:00:00.000Z", idempotencyKey: "hvr-resched" }, uid),
+        postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-hvr2", resourceId: "res-hvr", startAt: "2026-08-30T17:00:00.000Z", idempotencyKey: "hvr-race-hold" }, uid),
+      ]);
+      const rescheduleWon = reschedule.status === 200;
+      const holdWon = hold.status === 200;
+      assert.notEqual(rescheduleWon, holdWon, "§23: exatamente um dos dois deve vencer o segmento 17:00 em res-hvr, nunca ambos ou nenhum");
+      await auditNoOverlapInvariant(db, uid, "res-hvr");
+    }
+
+    // §24 — cancel vs reschedule concorrentes sobre o MESMO Booking: estado final único e coerente.
+    {
+      const uid = tenantUid();
+      const booking = await seedConfirmedBooking(harness.baseUrl, uid, "svc-cvr", "res-cvr", "2026-08-30T09:00:00.000Z", "cvr");
+      await Promise.all([
+        postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/cancel`, { idempotencyKey: "cvr-cancel" }, uid),
+        postJson(harness.baseUrl, `/api/services/bookings/${booking.bookingId}/reschedule`, { startAt: "2026-08-30T18:00:00.000Z", idempotencyKey: "cvr-resched" }, uid),
+      ]);
+      const bookingAfter = await db.doc(`users/${uid}/bookings/${booking.bookingId}`).get();
+      const finalStatus = bookingAfter.data()?.status;
+      const lockSnaps = await db.collection(`users/${uid}/scheduleLocks`).where("resourceId", "==", "res-cvr").get();
+      if (finalStatus === "cancelled") {
+        assert.equal(lockSnaps.size, 0, "§24: booking cancelled nunca pode ter locks em target");
+      } else {
+        assert.equal(finalStatus, "confirmed");
+        assert.ok(lockSnaps.size > 0, "§24: booking ativo nunca pode ter zero locks");
+      }
+    }
+
+    console.log("Services booking reschedule tests (S1-S12) + extra concurrency (§22-24) passed: simple move recalculates endAt from Service and migrates locks, self-overlap treats shared segments as never-conflicting (§16 worked example), target occupied by another Booking rejects with the old slot and its locks fully preserved (all-or-nothing), target occupied by an active Hold rejects, target occupied only by an expired Hold is reusable, boundary-adjacent reschedule is allowed, a cancelled Booking is never reschedulable, in_progress/completed Work reject reschedule, replay under the same key+target returns the identical result, the same key against a different target is an IDEMPOTENCY_CONFLICT, two Bookings racing for the same target yield at most 1 success with the loser's original slot fully intact, a concurrent Hold-vs-reschedule race for the same segment has exactly one winner, and a concurrent cancel-vs-reschedule race on the same Booking converges to one coherent final state (never cancelled-with-locks, never active-with-zero-locks) — all verified against the DUPLICATE_ACTIVE_SEGMENT_OWNERS=0 / ACTIVE_BOOKING_WITHOUT_COMPLETE_LOCK_SET=0 global invariant.");
   } finally {
     await harness.close();
   }
