@@ -221,6 +221,327 @@ service cloud.firestore {
       ];
     }
 
+    function isNonNegativeInteger(value) {
+      return value is int && value >= 0;
+    }
+
+    function serviceAllowedFields() {
+      return [
+        'id', 'tenantUid', 'name', 'description', 'imageUrl',
+        'active', 'published', 'pricing', 'durationMinutes',
+        'cost', 'bookingMode', 'createdAt', 'updatedAt', 'archivedAt'
+      ];
+    }
+
+    function serviceWorkAllowedFields() {
+      return [
+        'id', 'tenantUid', 'status', 'origin', 'customerId',
+        'sourceQuoteId', 'sourceQuoteVersionId',
+        'items', 'totals', 'financialSummary', 'cost', 'createdAt', 'updatedAt',
+        'startedAt', 'completedAt', 'cancelledAt'
+      ];
+    }
+
+    function quoteAllowedFields() {
+      return [
+        'id', 'tenantUid', 'status', 'customerId',
+        'draftItems', 'draftTotals', 'draftCustomerMessage', 'draftValidUntil',
+        'currentVersionId', 'currentVersionNumber',
+        'acceptedVersionId', 'convertedWorkId',
+        'createdAt', 'updatedAt', 'lastSentAt', 'acceptedAt', 'rejectedAt', 'cancelledAt'
+      ];
+    }
+
+    function isValidQuoteShape(uid, quoteId, data) {
+      return data.keys().hasOnly(quoteAllowedFields())
+        && data.keys().hasAll(['id', 'tenantUid', 'status', 'draftItems', 'draftTotals', 'createdAt', 'updatedAt'])
+        && data.id == quoteId
+        && data.tenantUid == uid
+        && data.status in ['draft', 'sent', 'accepted', 'rejected', 'cancelled']
+        && data.get('customerId', '') is string
+        && data.draftItems is list
+        && data.draftItems.size() <= 100
+        && isValidServiceTotals(data.draftTotals)
+        && data.get('draftCustomerMessage', '') is string
+        && data.get('draftCustomerMessage', '').size() <= 4000
+        && data.get('draftValidUntil', '') is string
+        && data.get('draftValidUntil', '').size() <= 40
+        && data.get('currentVersionId', '') is string
+        && data.get('currentVersionId', '').size() <= 120
+        && (!data.keys().hasAny(['currentVersionNumber'])
+          || (data.currentVersionNumber is int && data.currentVersionNumber >= 1 && data.currentVersionNumber <= 100000))
+        && data.get('acceptedVersionId', '') is string
+        && data.get('acceptedVersionId', '').size() <= 120
+        && data.get('convertedWorkId', '') is string
+        && data.get('convertedWorkId', '').size() <= 120
+        && data.createdAt is string
+        && data.createdAt.size() > 0
+        && data.createdAt.size() <= 40
+        && data.updatedAt is string
+        && data.updatedAt.size() > 0
+        && data.updatedAt.size() <= 40
+        && data.get('lastSentAt', '') is string
+        && data.get('lastSentAt', '').size() <= 40
+        && data.get('acceptedAt', '') is string
+        && data.get('acceptedAt', '').size() <= 40
+        && data.get('rejectedAt', '') is string
+        && data.get('rejectedAt', '').size() <= 40
+        && data.get('cancelledAt', '') is string
+        && data.get('cancelledAt', '').size() <= 40;
+    }
+
+    function isValidQuoteCreate(uid, quoteId) {
+      let data = request.resource.data;
+      return isValidQuoteShape(uid, quoteId, data)
+        && data.status == 'draft'
+        && !data.keys().hasAny([
+          'currentVersionId', 'currentVersionNumber', 'acceptedVersionId', 'convertedWorkId',
+          'lastSentAt', 'acceptedAt', 'rejectedAt', 'cancelledAt'
+        ])
+        && data.createdAt == data.updatedAt;
+    }
+
+    function isValidQuoteUpdate(uid, quoteId) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return resource.data.tenantUid == uid
+        && resource.data.status == 'draft'
+        && request.resource.data.status == 'draft'
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.tenantUid == resource.data.tenantUid
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.get('currentVersionId', '') == resource.data.get('currentVersionId', '')
+        && request.resource.data.get('currentVersionNumber', null) == resource.data.get('currentVersionNumber', null)
+        && request.resource.data.get('acceptedVersionId', '') == resource.data.get('acceptedVersionId', '')
+        && request.resource.data.get('convertedWorkId', '') == resource.data.get('convertedWorkId', '')
+        && request.resource.data.get('lastSentAt', '') == resource.data.get('lastSentAt', '')
+        && request.resource.data.get('acceptedAt', '') == resource.data.get('acceptedAt', '')
+        && request.resource.data.get('rejectedAt', '') == resource.data.get('rejectedAt', '')
+        && request.resource.data.get('cancelledAt', '') == resource.data.get('cancelledAt', '')
+        && changed.hasOnly(['customerId', 'draftItems', 'draftTotals', 'draftCustomerMessage', 'draftValidUntil', 'updatedAt'])
+        && changed.hasAny(['updatedAt'])
+        && request.resource.data.updatedAt != resource.data.updatedAt
+        && isValidQuoteShape(uid, quoteId, request.resource.data);
+    }
+
+    function quoteVersionAllowedFields() {
+      return [
+        'id', 'tenantUid', 'quoteId', 'versionNumber', 'customerId',
+        'items', 'totals', 'customerMessage', 'validUntil', 'createdAt', 'sentAt'
+      ];
+    }
+
+    function isValidQuoteVersionShape(uid, quoteId, versionId, data) {
+      return data.keys().hasOnly(quoteVersionAllowedFields())
+        && data.keys().hasAll(['id', 'tenantUid', 'quoteId', 'versionNumber', 'items', 'totals', 'createdAt', 'sentAt'])
+        && data.id == versionId
+        && data.tenantUid == uid
+        && data.quoteId == quoteId
+        && data.versionNumber is int
+        && data.versionNumber >= 1
+        && data.versionNumber <= 100000
+        && data.get('customerId', '') is string
+        && data.items is list
+        && data.items.size() <= 100
+        && isValidServiceTotals(data.totals)
+        && data.get('customerMessage', '') is string
+        && data.get('customerMessage', '').size() <= 4000
+        && data.get('validUntil', '') is string
+        && data.get('validUntil', '').size() <= 40
+        && data.createdAt is string
+        && data.createdAt.size() > 0
+        && data.createdAt.size() <= 40
+        && data.sentAt is string
+        && data.sentAt.size() > 0
+        && data.sentAt.size() <= 40;
+    }
+
+    function isValidServicePricing(pricing) {
+      return pricing is map
+        && (
+          (pricing.keys().hasOnly(['mode', 'priceCents'])
+            && pricing.mode == 'fixed'
+            && isNonNegativeInteger(pricing.priceCents))
+          || (pricing.keys().hasOnly(['mode', 'startingAtPriceCents'])
+            && pricing.mode == 'starting_at'
+            && isNonNegativeInteger(pricing.startingAtPriceCents))
+          || (pricing.keys().hasOnly(['mode'])
+            && pricing.mode == 'quote')
+        );
+    }
+
+    function isValidOptionalCost(cost) {
+      return cost is map
+        && (
+          (cost.keys().hasOnly(['kind'])
+            && cost.kind == 'unknown')
+          || (cost.keys().hasOnly(['kind', 'amountCents'])
+            && cost.kind == 'known'
+            && isNonNegativeInteger(cost.amountCents))
+        );
+    }
+
+    function isValidServiceTotals(totals) {
+      return totals is map
+        && totals.keys().hasOnly([
+          'serviceRevenueCents', 'productRevenueCents', 'additionalRevenueCents',
+          'discountTotalCents', 'contractedTotalCents'
+        ])
+        && totals.keys().hasAll([
+          'serviceRevenueCents', 'productRevenueCents', 'additionalRevenueCents',
+          'discountTotalCents', 'contractedTotalCents'
+        ])
+        && isNonNegativeInteger(totals.serviceRevenueCents)
+        && isNonNegativeInteger(totals.productRevenueCents)
+        && isNonNegativeInteger(totals.additionalRevenueCents)
+        && isNonNegativeInteger(totals.discountTotalCents)
+        && isNonNegativeInteger(totals.contractedTotalCents);
+    }
+
+    function isValidServiceWorkFinancialSummary(summary) {
+      return summary is map
+        && summary.keys().hasOnly([
+          'grossReceivedCents', 'refundedTotalCents', 'netReceivedCents'
+        ])
+        && summary.keys().hasAll([
+          'grossReceivedCents', 'refundedTotalCents', 'netReceivedCents'
+        ])
+        && isNonNegativeInteger(summary.grossReceivedCents)
+        && isNonNegativeInteger(summary.refundedTotalCents)
+        && isNonNegativeInteger(summary.netReceivedCents)
+        && summary.refundedTotalCents <= summary.grossReceivedCents
+        && summary.netReceivedCents == summary.grossReceivedCents - summary.refundedTotalCents;
+    }
+
+    function isZeroServiceWorkFinancialSummary(summary) {
+      return isValidServiceWorkFinancialSummary(summary)
+        && summary.grossReceivedCents == 0
+        && summary.refundedTotalCents == 0
+        && summary.netReceivedCents == 0;
+    }
+
+    function currentServiceWorkNetReceivedCents() {
+      return resource.data.get('financialSummary', null) is map
+        ? resource.data.financialSummary.netReceivedCents
+        : 0;
+    }
+
+    function isValidServiceShape(uid, serviceId, data) {
+      return data.keys().hasOnly(serviceAllowedFields())
+        && data.keys().hasAll([
+          'id', 'tenantUid', 'name', 'active', 'published',
+          'pricing', 'cost', 'bookingMode', 'createdAt', 'updatedAt'
+        ])
+        && data.id == serviceId
+        && data.tenantUid == uid
+        && data.name is string
+        && data.name.size() > 0
+        && data.name.size() <= 180
+        && data.get('description', '') is string
+        && data.get('description', '').size() <= 2000
+        && data.get('imageUrl', '') is string
+        && data.get('imageUrl', '').size() <= 2000
+        && data.active is bool
+        && data.published is bool
+        && isValidServicePricing(data.pricing)
+        && (!data.keys().hasAny(['durationMinutes'])
+          || (data.durationMinutes is int && data.durationMinutes > 0))
+        && isValidOptionalCost(data.cost)
+        && data.bookingMode in ['none', 'instant', 'request']
+        && data.createdAt is string
+        && data.createdAt.size() > 0
+        && data.createdAt.size() <= 40
+        && data.updatedAt is string
+        && data.updatedAt.size() > 0
+        && data.updatedAt.size() <= 40
+        && data.get('archivedAt', '') is string
+        && data.get('archivedAt', '').size() <= 40;
+    }
+
+    function isValidServiceCreate(uid, serviceId) {
+      return isValidServiceShape(uid, serviceId, request.resource.data);
+    }
+
+    function isValidServiceUpdate(uid, serviceId) {
+      return resource.data.tenantUid == uid
+        && request.resource.data.tenantUid == resource.data.tenantUid
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.createdAt == resource.data.createdAt
+        && isValidServiceShape(uid, serviceId, request.resource.data);
+    }
+
+    function isValidServiceWorkShape(uid, workId, data) {
+      return data.keys().hasOnly(serviceWorkAllowedFields())
+        && data.keys().hasAll([
+          'id', 'tenantUid', 'status', 'origin', 'items', 'totals', 'cost', 'createdAt', 'updatedAt'
+        ])
+        && data.id == workId
+        && data.tenantUid == uid
+        && data.status in ['planned', 'in_progress', 'completed', 'cancelled']
+        && data.origin in ['manual', 'booking', 'quote', 'request']
+        && data.get('customerId', '') is string
+        && data.get('sourceQuoteId', '') is string
+        && data.get('sourceQuoteId', '').size() <= 120
+        && data.get('sourceQuoteVersionId', '') is string
+        && data.get('sourceQuoteVersionId', '').size() <= 120
+        && data.items is list
+        && data.items.size() <= 100
+        && isValidServiceTotals(data.totals)
+        && isValidOptionalCost(data.cost)
+        && data.createdAt is string
+        && data.createdAt.size() > 0
+        && data.createdAt.size() <= 40
+        && data.updatedAt is string
+        && data.updatedAt.size() > 0
+        && data.updatedAt.size() <= 40
+        && data.get('startedAt', '') is string
+        && data.get('startedAt', '').size() <= 40
+        && data.get('completedAt', '') is string
+        && data.get('completedAt', '').size() <= 40
+        && data.get('cancelledAt', '') is string
+        && data.get('cancelledAt', '').size() <= 40
+        && (!data.keys().hasAny(['financialSummary'])
+          || isValidServiceWorkFinancialSummary(data.financialSummary))
+        && ((data.origin == 'quote'
+            && data.get('sourceQuoteId', '') != ''
+            && data.get('sourceQuoteVersionId', '') != '')
+          || (data.origin != 'quote'
+            && data.get('sourceQuoteId', '') == ''
+            && data.get('sourceQuoteVersionId', '') == ''));
+    }
+
+    function isValidServiceWorkCreate(uid, workId) {
+      let data = request.resource.data;
+      return isValidServiceWorkShape(uid, workId, data)
+        && data.origin == 'manual'
+        && data.status == 'planned'
+        && data.keys().hasAll(['financialSummary'])
+        && isZeroServiceWorkFinancialSummary(data.financialSummary)
+        && !data.keys().hasAny(['sourceQuoteId', 'sourceQuoteVersionId'])
+        && !data.keys().hasAny(['startedAt', 'completedAt', 'cancelledAt'])
+        && data.createdAt == data.updatedAt;
+    }
+
+    function isValidServiceWorkUpdate(uid, workId) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return resource.data.tenantUid == uid
+        && request.resource.data.tenantUid == resource.data.tenantUid
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.origin == resource.data.origin
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.get('startedAt', null) == resource.data.get('startedAt', null)
+        && request.resource.data.get('completedAt', null) == resource.data.get('completedAt', null)
+        && request.resource.data.get('cancelledAt', null) == resource.data.get('cancelledAt', null)
+        && request.resource.data.get('sourceQuoteId', '') == resource.data.get('sourceQuoteId', '')
+        && request.resource.data.get('sourceQuoteVersionId', '') == resource.data.get('sourceQuoteVersionId', '')
+        && request.resource.data.get('financialSummary', null) == resource.data.get('financialSummary', null)
+        && changed.hasOnly(['customerId', 'items', 'totals', 'cost', 'updatedAt'])
+        && changed.hasAny(['updatedAt'])
+        && request.resource.data.updatedAt != resource.data.updatedAt
+        && request.resource.data.totals.contractedTotalCents >= currentServiceWorkNetReceivedCents()
+        && isValidServiceWorkShape(uid, workId, request.resource.data);
+    }
+
     function isValidClientCreate(clientId) {
       return request.resource.data.keys().hasOnly(clientAllowedFields())
         && request.resource.data.keys().hasAll(['name'])
@@ -453,6 +774,50 @@ service cloud.firestore {
         allow create: if userOwnsResource(uid) && isValidClientCreate(clientId);
         allow update: if userOwnsResource(uid) && isValidClientUpdate(clientId);
         allow delete: if userOwnsResource(uid);
+      }
+
+      match /services/{serviceId} {
+        allow read: if userOwnsResource(uid);
+        allow create: if userOwnsResource(uid) && isValidServiceCreate(uid, serviceId);
+        allow update: if userOwnsResource(uid) && isValidServiceUpdate(uid, serviceId);
+        allow delete: if false;
+      }
+
+      match /serviceWorks/{workId} {
+        allow read: if userOwnsResource(uid);
+        allow create: if userOwnsResource(uid) && isValidServiceWorkCreate(uid, workId);
+        allow update: if userOwnsResource(uid) && isValidServiceWorkUpdate(uid, workId);
+        allow delete: if false;
+
+        match /payments/{paymentId} {
+          allow read: if userOwnsResource(uid);
+          allow create, update, delete: if false;
+
+          match /refunds/{refundId} {
+            allow read: if userOwnsResource(uid);
+            allow create, update, delete: if false;
+          }
+        }
+      }
+
+      match /quotes/{quoteId} {
+        allow read: if userOwnsResource(uid);
+        allow create: if userOwnsResource(uid) && isValidQuoteCreate(uid, quoteId);
+        allow update: if userOwnsResource(uid) && isValidQuoteUpdate(uid, quoteId);
+        allow delete: if false;
+
+        match /versions/{versionId} {
+          allow read: if userOwnsResource(uid) && isValidQuoteVersionShape(uid, quoteId, versionId, resource.data);
+          allow create, update, delete: if false;
+        }
+      }
+
+      match /quoteCommandIdempotency/{key} {
+        allow read, write: if false;
+      }
+
+      match /servicePaymentCommandIdempotency/{key} {
+        allow read, write: if false;
       }
 
       // SUBCOLLECTION: orders (Encomendas/Pedidos)

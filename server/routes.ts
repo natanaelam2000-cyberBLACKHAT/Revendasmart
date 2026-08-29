@@ -15,6 +15,9 @@ import { registerCreativeProfileRoutes } from "./marketing-pro-creative-profile"
 import { registerProductUnderstandingRoutes } from "./marketing-pro-product-understanding";
 import { registerProductCutoutPhotoroomRoutes } from "./product-cutout-photoroom";
 import { registerProductPhotoEnhancementRoutes } from "./product-photo-enhancement-routes";
+import { registerServiceQuoteRoutes } from "./service-quote-commands";
+import { registerServicePaymentRoutes } from "./service-payment-commands";
+import { registerServiceWorkRoutes } from "./service-work-commands";
 import { isMarketingProRealBackgroundEnabled } from "./marketing-pro-flags";
 import { createGoogleMarketingProBackgroundProvider, isGoogleMarketingProCredentialConfigured } from "./marketing-pro-provider-google";
 import { registerAccountDeletionRoutes } from "./account-deletion";
@@ -489,6 +492,9 @@ export async function registerRoutes(
 
   // RELEASE V1 §7 — melhoria real de foto (Premium/admin); entitlement e ownership revalidados na rota.
   registerProductPhotoEnhancementRoutes(app, requireAuth);
+  registerServiceWorkRoutes(app, requireAuth);
+  registerServiceQuoteRoutes(app, requireAuth);
+  registerServicePaymentRoutes(app, requireAuth);
 
   // RELEASE-03: UID is derived exclusively by requireAuth; request bodies never control ownership.
   registerAccountDeletionRoutes(app, requireAuth);
