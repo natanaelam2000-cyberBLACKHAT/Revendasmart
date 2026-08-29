@@ -10,7 +10,9 @@ const budgets = [
   // PROMOTIONAL-CAMPAIGNS-HOTFIX-02: main já excedia o budget anterior (175 kB) em clean checkout antes
   // deste hotfix (175.51 kB) — o guardrail não representava mais o baseline real do projeto. Recalibrado
   // minimamente (175 -> 177 kB) para refletir o baseline real + o card de imagem deste hotfix (176.31 kB).
-  { label: 'main css', pattern: /^index-.*\.css$/, maxKb: 177 },
+  // SECURE-DRAW-VISUAL-07: 177 -> 178 kB (medido isolado: 177.27 kB — keyframes rs-draw-spin/decelerate/
+  // pulse + telas novas de countdown/globo/reveal). Ver justificativa completa perto de totalBudgets.
+  { label: 'main css', pattern: /^index-.*\.css$/, maxKb: 178 },
   { label: 'entry js', pattern: /^index-.*\.js$/, maxKb: 35 },
   { label: 'dashboard route', pattern: /^dashboard-.*\.js$/, maxKb: 55 },
   // RELEASE-QUALITY-04: onboarding subiu por um deslocamento marginal de chunk (o novo ThemeProvider
@@ -50,8 +52,14 @@ const budgets = [
 // o aumento (CSS: reuso dos tons sky-100/violet-100/bg-primary já gerados, delta zerado; JS: dedup de
 // handleCloseEntries/handleDraw num único runPipelineAction, +2.63 kB -> +2.45 kB). Todo o custo cai nos
 // chunks lazy de /sorteios (close-entries/draw/result), nunca no caminho crítico do vendedor comum.
+// SECURE-DRAW-VISUAL-07 — elevado 2284 -> 2290 kB (medido isolado 2289,74 kB contra origin/main),
+// autorizado condicionalmente à confirmação de boot idêntico — confirmado: 484529 bytes nos dois. A
+// experiência de sorteio (`sorteio-draw-experience.tsx`) é um SEGUNDO nível de lazy dentro de Sorteios já
+// lazy — só baixa quando o admin clica "Realizar sorteio"/"Reproduzir animação", nunca no boot nem no
+// carregamento normal do detalhe da campanha. Sem duplicação a cortar: é uma tela nova de ~250 linhas
+// (countdown/globo/spin/decel/reveal), não uma pequena adição a um fluxo já existente.
 const totalBudgets = {
-  jsKb: 2284,
+  jsKb: 2290,
   jsGzipKb: 700,
 };
 

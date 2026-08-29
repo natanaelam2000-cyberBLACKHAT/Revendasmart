@@ -379,6 +379,48 @@ export interface OfficialDrawResult {
   readonly createdBy: string;
 }
 
+/**
+ * SECURE-DRAW-VISUAL-07 — só decide QUAIS números aparecem decorativamente girando no globo; NUNCA
+ * decide o vencedor (§2 — Math.random/pseudoaleatoriedade aqui é puramente visual). `winningNumber`
+ * SEMPRE está incluído no conjunto retornado, porque a bolinha revelada no final precisa corresponder a
+ * um número realmente renderizado (§7/§20). `randomFn` é injetável só para tornar a função testável sem
+ * depender de Math.random real.
+ */
+export function buildDrawAnimationBalls(
+  numberStart: number,
+  numberEnd: number,
+  winningNumber: number,
+  maxBalls: number,
+  randomFn: () => number = Math.random,
+): number[] {
+  const range = Math.max(1, numberEnd - numberStart + 1);
+  const count = Math.min(Math.max(1, maxBalls), range);
+  const set = new Set<number>([winningNumber]);
+  let guard = 0;
+  while (set.size < count && guard < count * 20) {
+    set.add(numberStart + Math.floor(randomFn() * range));
+    guard += 1;
+  }
+  return Array.from(set);
+}
+
+export type DrawAnimationMode = "new" | "replay";
+
+/**
+ * Em modo "replay" o resultado já é conhecido de antemão — a apresentação nunca chama /draw de novo
+ * (§11/§12). Em modo "new" a apresentação só conhece o resultado depois que o backend responde (§1) —
+ * por isso começa null aqui, nunca o `existingDraw` (que é ignorado/null nesse modo).
+ */
+export function resolveInitialDrawAnimationResult(mode: DrawAnimationMode, existingDraw: OfficialDrawResult | null): OfficialDrawResult | null {
+  return mode === "replay" ? existingDraw : null;
+}
+
+/** §5 — timing padrão (~10.6s de countdown a revelação completa, dentro dos 8–11s sugeridos). */
+export const DRAW_ANIMATION_PHASE_MS = { countdown: 3000, spinning: 4000, decelerating: 1600, revealNumber: 1200, revealWinner: 1200 } as const;
+/** §15 — prefers-reduced-motion: pula o giro contínuo (spinning/decelerating = 0), mantém uma contagem
+ * curta até o resultado, nunca impede o uso do recurso. */
+export const DRAW_ANIMATION_REDUCED_PHASE_MS = { countdown: 900, spinning: 0, decelerating: 0, revealNumber: 500, revealWinner: 500 } as const;
+
 export function isPromotionalAllocationMode(value: unknown): value is PromotionalAllocationMode {
   return value === "customer_choice" || value === "automatic";
 }

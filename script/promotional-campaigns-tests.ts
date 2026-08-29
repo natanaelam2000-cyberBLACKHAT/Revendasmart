@@ -14,10 +14,14 @@ import {
   calculateEntitlement,
   calculateEntitlementWithManualGrants,
   calculateMaxSelectable,
+  buildDrawAnimationBalls,
   calculateTokenRemaining,
   canonicalEligibleSetString,
   countDistinctParticipants,
   formatCampaignNumber,
+  resolveInitialDrawAnimationResult,
+  DRAW_ANIMATION_PHASE_MS,
+  DRAW_ANIMATION_REDUCED_PHASE_MS,
   isCampaignClosable,
   isCampaignDrawable,
   isCampaignPubliclyClaimable,
@@ -263,6 +267,59 @@ function run(): void {
   }
 
   console.log("PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-06 pure-function tests passed: status transitions (closable/drawable), eligible-set construction (sorted, origin-blind, distinct-participant count), eligibleSetHash deterministic and content-sensitive. LEGACY-FINISHED-DRAW-06B: legacy finished status is drawable (active/paused/draft/drawn remain blocked).");
+
+  // ==================================================================================================
+  // SECURE-DRAW-VISUAL-07 §21 — a apresentação NUNCA decide o vencedor; a bolinha final revelada é
+  // sempre `officialDraw.winningNumber`, vindo de fora, nunca calculado aqui.
+  // ==================================================================================================
+  {
+    // §21.1/§21.2/§21.3 — official result recebido => animação final = official winningNumber, testado
+    // com os dois valores exatos citados no ticket (100 e 07).
+    const ballsFor100 = buildDrawAnimationBalls(1, 100, 100, 24);
+    assert.ok(ballsFor100.includes(100), "§21: o número oficial (100) precisa estar entre as bolinhas — é ele que será revelado no final");
+    assert.equal(formatCampaignNumber(100), "100", "§21.2: resultado 100 => final '100'");
+
+    const ballsFor7 = buildDrawAnimationBalls(1, 100, 7, 24);
+    assert.ok(ballsFor7.includes(7), "§21: o número oficial (07) precisa estar entre as bolinhas");
+    assert.equal(formatCampaignNumber(7), "07", "§21.3: resultado 07 => final '07' (dois dígitos)");
+
+    // Determinístico: rodando 50 vezes com Math.random real, o vencedor está SEMPRE presente — nunca uma
+    // corrida de sorte; nunca excede o teto de bolinhas; nunca sai do range da campanha.
+    for (let i = 0; i < 50; i += 1) {
+      const balls = buildDrawAnimationBalls(1, 50, 33, 24);
+      assert.ok(balls.includes(33), "§2: Math.random() decorativo nunca pode fazer o vencedor sumir do globo");
+      assert.ok(balls.length <= 24, "nunca excede o teto de bolinhas decorativas");
+      assert.ok(balls.every((n) => n >= 1 && n <= 50), "nenhuma bolinha decorativa fora do range da campanha");
+    }
+
+    // Range minúsculo (nunca trava em loop infinito tentando preencher mais bolinhas do que existem).
+    const tinyRange = buildDrawAnimationBalls(5, 5, 5, 24);
+    assert.deepEqual(tinyRange, [5], "range de 1 número: só a bolinha vencedora, sem loop infinito");
+
+    // §21.4/§21.5 — existing draw (modo replay) nunca chama draw: o resultado inicial já vem pronto do
+    // officialDraw existente, nunca null (que forçaria uma chamada de rede em modo "new").
+    const fakeDraw = {
+      drawId: "d1", campaignId: "c1", campaignOwnerId: "o1", closedAt: null, drawnAt: "2026-01-01T00:00:00.000Z",
+      eligibleNumberCount: 1, participantCount: 1, algorithm: "crypto.randomInt", algorithmVersion: 1,
+      eligibleSetHash: "hash", winningNumber: 100, winningClientId: "natanael-id",
+      winnerDisplayNameSnapshot: "natanael", prizeNameSnapshot: "Malbec Eau de Parfum último lançamento",
+      prizeImageUrlSnapshot: null, createdBy: "admin",
+    };
+    assert.equal(resolveInitialDrawAnimationResult("replay", fakeDraw), fakeDraw, "§21.4: modo replay parte direto do resultado já existente — nunca dispara uma nova apuração");
+    assert.equal(resolveInitialDrawAnimationResult("new", fakeDraw), null, "§21.5: modo new NUNCA usa um draw pré-existente como se fosse o resultado — só o que o backend responder à chamada real");
+    assert.equal(resolveInitialDrawAnimationResult("new", null), null);
+
+    // §21.9/§15 — reduced-motion pula giro contínuo (spinning/decelerating), mas NUNCA pula a contagem
+    // nem a revelação — o resultado permanece acessível mesmo com a animação reduzida.
+    assert.equal(DRAW_ANIMATION_REDUCED_PHASE_MS.spinning, 0, "§15: reduced-motion pula o giro contínuo do globo");
+    assert.equal(DRAW_ANIMATION_REDUCED_PHASE_MS.decelerating, 0, "§15: reduced-motion pula a desaceleração");
+    assert.ok(DRAW_ANIMATION_REDUCED_PHASE_MS.countdown > 0, "§15: ainda mostra uma contagem curta, nunca pula direto sem nenhum aviso");
+    assert.ok(DRAW_ANIMATION_REDUCED_PHASE_MS.revealNumber > 0 && DRAW_ANIMATION_REDUCED_PHASE_MS.revealWinner > 0, "§15: número e vencedor continuam sendo revelados, só mais rápido");
+    assert.ok(DRAW_ANIMATION_PHASE_MS.spinning > 0 && DRAW_ANIMATION_PHASE_MS.decelerating > 0, "sanity: a experiência normal (motion completo) preserva giro e desaceleração reais");
+    const totalMs = DRAW_ANIMATION_PHASE_MS.countdown + DRAW_ANIMATION_PHASE_MS.spinning + DRAW_ANIMATION_PHASE_MS.decelerating + DRAW_ANIMATION_PHASE_MS.revealNumber + DRAW_ANIMATION_PHASE_MS.revealWinner;
+    assert.ok(totalMs >= 8000 && totalMs <= 11000, `§5: duração total sugerida de 8–11s (medido: ${totalMs}ms)`);
+  }
+  console.log("PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-VISUAL-07 pure-function tests passed: the winning number is always present among the decorative balls regardless of Math.random() (never disappears, never exceeds the ball cap, never leaves the campaign's number range, never infinite-loops on a 1-number range), formatCampaignNumber renders both exact ticket fixtures (100 and 07), replay mode always resolves its initial result from the existing official draw (never starts from null, which would force a real /draw call), new-draw mode never starts from a pre-existing result (only ever from what the backend actually returns), reduced-motion skips the continuous spin/decelerate loop while still keeping a short countdown and a real reveal, and the full-motion timing table totals within the ticket's suggested 8-11s window. (Double-click safety, network-error handling, and reload persistence were verified live in this round's visual QA — see report.)");
 }
 
 run();

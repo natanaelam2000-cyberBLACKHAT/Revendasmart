@@ -542,7 +542,20 @@
   .rs-image-reveal {
     animation: none;
   }
+
+  .rs-draw-spin, .rs-draw-decelerate, .rs-draw-pulse {
+    animation: none !important;
+  }
 }
+
+/* SECURE-DRAW-VISUAL-07 — só 3 keyframes leves (transform/opacity, GPU-friendly), reaproveitadas via
+   className puro (nunca decide o vencedor — só apresenta o resultado já oficial). */
+.rs-draw-spin { animation: rs-draw-spin 0.9s linear infinite; }
+.rs-draw-decelerate { animation: rs-draw-decelerate 1.6s cubic-bezier(0.1, 0.6, 0.2, 1) forwards; }
+.rs-draw-pulse { animation: rs-draw-pulse 1.1s ease-out infinite; }
+@keyframes rs-draw-spin { to { transform: rotate(360deg); } }
+@keyframes rs-draw-decelerate { from { transform: rotate(0deg); } to { transform: rotate(1080deg); } }
+@keyframes rs-draw-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
 
 
 /* User appearance preferences applied through UserSettingsProvider.

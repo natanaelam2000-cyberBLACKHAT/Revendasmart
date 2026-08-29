@@ -20,6 +20,10 @@ import type { EntitlementPolicy, ManualGrantReason, OfficialDrawResult, Promotio
  * campanha"), então separá-la é economia real de carregamento sem custo de duplicar o gate de admin.
  */
 const SorteiosCreate = lazy(() => import("./sorteios-create"));
+/** SECURE-DRAW-VISUAL-07 — só é aberta ao clicar "Realizar sorteio"/"Reproduzir animação" (nunca no
+ * carregamento normal do detalhe da campanha), então fica em chunk próprio pelo mesmo raciocínio de
+ * `SorteiosCreate` acima. */
+const SorteioDrawExperience = lazy(() => import("./sorteio-draw-experience"));
 
 const CARD = "rounded-2xl border border-border/60 bg-white p-4";
 const LABEL = "text-xs font-black uppercase tracking-wide text-muted-foreground";
@@ -335,6 +339,7 @@ function CampaignDetail({ campaignId }: { campaignId: string }) {
   const [changingStatus, setChangingStatus] = useState(false);
   const [draw, setDraw] = useState<OfficialDrawResult | null>(null);
   const [pipelineBusy, setPipelineBusy] = useState(false);
+  const [drawExperience, setDrawExperience] = useState<{ mode: "new" | "replay" } | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -369,7 +374,18 @@ function CampaignDetail({ campaignId }: { campaignId: string }) {
     }
   };
   const handleCloseEntries = () => runPipelineAction("Depois de encerrar, os clientes não poderão escolher novos números.", "close-entries", "Participações encerradas.", "Não foi possível encerrar as participações.");
-  const handleDraw = () => runPipelineAction("Esta ação realizará a apuração oficial da campanha.", "draw", "Sorteio realizado.", "Não foi possível realizar o sorteio.");
+  // SECURE-DRAW-VISUAL-07 — "Realizar sorteio" não chama mais /draw diretamente: abre a experiência
+  // visual, que É QUEM chama /draw internamente e só anima depois de receber o resultado oficial (§1).
+  // A confirmação continua aqui, antes de qualquer chamada de rede, exatamente como antes.
+  const handleDraw = () => {
+    if (drawExperience) return; // duplo clique nunca abre uma segunda experiência
+    if (!window.confirm("Esta ação realizará a apuração oficial da campanha.")) return;
+    setDrawExperience({ mode: "new" });
+  };
+  const handleReplayDraw = () => {
+    if (drawExperience || !draw) return;
+    setDrawExperience({ mode: "replay" });
+  };
 
   const handleStatusChange = async (status: PromotionalCampaignStatus) => {
     setChangingStatus(true);
@@ -450,7 +466,7 @@ function CampaignDetail({ campaignId }: { campaignId: string }) {
               <p className="text-xs font-black text-sky-700">Participações encerradas</p>
               <p className="text-xs text-sky-700">{metrics.numbersClaimed} números elegíveis</p>
               <p className="text-xs text-sky-700">{metrics.participantsCount} participantes</p>
-              <button type="button" disabled={pipelineBusy} onClick={handleDraw} data-testid="button-draw-campaign" className="mt-2 flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-xs font-black text-white disabled:opacity-60">
+              <button type="button" disabled={pipelineBusy || !!drawExperience} onClick={handleDraw} data-testid="button-draw-campaign" className="mt-2 flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-xs font-black text-white disabled:opacity-60">
                 <Ticket className="h-3.5 w-3.5" /> Realizar sorteio
               </button>
             </div>
@@ -461,7 +477,31 @@ function CampaignDetail({ campaignId }: { campaignId: string }) {
               <p className="text-3xl font-black text-violet-700" data-testid="text-winning-number">{formatCampaignNumber(draw.winningNumber)}</p>
               <p className="text-sm font-bold text-violet-700" data-testid="text-winner-name">{draw.winnerDisplayNameSnapshot}</p>
               <p className="text-xs text-violet-700">{draw.prizeNameSnapshot}</p>
+              {/* SECURE-DRAW-VISUAL-07 §11/§12 — nunca chama /draw de novo: só reproduz a apresentação
+                * visual em cima do officialDraw já persistido. */}
+              <button type="button" disabled={!!drawExperience} onClick={handleReplayDraw} data-testid="button-replay-draw" className="mt-3 rounded-full border border-violet-300 px-4 py-1.5 text-[11px] font-black text-violet-700 disabled:opacity-60">
+                Reproduzir animação
+              </button>
             </div>
+          )}
+          {drawExperience && (
+            <Suspense fallback={null}>
+              <SorteioDrawExperience
+                campaignId={campaignId}
+                campaignTitle={campaign.title}
+                numberStart={campaign.numberStart}
+                numberEnd={campaign.numberEnd}
+                mode={drawExperience.mode}
+                existingDraw={drawExperience.mode === "replay" ? draw : null}
+                // BUGFIX (achado no QA visual) — `load()` liga `loading`, e o early-return
+                // `if (loading || !data)` acima troca a árvore inteira por um skeleton, o que
+                // DESMONTARIA esta própria experiência no meio da animação se fosse chamado aqui dentro.
+                // `onDrawComplete` só atualiza o resultado localmente; o refresh completo (status,
+                // métricas, participantes) só acontece quando o usuário FECHA a experiência.
+                onDrawComplete={(newDraw) => setDraw(newDraw)}
+                onClose={() => { setDrawExperience(null); void load(); }}
+              />
+            </Suspense>
           )}
         </div>
 
