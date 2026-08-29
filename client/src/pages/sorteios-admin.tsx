@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { useLocation, useParams } from "wouter";
-import { Ticket, Plus, Minus, ChevronRight, ArrowLeft, Share2, Copy, Play, Pause, CheckCircle2, Ban } from "lucide-react";
+import { Ticket, Plus, Minus, ChevronRight, ArrowLeft, Share2, Copy, Play, Pause, Ban } from "lucide-react";
 import { Layout } from "@/components/layout";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { useAdminAccess } from "@/hooks/useAdminAccess";
@@ -128,10 +128,14 @@ interface Metrics {
 }
 interface DetailResponse { campaign: PromotionalCampaign; metrics: Metrics; participants: Participant[] }
 
+// LEGACY-FINISHED-DRAW-06B §6/§7 — "Finalizar" (PATCH direto para "finished") permitia pular a apuração
+// inteira: uma campanha ativa virava "finished" sem nunca passar por "entries_closed", ficando presa sem
+// acesso a "Realizar sorteio" até este hotfix ensinar o backend a tratar "finished" como também elegível
+// para apuração. Removido daqui para que NENHUMA campanha nova volte a cair nesse estado — o fluxo
+// correto agora é sempre Ativa → Encerrar participações → Realizar sorteio.
 const STATUS_ACTIONS: { status: PromotionalCampaignStatus; label: string; icon: typeof Play }[] = [
   { status: "active", label: "Ativar", icon: Play },
   { status: "paused", label: "Pausar", icon: Pause },
-  { status: "finished", label: "Finalizar", icon: CheckCircle2 },
 ];
 
 /** Linha label/valor reaproveitada entre o resumo de entitlement e o detalhe do participante — evita
@@ -337,7 +341,9 @@ function CampaignDetail({ campaignId }: { campaignId: string }) {
     try {
       const detail = await apiRequest<DetailResponse>(`/api/admin/sorteios/campaigns/${campaignId}`, { auth: true });
       setData(detail);
-      if (detail.campaign.status === "drawn") {
+      // LEGACY-FINISHED-DRAW-06B — "finished" também busca o resultado: pode ser uma campanha legada
+      // sem draw ainda (result: null, mostra o painel de apuração) ou uma que já foi sorteada.
+      if (detail.campaign.status === "drawn" || detail.campaign.status === "finished") {
         const result = await apiRequest<{ draw: OfficialDrawResult | null }>(`/api/admin/sorteios/campaigns/${campaignId}/result`, { auth: true });
         setDraw(result.draw);
       }
@@ -436,7 +442,10 @@ function CampaignDetail({ campaignId }: { campaignId: string }) {
               </button>
             </div>
           )}
-          {campaign.status === "entries_closed" && (
+          {/* LEGACY-FINISHED-DRAW-06B — uma campanha "finished" pelo fluxo antigo (sem draw ainda) mostra
+            * o MESMO painel de apuração pendente que "entries_closed": nunca só "Finalizado" sem saída,
+            * nunca reabre participações, só libera a etapa de apuração que ficou inacessível (§5/§7). */}
+          {(campaign.status === "entries_closed" || (campaign.status === "finished" && !draw)) && (
             <div className="mt-3 rounded-xl bg-sky-100 p-3">
               <p className="text-xs font-black text-sky-700">Participações encerradas</p>
               <p className="text-xs text-sky-700">{metrics.numbersClaimed} números elegíveis</p>
@@ -446,7 +455,7 @@ function CampaignDetail({ campaignId }: { campaignId: string }) {
               </button>
             </div>
           )}
-          {campaign.status === "drawn" && draw && (
+          {(campaign.status === "drawn" || campaign.status === "finished") && draw && (
             <div className="mt-3 rounded-xl bg-violet-100 p-4 text-center" data-testid="draw-result">
               <p className="text-[10px] font-black uppercase tracking-wide text-violet-700">Número sorteado</p>
               <p className="text-3xl font-black text-violet-700" data-testid="text-winning-number">{formatCampaignNumber(draw.winningNumber)}</p>

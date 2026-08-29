@@ -310,9 +310,18 @@ export function isCampaignClosable(status: PromotionalCampaignStatus): boolean {
   return status === "active" || status === "paused";
 }
 
-/** Só pode sortear depois de encerrar — nunca a partir de active/paused/draft/finished. */
+/**
+ * Só pode sortear depois de encerrar — nunca a partir de active/paused/draft.
+ *
+ * LEGACY-FINISHED-DRAW-06B — "finished" também é elegível: campanhas encerradas pelo botão/fluxo antigo
+ * (anterior ao SECURE-DRAW-06) chegam a esse status sem nunca ter passado por "entries_closed", e sem
+ * nenhum resultado oficial persistido. O botão "Finalizar" atalho foi removido da UI (não é mais possível
+ * criar NOVAS campanhas nesse estado sem apuração), mas isto preserva o acesso à apuração para as que já
+ * existem. O chamador (server) só invoca esta função DEPOIS de confirmar que nenhum draw oficial já
+ * existe — aqui só se decide "esse status é compatível com apuração", nunca "já foi sorteado ou não".
+ */
 export function isCampaignDrawable(status: PromotionalCampaignStatus): boolean {
-  return status === "entries_closed";
+  return status === "entries_closed" || status === "finished";
 }
 
 /**

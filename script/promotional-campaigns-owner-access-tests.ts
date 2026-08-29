@@ -916,7 +916,133 @@ async function main() {
     }
   }
 
+  // ==================================================================================================
+  // HOTFIX — LEGACY-FINISHED-DRAW-06B — campanha finalizada pelo fluxo antigo (status "finished", sem
+  // nunca ter passado por "entries_closed", sem draw oficial) precisa continuar acessível para apuração.
+  // ==================================================================================================
+  {
+    const lfCampaign = await postJson("/api/admin/sorteios/campaigns", {
+      title: "Sorteio Legacy Finished", prizeName: "Prêmio Legado", startsAt, endsAt, spendPerEntry: 100, numberCount: 100,
+    }, adminAToken);
+    const lfCampaignId = lfCampaign.body.id as string;
+    const lfSlug = lfCampaign.body.slug as string;
+    await patchJson(`/api/admin/sorteios/campaigns/${lfCampaignId}/status`, { status: "active" }, adminAToken);
+
+    const lfClientId = await makeClientWithSales("legacy-cliente", 300);
+    const lfLink = await postJson(`/api/admin/sorteios/campaigns/${lfCampaignId}/links`, { customerId: lfClientId, selectionLimit: 2 }, adminAToken);
+    await postJson(`/api/public/sorteios/${lfSlug}/claim`, { token: lfLink.body.token, numbers: [10] });
+
+    // Reproduz o bug real: PATCH direto para "finished" pelo fluxo antigo — NUNCA passou por close-entries.
+    await patchJson(`/api/admin/sorteios/campaigns/${lfCampaignId}/status`, { status: "finished" }, adminAToken);
+    const lfBeforeDrawSnap = await db.doc(`promotionalCampaigns/${lfCampaignId}/draws/official`).get();
+    assert.equal(lfBeforeDrawSnap.exists, false, "setup: campanha legada finished sem nenhum draw oficial ainda");
+
+    // ===== legacy finished + no result => draw permitido =====
+    const lfDraw1 = await postJson(`/api/admin/sorteios/campaigns/${lfCampaignId}/draw`, {}, adminAToken);
+    assert.equal(lfDraw1.status, 201, "LEGACY-FINISHED-DRAW-06B: draw precisa ser aceito a partir de status legado finished");
+    assert.equal(lfDraw1.body.alreadyDrawn, false);
+    assert.equal((lfDraw1.body.draw as Record<string, unknown>).winningNumber, 10, "único número elegível — vencedor determinístico");
+    const lfDrawId1 = (lfDraw1.body.draw as Record<string, unknown>).drawId;
+
+    // Após apurar, o status real vira "drawn" (convergindo com o pipeline novo) — confirmar isso também.
+    const lfDetailAfterDraw = await getJson(`/api/admin/sorteios/campaigns/${lfCampaignId}`, adminAToken);
+    assert.equal((lfDetailAfterDraw.body.campaign as Record<string, unknown>).status, "drawn", "após apurar, status converge para 'drawn' mesmo tendo partido de 'finished'");
+
+    // ===== legacy finished + result existente => mesmo resultado, nunca reroll =====
+    // (agora via PATCH direto de volta para "finished", simulando uma chamada legada repetida contra uma
+    // campanha que JÁ tinha sido apurada por este mesmo hotfix — o draw doc já existe, então nem o status
+    // importa mais: a proteção real é a existência do documento oficial.)
+    const lfDraw2 = await postJson(`/api/admin/sorteios/campaigns/${lfCampaignId}/draw`, {}, adminAToken);
+    assert.equal(lfDraw2.status, 200);
+    assert.equal(lfDraw2.body.alreadyDrawn, true);
+    assert.equal((lfDraw2.body.draw as Record<string, unknown>).drawId, lfDrawId1, "LEGACY-FINISHED-DRAW-06B: nunca gera um segundo vencedor, mesmo repetindo a chamada");
+
+    // ===== legacy finished => novos claims bloqueados (nunca reabre participações) =====
+    const lfLink2 = await postJson(`/api/admin/sorteios/campaigns/${lfCampaignId}/links`, { customerId: lfClientId, selectionLimit: 1 }, adminAToken);
+    // entitlement pode estar zerado (1 já usado de um total de 3 automáticos, ainda há saldo — mas o
+    // ponto do teste é o CLAIM em si, não o saldo).
+    if (lfLink2.status === 201) {
+      const lfClaimAfterFinished = await postJson(`/api/public/sorteios/${lfSlug}/claim`, { token: lfLink2.body.token, numbers: [20] });
+      assert.equal(lfClaimAfterFinished.body.ok, false, "LEGACY-FINISHED-DRAW-06B: claim nunca é aceito numa campanha finished/drawn — nunca reabre participações");
+    }
+
+    // ===== outra campanha legacy finished (SEM draw), diferente instância, para isolar dos testes acima =====
+    {
+      const lfCampaign2 = await postJson("/api/admin/sorteios/campaigns", {
+        title: "Sorteio Legacy Finished Zero", prizeName: "Prêmio", startsAt, endsAt, spendPerEntry: 100, numberCount: 100,
+      }, adminAToken);
+      const lfCampaignId2 = lfCampaign2.body.id as string;
+      await patchJson(`/api/admin/sorteios/campaigns/${lfCampaignId2}/status`, { status: "active" }, adminAToken);
+      await patchJson(`/api/admin/sorteios/campaigns/${lfCampaignId2}/status`, { status: "finished" }, adminAToken);
+
+      // ===== zero eligible entries bloqueia mesmo a partir de finished =====
+      const lfZeroDraw = await postJson(`/api/admin/sorteios/campaigns/${lfCampaignId2}/draw`, {}, adminAToken);
+      assert.equal(lfZeroDraw.status, 400);
+      assert.equal(lfZeroDraw.body.code, "NO_ELIGIBLE_ENTRIES");
+      const lfZeroDetail = await getJson(`/api/admin/sorteios/campaigns/${lfCampaignId2}`, adminAToken);
+      assert.equal((lfZeroDetail.body.campaign as Record<string, unknown>).status, "finished", "draw bloqueado por zero elegíveis não muda o status");
+    }
+
+    // ===== active bloqueia draw =====
+    {
+      const lfActive = await postJson("/api/admin/sorteios/campaigns", {
+        title: "Sorteio Ainda Ativo", prizeName: "Prêmio", startsAt, endsAt, spendPerEntry: 100, numberCount: 100,
+      }, adminAToken);
+      await patchJson(`/api/admin/sorteios/campaigns/${lfActive.body.id}/status`, { status: "active" }, adminAToken);
+      const activeDraw = await postJson(`/api/admin/sorteios/campaigns/${lfActive.body.id}/draw`, {}, adminAToken);
+      assert.equal(activeDraw.status, 400);
+      assert.equal(activeDraw.body.code, "CAMPAIGN_NOT_CLOSED", "active continua bloqueado para draw");
+
+      // ===== paused bloqueia draw =====
+      await patchJson(`/api/admin/sorteios/campaigns/${lfActive.body.id}/status`, { status: "paused" }, adminAToken);
+      const pausedDraw = await postJson(`/api/admin/sorteios/campaigns/${lfActive.body.id}/draw`, {}, adminAToken);
+      assert.equal(pausedDraw.status, 400);
+      assert.equal(pausedDraw.body.code, "CAMPAIGN_NOT_CLOSED", "paused continua bloqueado para draw");
+    }
+
+    // ===== entries_closed novo continua permitindo draw normalmente (não quebrado pelo hotfix) =====
+    {
+      const newFlow = await postJson("/api/admin/sorteios/campaigns", {
+        title: "Sorteio Fluxo Novo", prizeName: "Prêmio", startsAt, endsAt, spendPerEntry: 100, numberCount: 100,
+      }, adminAToken);
+      const newFlowId = newFlow.body.id as string;
+      const newFlowSlug = newFlow.body.slug as string;
+      await patchJson(`/api/admin/sorteios/campaigns/${newFlowId}/status`, { status: "active" }, adminAToken);
+      const newFlowClientId = await makeClientWithSales("fluxo-novo-cliente", 100);
+      const newFlowLink = await postJson(`/api/admin/sorteios/campaigns/${newFlowId}/links`, { customerId: newFlowClientId, selectionLimit: 1 }, adminAToken);
+      await postJson(`/api/public/sorteios/${newFlowSlug}/claim`, { token: newFlowLink.body.token, numbers: [5] });
+      await postJson(`/api/admin/sorteios/campaigns/${newFlowId}/close-entries`, {}, adminAToken);
+      const newFlowDraw = await postJson(`/api/admin/sorteios/campaigns/${newFlowId}/draw`, {}, adminAToken);
+      assert.equal(newFlowDraw.status, 201, "NEW_FLOW_SKIPS_DRAW=NO: o fluxo novo (entries_closed) continua funcionando normalmente após o hotfix");
+    }
+
+    // ===== concorrência: 2 draws simultâneos numa campanha legacy finished => 1 resultado oficial =====
+    {
+      const raceCampaign = await postJson("/api/admin/sorteios/campaigns", {
+        title: "Sorteio Legacy Race", prizeName: "Prêmio", startsAt, endsAt, spendPerEntry: 100, numberCount: 100,
+      }, adminAToken);
+      const raceCampaignId = raceCampaign.body.id as string;
+      const raceSlug = raceCampaign.body.slug as string;
+      await patchJson(`/api/admin/sorteios/campaigns/${raceCampaignId}/status`, { status: "active" }, adminAToken);
+      const raceClientId = await makeClientWithSales("legacy-race-cliente", 400);
+      const raceLink = await postJson(`/api/admin/sorteios/campaigns/${raceCampaignId}/links`, { customerId: raceClientId, selectionLimit: 4 }, adminAToken);
+      await postJson(`/api/public/sorteios/${raceSlug}/claim`, { token: raceLink.body.token, numbers: [1, 2, 3, 4] });
+      await patchJson(`/api/admin/sorteios/campaigns/${raceCampaignId}/status`, { status: "finished" }, adminAToken);
+
+      const [raceA, raceB] = await Promise.all([
+        postJson(`/api/admin/sorteios/campaigns/${raceCampaignId}/draw`, {}, adminAToken),
+        postJson(`/api/admin/sorteios/campaigns/${raceCampaignId}/draw`, {}, adminAToken),
+      ]);
+      const raceDrawIdA = (raceA.body.draw as Record<string, unknown>).drawId;
+      const raceDrawIdB = (raceB.body.draw as Record<string, unknown>).drawId;
+      assert.equal(raceDrawIdA, raceDrawIdB, "LEGACY-FINISHED-DRAW-06B: duas requisições concorrentes de draw a partir de finished convergem para 1 único drawId oficial");
+      const raceOfficialSnap = await db.collection(`promotionalCampaigns/${raceCampaignId}/draws`).get();
+      assert.equal(raceOfficialSnap.size, 1, "apenas 1 documento de apuração oficial persistido, nunca 2");
+    }
+  }
+
   server.close();
+  console.log("HOTFIX-LEGACY-FINISHED-DRAW-06B owner-access tests passed: legacy 'finished' campaign (never passed through entries_closed) with no official draw yet accepts /draw and produces a deterministic winner from the actually-claimed numbers, status converges to 'drawn' afterward; a repeated /draw call against an already-drawn legacy campaign returns the identical official result (no reroll, protected by draw-document existence, not by status); a legacy finished campaign never accepts new claims (participations never reopen); zero eligible entries still blocks draw without changing status; active/paused remain blocked for draw exactly as before; the new entries_closed pipeline is untouched by this hotfix; two concurrent draw requests against a legacy finished campaign converge to exactly one official drawId.");
   console.log("PROMOTIONAL-CAMPAIGNS-PARTICIPANT-SYNC-06A owner-access tests passed: registered_sale-only client that generates a link now appears in PARTICIPANTES immediately (materialized in Firestore, not just computed), manual_internal behavior preserved, automatic+manual entries aggregate into a single logical participant (never two docs), a second link for the same client never duplicates the participant or inflates participantsCount, a later claim updates the SAME participant doc (chosen/remaining), revoke preserves the participant, tenant isolation holds (link generation against another tenant's client 404s, no cross-tenant participant leak), a failed link generation (client not found) never leaves a ghost participant, qualifyingSpend/sales are provably untouched by this projection fix, and a pre-existing token-without-participant (the real historical bug, reproduced directly in Firestore) self-heals on campaign-detail load — idempotently, without a destructive migration.");
   console.log("PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-06 owner-access/concurrency tests passed: non-admin close/draw denied, cross-tenant close/draw/result denied, draw before close-entries denied (status unchanged), close-entries from draft denied, zero eligible entries blocks draw (status stays entries_closed), generic status PATCH can never fake entries_closed/drawn and locks after close, claim rejected after close-entries, registered_sale and manual_internal claimed numbers equally eligible, unclaimed numbers excluded from the eligible set, official draw persisted with server-side crypto.randomInt (never Math.random, never a client-supplied winningNumber/winningClientId), eligibleSetHash reproducible from an independent Firestore query, second draw call returns the same official result (no reroll), concurrent draw requests converge to exactly one official drawId, winner name and prize snapshots stay frozen even after the underlying client/campaign is edited afterward.");
   console.log("PROMOTIONAL-CAMPAIGNS-01 owner-access/concurrency tests passed: non-admin create denied, cross-owner detail denied, entitlement computed from real sales (350/100=3), claim confirms atomically, reopening link reflects 0 remaining + own numbers, another customer blocked from an already-claimed number, concurrent claims for the same number resolve to exactly one winner, invalid/revoked token denied, draft/paused/finished campaigns reject claims. LINK-SELECTION-LIMIT-04: link creation blocked with zero entitlement, entitlement preview endpoint, per-token cap independent of global balance, reopening reflects token-scoped remaining, multiple links never jointly overspend, concurrent claims across different links never overspend entitlement, revoke preserves unused rights, legacy tokens without selectionLimit remain fully compatible, tenant isolation on link creation. MANUAL-INTERNAL-05: non-admin denied, spoofed policy ignored (server-authoritative from campaign doc), cross-owner campaign/client denied, invalid quantity denied, idempotent replay never duplicates, qualifyingSpend/sales/stock untouched by manual grants, concurrent claims across manual-funded links never overspend, revoke preserves manual-included balance, ledger immutable across a compensating adjustment, end-to-end §18 fixture (automatic=2, manual=3, claimed=5, remaining=0, qualifyingSpend unchanged, zero extra sales).");

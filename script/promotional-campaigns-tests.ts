@@ -212,7 +212,11 @@ function run(): void {
   assert.equal(isCampaignDrawable("entries_closed"), true, "§8: só sorteia depois de encerrar");
   assert.equal(isCampaignDrawable("active"), false);
   assert.equal(isCampaignDrawable("paused"), false);
+  assert.equal(isCampaignDrawable("draft"), false);
   assert.equal(isCampaignDrawable("drawn"), false, "não sorteia de novo");
+  // LEGACY-FINISHED-DRAW-06B §8 — "finished" pelo fluxo antigo também é elegível para apuração (o server
+  // só chama isto depois de confirmar que nenhum draw oficial já existe — ver testes de integração).
+  assert.equal(isCampaignDrawable("finished"), true, "LEGACY-FINISHED-DRAW-06B: campanha legada finished também pode ser sorteada");
 
   // §24.1/§24.2 — campanha com 5 números claimed, snapshot contém exatamente 5
   {
@@ -258,7 +262,7 @@ function run(): void {
     assert.notEqual(hashA, hashC, "conjunto diferente (19 em vez de 18) produz hash diferente — o hash é sensível ao conteúdo real");
   }
 
-  console.log("PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-06 pure-function tests passed: status transitions (closable/drawable), eligible-set construction (sorted, origin-blind, distinct-participant count), eligibleSetHash deterministic and content-sensitive.");
+  console.log("PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-06 pure-function tests passed: status transitions (closable/drawable), eligible-set construction (sorted, origin-blind, distinct-participant count), eligibleSetHash deterministic and content-sensitive. LEGACY-FINISHED-DRAW-06B: legacy finished status is drawable (active/paused/draft/drawn remain blocked).");
 }
 
 run();
