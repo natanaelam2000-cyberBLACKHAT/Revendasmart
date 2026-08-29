@@ -820,6 +820,28 @@ service cloud.firestore {
         allow read, write: if false;
       }
 
+      // SERV-BOOK-01 — autoridade de concorrência é sempre o servidor (Admin SDK ignora Rules). O client
+      // só pode LER o próprio Hold/Booking já confirmado pelo servidor — nunca criar/alterar/apagar, e
+      // nunca ver o estado interno de ScheduleLock (que decide ownership/expiração de cada segmento de 5
+      // minutos) nem a coleção de idempotência.
+      match /bookingHolds/{holdId} {
+        allow read: if userOwnsResource(uid);
+        allow create, update, delete: if false;
+      }
+
+      match /bookings/{bookingId} {
+        allow read: if userOwnsResource(uid);
+        allow create, update, delete: if false;
+      }
+
+      match /scheduleLocks/{lockId} {
+        allow read, write: if false;
+      }
+
+      match /serviceBookingCommandIdempotency/{key} {
+        allow read, write: if false;
+      }
+
       // SUBCOLLECTION: orders (Encomendas/Pedidos)
       // User can only read/create their own orders. Update is limited to status changes — no other
       // field can be edited from the client. Deletion is disabled: there is no delete UI today.

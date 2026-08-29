@@ -1,0 +1,54 @@
+import { collection, doc, getDoc, getDocs, getFirestore, orderBy, query } from "firebase/firestore";
+import { assertValidBooking, assertValidBookingHold, type Booking, type BookingHold } from "@shared/service-bookings";
+import { getCurrentFirebaseUser } from "./firebase";
+
+/**
+ * SERV-BOOK-01 — leitura somente-leitura para BookingHold/Booking, mesmo padrão de
+ * client/src/lib/service-payments-persistence.ts: nenhum create/update/delete aqui. ScheduleLock e a
+ * coleção de idempotência nunca são expostas ao client (nem para leitura) — ver firestore.rules.
+ */
+function requireCurrentUid(): string {
+  const uid = getCurrentFirebaseUser()?.uid;
+  if (!uid) throw new Error("UNAUTHENTICATED");
+  return uid;
+}
+
+function bookingHoldsCollection(uid: string) {
+  return collection(getFirestore(), "users", uid, "bookingHolds");
+}
+function bookingsCollection(uid: string) {
+  return collection(getFirestore(), "users", uid, "bookings");
+}
+
+function parseHold(value: unknown): BookingHold {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("INVALID_BOOKING_HOLD");
+  return assertValidBookingHold(value as BookingHold);
+}
+function parseBooking(value: unknown): Booking {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("INVALID_BOOKING");
+  return assertValidBooking(value as Booking);
+}
+
+export async function getServiceBookingHold(holdId: string): Promise<BookingHold | null> {
+  const uid = requireCurrentUid();
+  const snapshot = await getDoc(doc(bookingHoldsCollection(uid), holdId));
+  return snapshot.exists() ? parseHold(snapshot.data()) : null;
+}
+
+export async function listServiceBookingHolds(): Promise<BookingHold[]> {
+  const uid = requireCurrentUid();
+  const snapshot = await getDocs(query(bookingHoldsCollection(uid), orderBy("createdAt", "desc")));
+  return snapshot.docs.map((item) => parseHold(item.data()));
+}
+
+export async function getServiceBooking(bookingId: string): Promise<Booking | null> {
+  const uid = requireCurrentUid();
+  const snapshot = await getDoc(doc(bookingsCollection(uid), bookingId));
+  return snapshot.exists() ? parseBooking(snapshot.data()) : null;
+}
+
+export async function listServiceBookings(): Promise<Booking[]> {
+  const uid = requireCurrentUid();
+  const snapshot = await getDocs(query(bookingsCollection(uid), orderBy("createdAt", "desc")));
+  return snapshot.docs.map((item) => parseBooking(item.data()));
+}
