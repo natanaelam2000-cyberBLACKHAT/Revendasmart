@@ -30,6 +30,8 @@ const SettingsMercadoPago = lazy(() => import("@/pages/settings-mercadopago"));
 const Admin = lazy(() => import("@/pages/admin"));
 const SorteiosAdmin = lazy(() => import("@/pages/sorteios-admin"));
 const Subscribe = lazy(() => import("@/pages/subscribe"));
+const ServiceAgenda = lazy(() => import("@/pages/service-agenda"));
+const ServiceAvailabilitySettings = lazy(() => import("@/pages/service-availability-settings"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 
 function LegacyMarketingRedirect() {
@@ -142,6 +144,8 @@ function PrivateRoutes() {
         <Route path="/settings" component={Settings} />
         <Route path="/settings/mercadopago" component={SettingsMercadoPago} />
         <Route path="/subscribe" component={Subscribe} />
+        <Route path="/servicos/agenda" component={ServiceAgenda} />
+        <Route path="/servicos/disponibilidade" component={ServiceAvailabilitySettings} />
         <Route path="/admin" component={Admin} />
         <Route path="/sorteios" component={SorteiosAdmin} />
         <Route path="/sorteios/:campaignId" component={SorteiosAdmin} />

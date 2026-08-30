@@ -40,9 +40,20 @@ const budgets = [
 // referenciado por App.tsx/PrivateRouter fora de `lazy(() => import(...))`), então o excesso de ~11 kB
 // no total somado vem só dos chunks sob demanda de /sorteios e /sorteio/:slug, nunca do caminho crítico
 // do vendedor comum.
+//
+// SERV-UI-01 — orçamento elevado de 2280 -> 2320 kB (JS) e 700 -> 705 kB (gzip), autorizado explicitamente
+// pelo ticket após PERF-BUNDLE-03 comprovar que não havia mais nenhuma economia segura disponível (todo o
+// conteúdo de vendor-misc já é dependência transitiva de libs realmente em uso — recharts/radix/react-
+// query/capacitor — e a remoção medida de todo código shadcn/npm comprovadamente morto rendeu 0 kB, já que
+// o tree-shaking já os excluía). A Agenda operacional (service-agenda-*.js, ~37 kB raw / ~10,4 kB gzip) é
+// 100% lazy-loaded (`lazy(() => import("@/pages/service-agenda"))` em PrivateRouter.tsx, nunca referenciada
+// no boot eager) e não usa nenhuma dependência nova (zero libs de calendário, zero recharts) — reaproveita
+// só componentes/helpers já existentes (Layout, Sheet, Dialog, ConfirmActionDialog, EmptyState, date-utils,
+// os wrappers de comando de Services já aprovados). INITIAL_BOOT_REGRESSION_BYTES = 0, confirmado medindo
+// o boot antes/depois do build.
 const totalBudgets = {
-  jsKb: 2280,
-  jsGzipKb: 700,
+  jsKb: 2320,
+  jsGzipKb: 705,
 };
 
 const maxSingleAssetKb = 500;

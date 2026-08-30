@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, getDocs, getFirestore, orderBy, query } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, getFirestore, orderBy, query, where } from "firebase/firestore";
 import { assertValidBooking, assertValidBookingHold, type Booking, type BookingHold } from "@shared/service-bookings";
 import { getCurrentFirebaseUser } from "./firebase";
 
@@ -50,5 +50,24 @@ export async function getServiceBooking(bookingId: string): Promise<Booking | nu
 export async function listServiceBookings(): Promise<Booking[]> {
   const uid = requireCurrentUid();
   const snapshot = await getDocs(query(bookingsCollection(uid), orderBy("createdAt", "desc")));
+  return snapshot.docs.map((item) => parseBooking(item.data()));
+}
+
+/** SERV-UI-01 §18/§19 — leitura da Agenda: limitada por resource + range temporal (nunca o histórico
+ * inteiro), reaproveitando a mesma coleção/Rules já existentes (nenhum endpoint novo, nenhuma escrita).
+ * `startAt` é indexado (firestore.indexes.json: bookings resourceId+startAt) para este range funcionar
+ * sem scan da coleção inteira. */
+export async function listServiceBookingsForResourceAndRange(
+  resourceId: string,
+  rangeStartAt: string,
+  rangeEndAt: string,
+): Promise<Booking[]> {
+  const uid = requireCurrentUid();
+  const snapshot = await getDocs(query(
+    bookingsCollection(uid),
+    where("resourceId", "==", resourceId),
+    where("startAt", ">=", rangeStartAt),
+    where("startAt", "<", rangeEndAt),
+  ));
   return snapshot.docs.map((item) => parseBooking(item.data()));
 }

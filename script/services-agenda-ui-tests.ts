@@ -1,0 +1,164 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import {
+  addDaysToDateKey,
+  buildAgendaSegments,
+  collapseAdjacentSegments,
+  computeLocalDayRangeUtc,
+  dayOfWeekForDateKeyInTimezone,
+  formatTimeInTimezone,
+  todayDateKey,
+  zonedWallClockToUtcInstant,
+} from "../client/src/lib/service-agenda-helpers";
+import type { Booking } from "../shared/service-bookings";
+import type { ServiceAvailabilityBlock, WeeklyHours } from "../shared/service-availability";
+
+/**
+ * SERV-UI-01 §23 — testes focados da Agenda: helpers puros com testes reais (não só source-text), e
+ * source-text assertions só para o que realmente é "prova estrutural" (UI4/UI5/UI8 — quais comandos são
+ * chamados, nunca escrita direta no Firestore), mesmo padrão já usado no resto do app (nenhuma lib de
+ * testing de componente instalada neste projeto).
+ */
+function read(path: string): string {
+  return readFileSync(path, "utf8");
+}
+
+function closedWeek(): WeeklyHours {
+  return { sunday: [], monday: [], tuesday: [], wednesday: [], thursday: [], friday: [], saturday: [] };
+}
+
+function fixtureBooking(overrides: Partial<Booking> = {}): Booking {
+  return {
+    id: "booking-1", tenantUid: "uid-1", serviceId: "svc-1", resourceId: "default", workId: "work-1",
+    startAt: "2026-08-31T13:00:00.000Z", endAt: "2026-08-31T13:30:00.000Z",
+    status: "confirmed", source: "manual", createdAt: "2026-08-31T00:00:00.000Z", updatedAt: "2026-08-31T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function fixtureBlock(overrides: Partial<ServiceAvailabilityBlock> = {}): ServiceAvailabilityBlock {
+  return {
+    id: "block-1", tenantUid: "uid-1", resourceId: "default",
+    startAt: "2026-08-31T14:00:00.000Z", endAt: "2026-08-31T14:30:00.000Z", createdAt: "2026-08-31T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function run() {
+  // ===== Timezone helpers (base de tudo — precisam estar corretos antes do resto) =====
+  {
+    // 2026-08-31T13:00:00Z em America/Sao_Paulo (UTC-3) é 10:00 local.
+    const instant = zonedWallClockToUtcInstant("2026-08-31", 10 * 60, "America/Sao_Paulo");
+    assert.equal(instant.toISOString(), "2026-08-31T13:00:00.000Z");
+  }
+  {
+    const { rangeStartAt, rangeEndAt } = computeLocalDayRangeUtc("2026-08-31", "America/Sao_Paulo");
+    assert.equal(rangeStartAt, "2026-08-31T03:00:00.000Z", "início do dia local (00:00 SP) em UTC");
+    assert.equal(rangeEndAt, "2026-09-01T03:00:00.000Z", "início do dia seguinte, nunca um range maior (§19)");
+  }
+  assert.equal(addDaysToDateKey("2026-08-31", 1), "2026-09-01");
+  assert.equal(addDaysToDateKey("2026-08-31", -1), "2026-08-30");
+  assert.equal(dayOfWeekForDateKeyInTimezone("2026-08-31", "America/Sao_Paulo"), 1, "2026-08-31 é segunda-feira");
+  assert.equal(dayOfWeekForDateKeyInTimezone("2026-09-06", "America/Sao_Paulo"), 0, "2026-09-06 é domingo");
+  assert.equal(typeof todayDateKey(), "string");
+  assert.match(todayDateKey(), /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(formatTimeInTimezone("2026-08-31T13:00:00.000Z", "America/Sao_Paulo"), "10:00");
+  // §20 — MESMO instante, timezone diferente, horário exibido diferente (nunca o do navegador).
+  assert.equal(formatTimeInTimezone("2026-08-31T13:00:00.000Z", "America/New_York"), "09:00");
+
+  // ===== UI1 — agenda vazia (sem weeklyHours para o dia) não gera segmentos =====
+  {
+    const segments = buildAgendaSegments("2026-09-06", "America/Sao_Paulo", closeWeekWithMonday(), [], []);
+    assert.deepEqual(segments, [], "UI1: dia fechado (domingo) não gera nenhum segmento — a UI mostra o empty state correspondente");
+  }
+  {
+    const segments = buildAgendaSegments("2026-08-31", "America/Sao_Paulo", undefined, [], []);
+    assert.deepEqual(segments, [], "UI1: sem weeklyHours (schedule ausente) também não gera segmentos");
+  }
+
+  // ===== UI2 — Booking aparece no horário correto =====
+  {
+    const booking = fixtureBooking({ startAt: "2026-08-31T13:00:00.000Z", endAt: "2026-08-31T13:30:00.000Z" });
+    const segments = buildAgendaSegments("2026-08-31", "America/Sao_Paulo", closeWeekWithMonday(), [booking], []);
+    const bookedSegments = segments.filter((segment) => segment.status === "booked");
+    assert.ok(bookedSegments.length > 0, "UI2: deve haver ao menos um segmento 'booked'");
+    assert.ok(bookedSegments.every((segment) => segment.booking?.id === booking.id), "UI2: o segmento aponta para o Booking real");
+    assert.equal(formatTimeInTimezone(bookedSegments[0].startAt, "America/Sao_Paulo"), "10:00", "UI2: horário de exibição bate com o startAt real do Booking (10:00 local)");
+  }
+
+  // ===== UI3 — Block aparece como indisponível =====
+  {
+    const block = fixtureBlock({ startAt: "2026-08-31T14:00:00.000Z", endAt: "2026-08-31T14:30:00.000Z" });
+    const segments = buildAgendaSegments("2026-08-31", "America/Sao_Paulo", closeWeekWithMonday(), [], [block]);
+    const blockedSegments = segments.filter((segment) => segment.status === "blocked");
+    assert.ok(blockedSegments.length > 0, "UI3: deve haver ao menos um segmento 'blocked'");
+    assert.ok(blockedSegments.every((segment) => segment.block?.id === block.id), "UI3: o segmento aponta para o Block real");
+  }
+
+  // Booking sempre tem prioridade visual sobre Block quando (por algum motivo) coincidem — nunca esconde
+  // um agendamento confirmado atrás de um bloqueio.
+  {
+    const booking = fixtureBooking({ startAt: "2026-08-31T13:00:00.000Z", endAt: "2026-08-31T13:30:00.000Z" });
+    const block = fixtureBlock({ startAt: "2026-08-31T13:00:00.000Z", endAt: "2026-08-31T13:30:00.000Z" });
+    const segments = buildAgendaSegments("2026-08-31", "America/Sao_Paulo", closeWeekWithMonday(), [booking], [block]);
+    const overlapping = segments.find((segment) => segment.startAt === "2026-08-31T13:00:00.000Z");
+    assert.equal(overlapping?.status, "booked");
+  }
+
+  // collapseAdjacentSegments — segmentos contíguos do MESMO Booking/Block viram uma faixa só.
+  {
+    const booking = fixtureBooking({ startAt: "2026-08-31T13:00:00.000Z", endAt: "2026-08-31T14:00:00.000Z" });
+    const segments = buildAgendaSegments("2026-08-31", "America/Sao_Paulo", closeWeekWithMonday(), [booking], [], 30);
+    const collapsed = collapseAdjacentSegments(segments);
+    const bookedCollapsed = collapsed.filter((segment) => segment.status === "booked");
+    assert.equal(bookedCollapsed.length, 1, "os 2 segmentos de 30min do mesmo Booking colapsam numa única faixa");
+    assert.equal(bookedCollapsed[0].startAt, "2026-08-31T13:00:00.000Z");
+    assert.equal(bookedCollapsed[0].endAt, "2026-08-31T14:00:00.000Z");
+  }
+
+  console.log("Services agenda pure-function tests passed: zoned wall-clock conversion, day range UTC, day-of-week in timezone, time formatting per-resource (never the browser's), empty agenda (UI1), booking rendered at correct time (UI2), block rendered as unavailable (UI3), booking takes visual priority over an overlapping block, and adjacent-segment collapsing.");
+
+  // ===== UI4/UI5/UI6/UI8 — provas estruturais sobre o componente real =====
+  const agendaSource = read("client/src/pages/service-agenda.tsx");
+
+  // UI4 — cancelar chama o comando real, nunca uma escrita direta.
+  assert.match(agendaSource, /import \{ cancelServiceBooking, rescheduleServiceBooking \} from "@\/lib\/service-booking-commands"/, "UI4/UI5: usa os wrappers de comando reais, não uma nova implementação");
+  assert.match(agendaSource, /await cancelServiceBooking\(selectedBooking\.id\)/, "UI4: cancelamento chama cancelServiceBooking com o id real do Booking");
+
+  // UI5 — reagendamento consulta disponibilidade real antes de reagendar.
+  assert.match(agendaSource, /import \{ createServiceAvailabilityBlock, deleteServiceAvailabilityBlock, getServiceAvailability/, "UI5: usa getServiceAvailability real, nunca uma segunda lógica de disponibilidade");
+  assert.match(agendaSource, /await getServiceAvailability\(\{/, "UI5: consulta disponibilidade real antes de listar horários de reagendamento");
+  assert.match(agendaSource, /await rescheduleServiceBooking\(selectedBooking\.id, \{ startAt: candidateStartAt \}\)/, "UI5: reagendamento chama rescheduleServiceBooking com um horário que veio da consulta real");
+
+  // UI6 — race/conflito no reagendamento mostra erro E atualiza a lista de horários (nunca trava num candidato morto).
+  const handleSlotBody = agendaSource.slice(
+    agendaSource.indexOf("const handlePickRescheduleSlot"),
+    agendaSource.indexOf("const openCreateBlock"),
+  );
+  assert.match(handleSlotBody, /catch \(error\) \{/, "UI6: erro de reagendamento é tratado explicitamente");
+  assert.match(handleSlotBody, /setRescheduleError\(agendaErrorMessage\(error\)\)/, "UI6: mensagem de erro traduzida é exibida");
+  assert.match(handleSlotBody, /await getServiceAvailability\(\{ serviceId: selectedBooking\.serviceId, resourceId: selectedBooking\.resourceId, rangeStartAt, rangeEndAt \}\)/, "UI6: após falha, a lista de horários é atualizada de novo (o slot que sumiu não fica mais oferecido)");
+
+  // UI7 — navegação de data/resource recalcula o range consultado (a query de Bookings depende de selectedDate/timeZone).
+  assert.match(agendaSource, /const \{ rangeStartAt, rangeEndAt \} = computeLocalDayRangeUtc\(selectedDate, timeZone\)/, "UI7: range consultado é recalculado a partir da data selecionada e do timezone real do resource");
+  assert.match(agendaSource, /}, \[selectedDate, schedule, timeZone, reloadToken\]\)/, "UI7: o efeito que busca Bookings depende de selectedDate — navegar muda a query");
+
+  // UI8 — nenhuma escrita direta no Firestore para Booking/Block: só os comandos server-side.
+  assert.doesNotMatch(agendaSource, /\bsetDoc\b|\bupdateDoc\b|\bdeleteDoc\b|\baddDoc\b/, "UI8: a Agenda nunca escreve Booking/Block direto no Firestore — só via comandos server-side");
+  assert.doesNotMatch(agendaSource, /from "firebase\/firestore"/, "UI8: nenhum import do SDK de escrita do Firestore nesta página");
+
+  // §0 — rota lazy, sem lib de calendário nova, sem recharts.
+  const routerSource = read("client/src/routers/PrivateRouter.tsx");
+  assert.match(routerSource, /const ServiceAgenda = lazy\(\(\) => import\("@\/pages\/service-agenda"\)\)/, "AGENDA_ROUTE_LAZY: a rota precisa ser lazy-loaded");
+  assert.match(routerSource, /<Route path="\/servicos\/agenda" component=\{ServiceAgenda\} \/>/, "a rota /servicos/agenda precisa estar registrada");
+  assert.doesNotMatch(agendaSource, /recharts/i, "RECHARTS_IMPORTED_IN_AGENDA deve ser NO — nenhum gráfico nesta tela");
+  assert.doesNotMatch(agendaSource, /full-?calendar|react-big-calendar|daypilot|syncfusion/i, "nenhuma lib de calendário pesada foi adicionada (§0)");
+
+  console.log("Services agenda structural tests passed: cancel/reschedule/block-create/block-delete use only the existing server-side commands (never a direct Firestore write for Booking/Block, UI8), reschedule queries real availability before offering slots (UI5) and refreshes candidates after a conflict (UI6), date navigation recomputes the queried range (UI7), the route is lazy-loaded with no calendar library and no recharts import.");
+}
+
+function closeWeekWithMonday(): WeeklyHours {
+  return { ...closedWeek(), monday: [{ start: "08:00", end: "12:00" }, { start: "13:00", end: "18:00" }] };
+}
+
+run();
