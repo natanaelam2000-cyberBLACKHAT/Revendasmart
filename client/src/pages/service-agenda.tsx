@@ -21,6 +21,7 @@ import {
   addDaysToDateKey,
   buildAgendaSegments,
   collapseAdjacentSegments,
+  agendaErrorMessage,
   computeLocalDayRangeUtc,
   formatTimeInTimezone,
   todayDateKey,
@@ -39,23 +40,6 @@ import type { Service, ServiceWork } from "@shared/services";
  */
 const DEFAULT_RESOURCE_ID = "default";
 const browserTimeZone = typeof Intl !== "undefined" ? Intl.DateTimeFormat().resolvedOptions().timeZone : "UTC";
-
-function apiErrorCode(error: unknown): string {
-  return typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code || "") : "";
-}
-
-/** §22 — nunca expõe código/stack interno; traduz os casos conhecidos, cai num texto genérico seguro. */
-function agendaErrorMessage(error: unknown): string {
-  const code = apiErrorCode(error);
-  if (code === "SEGMENT_UNAVAILABLE" || code === "BLOCKED_INTERVAL") return "Esse horário não está mais disponível. Escolha outro.";
-  if (code === "OUTSIDE_WORKING_HOURS") return "Esse horário está fora do expediente configurado.";
-  if (code === "MISALIGNED_SLOT") return "Esse horário não está alinhado aos horários disponíveis.";
-  if (code === "MIN_ADVANCE_VIOLATION" || code === "MAX_ADVANCE_VIOLATION") return "Esse horário está fora da janela de antecedência permitida.";
-  if (code === "WORK_NOT_CANCELABLE" || code === "BOOKING_NOT_RESCHEDULABLE") return "Este atendimento já foi iniciado ou concluído.";
-  if (code === "BLOCK_CONFLICT_WITH_BOOKING") return "Já existe um agendamento confirmado neste horário.";
-  if (code === "BLOCK_CONFLICT_WITH_ACTIVE_HOLD") return "Existe uma reserva temporária ativa neste horário.";
-  return "Não foi possível concluir a ação agora. Tente novamente.";
-}
 
 function statusLabel(status: AgendaSegment["status"]): string {
   if (status === "booked") return "Ocupado";

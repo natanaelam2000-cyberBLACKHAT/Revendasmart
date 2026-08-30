@@ -15,7 +15,17 @@
  * configurado = nada para respeitar), nunca quando um schedule real está presente.
  */
 import type { Booking } from "@shared/service-bookings";
-import type { ServiceAvailabilityBlock, WeeklyHours } from "@shared/service-availability";
+import type { DailyPeriod, DayOfWeek, ServiceAvailabilityBlock, WeeklyHours } from "@shared/service-availability";
+
+/** Só os TIPOS de shared/service-availability.ts são importados aqui (apagados em compile-time, custo
+ * zero de bundle) — nunca as funções/classe de validação (assertValidDailyPeriod/assertNoOverlappingPeriods/
+ * ServiceAvailabilityDomainError), que tornariam aquele módulo alcançável pela primeira vez no client (ele
+ * hoje só é usado por server/service-availability-commands.ts e pelas duas funções puras de shape usadas em
+ * service-availability-persistence.ts). "HH:MM" com zero à esquerda é diretamente comparável como string —
+ * `validateWeeklyDraft` abaixo reimplica a MESMA regra (start<end, sem overlap) com aritmética local
+ * equivalente, documentada como exceção deliberada só por causa do orçamento de bundle (§0/§26 SERV-UI-02),
+ * nunca uma segunda definição de negócio divergente — o servidor continua validando as mesmas regras de
+ * verdade em todo upsertServiceResourceSchedule. */
 
 export type AgendaSegmentStatus = "available" | "booked" | "blocked";
 
@@ -86,7 +96,7 @@ export function formatTimeInTimezone(isoString: string, timeZone: string): strin
   return new Intl.DateTimeFormat("pt-BR", { timeZone, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(isoString));
 }
 
-const DAY_NAMES: readonly string[] = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const DAY_NAMES: readonly DayOfWeek[] = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
 /**
  * §7/§17 — deriva o status visual de cada segmento de exibição (passo de 30min, só para RENDER — nunca a
@@ -140,6 +150,30 @@ export function buildAgendaSegments(
   return segments;
 }
 
+function apiErrorCode(error: unknown): string {
+  return typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code || "") : "";
+}
+
+/** SERV-UI-01 §22 / SERV-UI-02 §18 — nunca expõe código/stack interno; traduz os casos conhecidos do
+ * backend de disponibilidade/booking, cai num texto genérico seguro. Compartilhado entre a Agenda e a tela
+ * de configuração de disponibilidade — as duas conversam com os mesmos comandos, os mesmos códigos de erro
+ * podem aparecer nas duas. */
+export function agendaErrorMessage(error: unknown): string {
+  const code = apiErrorCode(error);
+  if (code === "SEGMENT_UNAVAILABLE" || code === "BLOCKED_INTERVAL") return "Esse horário não está mais disponível. Escolha outro.";
+  if (code === "OUTSIDE_WORKING_HOURS") return "Esse horário está fora do expediente configurado.";
+  if (code === "MISALIGNED_SLOT") return "Esse horário não está alinhado aos horários disponíveis.";
+  if (code === "MIN_ADVANCE_VIOLATION" || code === "MAX_ADVANCE_VIOLATION") return "Esse horário está fora da janela de antecedência permitida.";
+  if (code === "WORK_NOT_CANCELABLE" || code === "BOOKING_NOT_RESCHEDULABLE") return "Este atendimento já foi iniciado ou concluído.";
+  if (code === "BLOCK_CONFLICT_WITH_BOOKING") return "Existe um atendimento agendado nesse período.";
+  if (code === "BLOCK_CONFLICT_WITH_ACTIVE_HOLD") return "Esse horário está temporariamente reservado. Tente novamente em alguns instantes.";
+  if (code === "INVALID_TIMEZONE") return "Fuso horário inválido.";
+  if (code === "INVALID_SLOT_STEP") return "Intervalo entre horários inválido.";
+  if (code === "INVALID_ADVANCE_WINDOW") return "Antecedência inválida.";
+  if (code === "OVERLAPPING_DAILY_PERIODS") return "Há horários de atendimento sobrepostos neste dia.";
+  return "Não foi possível concluir a ação agora. Tente novamente.";
+}
+
 /** Agrupa segmentos contíguos do MESMO status/booking/block numa única faixa visual — evita renderizar
  * dezenas de blocos de 30min idênticos lado a lado para um Booking/Block que ocupa horas seguidas. */
 export function collapseAdjacentSegments(segments: readonly AgendaSegment[]): AgendaSegment[] {
@@ -158,4 +192,73 @@ export function collapseAdjacentSegments(segments: readonly AgendaSegment[]): Ag
     }
   }
   return collapsed;
+}
+
+/**
+ * SERV-UI-02 — rótulos/ordem de exibição do expediente semanal (segunda primeiro, como o ticket pede),
+ * independente da ordem de indexação de DAYS_OF_WEEK (domingo primeiro, alinhada a getUTCDay()).
+ */
+export const DAY_LABELS: Readonly<Record<DayOfWeek, string>> = {
+  monday: "Segunda-feira", tuesday: "Terça-feira", wednesday: "Quarta-feira", thursday: "Quinta-feira",
+  friday: "Sexta-feira", saturday: "Sábado", sunday: "Domingo",
+};
+export const DISPLAY_DAYS: readonly DayOfWeek[] = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+
+export type DraftPeriod = { readonly id: string; readonly start: string; readonly end: string };
+export type WeeklyDraft = Record<DayOfWeek, DraftPeriod[]>;
+
+function generateDraftId(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export function emptyWeeklyDraft(): WeeklyDraft {
+  return { sunday: [], monday: [], tuesday: [], wednesday: [], thursday: [], friday: [], saturday: [] };
+}
+
+/** Schedule carregado do servidor -> rascunho editável (cada período ganha um id local estável para a
+ * lista React — o backend nunca vê/persiste esse id). */
+export function draftFromWeeklyHours(weeklyHours: WeeklyHours): WeeklyDraft {
+  const draft = emptyWeeklyDraft();
+  for (const day of DAY_NAMES) {
+    draft[day] = weeklyHours[day].map((period) => ({ id: generateDraftId(), start: period.start, end: period.end }));
+  }
+  return draft;
+}
+
+/** Rascunho editável -> shape que o comando server-side espera (nunca inclui o id local). */
+export function weeklyHoursFromDraft(draft: WeeklyDraft): WeeklyHours {
+  const result = {} as Record<DayOfWeek, readonly DailyPeriod[]>;
+  for (const day of DAY_NAMES) {
+    result[day] = draft[day].map(({ start, end }) => ({ start, end }));
+  }
+  return result as WeeklyHours;
+}
+
+/**
+ * §6/§7 — valida ordem (start<end) e overlap por dia ANTES de enviar ao servidor: a MESMA regra de negócio
+ * que shared/service-availability.ts's assertValidDailyPeriod/assertNoOverlappingPeriods aplicam
+ * server-side, só reimplementada com aritmética local em vez de importar essas funções (ver nota de
+ * bundle no topo do arquivo) — nunca uma definição DIVERGENTE. "HH:MM" com dois dígitos e zero à esquerda
+ * é diretamente comparável como string (a mesma ordem lexicográfica é a ordem cronológica do dia). O
+ * servidor continua sendo a autoridade final — esta checagem é só UX, roda de novo (com autoridade) no
+ * upsertServiceResourceSchedule. Retorna a mensagem amigável do primeiro dia inválido, ou `null` se tudo
+ * estiver correto.
+ */
+export function validateWeeklyDraft(draft: WeeklyDraft): string | null {
+  for (const day of DAY_NAMES) {
+    const periods = draft[day];
+    for (const period of periods) {
+      if (period.end <= period.start) {
+        return `${DAY_LABELS[day]}: confira o início e o fim de cada período (o fim precisa vir depois do início).`;
+      }
+    }
+    const sorted = [...periods].sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+    for (let i = 1; i < sorted.length; i += 1) {
+      if (sorted[i].start < sorted[i - 1].end) {
+        return `${DAY_LABELS[day]}: há horários de atendimento sobrepostos neste dia.`;
+      }
+    }
+  }
+  return null;
 }

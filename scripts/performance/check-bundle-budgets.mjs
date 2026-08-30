@@ -51,9 +51,18 @@ const budgets = [
 // só componentes/helpers já existentes (Layout, Sheet, Dialog, ConfirmActionDialog, EmptyState, date-utils,
 // os wrappers de comando de Services já aprovados). INITIAL_BOOT_REGRESSION_BYTES = 0, confirmado medindo
 // o boot antes/depois do build.
+//
+// SERV-UI-02 — orçamento elevado de 2320 -> 2333 kB (JS) e 705 -> 710 kB (gzip), autorizado explicitamente
+// pelo ticket após uma auditoria real: a única ineficiência genuína encontrada (um <Select> do
+// @radix-ui/react-select nunca usado em nenhuma outra tela deste app, que puxaria vendor-radix de ~35 para
+// ~54 kB só por essa tela) já foi corrigida trocando para <select> nativo — sem essa correção o excesso
+// teria sido de ~35 kB em vez de ~13 kB. O restante (client/src/pages/service-availability-settings.tsx,
+// ~11,4 kB, e as novas funções puras de rascunho de expediente em service-agenda-helpers.ts, ~2,7 kB) é
+// conteúdo real da tela de configuração de disponibilidade (editor de expediente semanal + folgas/
+// bloqueios), 100% lazy-loaded, sem nenhuma dependência nova. INITIAL_BOOT_REGRESSION_BYTES = 0.
 const totalBudgets = {
-  jsKb: 2320,
-  jsGzipKb: 705,
+  jsKb: 2333,
+  jsGzipKb: 710,
 };
 
 const maxSingleAssetKb = 500;
