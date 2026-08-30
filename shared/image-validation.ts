@@ -176,6 +176,18 @@ export const CUTOUT_UPLOAD_LIMITS: ImageUploadLimits = {
   minDimensionPx: IMAGE_UPLOAD_MIN_DIMENSION_PX,
 };
 
+/** PRODUCT-THUMBNAIL-01 — miniatura de produto (client/src/pages/add-product.tsx comprime para no máx.
+ * 320×320 antes de enviar). Limite bem mais apertado que o upload principal: nunca confia que o cliente
+ * comprimiu corretamente — um "thumbnail" de verdade nunca deveria passar de ~150KB/menos de 1 megapixel;
+ * qualquer coisa maior é rejeitada aqui, mesmo que o magic-byte/formato estejam corretos. */
+export const THUMBNAIL_UPLOAD_MAX_BYTES = 150 * 1024;
+export const THUMBNAIL_UPLOAD_MAX_MEGAPIXELS = 1;
+export const THUMBNAIL_UPLOAD_LIMITS: ImageUploadLimits = {
+  maxBytes: THUMBNAIL_UPLOAD_MAX_BYTES,
+  maxMegapixels: THUMBNAIL_UPLOAD_MAX_MEGAPIXELS,
+  minDimensionPx: IMAGE_UPLOAD_MIN_DIMENSION_PX,
+};
+
 export type ImageUploadRejectionReason =
   | "empty"
   | "too-large"

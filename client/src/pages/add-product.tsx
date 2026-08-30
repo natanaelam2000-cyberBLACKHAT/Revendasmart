@@ -170,14 +170,29 @@ function logProductSaveDiagnostic(event: string, context: Record<string, unknown
   logTelemetryEvent(event as any, context as any).catch(() => {});
 }
 
+type UploadedProductAsset = { kind: "product" | "product-thumbnail"; storagePath: string };
+
 /** RELEASE-18: storage.rules nega delete direto do client nestes paths — rollback de upload (Firestore
- * write seguinte falhou) precisa passar pelo endpoint server-side, igual ao upload em si. */
-async function cleanupUploadedProductImages(productId: string, token: string, paths: string[]) {
-  if (!paths.length) return;
+ * write seguinte falhou) precisa passar pelo endpoint server-side, igual ao upload em si.
+ * PRODUCT-THUMBNAIL-01: cada entrada carrega seu próprio `kind` (imagem principal ou miniatura) — os dois
+ * paths vivem em namespaces diferentes (`products/` vs `product-thumbnails/`), então o delete precisa
+ * saber qual dos dois para resolver o path corretamente no servidor (ver `storagePathFor` em
+ * server/uploads.ts). */
+async function cleanupUploadedProductImages(productId: string, token: string, assets: UploadedProductAsset[]) {
+  if (!assets.length) return;
   await Promise.allSettled(
-    paths.map((storagePath) => deleteImageViaServer({ kind: "product", targetId: productId, storagePath, token })),
+    assets.map(({ kind, storagePath }) => deleteImageViaServer({ kind, targetId: productId, storagePath, token })),
   );
 }
+
+/** PRODUCT-THUMBNAIL-01 — dimensões deliberadamente bem menores que a imagem principal (1200×1200): um
+ * card/lista de produto nunca renderiza a miniatura maior que ~160-200px de lado mesmo em telas de alto
+ * DPR (2-3x), então 320px de lado já cobre isso com folga sem desperdiçar banda/Storage. targetSize baixo
+ * (60KB) porque compressImage já teria um fallback de qualidade decrescente se não coubesse — na prática
+ * uma imagem 320×320 em webp/jpeg de qualidade 0.75 fica muito abaixo disso. */
+const THUMBNAIL_MAX_DIMENSION = 320;
+const THUMBNAIL_QUALITY = 0.75;
+const THUMBNAIL_TARGET_BYTES = 60 * 1024;
 
 interface ProductFormData {
   name: string;
@@ -191,6 +206,8 @@ interface ProductFormData {
   description: string;
   imageUrl: string;
   storagePath: string;
+  thumbnailUrl: string;
+  thumbnailStoragePath: string;
   extras: Record<string, string>;
   isFeatured: boolean;
   isOnSale: boolean;
@@ -283,6 +300,8 @@ const [, setLocation] = useLocation();
   description: "",
   imageUrl: "",
   storagePath: "",
+  thumbnailUrl: "",
+  thumbnailStoragePath: "",
   extras: {}, // ✅ CORRETO
   isFeatured: false,
   isOnSale: false,
@@ -393,6 +412,8 @@ const [, setLocation] = useLocation();
                 description: product.description || "",
                 imageUrl: product.imageUrl || "",
                 storagePath: product.storagePath || "",
+                thumbnailUrl: product.thumbnailUrl || "",
+                thumbnailStoragePath: product.thumbnailStoragePath || "",
                 extras: product.extras || {},
                 isFeatured: product.isFeatured || false,
                 isOnSale: product.isOnSale || false,
@@ -491,7 +512,7 @@ const [, setLocation] = useLocation();
     if (isSaving) return;
 
     let saveStage: ProductSaveStage = "unknown";
-    const uploadedPaths: string[] = [];
+    const uploadedAssets: UploadedProductAsset[] = [];
     let attemptedPayload: Record<string, unknown> | undefined;
     let productPathUid = "";
     setIsSaving(true);
@@ -543,6 +564,8 @@ const [, setLocation] = useLocation();
 
       let imageUrl = formData.imageUrl || "";
       let storagePath = formData.storagePath || "";
+      let thumbnailUrl = formData.thumbnailUrl || "";
+      let thumbnailStoragePath = formData.thumbnailStoragePath || "";
       const file = selectedFileRef.current;
 
       if (file) {
@@ -555,14 +578,45 @@ const [, setLocation] = useLocation();
           if (!token) throw new Error("Not authenticated");
           const result = await uploadImageViaServer({ kind: "product", targetId: productId, blob: file, token });
           storagePath = result.storagePath;
-          uploadedPaths.push(storagePath);
+          uploadedAssets.push({ kind: "product", storagePath });
           imageUrl = result.downloadUrl;
+
+          // PRODUCT-THUMBNAIL-01: miniatura é otimização, nunca requisito para salvar o produto — uma
+          // falha aqui só decai para thumbnailUrl/thumbnailStoragePath ausentes (§10), nunca bloqueia o
+          // fluxo principal nem mostra erro fatal ao vendedor. Nova imagem sempre gera nova miniatura
+          // (nunca herda a miniatura antiga junto de uma imagem principal nova, §13).
+          const previousThumbnailStoragePath = thumbnailStoragePath;
+          try {
+            const thumbCompressed = await compressImage(file, THUMBNAIL_MAX_DIMENSION, THUMBNAIL_MAX_DIMENSION, THUMBNAIL_QUALITY, THUMBNAIL_TARGET_BYTES, "image/webp");
+            if (thumbCompressed) {
+              const thumbResult = await uploadImageViaServer({ kind: "product-thumbnail", targetId: productId, blob: thumbCompressed.blob, token });
+              thumbnailStoragePath = thumbResult.storagePath;
+              uploadedAssets.push({ kind: "product-thumbnail", storagePath: thumbnailStoragePath });
+              thumbnailUrl = thumbResult.downloadUrl;
+              // §14 — troca de formato (thumb-v1.jpg <-> thumb-v1.webp): o novo save já sobrescreveu o
+              // path canônico atual; a variante da extensão ANTIGA (se existir e for diferente) fica
+              // órfã e precisa ser removida — best-effort, nunca bloqueia o salvamento.
+              if (previousThumbnailStoragePath && previousThumbnailStoragePath !== thumbnailStoragePath) {
+                deleteImageViaServer({ kind: "product-thumbnail", targetId: productId, storagePath: previousThumbnailStoragePath, token }).catch(() => {});
+              }
+            } else {
+              thumbnailUrl = "";
+              thumbnailStoragePath = "";
+            }
+          } catch (thumbErr) {
+            const thumbErrorCode = thumbErr instanceof ServerUploadError ? (thumbErr.reason || thumbErr.code) : getErrorCode(thumbErr);
+            logTelemetryEvent("add_product_thumbnail_upload_failed" as any, { stage: "thumbnail_upload", errorCode: thumbErrorCode, productType: activeNicho }).catch(() => {});
+            thumbnailUrl = "";
+            thumbnailStoragePath = "";
+          }
         } catch (uploadErr) {
           const errorCode = uploadErr instanceof ServerUploadError ? (uploadErr.reason || uploadErr.code) : getErrorCode(uploadErr);
           logTelemetryEvent("add_product_image_upload_failed" as any, { stage: "upload", errorCode, hasImage: true, productType: activeNicho }).catch(() => {});
           setUploadError(getProductSaveErrorMessage(uploadErr, "storage_upload"));
           imageUrl = "";
           storagePath = "";
+          thumbnailUrl = "";
+          thumbnailStoragePath = "";
         }
       }
 
@@ -570,7 +624,10 @@ const [, setLocation] = useLocation();
         setLocalBrandSuggestions((current) => saveLocalBrandSuggestion(activeNicho, normalizedBrand, current));
       }
 
-      const productData = buildProductCreatePayload({ formData, productName, normalizedBrand, category, costPrice, salePrice, stock, imageUrl, storagePath, activeNicho });
+      const productData = buildProductCreatePayload({
+        formData, productName, normalizedBrand, category, costPrice, salePrice, stock, imageUrl, storagePath, activeNicho,
+        ...(thumbnailUrl && thumbnailStoragePath ? { thumbnailUrl, thumbnailStoragePath } : {}),
+      });
       attemptedPayload = { ...productData, id: id || productId };
       // RELEASE-QUALITY-05 §8: em EDIÇÃO, nunca grava o estoque como valor absoluto — uma venda (em
       // qualquer dispositivo) pode ter decrementado o estoque real entre o formulário carregar e o
@@ -590,10 +647,10 @@ const [, setLocation] = useLocation();
           await setDoc(productRef, attemptedPayload);
         }
       } catch (writeErr) {
-        if (uploadedPaths.length) {
+        if (uploadedAssets.length) {
           saveStage = "storage_cleanup";
           const cleanupToken = await currentUser.getIdToken().catch(() => "");
-          if (cleanupToken) await cleanupUploadedProductImages(productId, cleanupToken, uploadedPaths);
+          if (cleanupToken) await cleanupUploadedProductImages(productId, cleanupToken, uploadedAssets);
           saveStage = id ? "firestore_update" : "firestore_create";
         }
         throw writeErr;

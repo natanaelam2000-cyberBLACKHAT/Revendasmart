@@ -31,6 +31,16 @@ service firebase.storage {
       allow write: if false;
     }
 
+    // PRODUCT-THUMBNAIL-01 — miniatura de produto, path irmão dedicado (mesmo raciocínio do
+    // product-cutouts acima: nunca aninhar em products/**, que herdaria a regra mais larga por união).
+    // SERVER_WRITE_ONLY: só `server/uploads.ts` (kind "product-thumbnail") grava aqui, via Admin SDK.
+    // Leitura pública porque catálogo/cards consomem thumbnailUrl sem autenticação, mesmo padrão da
+    // imagem principal do produto.
+    match /users/{uid}/product-thumbnails/{productId}/{fileName} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     match /users/{uid}/branding/{allPaths=**} {
       allow read: if true;
       allow write: if false;
