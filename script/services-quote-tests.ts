@@ -32,6 +32,17 @@ function tenantUid(): string {
   return `services-quote-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/** TEST-FIX-QUOTE-01 — draftValidUntil precisa estar no futuro no momento em que sendQuoteCommand roda de
+ * verdade (contra o relógio real do processo), então nunca pode ser uma data absoluta fixa: ela expiraria
+ * assim que o calendário a alcançasse (era exatamente isso que quebrava com "2026-08-30T00:00:00.000Z").
+ * Margem ampla (7 dias) para nunca ficar perigosamente perto do presente. */
+function isoDaysFromNow(days: number): string {
+  return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+}
+/** Único valor reusado em todos os fixtures de "draftValidUntil válido" deste arquivo — calculado uma vez
+ * no carregamento do módulo, nunca espalhando Date.now() por cada chamada de seedQuote. */
+const FUTURE_DRAFT_VALID_UNTIL = isoDaysFromNow(7);
+
 function omitUndefined<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, fieldValue]) => typeof fieldValue !== "undefined")) as T;
 }
@@ -143,7 +154,7 @@ async function run() {
   {
     const uid = tenantUid();
     const quoteId = "quote-send-replay";
-    await seedQuote(uid, quoteId, { draftValidUntil: "2026-08-30T00:00:00.000Z" });
+    await seedQuote(uid, quoteId, { draftValidUntil: FUTURE_DRAFT_VALID_UNTIL });
     const sent = await sendQuoteCommand(db, uid, quoteId, "send-k1");
     const replay = await sendQuoteCommand(db, uid, quoteId, "send-k1");
     assertSameResult(replay, sent, true);
@@ -157,7 +168,7 @@ async function run() {
   {
     const uid = tenantUid();
     const quoteId = "quote-versioning";
-    await seedQuote(uid, quoteId, { draftValidUntil: "2026-08-30T00:00:00.000Z" });
+    await seedQuote(uid, quoteId, { draftValidUntil: FUTURE_DRAFT_VALID_UNTIL });
     const sentV1 = await sendQuoteCommand(db, uid, quoteId, "send-v1");
     const version1 = await getVersion(uid, quoteId, "version-1");
     const revised = await beginQuoteRevisionCommand(db, uid, quoteId, "version-1", "revise-k1");
@@ -191,7 +202,7 @@ async function run() {
   {
     const uid = tenantUid();
     const quoteId = "quote-stale-accept";
-    await seedQuote(uid, quoteId, { draftValidUntil: "2026-08-30T00:00:00.000Z" });
+    await seedQuote(uid, quoteId, { draftValidUntil: FUTURE_DRAFT_VALID_UNTIL });
     await sendQuoteCommand(db, uid, quoteId, "send-v1");
     await beginQuoteRevisionCommand(db, uid, quoteId, "version-1", "revise-v1");
     const current = await getQuote(uid, quoteId);
@@ -220,7 +231,7 @@ async function run() {
   {
     const uid = tenantUid();
     const quoteId = "quote-reject";
-    await seedQuote(uid, quoteId, { draftValidUntil: "2026-08-30T00:00:00.000Z" });
+    await seedQuote(uid, quoteId, { draftValidUntil: FUTURE_DRAFT_VALID_UNTIL });
     await sendQuoteCommand(db, uid, quoteId, "send-reject");
     const rejected = await rejectQuoteCommand(db, uid, quoteId, "version-1", "reject-k1");
     const replay = await rejectQuoteCommand(db, uid, quoteId, "version-1", "reject-k1");
@@ -244,7 +255,7 @@ async function run() {
   {
     const uid = tenantUid();
     const quoteId = "quote-cancel-sent";
-    await seedQuote(uid, quoteId, { draftValidUntil: "2026-08-30T00:00:00.000Z" });
+    await seedQuote(uid, quoteId, { draftValidUntil: FUTURE_DRAFT_VALID_UNTIL });
     await sendQuoteCommand(db, uid, quoteId, "send-cancel");
     const cancelled = await cancelQuoteCommand(db, uid, quoteId, "cancel-sent");
     assert.equal(cancelled.resultingStatus, "cancelled");
@@ -255,7 +266,7 @@ async function run() {
   {
     const uid = tenantUid();
     const quoteId = "quote-convert";
-    await seedQuote(uid, quoteId, { draftValidUntil: "2026-08-30T00:00:00.000Z", customerId: "client-1" });
+    await seedQuote(uid, quoteId, { draftValidUntil: FUTURE_DRAFT_VALID_UNTIL, customerId: "client-1" });
     await sendQuoteCommand(db, uid, quoteId, "send-convert");
     await acceptQuoteCommand(db, uid, quoteId, "version-1", "accept-convert");
     const converted = await convertAcceptedQuoteToWorkCommand(db, uid, quoteId, "convert-k1");
@@ -282,7 +293,7 @@ async function run() {
   {
     const uid = tenantUid();
     const quoteId = "quote-replay-after-later-state";
-    await seedQuote(uid, quoteId, { draftValidUntil: "2026-08-30T00:00:00.000Z" });
+    await seedQuote(uid, quoteId, { draftValidUntil: FUTURE_DRAFT_VALID_UNTIL });
     const sendV1 = await sendQuoteCommand(db, uid, quoteId, "send-k1");
     await beginQuoteRevisionCommand(db, uid, quoteId, "version-1", "revise-k2");
     const current = await getQuote(uid, quoteId);
@@ -302,15 +313,15 @@ async function run() {
   {
     const uid = tenantUid();
     const quoteId = "quote-action-conflict";
-    await seedQuote(uid, quoteId, { draftValidUntil: "2026-08-30T00:00:00.000Z" });
+    await seedQuote(uid, quoteId, { draftValidUntil: FUTURE_DRAFT_VALID_UNTIL });
     await sendQuoteCommand(db, uid, quoteId, "same-key");
     await assert.rejects(() => cancelQuoteCommand(db, uid, quoteId, "same-key"), hasCode("IDEMPOTENCY_CONFLICT"));
   }
 
   {
     const uid = tenantUid();
-    await seedQuote(uid, "quote-a", { draftValidUntil: "2026-08-30T00:00:00.000Z" });
-    await seedQuote(uid, "quote-b", { draftValidUntil: "2026-08-30T00:00:00.000Z" });
+    await seedQuote(uid, "quote-a", { draftValidUntil: FUTURE_DRAFT_VALID_UNTIL });
+    await seedQuote(uid, "quote-b", { draftValidUntil: FUTURE_DRAFT_VALID_UNTIL });
     await sendQuoteCommand(db, uid, "quote-a", "same-key");
     await assert.rejects(() => sendQuoteCommand(db, uid, "quote-b", "same-key"), hasCode("IDEMPOTENCY_CONFLICT"));
   }
@@ -325,7 +336,7 @@ async function run() {
   {
     const uid = tenantUid();
     const quoteId = "quote-idempotency-count";
-    await seedQuote(uid, quoteId, { draftValidUntil: "2026-08-30T00:00:00.000Z" });
+    await seedQuote(uid, quoteId, { draftValidUntil: FUTURE_DRAFT_VALID_UNTIL });
     await sendQuoteCommand(db, uid, quoteId, "count-send");
     await beginQuoteRevisionCommand(db, uid, quoteId, "version-1", "count-revise");
     const idemDocs = await getIdempotencyDocs(uid);
