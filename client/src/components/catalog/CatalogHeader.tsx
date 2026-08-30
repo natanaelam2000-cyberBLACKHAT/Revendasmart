@@ -16,7 +16,7 @@ export function CatalogHeader({ mode, storeName, storeLogoUrl, searchTerm, onSea
   const [logoFailed, setLogoFailed] = useState(false);
 
   return (
-    <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-xl">
+    <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-xl" data-catalog-header-mode={mode}>
       <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-2.5 sm:px-6">
         <div className="flex min-w-0 shrink-0 items-center gap-2">
           {storeLogoUrl && !logoFailed && (
@@ -44,7 +44,11 @@ export function CatalogHeader({ mode, storeName, storeLogoUrl, searchTerm, onSea
           />
         </div>
 
-        {mode === "seller" ? (
+        {/* CATALOG-GOLDEN-RESTORE-05 §1/§3 — no commit histórico (6de2c85) Compartilhar e Carrinho
+            apareciam JUNTOS, em qualquer contexto (`mode`); restaurado fielmente, sem a exclusividade
+            "seller vê só um, público vê só o outro" que um sprint posterior tinha introduzido. `mode`
+            permanece na prop (identidade visual/futuro uso), só não decide mais quais botões aparecem. */}
+        <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
             onClick={onShareCatalog}
@@ -53,7 +57,6 @@ export function CatalogHeader({ mode, storeName, storeLogoUrl, searchTerm, onSea
           >
             <Share2 className="h-4 w-4" /> <span className="hidden sm:inline">Compartilhar</span>
           </button>
-        ) : (
           <button
             type="button"
             onClick={onOpenCart}
@@ -64,7 +67,7 @@ export function CatalogHeader({ mode, storeName, storeLogoUrl, searchTerm, onSea
             <ShoppingCart className="h-4 w-4" />
             {cartCount > 0 && <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[9px] font-black text-white ring-2 ring-white">{cartCount}</span>}
           </button>
-        )}
+        </div>
       </div>
     </header>
   );

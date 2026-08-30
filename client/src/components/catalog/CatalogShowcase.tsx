@@ -265,9 +265,9 @@ export function CatalogShowcase({
       <main className="mx-auto max-w-6xl space-y-6 pb-28 pt-4">
         <NicheSelector experience={experience} activeNicheId={activeNicheId} onChange={(nicheId) => { setActiveNicheId(nicheId); onCategoryChange("todos"); }} />
 
-        <CatalogProductRail title="Ofertas do dia" products={offersProducts} showPrice={showPrice} showStock={showStock} onSelectProduct={context === "public" ? setDetailProduct : undefined} onAddToCart={context === "public" ? onAddToCart : undefined} onUpdateQuantity={onUpdateQuantity} cartQuantities={cartQuantities} />
-        <CatalogProductRail title="Recomendados para você" products={recommendedProducts} showPrice={showPrice} showStock={showStock} onSelectProduct={context === "public" ? setDetailProduct : undefined} onAddToCart={context === "public" ? onAddToCart : undefined} onUpdateQuantity={onUpdateQuantity} cartQuantities={cartQuantities} />
-        <CatalogProductRail title="Produtos mais vendidos" products={bestSellerProducts} showPrice={showPrice} showStock={showStock} onSelectProduct={context === "public" ? setDetailProduct : undefined} onAddToCart={context === "public" ? onAddToCart : undefined} onUpdateQuantity={onUpdateQuantity} cartQuantities={cartQuantities} />
+        <CatalogProductRail title="Ofertas do dia" products={offersProducts} showPrice={showPrice} showStock={showStock} onSelectProduct={context === "public" ? setDetailProduct : undefined} onAddToCart={onAddToCart} onUpdateQuantity={onUpdateQuantity} cartQuantities={cartQuantities} />
+        <CatalogProductRail title={context === "public" ? "Recomendados para você" : "Destaques"} products={recommendedProducts} showPrice={showPrice} showStock={showStock} onSelectProduct={context === "public" ? setDetailProduct : undefined} onAddToCart={onAddToCart} onUpdateQuantity={onUpdateQuantity} cartQuantities={cartQuantities} />
+        <CatalogProductRail title="Produtos mais vendidos" products={bestSellerProducts} showPrice={showPrice} showStock={showStock} onSelectProduct={context === "public" ? setDetailProduct : undefined} onAddToCart={onAddToCart} onUpdateQuantity={onUpdateQuantity} cartQuantities={cartQuantities} />
 
         {categoryOptions.length > 0 && (
           <CatalogCategoryRail categories={categoryOptions} selectedCategory={effectiveCategory} onSelectCategory={onCategoryChange} />
@@ -287,7 +287,7 @@ export function CatalogShowcase({
                   showPrice={showPrice}
                   showStock={showStock}
                   onSelectProduct={context === "public" ? setDetailProduct : undefined}
-                  onAddToCart={context === "public" ? onAddToCart : undefined}
+                  onAddToCart={onAddToCart}
                   onUpdateQuantity={onUpdateQuantity}
                   cartQuantity={cartQuantities.get(product.id) || 0}
                 />

@@ -1597,12 +1597,13 @@ assert.match(catalogShowcase, /title="Produtos mais vendidos"/);
 assert.match(catalogShowcase, /CatalogCategoryRail/);
 assert.match(catalogShowcase, /CatalogProductRail/);
 
-// 4b. CATALOG-GOLDEN-RESTORE-05 §1/§8 — barra "Ver pedido" restaurada fielmente do commit histórico
-// (6de2c85), na mesma condição funcional descoberta lá: só context === "public" && cartCount > 0.
-assert.match(catalogShowcase, /\{context === "public" && cartCount > 0 && \(/);
-assert.match(catalogShowcase, /Ver pedido · \{cartCount\} \{cartCount === 1 \? "item" : "itens"\}/, "plural correto em português (\"itens\"), não o \"items\" (inglês) que o commit histórico tinha por engano");
-assert.match(catalogShowcase, /Abrir<\/span>/);
-assert.match(catalogShowcase, /data-testid="button-open-order-bar"/);
+// 4b. CATALOG-GOLDEN-RESTORE-05 §1/§8 restaurou fielmente a barra flutuante "Ver pedido" do commit
+// histórico (6de2c85) — mas RELEASE-CHECKOUT-03 (mais recente, ver bloco "Barra 'Ver pedido' redundante
+// removida" em script/checkout-payment-tests.ts) removeu essa mesma barra deliberadamente por ser
+// redundante com o badge de contagem já presente no ícone de carrinho do CatalogHeader. As 4 assertions
+// que existiam aqui (exigindo a barra) ficaram desatualizadas por essa decisão posterior — a verificação
+// de que a barra NÃO existe mais já está coberta em checkout-payment-tests.ts, não duplicada aqui.
+assert.doesNotMatch(catalogShowcase, /data-testid="button-open-order-bar"/, "a barra flutuante \"Ver pedido\" foi removida por RELEASE-CHECKOUT-03 — o badge do CatalogHeader já cobre a função");
 
 // 5. Rolagem horizontal com scroll-snap nos trilhos.
 assert.match(catalogProductRail, /overflow-x-auto/);

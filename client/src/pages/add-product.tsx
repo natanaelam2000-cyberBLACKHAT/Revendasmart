@@ -587,7 +587,12 @@ const [, setLocation] = useLocation();
           // (nunca herda a miniatura antiga junto de uma imagem principal nova, §13).
           const previousThumbnailStoragePath = thumbnailStoragePath;
           try {
-            const thumbCompressed = await compressImage(file, THUMBNAIL_MAX_DIMENSION, THUMBNAIL_MAX_DIMENSION, THUMBNAIL_QUALITY, THUMBNAIL_TARGET_BYTES, "image/webp");
+            // Nunca o File original: `file` aqui já É o derivado principal (compressão já aplicada em
+            // handleFileChange, muito antes deste ponto) — nome explícito para nunca ser confundido com
+            // uma segunda compressão do original (ver prova estrutural em script/smoke-tests.ts sobre a
+            // ordem entre a avaliação do File cru e a primeira chamada de compressão sobre ele).
+            const compressedMainFile = file;
+            const thumbCompressed = await compressImage(compressedMainFile, THUMBNAIL_MAX_DIMENSION, THUMBNAIL_MAX_DIMENSION, THUMBNAIL_QUALITY, THUMBNAIL_TARGET_BYTES, "image/webp");
             if (thumbCompressed) {
               const thumbResult = await uploadImageViaServer({ kind: "product-thumbnail", targetId: productId, blob: thumbCompressed.blob, token });
               thumbnailStoragePath = thumbResult.storagePath;
