@@ -30,10 +30,15 @@ import {
   computeScheduleSegments,
   diffScheduleSegments,
   isSegmentAvailableForHold,
+  resolveBookableServiceDuration,
   type Booking,
   type BookingHold,
   type ScheduleLock,
 } from "../shared/service-bookings";
+import {
+  ServiceAvailabilityCommandError,
+  assertIntervalAllowedByScheduleCommand,
+} from "./service-availability-commands";
 
 type CreateHoldResult = {
   action: "create_hold";
@@ -120,7 +125,12 @@ export class ServiceBookingCommandError extends Error {
     | "LOCK_OWNERSHIP_LOST"
     | "WORK_NOT_CANCELABLE"
     | "BOOKING_NOT_RESCHEDULABLE"
-    | "IDEMPOTENCY_CONFLICT";
+    | "IDEMPOTENCY_CONFLICT"
+    | "OUTSIDE_WORKING_HOURS"
+    | "BLOCKED_INTERVAL"
+    | "MISALIGNED_SLOT"
+    | "MIN_ADVANCE_VIOLATION"
+    | "MAX_ADVANCE_VIOLATION";
 
   constructor(code: ServiceBookingCommandError["code"], message: string) {
     super(message);
@@ -142,6 +152,11 @@ const COMMAND_ERROR_MESSAGES = {
   WORK_NOT_CANCELABLE: "Este atendimento não pode mais ser cancelado.",
   BOOKING_NOT_RESCHEDULABLE: "Este agendamento não pode mais ser reagendado.",
   IDEMPOTENCY_CONFLICT: "A mesma chave não pode ser reutilizada em outra operação.",
+  OUTSIDE_WORKING_HOURS: "Este horário está fora do expediente configurado.",
+  BLOCKED_INTERVAL: "Este horário está bloqueado na agenda.",
+  MISALIGNED_SLOT: "Este horário não está alinhado aos horários disponíveis.",
+  MIN_ADVANCE_VIOLATION: "Este horário está muito próximo do momento atual.",
+  MAX_ADVANCE_VIOLATION: "Este horário está além da janela de antecedência permitida.",
 } as const;
 
 function db_(): Firestore {
@@ -236,29 +251,6 @@ function validateStartAt(value: unknown): string {
     throw new ServiceBookingCommandError("INVALID_PAYLOAD", "startAt deve ser um timestamp ISO válido.");
   }
   return new Date(Date.parse(text)).toISOString();
-}
-
-/**
- * §8/§11 — o CLIENTE nunca envia endAt/duração: o servidor SEMPRE deriva de Service.durationMinutes, para
- * que reduzir a duração no payload nunca "fure" a concorrência real. Um Service só é reservável (§21,
- * bookingMode reaproveitado como já existente — nunca reimplementado) quando: bookingMode != "none",
- * durationMinutes é um inteiro positivo múltiplo da grade de lock de 5 minutos, e pricing.mode é "fixed"
- * (preço determinístico é exigido para o ServiceWork nascer com totals corretos na confirmação).
- */
-function resolveBookableServiceDuration(service: Service): number {
-  if (service.bookingMode === "none") {
-    throw new ServiceBookingCommandError("SERVICE_NOT_BOOKABLE", "Este serviço não aceita reservas (bookingMode=none).");
-  }
-  if (typeof service.durationMinutes !== "number" || !Number.isInteger(service.durationMinutes) || service.durationMinutes <= 0) {
-    throw new ServiceBookingCommandError("SERVICE_NOT_BOOKABLE", "Este serviço não possui duração configurada.");
-  }
-  if (service.durationMinutes % 5 !== 0) {
-    throw new ServiceBookingCommandError("SERVICE_NOT_BOOKABLE", "A duração do serviço precisa ser múltipla de 5 minutos.");
-  }
-  if (service.pricing.mode !== "fixed") {
-    throw new ServiceBookingCommandError("SERVICE_NOT_BOOKABLE", "Este serviço não possui preço fixo configurado para reserva.");
-  }
-  return service.durationMinutes;
 }
 
 function buildServiceLineItem(service: Service, capturedAt: IsoUtcString): ServiceLineItem {
@@ -359,9 +351,18 @@ export async function createServiceBookingHoldCommand(
     const startAt = validateStartAt(startAtInput);
     const endAt = new Date(Date.parse(startAt) + durationMinutes * 60_000).toISOString();
     const { startAt: validStart, endAt: validEnd } = assertValidBookingInterval(startAt, endAt);
-    const segments = computeScheduleSegments(validStart, validEnd);
 
     const serverNowIso = new Date().toISOString();
+    // SERV-AVAIL-01 §17 — o cliente nunca contorna o expediente/blocks/step/antecedência enviando um
+    // horário fora deles: o servidor sempre revalida contra a agenda ANTES de conceder qualquer lock.
+    try {
+      await assertIntervalAllowedByScheduleCommand(tx, db, uid, resourceId, validStart, validEnd, serverNowIso);
+    } catch (error) {
+      if (error instanceof ServiceAvailabilityCommandError) throw translateAvailabilityError(error);
+      throw error;
+    }
+
+    const segments = computeScheduleSegments(validStart, validEnd);
     const lockRefs = segments.map((segmentStartAt) => scheduleLockRef(db, uid, resourceId, segmentStartAt));
     const lockSnaps = lockRefs.length ? await tx.getAll(...lockRefs) : [];
 
@@ -453,6 +454,17 @@ export async function confirmServiceBookingHoldCommand(
     const serverNowIso = new Date().toISOString();
     if (Date.parse(hold.expiresAt) <= Date.parse(serverNowIso)) {
       throw new ServiceBookingCommandError("HOLD_EXPIRED", "Esta reserva temporária expirou.");
+    }
+
+    // SERV-AVAIL-01 §24 — antes de transformar o hold em Booking, revalida a agenda ATUAL: se um novo
+    // block ou uma mudança de expediente tornaram este intervalo inválido desde a criação do hold, a
+    // confirmação é rejeitada aqui, sem escrever Booking/Work e sem converter nenhum lock (transaction
+    // ainda não escreveu nada até este ponto).
+    try {
+      await assertIntervalAllowedByScheduleCommand(tx, db, uid, hold.resourceId, hold.startAt, hold.endAt, serverNowIso);
+    } catch (error) {
+      if (error instanceof ServiceAvailabilityCommandError) throw translateAvailabilityError(error);
+      throw error;
     }
 
     const segments = computeScheduleSegments(hold.startAt, hold.endAt);
@@ -752,6 +764,17 @@ export async function rescheduleServiceBookingCommand(
     const newEndAt = new Date(Date.parse(newStartAt) + durationMinutes * 60_000).toISOString();
     const { startAt: validNewStart, endAt: validNewEnd } = assertValidBookingInterval(newStartAt, newEndAt);
 
+    const serverNowIso = new Date().toISOString();
+    // SERV-AVAIL-01 §18 — o NOVO alvo também precisa respeitar expediente/blocks/step/antecedência; o
+    // intervalo antigo já foi validado quando o Booking nasceu/foi reagendado, não precisa revalidar aqui.
+    // Chamado ANTES de tocar em qualquer lock, para nunca liberar o horário antigo sem garantir o novo.
+    try {
+      await assertIntervalAllowedByScheduleCommand(tx, db, uid, booking.resourceId, validNewStart, validNewEnd, serverNowIso);
+    } catch (error) {
+      if (error instanceof ServiceAvailabilityCommandError) throw translateAvailabilityError(error);
+      throw error;
+    }
+
     const oldSegments = computeScheduleSegments(booking.startAt, booking.endAt);
     const newSegments = computeScheduleSegments(validNewStart, validNewEnd);
     const { sharedSegments, releasedSegments, acquiredSegments } = diffScheduleSegments(oldSegments, newSegments);
@@ -763,8 +786,6 @@ export async function rescheduleServiceBookingCommand(
     const lockSnaps = lockRefs.length ? await tx.getAll(...lockRefs) : [];
     const lockSnapBySegment = new Map<string, (typeof lockSnaps)[number]>();
     for (let i = 0; i < unionSegments.length; i += 1) lockSnapBySegment.set(unionSegments[i], lockSnaps[i]);
-
-    const serverNowIso = new Date().toISOString();
 
     // §17/§18 — target ocupado por outro Booking ou Hold ativo de outro owner => aborta TUDO, sem tocar
     // no horário antigo (a transaction ainda não escreveu nada até aqui).
@@ -820,8 +841,26 @@ function statusForError(code: ServiceBookingCommandError["code"]): number {
     code === "SEGMENT_UNAVAILABLE" || code === "HOLD_EXPIRED" || code === "HOLD_RELEASED"
     || code === "HOLD_ALREADY_CONFIRMED" || code === "LOCK_OWNERSHIP_LOST"
     || code === "WORK_NOT_CANCELABLE" || code === "BOOKING_NOT_RESCHEDULABLE"
+    || code === "OUTSIDE_WORKING_HOURS" || code === "BLOCKED_INTERVAL" || code === "MISALIGNED_SLOT"
+    || code === "MIN_ADVANCE_VIOLATION" || code === "MAX_ADVANCE_VIOLATION"
   ) return 409;
   return 400;
+}
+
+/**
+ * SERV-AVAIL-01 §17/§18/§24 — traduz uma rejeição da camada de disponibilidade (schedule/blocks) para o
+ * mesmo tipo de erro que o resto deste arquivo já usa, para que o catch de cada rota não precise conhecer
+ * o módulo de disponibilidade. server/service-availability-commands.ts nunca importa nada deste arquivo —
+ * a dependência é sempre em UM sentido (booking -> availability) para não criar um ciclo entre os dois.
+ */
+function translateAvailabilityError(error: ServiceAvailabilityCommandError): ServiceBookingCommandError {
+  const code: ServiceBookingCommandError["code"] = error.code === "OUTSIDE_WORKING_HOURS" ? "OUTSIDE_WORKING_HOURS"
+    : error.code === "BLOCKED_INTERVAL" ? "BLOCKED_INTERVAL"
+    : error.code === "MISALIGNED_SLOT" ? "MISALIGNED_SLOT"
+    : error.code === "MIN_ADVANCE_VIOLATION" ? "MIN_ADVANCE_VIOLATION"
+    : error.code === "MAX_ADVANCE_VIOLATION" ? "MAX_ADVANCE_VIOLATION"
+    : "SEGMENT_UNAVAILABLE";
+  return new ServiceBookingCommandError(code, error.message);
 }
 
 export function registerServiceBookingRoutes(

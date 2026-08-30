@@ -19,6 +19,7 @@ import { registerServiceQuoteRoutes } from "./service-quote-commands";
 import { registerServicePaymentRoutes } from "./service-payment-commands";
 import { registerServiceWorkRoutes } from "./service-work-commands";
 import { registerServiceBookingRoutes } from "./service-booking-commands";
+import { registerServiceAvailabilityRoutes } from "./service-availability-commands";
 import { isMarketingProRealBackgroundEnabled } from "./marketing-pro-flags";
 import { createGoogleMarketingProBackgroundProvider, isGoogleMarketingProCredentialConfigured } from "./marketing-pro-provider-google";
 import { registerAccountDeletionRoutes } from "./account-deletion";
@@ -497,6 +498,7 @@ export async function registerRoutes(
   registerServiceQuoteRoutes(app, requireAuth);
   registerServicePaymentRoutes(app, requireAuth);
   registerServiceBookingRoutes(app, requireAuth);
+  registerServiceAvailabilityRoutes(app, requireAuth);
 
   // RELEASE-03: UID is derived exclusively by requireAuth; request bodies never control ownership.
   registerAccountDeletionRoutes(app, requireAuth);

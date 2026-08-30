@@ -14,6 +14,7 @@ import {
   assertUid,
   type EntityId,
   type IsoUtcString,
+  type Service,
   type Uid,
 } from "./services";
 
@@ -249,6 +250,31 @@ export function diffScheduleSegments(oldSegments: readonly string[], newSegments
     releasedSegments: oldSegments.filter((segment) => !newSet.has(segment)),
     acquiredSegments: newSegments.filter((segment) => !oldSet.has(segment)),
   };
+}
+
+/**
+ * SERV-AVAIL-01 — movida de server/service-booking-commands.ts (era uma função privada só usada ali) para
+ * cá, exportada, porque agora TAMBÉM é consumida por server/service-availability-commands.ts (§14 —
+ * getServiceAvailability precisa da mesma duração real do Service usada por createHold, nunca uma segunda
+ * definição paralela). Fica em shared/service-bookings.ts — não em shared/services.ts — porque o conceito
+ * "reservável" (bookingMode/duração múltipla de 5 min/preço fixo) é específico do domínio de agenda, não do
+ * domínio comercial genérico. Nunca aceitar endAt/duração vindos do cliente (§8/§11) — o servidor sempre
+ * deriva a partir daqui.
+ */
+export function resolveBookableServiceDuration(service: Service): number {
+  if (service.bookingMode === "none") {
+    throw new ServiceBookingsDomainError("SERVICE_NOT_BOOKABLE", "Este serviço não aceita reservas (bookingMode=none).");
+  }
+  if (typeof service.durationMinutes !== "number" || !Number.isInteger(service.durationMinutes) || service.durationMinutes <= 0) {
+    throw new ServiceBookingsDomainError("SERVICE_NOT_BOOKABLE", "Este serviço não possui duração configurada.");
+  }
+  if (service.durationMinutes % SCHEDULE_LOCK_GRANULARITY_MINUTES !== 0) {
+    throw new ServiceBookingsDomainError("SERVICE_NOT_BOOKABLE", "A duração do serviço precisa ser múltipla de 5 minutos.");
+  }
+  if (service.pricing.mode !== "fixed") {
+    throw new ServiceBookingsDomainError("SERVICE_NOT_BOOKABLE", "Este serviço não possui preço fixo configurado para reserva.");
+  }
+  return service.durationMinutes;
 }
 
 export function assertValidScheduleLock(lock: ScheduleLock): ScheduleLock {

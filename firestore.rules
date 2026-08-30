@@ -842,6 +842,25 @@ service cloud.firestore {
         allow read, write: if false;
       }
 
+      // SERV-AVAIL-01 — expediente (ServiceResourceSchedule) e bloqueios extraordinários
+      // (ServiceAvailabilityBlock) são dados administrativos legíveis pelo próprio dono, mas escritos
+      // SEMPRE pelo servidor (server/service-availability-commands.ts) — mesmo padrão de bookingHolds/
+      // bookings acima. A coleção de idempotência do domínio de disponibilidade fica invisível ao client,
+      // mesmo padrão de serviceBookingCommandIdempotency.
+      match /serviceResourceSchedules/{resourceId} {
+        allow read: if userOwnsResource(uid);
+        allow create, update, delete: if false;
+      }
+
+      match /serviceAvailabilityBlocks/{blockId} {
+        allow read: if userOwnsResource(uid);
+        allow create, update, delete: if false;
+      }
+
+      match /serviceAvailabilityCommandIdempotency/{key} {
+        allow read, write: if false;
+      }
+
       // SUBCOLLECTION: orders (Encomendas/Pedidos)
       // User can only read/create their own orders. Update is limited to status changes — no other
       // field can be edited from the client. Deletion is disabled: there is no delete UI today.
