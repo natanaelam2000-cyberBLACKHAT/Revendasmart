@@ -243,6 +243,10 @@ async function run() {
     await expectFails("owner não altera completedAt do Work", () => updateDoc(workARef, { completedAt: LATER, updatedAt: LATER }));
     await expectFails("owner não altera tenantUid do Work", () => updateDoc(workARef, { tenantUid: uidB, updatedAt: LATER }));
     await expectFails("owner não altera id do Work", () => updateDoc(workARef, { id: "other-work", updatedAt: LATER }));
+    // SERV-QUOTE-LINK-01 QW10 — o vínculo Work.quoteId é server-authoritative (só createServiceQuoteForWorkCommand
+    // e convertAcceptedQuoteToWorkCommand escrevem esse campo, via Admin SDK); o client nunca pode setá-lo/trocá-lo
+    // diretamente, mesmo quando o Work ainda não tem nenhum orçamento vinculado.
+    await expectFails("owner não vincula quoteId do Work diretamente", () => updateDoc(workARef, { quoteId: "hacked-quote", updatedAt: LATER }));
     await expectFails("delete de Work é negado", () => deleteDoc(workARef));
     await expectFails("owner não altera financialSummary do Work", () =>
       updateDoc(workARef, {

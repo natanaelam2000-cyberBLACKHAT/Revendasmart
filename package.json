@@ -19,6 +19,8 @@
     "test:services-work": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:services-work:run\"",
     "test:services-quote:run": "tsx script/services-quote-tests.ts",
     "test:services-quote": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:services-quote:run\"",
+    "test:services-quote-work-link:run": "tsx script/services-quote-work-link-tests.ts",
+    "test:services-quote-work-link": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:services-quote-work-link:run\"",
     "test:services-pay:run": "tsx script/services-pay-tests.ts",
     "test:services-pay": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:services-pay:run\"",
     "test:services-domain": "tsx script/services-domain-tests.ts",

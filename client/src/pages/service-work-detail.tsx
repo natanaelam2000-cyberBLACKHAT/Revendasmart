@@ -9,13 +9,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { useClientsLiteData } from "@/hooks/useClientsLiteData";
 import { getServiceWork } from "@/lib/services-persistence";
 import { startServiceWork, completeServiceWork, cancelServiceWork } from "@/lib/service-work-commands";
 import { listServiceBookingsForWork } from "@/lib/service-bookings-persistence";
 import { cancelServiceBooking } from "@/lib/service-booking-commands";
 import { getServiceResourceSchedule } from "@/lib/service-availability-persistence";
-import { getQuote } from "@/lib/service-quotes-persistence";
+import { getQuote, updateQuoteDraft } from "@/lib/service-quotes-persistence";
+import { createServiceQuoteForWork } from "@/lib/service-quote-commands";
 import { listServicePayments, listServiceRefunds } from "@/lib/service-payments-persistence";
 import { recordServicePayment, refundServicePayment } from "@/lib/service-payment-commands";
 import { notifyError, notifySuccess } from "@/lib/notify";
@@ -58,12 +60,17 @@ export default function ServiceWorkDetail() {
 
   const [transitioning, setTransitioning] = useState(false);
 
-  // SERV-UI-03 — apenas EXIBE um Quote já relacionado (work.sourceQuoteId); criação/edição inline de Quote
-  // dentro desta tela foi cortada de escopo (decisão explícita): o domínio atual não tem um campo que ligue
-  // permanentemente um Quote novo a um Work já existente (só o caminho inverso — Quote aceito -> convert ->
-  // cria um Work novo com sourceQuoteId). Ver SERV-QUOTE-LINK-01 para definir essa relação formalmente.
+  // SERV-QUOTE-LINK-01 — agora que ServiceWork.quoteId formaliza o vínculo (server-authoritative), criar/
+  // editar orçamento voltou a ser suportado: criar usa createServiceQuoteForWorkCommand (transaction que
+  // impede mais de 1 Quote por Work, §7/§18); editar reaproveita updateQuoteDraft (já existente, só válido
+  // para status "draft", validado tanto no client quanto nas Rules — nunca edita uma versão histórica).
   const [quote, setQuote] = useState<Quote | null | undefined>(undefined);
   const [quoteError, setQuoteError] = useState("");
+  const [quoteDialogOpen, setQuoteDialogOpen] = useState(false);
+  const [quoteMessage, setQuoteMessage] = useState("");
+  const [quoteValidUntil, setQuoteValidUntil] = useState("");
+  const [creatingQuote, setCreatingQuote] = useState(false);
+  const [savingQuoteDraft, setSavingQuoteDraft] = useState(false);
 
   const [payments, setPayments] = useState<ServicePaymentRecord[]>([]);
   const [refundsByPayment, setRefundsByPayment] = useState<Map<string, ServiceRefundRecord[]>>(new Map());
@@ -109,21 +116,24 @@ export default function ServiceWorkDetail() {
     return () => { cancelled = true; };
   }, [workId, reloadToken]);
 
-  // Orçamento relacionado — só existe hoje quando o Work nasceu de uma Quote aceita (sourceQuoteId, §13).
+  // SERV-QUOTE-LINK-01 — quoteId é a fonte de verdade única; work.sourceQuoteId permanece como fallback
+  // só para Works de origin="quote" criados ANTES deste ticket (legados sem quoteId, §22 — continuam
+  // legíveis, nunca migrados/persistidos retroativamente aqui).
+  const relatedQuoteId = work?.quoteId ?? work?.sourceQuoteId;
   useEffect(() => {
     if (!work) { setQuote(work === null ? null : undefined); return; }
-    if (!work.sourceQuoteId) { setQuote(null); return; }
+    if (!relatedQuoteId) { setQuote(null); return; }
     let cancelled = false;
     (async () => {
       try {
-        const loadedQuote = await getQuote(work.sourceQuoteId as string);
+        const loadedQuote = await getQuote(relatedQuoteId);
         if (!cancelled) setQuote(loadedQuote);
       } catch (error) {
         if (!cancelled) { setQuote(null); setQuoteError(serviceWorkErrorMessage(error)); }
       }
     })();
     return () => { cancelled = true; };
-  }, [work]);
+  }, [work, relatedQuoteId]);
 
   // Financeiro: histórico de pagamentos/reembolsos (só para a lista de movimentações, §23 — os totais
   // exibidos vêm de deriveServiceWorkFinancials(work), nunca recalculados aqui a partir dessa lista).
@@ -173,6 +183,9 @@ export default function ServiceWorkDetail() {
   const serviceName = work?.items.find((item) => item.kind === "service")?.snapshot.name
     ?? (work?.origin === "manual" ? "Atendimento avulso" : "Atendimento");
   const customerName = work?.customerId ? clientNameById.get(work.customerId) ?? work.customerId : null;
+  // §10/UI8 — espelha a mesma regra do servidor (WORK_NOT_ELIGIBLE_FOR_QUOTE): completed/cancelled não
+  // oferece a ação de criar um novo orçamento, evitando uma tentativa fadada a ser rejeitada.
+  const workCanReceiveQuote = work?.status === "planned" || work?.status === "in_progress";
 
   const handleStart = useCallback(async () => {
     if (!work) return;
@@ -221,6 +234,56 @@ export default function ServiceWorkDetail() {
       setTransitioning(false);
     }
   }, [work, booking, refresh]);
+
+  const openCreateQuoteDialog = useCallback(() => {
+    setQuoteMessage("");
+    setQuoteValidUntil("");
+    setQuoteDialogOpen(true);
+  }, []);
+
+  const handleCreateQuote = useCallback(async () => {
+    if (!work) return;
+    setCreatingQuote(true);
+    try {
+      const nextValidUntil = quoteValidUntil ? new Date(`${quoteValidUntil}T23:59:59.000Z`).toISOString() : undefined;
+      await createServiceQuoteForWork(work.id, { customerMessage: quoteMessage || undefined, validUntil: nextValidUntil });
+      notifySuccess("Orçamento criado a partir dos itens deste atendimento.");
+      setQuoteDialogOpen(false);
+      refresh();
+    } catch (error) {
+      notifyError(serviceWorkErrorMessage(error));
+    } finally {
+      setCreatingQuote(false);
+    }
+  }, [work, quoteMessage, quoteValidUntil, refresh]);
+
+  const openEditQuoteDialog = useCallback(() => {
+    if (!quote) return;
+    setQuoteMessage(quote.draftCustomerMessage ?? "");
+    setQuoteValidUntil(quote.draftValidUntil ? quote.draftValidUntil.slice(0, 10) : "");
+    setQuoteDialogOpen(true);
+  }, [quote]);
+
+  const handleSaveQuoteDraft = useCallback(async () => {
+    if (!quote || quote.status !== "draft") return;
+    setSavingQuoteDraft(true);
+    try {
+      const nextValidUntil = quoteValidUntil ? new Date(`${quoteValidUntil}T23:59:59.000Z`).toISOString() : undefined;
+      const updated = await updateQuoteDraft(quote.id, {
+        customerId: quote.customerId,
+        items: quote.draftItems,
+        customerMessage: quoteMessage || undefined,
+        validUntil: nextValidUntil,
+      });
+      setQuote(updated);
+      notifySuccess("Orçamento atualizado.");
+      setQuoteDialogOpen(false);
+    } catch (error) {
+      notifyError(serviceWorkErrorMessage(error));
+    } finally {
+      setSavingQuoteDraft(false);
+    }
+  }, [quote, quoteMessage, quoteValidUntil]);
 
   const openPaymentDialog = useCallback(() => {
     setPaymentAmount("");
@@ -367,9 +430,24 @@ export default function ServiceWorkDetail() {
                   <span className="font-bold text-foreground">{formatLocalDate(new Date(quote.draftValidUntil), "dd/MM/yyyy", { locale: ptBR })}</span>
                 </div>
               )}
+              {quote.status === "draft" && (
+                <Button type="button" variant="outline" size="sm" onClick={openEditQuoteDialog} data-testid="button-work-edit-quote" className="rounded-full">
+                  Editar orçamento
+                </Button>
+              )}
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground" data-testid="text-work-quote-empty">Nenhum orçamento vinculado a este atendimento.</p>
+            <EmptyState
+              title="Nenhum orçamento vinculado a este atendimento."
+              description={
+                workCanReceiveQuote
+                  ? "Você pode criar um orçamento com os itens deste atendimento."
+                  : "Este atendimento não pode mais receber um novo orçamento."
+              }
+              action={workCanReceiveQuote
+                ? <Button type="button" onClick={openCreateQuoteDialog} data-testid="button-work-create-quote" className="rounded-full">Criar orçamento</Button>
+                : undefined}
+            />
           )}
         </div>
 
@@ -433,6 +511,39 @@ export default function ServiceWorkDetail() {
           </div>
         </div>
       </div>
+
+      {/* Criar/editar orçamento */}
+      <Dialog open={quoteDialogOpen} onOpenChange={setQuoteDialogOpen}>
+        <DialogContent className="max-w-sm rounded-[2rem]" data-testid="dialog-quote">
+          <DialogHeader>
+            <DialogTitle>{quote ? "Editar orçamento" : "Criar orçamento"}</DialogTitle>
+            <DialogDescription>
+              {quote ? "Atualize a mensagem e a validade do orçamento." : "Um orçamento será criado com os itens deste atendimento."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label htmlFor="quote-message">Mensagem para o cliente (opcional)</Label>
+              <Textarea id="quote-message" value={quoteMessage} onChange={(event) => setQuoteMessage(event.target.value)} data-testid="input-quote-message" />
+            </div>
+            <div>
+              <Label htmlFor="quote-valid-until">Válido até (opcional)</Label>
+              <Input id="quote-valid-until" type="date" value={quoteValidUntil} onChange={(event) => setQuoteValidUntil(event.target.value)} data-testid="input-quote-valid-until" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              onClick={quote ? handleSaveQuoteDraft : handleCreateQuote}
+              disabled={quote ? savingQuoteDraft : creatingQuote}
+              data-testid="button-confirm-quote"
+              className="w-full rounded-full"
+            >
+              {quote ? (savingQuoteDraft ? "Salvando…" : "Salvar orçamento") : (creatingQuote ? "Criando…" : "Criar orçamento")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Registrar recebimento */}
       <Dialog open={paymentDialogOpen} onOpenChange={setPaymentDialogOpen}>

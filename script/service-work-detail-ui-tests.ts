@@ -83,29 +83,65 @@ function run() {
   // ===== UI1-UI8, UI10, UI14-UI16 — provas estruturais sobre o componente real =====
   const pageSource = read("client/src/pages/service-work-detail.tsx");
 
-  // UI1 — Work carrega via o mesmo helper read-only já usado pela Agenda, e os totais financeiros vêm do
-  // domínio (deriveServiceWorkFinancials), nunca recalculados à mão na tela.
-  assert.match(pageSource, /import \{ getServiceWork \} from "@\/lib\/services-persistence"/, "UI1: Work é lido via services-persistence.ts, nenhuma query nova");
-  assert.match(pageSource, /deriveServiceWorkFinancials\(work\)/, "UI1: financeiro sempre derivado do domínio, nunca recalculado na UI");
+  // UI1(§32) — Work carrega via o mesmo helper read-only já usado pela Agenda, e os totais financeiros vêm
+  // do domínio (deriveServiceWorkFinancials), nunca recalculados à mão na tela.
+  assert.match(pageSource, /import \{ getServiceWork \} from "@\/lib\/services-persistence"/, "Work é lido via services-persistence.ts, nenhuma query nova");
+  assert.match(pageSource, /deriveServiceWorkFinancials\(work\)/, "financeiro sempre derivado do domínio, nunca recalculado na UI");
 
-  // UI2/UI3/UI4 — ações de lifecycle só aparecem para planned/in_progress; completed/cancelled são
+  // UI2/UI3/UI4(§32) — ações de lifecycle só aparecem para planned/in_progress; completed/cancelled são
   // somente-leitura (o bloco de ações inteiro é condicionado a esses dois status).
-  assert.match(pageSource, /work\.status === "planned" \|\| work\.status === "in_progress"/, "UI4: bloco de ações só existe para planned/in_progress — completed/cancelled não mostram nenhuma ação");
-  assert.match(pageSource, /work\.status === "planned" &&[\s\S]{0,120}button-work-start/, "UI2: 'Iniciar atendimento' só aparece quando planned");
-  assert.match(pageSource, /work\.status === "in_progress" &&[\s\S]{0,120}button-work-complete/, "UI3: 'Concluir atendimento' só aparece quando in_progress");
+  assert.match(pageSource, /work\.status === "planned" \|\| work\.status === "in_progress"/, "bloco de ações só existe para planned/in_progress — completed/cancelled não mostram nenhuma ação");
+  assert.match(pageSource, /work\.status === "planned" &&[\s\S]{0,120}button-work-start/, "'Iniciar atendimento' só aparece quando planned");
+  assert.match(pageSource, /work\.status === "in_progress" &&[\s\S]{0,120}button-work-complete/, "'Concluir atendimento' só aparece quando in_progress");
 
-  // UI5 — cancelamento usa o command correto conforme exista (ou não) um Booking confirmado ligado ao Work
-  // (§9 — nunca cancela o Work isoladamente deixando um Booking ativo órfão).
-  assert.match(pageSource, /import \{ listServiceBookingsForWork \} from "@\/lib\/service-bookings-persistence"/, "UI5: descobre o Booking ligado antes de decidir como cancelar");
-  assert.match(pageSource, /if \(booking && booking\.status === "confirmed"\) \{\s*await cancelServiceBooking\(booking\.id\);\s*\} else \{\s*await cancelServiceWork\(work\.id\);/, "UI5: Booking confirmado -> cancelServiceBooking; senão -> cancelServiceWork direto");
+  // UI5(§32) — cancelamento usa o command correto conforme exista (ou não) um Booking confirmado ligado ao
+  // Work (§9 — nunca cancela o Work isoladamente deixando um Booking ativo órfão).
+  assert.match(pageSource, /import \{ listServiceBookingsForWork \} from "@\/lib\/service-bookings-persistence"/, "descobre o Booking ligado antes de decidir como cancelar");
+  assert.match(pageSource, /if \(booking && booking\.status === "confirmed"\) \{\s*await cancelServiceBooking\(booking\.id\);\s*\} else \{\s*await cancelServiceWork\(work\.id\);/, "Booking confirmado -> cancelServiceBooking; senão -> cancelServiceWork direto");
 
-  // UI6/UI7 — Quote é só exibido (nunca criado/editado nesta tela, decisão explícita de escopo).
-  assert.match(pageSource, /import \{ getQuote \} from "@\/lib\/service-quotes-persistence"/, "UI6: Quote relacionado é lido, nunca escrito, nesta tela");
-  assert.doesNotMatch(pageSource, /createQuoteDraft|updateQuoteDraft/, "QUOTE_INLINE_AUTHORING_IMPLEMENTED deve ser NO: nenhuma criação/edição de Quote nesta tela (o domínio não liga um Quote novo a um Work já existente)");
-  assert.match(pageSource, /card-work-quote/, "UI6: existe uma seção que exibe o Quote quando relacionado");
-  assert.match(pageSource, /Nenhum orçamento vinculado a este atendimento\./, "UI7: empty state claro quando não há Quote relacionado");
+  // ===== SERV-QUOTE-LINK-01 §21 UI1-UI8 — criar/editar orçamento agora que ServiceWork.quoteId formaliza
+  // o vínculo (server-authoritative); nada disso existe mais como escrita direta de Firestore na tela. =====
 
-  // UI8/UI10 — Payment/Refund só através dos commands server-side já aprovados.
+  // UI1 — Work sem Quote mostra "Criar orçamento" (só quando o Work ainda pode receber um, §10/UI8).
+  assert.match(pageSource, /const workCanReceiveQuote = work\?\.status === "planned" \|\| work\?\.status === "in_progress"/, "UI8: workCanReceiveQuote espelha a mesma regra do servidor (WORK_NOT_ELIGIBLE_FOR_QUOTE)");
+  assert.match(pageSource, /workCanReceiveQuote\s*\?\s*<Button[^>]*button-work-create-quote/, "UI1: CTA \"Criar orçamento\" só aparece quando o Work pode mesmo receber um");
+  assert.match(pageSource, /Nenhum orçamento vinculado a este atendimento\./, "UI1: empty state claro quando não há Quote relacionado");
+
+  // UI2 — criação usa o command server-side novo (nunca uma escrita direta de Quote/Work).
+  assert.match(pageSource, /import \{ createServiceQuoteForWork \} from "@\/lib\/service-quote-commands"/, "UI2: criação de orçamento usa o command server-side");
+  assert.match(pageSource, /await createServiceQuoteForWork\(work\.id, \{ customerMessage: quoteMessage \|\| undefined, validUntil: nextValidUntil \}\)/, "UI2: chama o command real com workId + campos suportados");
+
+  // UI3 — Work com Quote mostra status/total/validade.
+  assert.match(pageSource, /card-work-quote/, "UI3: existe uma seção que exibe o Quote quando relacionado");
+  assert.match(pageSource, /quoteStatusLabel\(quote\.status\)/, "UI3: status exibido");
+  assert.match(pageSource, /quote\.draftTotals\.contractedTotalCents/, "UI3: total exibido");
+  assert.match(pageSource, /quote\.draftValidUntil/, "UI3: validade exibida quando presente");
+
+  // UI4 — editar reaproveita o versioning/command já existente (updateQuoteDraft), só quando status="draft"
+  // (nunca edita uma versão histórica — Rules já impõem isso, ver isValidQuoteUpdate).
+  assert.match(pageSource, /import \{ getQuote, updateQuoteDraft \} from "@\/lib\/service-quotes-persistence"/, "UI4: edição reaproveita updateQuoteDraft já existente, não um command novo");
+  assert.match(pageSource, /quote\.status === "draft" &&[\s\S]{0,200}button-work-edit-quote/, "UI4: 'Editar orçamento' só aparece quando o Quote está em draft");
+  assert.match(pageSource, /await updateQuoteDraft\(quote\.id, \{/, "UI4: edição chama updateQuoteDraft com o id do Quote existente");
+
+  // UI5 — nenhuma escrita direta de Firestore na PRÓPRIA tela (a criação passa pelo command server-side; a
+  // edição delega para o wrapper já aprovado de service-quotes-persistence.ts, nunca um setDoc/updateDoc
+  // cru aqui).
+  assert.doesNotMatch(pageSource, /from "firebase\/firestore"/, "UI5: nenhum import do SDK de escrita do Firestore nesta página");
+
+  // UI6 — refresh após criação (recarrega o Work, que passa a expor quoteId) e após edição (atualiza o
+  // Quote local com a resposta do próprio updateQuoteDraft).
+  assert.match(pageSource, /notifySuccess\("Orçamento criado a partir dos itens deste atendimento\."\);\s*setQuoteDialogOpen\(false\);\s*refresh\(\);/, "UI6: após criar, recarrega o Work (relatedQuoteId passa a existir)");
+  assert.match(pageSource, /const updated = await updateQuoteDraft\(quote\.id, \{[\s\S]{0,300}setQuote\(updated\);/, "UI6: após editar, o Quote local é atualizado com a resposta real");
+
+  // UI7 — erro de concorrência (WORK_ALREADY_HAS_QUOTE) tratado com a mesma mensagem amigável dos outros
+  // commands, nunca um code/stack cru.
+  assert.match(pageSource, /catch \(error\) \{\s*notifyError\(serviceWorkErrorMessage\(error\)\);\s*\} finally \{\s*setCreatingQuote\(false\);/, "UI7: erro de criação (incl. concorrência) tratado via serviceWorkErrorMessage");
+
+  // UI8 — coberto acima (workCanReceiveQuote); reforça que o Work legado sem quoteId mas com sourceQuoteId
+  // continua legível (§22), sem migração retroativa.
+  assert.match(pageSource, /const relatedQuoteId = work\?\.quoteId \?\? work\?\.sourceQuoteId;/, "§22: quoteId é a fonte de verdade, sourceQuoteId é só fallback de leitura para Works legados");
+
+  // UI8/UI10(§32) — Payment/Refund só através dos commands server-side já aprovados.
   assert.match(pageSource, /import \{ recordServicePayment, refundServicePayment \} from "@\/lib\/service-payment-commands"/, "UI8/UI10: Payment/Refund só via os commands server-side existentes");
   assert.match(pageSource, /await recordServicePayment\(work\.id, \{ amountCents, method: paymentMethod \}\)/, "UI8: registrar recebimento chama o command real com amountCents/method");
   assert.match(pageSource, /await refundServicePayment\(work\.id, refundPaymentId, \{ amountCents, reason: refundReason \|\| undefined \}\)/, "UI10: registrar reembolso chama o command real com amountCents/reason");
@@ -129,7 +165,7 @@ function run() {
   const agendaSource = read("client/src/pages/service-agenda.tsx");
   assert.match(agendaSource, /href=\{`\/servicos\/atendimentos\/\$\{selectedBooking\.workId\}`\}/, "a Agenda precisa linkar para o Work a partir do Booking selecionado");
 
-  console.log("Service work detail structural tests passed: Work loads via the existing read-only helper with financials always derived from the domain (UI1), lifecycle actions gated correctly by status with no invalid action ever shown for completed/cancelled (UI2-UI4), cancel picks the Booking-aware command when a confirmed Booking exists and the direct Work command otherwise (UI5), Quote is only ever displayed — never authored — with a clear empty state (UI6/UI7, QUOTE_INLINE_AUTHORING_IMPLEMENTED=NO), Payment/Refund only ever go through the real server-side commands (UI8/UI10), the movement history models both kinds chronologically (UI14), no direct Firestore write exists for Payment/Refund (UI15), no Sale/PDV/Mercado Pago logic was imported (UI16), and the route is lazy-loaded and reachable from the Agenda's booking detail.");
+  console.log("Service work detail structural tests passed: Work loads via the existing read-only helper with financials always derived from the domain, lifecycle actions gated correctly by status with no invalid action ever shown for completed/cancelled, cancel picks the Booking-aware command when a confirmed Booking exists and the direct Work command otherwise. SERV-QUOTE-LINK-01: creating a Quote for a Work without one uses the new server-side command (never a direct write) and is only offered while the Work can still receive one, an existing Quote shows status/total/validity, editing a draft Quote reuses the already-approved updateQuoteDraft (never a historical version), creation refreshes the Work so quoteId propagates and editing refreshes the Quote from the real response, creation errors (including concurrency) are mapped to friendly messages, and quoteId is the single source of truth with sourceQuoteId only as a legacy read fallback. Payment/Refund only ever go through the real server-side commands, the movement history models both kinds chronologically, no direct Firestore write exists on this page, no Sale/PDV/Mercado Pago logic was imported, and the route is lazy-loaded and reachable from the Agenda's booking detail.");
 }
 
 run();

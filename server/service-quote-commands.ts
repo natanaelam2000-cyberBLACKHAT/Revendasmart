@@ -4,7 +4,10 @@ import { getFirebaseAdmin } from "./firebase-admin-init";
 import { logError, logInfo, logWarn } from "./logger";
 import {
   assertValidServiceWork,
+  calculateCommercialTotals,
   createZeroServiceWorkFinancialSummary,
+  normalizeServiceWorkDocument,
+  ServicesDomainError,
   type IsoUtcString,
   type ServiceWork,
 } from "../shared/services";
@@ -18,6 +21,16 @@ import {
 } from "../shared/service-quotes";
 
 type QuoteCommandAction = "send" | "revise" | "accept" | "reject" | "cancel" | "convert";
+
+/** SERV-QUOTE-LINK-01 — resultado do comando que cria um Quote (rascunho) para um ServiceWork já existente
+ * e liga os dois atomicamente (ServiceWork.quoteId). Ação distinta das QuoteCommandAction acima porque a
+ * entidade primária mutada é o Work (rota /api/services/works/:workId/quote), não uma Quote existente. */
+export type CreateQuoteForWorkResult = {
+  action: "create_quote_for_work";
+  workId: string;
+  quoteId: string;
+  idempotentReplay: boolean;
+};
 
 export type QuoteCommandResult = {
   quoteId: string;
@@ -45,7 +58,10 @@ export class ServiceQuoteCommandError extends Error {
     | "INVALID_TRANSITION"
     | "STALE_QUOTE_VERSION"
     | "QUOTE_EXPIRED"
-    | "IDEMPOTENCY_CONFLICT";
+    | "IDEMPOTENCY_CONFLICT"
+    | "WORK_NOT_FOUND"
+    | "WORK_ALREADY_HAS_QUOTE"
+    | "WORK_NOT_ELIGIBLE_FOR_QUOTE";
 
   constructor(code: ServiceQuoteCommandError["code"], message: string) {
     super(message);
@@ -62,6 +78,9 @@ const COMMAND_ERROR_MESSAGES = {
   STALE_QUOTE_VERSION: "A versão informada não é a versão atual do orçamento.",
   QUOTE_EXPIRED: "Esse orçamento expirou e não pode mais ser aceito.",
   IDEMPOTENCY_CONFLICT: "A mesma chave não pode ser reutilizada em outra operação.",
+  WORK_NOT_FOUND: "Atendimento não encontrado.",
+  WORK_ALREADY_HAS_QUOTE: "Este atendimento já tem um orçamento vinculado.",
+  WORK_NOT_ELIGIBLE_FOR_QUOTE: "Este atendimento não pode mais receber um novo orçamento.",
 } as const;
 
 function quoteRef(db: Firestore, uid: string, quoteId: string) {
@@ -472,6 +491,11 @@ export async function convertAcceptedQuoteToWorkCommand(
       customerId: acceptedVersion.customerId,
       sourceQuoteId: quoteId,
       sourceQuoteVersionId: acceptedVersion.id,
+      // SERV-QUOTE-LINK-01 — espelha sourceQuoteId em quoteId (mesmo valor, sempre concordantes por
+      // invariante em assertValidServiceWork) para que a UI do Work leia um único campo uniforme,
+      // independente de como o Quote chegou até o Work (conversão aqui, ou anexado depois a um Work já
+      // existente via createServiceQuoteForWorkCommand).
+      quoteId,
       items: acceptedVersion.items,
       totals: acceptedVersion.totals,
       financialSummary: createZeroServiceWorkFinancialSummary(),
@@ -498,6 +522,106 @@ export async function convertAcceptedQuoteToWorkCommand(
   });
 }
 
+function buildWorkQuoteId(workId: string): string {
+  return `work-quote-${workId}`;
+}
+
+type CreateQuoteForWorkIdempotencyRecord = {
+  key: string;
+  tenantUid: string;
+  action: "create_quote_for_work";
+  workId: string;
+  quoteId: string;
+  createdAt: IsoUtcString;
+};
+
+/**
+ * SERV-QUOTE-LINK-01 — cria um Quote (rascunho) para um ServiceWork já existente que ainda não tem
+ * orçamento, e liga os dois atomicamente (ServiceWork.quoteId). Itens/customerId sempre espelham o Work
+ * atual (nunca aceitos do client) — só customerMessage/validUntil são de entrada, mesmos campos já
+ * suportados por createQuoteDraft. §11: NUNCA altera ServiceWork.totals/contractedTotalCents — o Quote
+ * recém-criado é só um documento comercial de referência, o contrato do Work em execução não muda aqui.
+ * §12: como o Work não é alterado financeiramente por este comando, netReceivedCents <= contractedTotalCents
+ * permanece trivialmente preservado. Idempotência + a própria transação (retry otimista do Firestore quando
+ * duas tentativas concorrentes leem o mesmo Work) garantem no máximo 1 Quote vinculado por Work (§18/QW8).
+ */
+export async function createServiceQuoteForWorkCommand(
+  db: Firestore,
+  uid: string,
+  workId: string,
+  input: { customerMessage?: string; validUntil?: string },
+  idempotencyKey: string,
+): Promise<CreateQuoteForWorkResult> {
+  return await db.runTransaction(async (tx) => {
+    const workDocumentRef = serviceWorkRef(db, uid, workId);
+    const idemDocumentRef = quoteIdempotencyRef(db, uid, idempotencyKey);
+    const idemSnapshot = await tx.get(idemDocumentRef);
+
+    if (idemSnapshot.exists) {
+      const existing = idemSnapshot.data() as Partial<CreateQuoteForWorkIdempotencyRecord>;
+      if (existing.action !== "create_quote_for_work" || existing.tenantUid !== uid || existing.workId !== workId) {
+        throw new ServiceQuoteCommandError("IDEMPOTENCY_CONFLICT", "idempotencyKey já usada em outra operação.");
+      }
+      if (typeof existing.quoteId !== "string") {
+        throw new ServiceQuoteCommandError("INVALID_PAYLOAD", "Idempotency record inválida.");
+      }
+      return { action: "create_quote_for_work", workId, quoteId: existing.quoteId, idempotentReplay: true };
+    }
+
+    const workSnapshot = await tx.get(workDocumentRef);
+    if (!workSnapshot.exists) {
+      throw new ServiceQuoteCommandError("WORK_NOT_FOUND", "Atendimento não encontrado.");
+    }
+    const currentWork = normalizeServiceWorkDocument(workSnapshot.data() as ServiceWork);
+    if (currentWork.quoteId) {
+      throw new ServiceQuoteCommandError("WORK_ALREADY_HAS_QUOTE", "Este atendimento já tem um orçamento vinculado.");
+    }
+    if (currentWork.status === "completed" || currentWork.status === "cancelled") {
+      throw new ServiceQuoteCommandError("WORK_NOT_ELIGIBLE_FOR_QUOTE", "Este atendimento não pode mais receber um novo orçamento.");
+    }
+
+    const timestamp = new Date().toISOString();
+    const quoteId = buildWorkQuoteId(workId);
+
+    let quote: Quote;
+    try {
+      quote = assertValidQuote({
+        id: quoteId,
+        tenantUid: uid,
+        status: "draft",
+        customerId: currentWork.customerId,
+        draftItems: currentWork.items,
+        draftTotals: calculateCommercialTotals(currentWork.items),
+        draftCustomerMessage: input.customerMessage,
+        draftValidUntil: input.validUntil,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+    } catch (error) {
+      if (error instanceof ServicesDomainError) {
+        throw new ServiceQuoteCommandError("INVALID_PAYLOAD", error.message);
+      }
+      throw error;
+    }
+
+    const nextWork: ServiceWork = assertValidServiceWork({
+      ...currentWork,
+      quoteId,
+      updatedAt: timestamp,
+    });
+
+    const result: CreateQuoteForWorkResult = { action: "create_quote_for_work", workId, quoteId, idempotentReplay: false };
+    const record: CreateQuoteForWorkIdempotencyRecord = {
+      key: idempotencyKey, tenantUid: uid, action: "create_quote_for_work", workId, quoteId, createdAt: timestamp,
+    };
+
+    tx.create(quoteRef(db, uid, quoteId), omitUndefined(quote as unknown as Record<string, unknown>));
+    tx.set(workDocumentRef, omitUndefined(nextWork as unknown as Record<string, unknown>));
+    tx.create(idemDocumentRef, record);
+    return result;
+  });
+}
+
 function sendServiceQuoteCommandError(
   res: Response,
   status: number,
@@ -507,9 +631,12 @@ function sendServiceQuoteCommandError(
 }
 
 function statusForQuoteCommandError(code: ServiceQuoteCommandError["code"]): number {
-  if (code === "QUOTE_NOT_FOUND") return 404;
+  if (code === "QUOTE_NOT_FOUND" || code === "WORK_NOT_FOUND") return 404;
   if (code === "IDEMPOTENCY_CONFLICT") return 409;
-  if (code === "INVALID_TRANSITION" || code === "STALE_QUOTE_VERSION" || code === "QUOTE_EXPIRED") return 409;
+  if (
+    code === "INVALID_TRANSITION" || code === "STALE_QUOTE_VERSION" || code === "QUOTE_EXPIRED"
+    || code === "WORK_ALREADY_HAS_QUOTE" || code === "WORK_NOT_ELIGIBLE_FOR_QUOTE"
+  ) return 409;
   if (code === "UNAUTHENTICATED") return 401;
   return 400;
 }
@@ -594,5 +721,34 @@ export function registerServiceQuoteRoutes(
   app.post("/api/services/quotes/:quoteId/convert", requireAuth, async (req, res) => {
     await handleQuoteCommand(req, res, "convert", async (db, uid, quoteId, currentReq) =>
       await convertAcceptedQuoteToWorkCommand(db, uid, quoteId, validateIdempotencyKey(currentReq.body?.idempotencyKey)));
+  });
+
+  // SERV-QUOTE-LINK-01 — âncora em :workId (não :quoteId), porque a entidade primária mutada é o Work
+  // (ServiceWork.quoteId); reusa o mesmo padrão de tratamento de erro/idempotência das rotas acima.
+  app.post("/api/services/works/:workId/quote", requireAuth, async (req: Request, res: Response) => {
+    const uid = (req as Request & { firebaseUid?: string }).firebaseUid;
+    if (!uid) {
+      sendServiceQuoteCommandError(res, 401, "UNAUTHENTICATED");
+      return;
+    }
+    const workId = validateEntityId(req.params.workId, "workId");
+    const customerMessage = typeof req.body?.customerMessage === "string" && req.body.customerMessage.trim() ? req.body.customerMessage : undefined;
+    const validUntil = typeof req.body?.validUntil === "string" && req.body.validUntil.trim() ? req.body.validUntil : undefined;
+    const idempotencyKey = validateIdempotencyKey(req.body?.idempotencyKey);
+
+    try {
+      const db = getFirebaseAdmin().firestore();
+      const result = await createServiceQuoteForWorkCommand(db, uid, workId, { customerMessage, validUntil }, idempotencyKey);
+      logInfo("service_quote.create_for_work", { requestId: req.requestId, workId, quoteId: result.quoteId, idempotent: result.idempotentReplay });
+      res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof ServiceQuoteCommandError) {
+        logWarn("service_quote.create_for_work_rejected", { requestId: req.requestId, workId, code: error.code });
+        sendServiceQuoteCommandError(res, statusForQuoteCommandError(error.code), error.code);
+        return;
+      }
+      logError("service_quote.create_for_work_failed", error, { requestId: req.requestId, workId });
+      res.status(500).json({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o orçamento agora." });
+    }
   });
 }

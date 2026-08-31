@@ -138,6 +138,12 @@ export type ServiceWork = {
   readonly customerId?: EntityId;
   readonly sourceQuoteId?: EntityId;
   readonly sourceQuoteVersionId?: EntityId;
+  /** SERV-QUOTE-LINK-01 — o Quote atualmente relacionado a este Work, independente de como ele chegou lá:
+   * para origin="quote" é o mesmo valor de sourceQuoteId (escrito pelo convert), para qualquer outra origem
+   * é preenchido só quando um orçamento é criado DEPOIS para um Work já existente (createServiceQuoteForWork).
+   * Campo opcional e imutável pelo client (server-authoritative, ver firestore.rules) — um Work legado sem
+   * este campo continua válido e legível; nunca é preenchido vazio. V1 suporta no máximo 0..1 Quote por Work. */
+  readonly quoteId?: EntityId;
   readonly items: readonly CommercialItem[];
   readonly totals: CommercialTotals;
   readonly financialSummary: ServiceWorkFinancialSummary;
@@ -581,6 +587,9 @@ export function assertValidServiceWork(serviceWork: ServiceWork): ServiceWork {
   if (typeof serviceWork.sourceQuoteVersionId !== "undefined") {
     assertEntityId(serviceWork.sourceQuoteVersionId, "serviceWork.sourceQuoteVersionId");
   }
+  if (typeof serviceWork.quoteId !== "undefined") {
+    assertEntityId(serviceWork.quoteId, "serviceWork.quoteId");
+  }
   if (!Array.isArray(serviceWork.items) || serviceWork.items.length > 100) {
     throw new ServicesDomainError("INVALID_SERVICE_WORK", "serviceWork.items must be an array with up to 100 items.");
   }
@@ -621,6 +630,12 @@ export function assertValidServiceWork(serviceWork: ServiceWork): ServiceWork {
   if (serviceWork.origin === "quote") {
     if (!serviceWork.sourceQuoteId || !serviceWork.sourceQuoteVersionId) {
       throw new ServicesDomainError("INVALID_SERVICE_WORK", "quote-origin serviceWork must contain sourceQuoteId and sourceQuoteVersionId.");
+    }
+    // SERV-QUOTE-LINK-01 — quando presente (Works criados a partir de agora), quoteId deve concordar com
+    // sourceQuoteId; Works de origin="quote" anteriores a este ticket, sem quoteId, continuam válidos (campo
+    // opcional, nunca migrado retroativamente em leitura).
+    if (typeof serviceWork.quoteId !== "undefined" && serviceWork.quoteId !== serviceWork.sourceQuoteId) {
+      throw new ServicesDomainError("INVALID_SERVICE_WORK", "quote-origin serviceWork.quoteId must match sourceQuoteId when present.");
     }
   } else if (serviceWork.sourceQuoteId || serviceWork.sourceQuoteVersionId) {
     throw new ServicesDomainError("INVALID_SERVICE_WORK", "non-quote serviceWork cannot contain sourceQuoteId/sourceQuoteVersionId.");

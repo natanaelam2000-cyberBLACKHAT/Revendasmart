@@ -55,3 +55,24 @@ export async function cancelQuote(quoteId: string, idempotencyKey = generateIdem
 export async function convertAcceptedQuoteToWork(quoteId: string, idempotencyKey = generateIdempotencyKey()) {
   return await postServiceQuoteCommand(quoteId, "convert", { idempotencyKey });
 }
+
+export type CreateServiceQuoteForWorkResponse = {
+  action: "create_quote_for_work";
+  workId: string;
+  quoteId: string;
+  idempotentReplay: boolean;
+};
+
+/** SERV-QUOTE-LINK-01 — cria um Quote (rascunho) para um ServiceWork já existente sem orçamento, ligando
+ * os dois atomicamente no servidor (nunca uma escrita direta de ServiceWork.quoteId pelo client). */
+export async function createServiceQuoteForWork(
+  workId: string,
+  input: { customerMessage?: string; validUntil?: string } = {},
+  idempotencyKey = generateIdempotencyKey(),
+): Promise<CreateServiceQuoteForWorkResponse> {
+  return await apiRequest<CreateServiceQuoteForWorkResponse>(`/api/services/works/${encodeURIComponent(workId)}/quote`, {
+    method: "POST",
+    auth: true,
+    body: { customerMessage: input.customerMessage, validUntil: input.validUntil, idempotencyKey },
+  });
+}

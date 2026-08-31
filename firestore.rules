@@ -236,7 +236,7 @@ service cloud.firestore {
     function serviceWorkAllowedFields() {
       return [
         'id', 'tenantUid', 'status', 'origin', 'customerId',
-        'sourceQuoteId', 'sourceQuoteVersionId',
+        'sourceQuoteId', 'sourceQuoteVersionId', 'quoteId',
         'items', 'totals', 'financialSummary', 'cost', 'createdAt', 'updatedAt',
         'startedAt', 'completedAt', 'cancelledAt'
       ];
@@ -481,6 +481,8 @@ service cloud.firestore {
         && data.get('customerId', '') is string
         && data.get('sourceQuoteId', '') is string
         && data.get('sourceQuoteId', '').size() <= 120
+        && data.get('quoteId', '') is string
+        && data.get('quoteId', '').size() <= 120
         && data.get('sourceQuoteVersionId', '') is string
         && data.get('sourceQuoteVersionId', '').size() <= 120
         && data.items is list
@@ -516,7 +518,7 @@ service cloud.firestore {
         && data.status == 'planned'
         && data.keys().hasAll(['financialSummary'])
         && isZeroServiceWorkFinancialSummary(data.financialSummary)
-        && !data.keys().hasAny(['sourceQuoteId', 'sourceQuoteVersionId'])
+        && !data.keys().hasAny(['sourceQuoteId', 'sourceQuoteVersionId', 'quoteId'])
         && !data.keys().hasAny(['startedAt', 'completedAt', 'cancelledAt'])
         && data.createdAt == data.updatedAt;
     }
@@ -534,6 +536,7 @@ service cloud.firestore {
         && request.resource.data.get('cancelledAt', null) == resource.data.get('cancelledAt', null)
         && request.resource.data.get('sourceQuoteId', '') == resource.data.get('sourceQuoteId', '')
         && request.resource.data.get('sourceQuoteVersionId', '') == resource.data.get('sourceQuoteVersionId', '')
+        && request.resource.data.get('quoteId', '') == resource.data.get('quoteId', '')
         && request.resource.data.get('financialSummary', null) == resource.data.get('financialSummary', null)
         && changed.hasOnly(['customerId', 'items', 'totals', 'cost', 'updatedAt'])
         && changed.hasAny(['updatedAt'])
