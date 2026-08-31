@@ -2,157 +2,185 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { evaluateBudgets, kb } from './bundle-budget-core.mjs';
+
+// PERF-BUDGET-ARCH-01 — redesenho do gate de performance para a arquitetura lazy real do app (Services
+// SERV-UI-01/02/03 empurraram o total JS quase até o teto do budget único antigo, 3 vezes seguidas, mesmo
+// sendo 100% código lazy/sob-demanda que nunca toca o boot). A partir de agora:
+//
+// 1. Initial boot é gate rígido (a árvore de `imports` estáticos do entry, via dist/public/.vite/manifest.json
+//    — nunca `dynamicImports`, nunca regex de filename+hash).
+// 2. Cada rota lazy tem budget explícito por nome lógico; sem budget explícito, cai no teto default — uma
+//    rota nova gigante não passa só porque o total global ainda cabe.
+// 3. Vendor chunks relevantes têm budget pelo mesmo motivo/mecanismo.
+// 4. Total JS/gzip viram safety ceilings (detectam crescimento absurdo do artefato inteiro), não o gate
+//    principal — não devem subir a cada ticket de feature legítima.
+// 5. Nenhum budget deste arquivo deve subir automaticamente num ticket de feature — só depois de uma
+//    auditoria real mostrando que não há economia segura (mesmo processo já usado nas rodadas anteriores,
+//    documentado nos commits SERV-UI-01/02/03 no histórico deste arquivo).
+//
+// Lógica de avaliação pura em ./bundle-budget-core.mjs (testada isoladamente em
+// script/performance-bundle-budget-tests.ts, sem precisar de um build real do Vite).
 
 const root = process.cwd();
-const assetsDir = path.join(root, 'dist', 'public', 'assets');
+const distDir = path.join(root, 'dist', 'public');
+const assetsDir = path.join(distDir, 'assets');
+const manifestPath = path.join(distDir, '.vite', 'manifest.json');
 
-const budgets = [
-  // PROMOTIONAL-CAMPAIGNS-HOTFIX-02: main já excedia o budget anterior (175 kB) em clean checkout antes
-  // deste hotfix (175.51 kB) — o guardrail não representava mais o baseline real do projeto. Recalibrado
-  // minimamente (175 -> 177 kB) para refletir o baseline real + o card de imagem deste hotfix (176.31 kB).
-  { label: 'main css', pattern: /^index-.*\.css$/, maxKb: 177 },
-  { label: 'entry js', pattern: /^index-.*\.js$/, maxKb: 35 },
-  { label: 'dashboard route', pattern: /^dashboard-.*\.js$/, maxKb: 55 },
-  // RELEASE-QUALITY-04: onboarding subiu por um deslocamento marginal de chunk (o novo ThemeProvider
-  // global em main.tsx muda como o Vite particiona os bundles, não código novo na própria rota).
-  { label: 'onboarding route', pattern: /^onboarding-.*\.js$/, maxKb: 26 },
-  { label: 'add-product route', pattern: /^add-product-.*\.js$/, maxKb: 35 },
-  // REVENDASMART-LGPD-ANPD-REMEDIATION-01 Fase 7: +1kB pela busca sob demanda da chave Pix (minimização
-  // de exposição — o valor não vem mais na carga inicial do catálogo).
-  { label: 'public catalog route', pattern: /^public-catalog-.*\.js$/, maxKb: 31 },
-  { label: 'reports route', pattern: /^reports-.*\.js$/, maxKb: 35 },
-  // RELEASE-QUALITY-04: +2kB para o seletor de aparência (Sistema/Claro/Escuro) exigido pelo ticket.
-  // RC-04: +2kB para tornar "Indique e ganhe" descobrível (entrada no menu Conta já existia noutro
-  // arquivo) — código isolado do link, progresso visual (§12) e o fix real do compartilhamento nativo
-  // Android (@capacitor/share, que antes silenciosamente caía para clipboard no WebView) exigidos pelo ticket.
-  // OWNER-ACCESS-02: +1kB para a entrada condicional "Administração" no menu Conta (useAdminAccess +
-  // lazy import + checagem isAdmin) — o painel em si (AdminGrantsPanel) é lazy-loaded em chunk PRÓPRIO
-  // (AdminGrantsPanel-*.js, fora deste orçamento) e só baixa para quem já é admin.
-  { label: 'settings route', pattern: /^settings-.*\.js$/, maxKb: 56 },
-  { label: 'store intelligence panel', pattern: /^StoreIntelligencePanel-.*\.js$/, maxKb: 18, optional: true },
-  { label: 'scanner vendor', pattern: /^vendor-scanner-.*\.js$/, maxKb: 430 },
-  { label: 'recharts vendor', pattern: /^vendor-recharts-.*\.js$/, maxKb: 350 },
-];
+const config = {
+  // PERF-BUDGET-ARCH-01 — medido em 2026-08-31, build limpo do commit ace0dab: 484827 bytes (recursão real
+  // de `imports` a partir de index.html: index + vendor-react-core + vendor-misc + vendor-ui +
+  // vendor-app-runtime + vendor-radix). Budget = baseline + ~1,5% (492000 bytes), a mesma ordem de grandeza
+  // sugerida pelo ticket (baseline + no máximo ~2%) — margem pequena o bastante para pegar um import lazy
+  // virando eager por acidente, folgada o bastante para não quebrar em nondeterminism de build.
+  initialBoot: {
+    baselineBytes: 484827,
+    budgetBytes: 492000,
+  },
 
-// PROMOTIONAL-CAMPAIGNS-01C — orçamento total elevado de 2265 -> 2280 kB, autorizado explicitamente
-// pelo ticket após confirmar que o boot inicial (index.js + vendor chunks pré-carregados) não regrediu
-// materialmente (+0,63 kB / 0,11%): Sorteios Promocionais é admin-only e permanece 100% lazy (nunca
-// referenciado por App.tsx/PrivateRouter fora de `lazy(() => import(...))`), então o excesso de ~11 kB
-// no total somado vem só dos chunks sob demanda de /sorteios e /sorteio/:slug, nunca do caminho crítico
-// do vendedor comum.
-//
-// SERV-UI-01 — orçamento elevado de 2280 -> 2320 kB (JS) e 700 -> 705 kB (gzip), autorizado explicitamente
-// pelo ticket após PERF-BUNDLE-03 comprovar que não havia mais nenhuma economia segura disponível (todo o
-// conteúdo de vendor-misc já é dependência transitiva de libs realmente em uso — recharts/radix/react-
-// query/capacitor — e a remoção medida de todo código shadcn/npm comprovadamente morto rendeu 0 kB, já que
-// o tree-shaking já os excluía). A Agenda operacional (service-agenda-*.js, ~37 kB raw / ~10,4 kB gzip) é
-// 100% lazy-loaded (`lazy(() => import("@/pages/service-agenda"))` em PrivateRouter.tsx, nunca referenciada
-// no boot eager) e não usa nenhuma dependência nova (zero libs de calendário, zero recharts) — reaproveita
-// só componentes/helpers já existentes (Layout, Sheet, Dialog, ConfirmActionDialog, EmptyState, date-utils,
-// os wrappers de comando de Services já aprovados). INITIAL_BOOT_REGRESSION_BYTES = 0, confirmado medindo
-// o boot antes/depois do build.
-//
-// SERV-UI-02 — orçamento elevado de 2320 -> 2333 kB (JS) e 705 -> 710 kB (gzip), autorizado explicitamente
-// pelo ticket após uma auditoria real: a única ineficiência genuína encontrada (um <Select> do
-// @radix-ui/react-select nunca usado em nenhuma outra tela deste app, que puxaria vendor-radix de ~35 para
-// ~54 kB só por essa tela) já foi corrigida trocando para <select> nativo — sem essa correção o excesso
-// teria sido de ~35 kB em vez de ~13 kB. O restante (client/src/pages/service-availability-settings.tsx,
-// ~11,4 kB, e as novas funções puras de rascunho de expediente em service-agenda-helpers.ts, ~2,7 kB) é
-// conteúdo real da tela de configuração de disponibilidade (editor de expediente semanal + folgas/
-// bloqueios), 100% lazy-loaded, sem nenhuma dependência nova. INITIAL_BOOT_REGRESSION_BYTES = 0.
-//
-// SERV-UI-03 — orçamento elevado de 2333 -> 2358 kB (JS) e 710 -> 716 kB (gzip), autorizado explicitamente
-// pelo ticket após uma auditoria em duas rodadas: (1) a autoria/edição inline de orçamento (criar Quote a
-// partir de um Work já existente) foi cortada de escopo — o domínio atual não tem um campo que ligue
-// permanentemente um novo Quote a um Work pré-existente (só o caminho inverso, Quote aceito -> convert ->
-// cria um Work novo), então essa funcionalidade foi removida em vez de implementada sobre uma associação
-// inventada (dívida registrada como SERV-QUOTE-LINK-01); isso rendeu só ~2,8 kB (o formulário era pequeno
-// perto do resto da tela). (2) confirmado sem dependência nova, sem novo vendor chunk, zero Recharts/Mercado
-// Pago/lógica de Sale — o restante do peso é a tela de atendimento em si (client/src/pages/service-work-
-// detail.tsx, ~21,5 kB) usando pela primeira vez os wrappers finos de comando já aprovados (service-work-
-// commands.ts, service-payment-commands.ts, service-quotes-persistence.ts, service-payments-persistence.ts)
-// para lifecycle (iniciar/concluir/cancelar, cancelamento coerente com Booking quando existente), leitura de
-// Quote relacionado, resumo financeiro derivado e registro de Payment/Refund — tudo 100% lazy-loaded
-// (`lazy(() => import("@/pages/service-work-detail"))` em PrivateRouter.tsx). INITIAL_BOOT_REGRESSION_BYTES = 0.
-const totalBudgets = {
-  jsKb: 2358,
-  jsGzipKb: 716,
+  // PERF-BUDGET-ARCH-01 — budget = tamanho atual + margem pequena (rotas grandes ~8%, médias/pequenas
+  // ~15-25%, arredondado). Nomes vêm de `entry.name` no manifest do Vite (o nome lógico do entry point,
+  // nunca do filename com hash) — imune a coincidência de prefixo entre rotas (ex.: "service-agenda" vs
+  // "service-agenda-helpers", que uma regex `/^service-agenda-.*\.js$/` teria confundido).
+  routes: {
+    'marketing': 236,
+    'settings': 60,
+    'add-product': 36,
+    'public-catalog': 35,
+    'reports': 29,
+    'onboarding': 29,
+    'service-work-detail': 29,
+    'service-agenda': 20,
+    'catalog': 16,
+    'service-availability-settings': 15,
+    'dashboard': 15,
+  },
+  // Nenhuma rota lazy nova passa "de graça" só porque o total global ainda cabe (ticket §6) — cobre
+  // orders/billings/sell/subscribe/products/client-detail/admin/clients e qualquer rota futura ainda não
+  // auditada individualmente. Maior rota hoje sem budget explícito: orders (30.01 kB) — folga confortável.
+  defaultRouteBudgetKb: 40,
+
+  // PERF-BUDGET-ARCH-01 — mesmo raciocínio dos budgets de rota, agora para os vendor chunks manuais de
+  // vite.config.ts. Objetivo: capturar um novo pacote Radix, uma lib inteira importada sem tree-shaking,
+  // ou uma dependência duplicada — sem exigir que ninguém audite manualmente todo build.
+  vendor: {
+    'vendor-recharts': 352,
+    'vendor-firebase-firestore': 286,
+    'vendor-react-core': 204,
+    'vendor-misc': 198,
+    'vendor-scanner': 163,
+    'vendor-firebase-core': 91,
+    'vendor-firebase-auth': 82,
+    'vendor-firebase-observability': 60,
+    'vendor-radix': 40,
+    'vendor-ui': 36,
+    'vendor-lucide': 35,
+    'vendor-qrcode': 20,
+  },
+  defaultVendorBudgetKb: 40,
+
+  // Budget individual só nos chunks compartilhados claramente críticos (reaproveitados entre várias rotas
+  // lazy de Services/Catalog); os demais só aparecem no relatório quando crescem além do limiar de
+  // visibilidade — evita dezenas de regras frágeis por arquivo pequeno (ticket §8).
+  sharedChunks: {
+    'PrivateRouter': 38,
+    'CatalogShowcase': 29,
+    'service-agenda-helpers': 28,
+  },
+  sharedChunkVisibilityThresholdKb: 8,
+
+  // PERF-BUDGET-ARCH-01 — total JS deixa de ser o gate principal (era 2358 kB com só 0,38 kB de margem
+  // real após SERV-UI-03, um teto insustentável para arquitetura lazy). Vira um safety ceiling: detecta
+  // crescimento absurdo do artefato inteiro, não bloqueia cada rota lazy legítima (essa proteção já é feita
+  // pelos budgets de rota/vendor acima). Baseline real: 2357.62 kB / 715.32 kB gzip. Teto escolhido dentro
+  // da faixa sugerida pelo ticket (2500-2600 kB): 2550 kB dá ~192 kB (~8%) de headroom, espaço planejado
+  // para os próximos blocos conhecidos (SERV-PUBLIC-01, polish final de Services, Ads Pro) sem precisar
+  // reabrir este arquivo a cada ticket — sem ser um cheque em branco. Gzip proporcional à mesma margem.
+  totalSafetyCeiling: {
+    jsKb: 2550,
+    gzipKb: 775,
+  },
+
+  maxSingleAssetKb: 500,
+
+  forbiddenFrontendChunks: [
+    { label: 'date-fns frontend vendor', match: (name) => name === 'vendor-date-fns' },
+  ],
 };
 
-const maxSingleAssetKb = 500;
-
-const forbiddenFrontendChunks = [
-  { label: 'date-fns frontend vendor', pattern: /^vendor-date-fns-.*\.js$/ },
+// CSS não passa pela mesma árvore lazy/vendor — continua um check simples e isolado (só o entry principal).
+const cssBudgets = [
+  { label: 'main css', pattern: /^index-.*\.css$/, maxKb: 177 },
 ];
-
-function kb(bytes) {
-  return Math.round((bytes / 1024) * 100) / 100;
-}
 
 if (!fs.existsSync(assetsDir)) {
   console.error('dist/public/assets não encontrado. Rode npm run build antes de performance:bundle-check.');
   process.exit(1);
 }
-
-const files = fs.readdirSync(assetsDir)
-  .filter((name) => name.endsWith('.js') || name.endsWith('.css'))
-  .map((name) => {
-    const file = path.join(assetsDir, name);
-    const raw = fs.readFileSync(file);
-    return {
-      name,
-      sizeKb: kb(raw.length),
-      gzipKb: kb(zlib.gzipSync(raw).length),
-      type: path.extname(name).slice(1),
-    };
-  });
-
-const errors = [];
-for (const forbidden of forbiddenFrontendChunks) {
-  const matches = files.filter((file) => forbidden.pattern.test(file.name));
-  for (const file of matches) {
-    errors.push(`${forbidden.label}: ${file.name} não deve voltar ao bundle do frontend`);
-  }
+if (!fs.existsSync(manifestPath)) {
+  console.error('dist/public/.vite/manifest.json não encontrado. Confirme que vite.config.ts tem build.manifest=true e rode npm run build.');
+  process.exit(1);
 }
 
-for (const budget of budgets) {
-  const matches = files.filter((file) => budget.pattern.test(file.name));
+const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+
+const allFiles = fs.readdirSync(assetsDir).filter((name) => name.endsWith('.js') || name.endsWith('.css'));
+const assetSizes = {};
+for (const name of allFiles) {
+  const raw = fs.readFileSync(path.join(assetsDir, name));
+  assetSizes[`assets/${name}`] = { rawBytes: raw.length, gzipBytes: zlib.gzipSync(raw).length };
+}
+
+const errors = [];
+for (const budget of cssBudgets) {
+  const matches = allFiles.filter((name) => budget.pattern.test(name));
   if (matches.length === 0) {
-    if (budget.optional) continue;
     errors.push(`${budget.label}: asset não encontrado (${budget.pattern})`);
     continue;
   }
-  for (const file of matches) {
-    if (file.sizeKb > budget.maxKb) {
-      errors.push(`${budget.label}: ${file.name} ${file.sizeKb} kB > ${budget.maxKb} kB`);
-    }
+  for (const name of matches) {
+    const rawKb = kb(assetSizes[`assets/${name}`].rawBytes);
+    if (rawKb > budget.maxKb) errors.push(`${budget.label}: ${name} ${rawKb} kB > ${budget.maxKb} kB`);
   }
 }
 
-for (const file of files) {
-  if (file.sizeKb > maxSingleAssetKb) {
-    errors.push(`${file.name}: ${file.sizeKb} kB > ${maxSingleAssetKb} kB por asset individual`);
+const result = evaluateBudgets({ manifest, assetSizes, config });
+errors.push(...result.errors);
+
+console.log('=== Bundle Performance ===');
+console.log('');
+console.log('TOTAL');
+console.log(`  JS:   ${result.totalJsKb} / ${result.totalJsCeilingKb} kB`);
+console.log(`  Gzip: ${result.totalGzipKb} / ${result.totalGzipCeilingKb} kB`);
+console.log('');
+console.log('INITIAL BOOT');
+console.log(`  ${result.bootBytes} / ${result.bootBudgetBytes} bytes`);
+console.log('');
+console.log('VENDOR');
+for (const v of result.vendors) {
+  console.log(`  ${v.name}: ${v.rawKb} / ${v.budgetKb} kB gzip=${v.gzipKb} kB${v.budgetSource === 'default' ? ' (default budget)' : ''}${v.ok ? '' : '  FAIL'}`);
+}
+console.log('');
+console.log('LAZY ROUTES');
+for (const r of result.routes) {
+  console.log(`  ${r.name}: ${r.rawKb} / ${r.budgetKb} kB gzip=${r.gzipKb} kB${r.budgetSource === 'default' ? ' (default budget)' : ''}${r.ok ? '' : '  FAIL'}`);
+}
+if (result.sharedChunks.length) {
+  console.log('');
+  console.log('SHARED CHUNKS');
+  for (const s of result.sharedChunks) {
+    const budgetLabel = s.budgetKb === null ? '(sem budget — só visibilidade)' : `/ ${s.budgetKb} kB`;
+    console.log(`  ${s.name}: ${s.rawKb} kB ${budgetLabel} gzip=${s.gzipKb} kB${s.ok ? '' : '  FAIL'}`);
   }
 }
-
-const jsFiles = files.filter((file) => file.type === 'js');
-const totalJsKb = kb(jsFiles.reduce((sum, file) => sum + file.sizeKb * 1024, 0));
-const totalJsGzipKb = kb(jsFiles.reduce((sum, file) => sum + file.gzipKb * 1024, 0));
-if (totalJsKb > totalBudgets.jsKb) errors.push(`total JS: ${totalJsKb} kB > ${totalBudgets.jsKb} kB`);
-if (totalJsGzipKb > totalBudgets.jsGzipKb) errors.push(`total JS gzip: ${totalJsGzipKb} kB > ${totalBudgets.jsGzipKb} kB`);
-
-console.log('Performance bundle budget check');
-console.log(`Assets analisados: ${files.length}`);
-console.log(`Total JS: ${totalJsKb} kB`);
-console.log(`Total JS gzip: ${totalJsGzipKb} kB`);
-for (const file of files.sort((a, b) => b.sizeKb - a.sizeKb).slice(0, 12)) {
-  console.log(`${file.name}: ${file.sizeKb} kB gzip=${file.gzipKb} kB`);
-}
+console.log('');
 
 if (errors.length) {
   console.error('Budget violations:');
   for (const error of errors) console.error(`- ${error}`);
+  console.log('');
+  console.log('RESULT: FAIL');
   process.exit(1);
 }
 
-console.log('OK');
+console.log('RESULT: PASS');
