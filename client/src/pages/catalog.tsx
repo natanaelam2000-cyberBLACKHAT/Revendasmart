@@ -164,7 +164,6 @@ export default function Catalog() {
       notifyWarning("Configure o link do seu catálogo em Configurações antes de compartilhar.");
       return;
     }
-    const user = getFirebaseAuth()?.currentUser;
     const text = `Confira meu catálogo de produtos! ${catalogUrl}`;
     if (typeof navigator.share === "function") {
       try {
