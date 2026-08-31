@@ -6,7 +6,7 @@
  */
 import { getApiUrl } from "@/lib/api-config";
 
-export type ServerUploadKind = "product" | "logo" | "cutout" | "campaign-prize" | "product-thumbnail";
+export type ServerUploadKind = "product" | "logo" | "cutout" | "campaign-prize" | "product-thumbnail" | "marketing-pro-ad";
 
 export interface ServerUploadResult {
   readonly storagePath: string;

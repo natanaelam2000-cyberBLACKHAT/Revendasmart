@@ -685,8 +685,43 @@ service cloud.firestore {
         'templateId', 'themeId', 'price', 'priceText', 'headline', 'note', 'ctaText', 'storeName',
         'storeLogoUrl', 'primaryColor', 'showBrand', 'showVolume', 'showStockStatus',
         'showWhatsAppCta', 'backgroundStyle', 'catalogUrl', 'createdAt', 'createdAtISO',
-        'updatedAt', 'updatedAtISO', 'source', 'productAssetSnapshot'
+        'updatedAt', 'updatedAtISO', 'source', 'productAssetSnapshot',
+        // ADS-PRO-03 — identidade reproduzível do Anúncios Pro. Todos OPCIONAIS: histórico clássico
+        // (existente e futuro) nunca os envia e continua válido sem eles.
+        'mode', 'composerVersion', 'creativeFamily', 'creativeConceptId', 'format',
+        'proBackground', 'proCutout'
       ];
+    }
+
+    function isValidProBackground(background) {
+      return background is map
+        && background.keys().hasOnly(['sourceType', 'backgroundId', 'backgroundVersion', 'backgroundFamily', 'generationId'])
+        && background.keys().hasAll(['sourceType'])
+        && background.sourceType is string
+        && background.sourceType in ['GENERATED_DETERMINISTIC', 'STATIC_ASSET', 'AI_GENERATED']
+        && background.get('backgroundId', '') is string
+        && background.get('backgroundId', '').size() <= 120
+        && background.get('backgroundVersion', 1) is int
+        && background.get('backgroundVersion', 1) > 0
+        && background.get('backgroundFamily', '') is string
+        && background.get('backgroundFamily', '').size() <= 40
+        && background.get('generationId', '') is string
+        && background.get('generationId', '').size() <= 120;
+    }
+
+    function isValidProCutout(cutout) {
+      return cutout is map
+        && cutout.keys().hasOnly(['cutoutAssetId', 'storagePath', 'sourceAssetId'])
+        && cutout.keys().hasAll(['cutoutAssetId', 'storagePath'])
+        && cutout.cutoutAssetId is string
+        && cutout.cutoutAssetId.size() > 0
+        && cutout.cutoutAssetId.size() <= 512
+        && cutout.storagePath is string
+        && cutout.storagePath.size() > 0
+        && cutout.storagePath.size() <= 1000
+        && !cutout.storagePath.matches('(?i)data:.*')
+        && cutout.get('sourceAssetId', '') is string
+        && cutout.get('sourceAssetId', '').size() <= 512;
     }
 
     function isValidProductAssetSnapshot(snapshot, historyProductId) {
@@ -739,7 +774,19 @@ service cloud.firestore {
         // `source` registra de onde o anúncio nasceu. É OPCIONAL — entradas legadas, criadas antes do
         // campo existir, não o têm e continuam válidas. Mas, quando presente, só os dois valores que
         // o app realmente produz são aceitos: nada de string arbitrária entrando no histórico.
-        && data.get('source', 'manual') in ['catalog', 'manual'];
+        && data.get('source', 'manual') in ['catalog', 'manual']
+        // ADS-PRO-03 — todos opcionais; histórico clássico nunca os envia.
+        && data.get('mode', 'classic') in ['classic', 'pro']
+        && data.get('composerVersion', 1) is int
+        && data.get('composerVersion', 1) > 0
+        && data.get('creativeFamily', '') is string
+        && data.get('creativeFamily', '').size() <= 40
+        && data.get('creativeConceptId', '') is string
+        && data.get('creativeConceptId', '').size() <= 80
+        && data.get('format', '') is string
+        && data.get('format', '') in ['', 'square', 'portrait', 'story']
+        && (!data.keys().hasAny(['proBackground']) || isValidProBackground(data.proBackground))
+        && (!data.keys().hasAny(['proCutout']) || isValidProCutout(data.proCutout));
     }
 
     function isValidMarketingHistoryCreate() {

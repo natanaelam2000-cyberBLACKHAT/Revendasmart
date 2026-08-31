@@ -58,8 +58,13 @@ function run(): void {
   // novamente", e nunca chama onBackToConcepts a partir do catch (nunca joga o usuário pro início).
   assert.match(panelSource, /lastReady\?: ReadyArt/);
   assert.match(panelSource, /state\.lastReady &&/, "F: a última arte pronta continua visível durante uma falha nova");
+  // ADS-PRO-03: persistProAdHistory (função à parte, definida ANTES de handleGenerate no arquivo) ganhou
+  // seu próprio "} catch {" — buscar a partir do início do arquivo pegaria o catch ERRADO. A busca agora
+  // começa em "const handleGenerate = ", o marcador único da função que este teste realmente audita.
+  const handleGenerateStart = panelSource.indexOf("const handleGenerate = ");
+  assert.ok(handleGenerateStart > -1, "F: handleGenerate precisa existir");
   assert.doesNotMatch(
-    panelSource.slice(panelSource.indexOf("} catch {"), panelSource.indexOf("} finally {")),
+    panelSource.slice(panelSource.indexOf("} catch {", handleGenerateStart), panelSource.indexOf("} finally {", handleGenerateStart)),
     /onBackToConcepts/,
     "F: uma falha de geração nunca volta o usuário para a tela de conceitos sozinha",
   );

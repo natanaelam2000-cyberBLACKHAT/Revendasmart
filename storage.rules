@@ -26,6 +26,15 @@ service firebase.storage {
       allow write: if false;
     }
 
+    // ADS-PRO-03 — imagem final do anúncio Pro persistida (composer canônico), path irmão dedicado
+    // (mesmo raciocínio do product-cutouts acima). SERVER_WRITE_ONLY: só server/uploads.ts (kind
+    // "marketing-pro-ad") grava aqui, via Admin SDK. Leitura pública porque o histórico usa a
+    // downloadUrl como thumbnail direto num <img>, sem autenticação — mesmo padrão do cutout aprovado.
+    match /users/{uid}/marketing-pro-ads/{entryId}/{fileName} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     match /users/{uid}/products/{allPaths=**} {
       allow read: if true;
       allow write: if false;

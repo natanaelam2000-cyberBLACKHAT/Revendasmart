@@ -700,7 +700,7 @@ assert.match(publicCatalog, /Enviar pedido no WhatsApp/);
   // §2 showPrice: nenhuma superfície do carrinho/WhatsApp pode revelar preço quando showPrice=false.
   assert.match(publicCatalog, /const showPrice = store\?\.showPrice !== false;/);
   assert.match(publicCatalog, /\{showPrice && \(/, "C: bloco de preço no carrinho precisa ser condicional a showPrice");
-  assert.match(publicCatalog, /showPrice\s*\n\s*\? `  Qtd: \$\{item\.quantity\} \| Subtotal:/, "C: mensagem do WhatsApp só inclui subtotal quando showPrice=true");
+  assert.match(publicCatalog, /showPrice\s*\n\s*\? ` {2}Qtd: \$\{item\.quantity\} \| Subtotal:/, "C: mensagem do WhatsApp só inclui subtotal quando showPrice=true");
   assert.match(publicCatalog, /if \(showPrice\) message \+= `💰 \*Total:/, "C: mensagem do WhatsApp só inclui total quando showPrice=true");
 
   // §3 allowWhatsappOrders: CTA de envio não pode continuar funcional quando desativado.
@@ -990,7 +990,10 @@ assert.deepEqual(mergeMarketingHistory([localOnlyHistory], [remoteOnlyHistory], 
 // correcao do P1-1: um callback atrasado nao pode ler/gravar no armazenamento da conta trocada.
 assert.match(marketingHistoryHook, /readLocal\(expectedUid\)/);
 assert.match(marketingHistoryHook, /mergeMarketingHistory\(readLocal\(expectedUid\), remote, readDeletedIds\(expectedUid\)\)/);
-assert.match(marketingHistoryHook, /catch \{ \/\* Firestore rules may deny this optional history; local history remains available\. \*\/ \}/);
+// ADS-PRO-03 reestruturou recordAction para um catch multi-linha (agora devolve {id, persisted} em vez
+// de void, para o caller Pro saber se a escrita remota realmente aconteceu) — a garantia (falha do
+// Firestore nunca propaga, histórico local sempre permanece disponível) continua a mesma.
+assert.match(marketingHistoryHook, /catch \{\s*\/\/ Firestore rules may deny this optional history; local history remains available\./);
 assert.match(marketingHistoryHook, /rs:marketing-history-deleted/);
 assert.doesNotMatch(marketingHistoryHook, /createdWithAI\s*:\s*true/);
 assert.doesNotMatch(marketing + marketingFlow, /from ["'](?:openai|@ai-sdk|ai)["']/);
@@ -6562,7 +6565,9 @@ for (const [name, source] of [["useProductPickerData (Vendas/Pedidos)", productP
 // localStorage e no Firestore. Com addDoc o servidor criava um id diferente do `local-*` e o merge,
 // que casa por id, enxergava dois registros para a mesma ação.
 assert.match(marketingHistoryLib, /export function createMarketingEntryId\(\): string \{/);
-assert.match(marketingHistoryHook, /const entryId = createMarketingEntryId\(\);/);
+// ADS-PRO-03: recordAction ganhou um explicitId opcional (para o caller Pro nomear o upload de Storage
+// com o MESMO id do documento) — sem ele, o id continua nascendo aqui exatamente como antes.
+assert.match(marketingHistoryHook, /const entryId = explicitId \|\| createMarketingEntryId\(\);/);
 assert.match(marketingHistoryHook, /await setDoc\(doc\(getFirestore\(\), "users", user\.uid, "marketingHistory", entryId\), \{ \.\.\.cleaned, createdAt: serverTimestamp\(\), createdAtISO \}\)/);
 assert.match(marketingHistoryHook, /const optimistic: MarketingHistoryEntry = \{ \.\.\.cleaned, id: entryId, createdAtISO, createdAt: null \}/);
 // (checa a CHAMADA, não a menção em comentário — o comentário explica justamente por que addDoc saiu)
@@ -6669,11 +6674,22 @@ assert.match(marketingPage, /assertProductAssetSnapshotMatches\(\{ snapshot: ent
 {
   // Checa DENTRO de cada função de repetição — contar ocorrências no arquivo inteiro pegaria também
   // shareAdBlob, que é do editor atual e já recebia a imagem por parâmetro desde antes desta sprint.
-  for (const [nome, marcador] of [["repeatShare", 'const repeatShare ='], ["repeatDownload", 'const repeatDownload =']] as const) {
+  // ADS-PRO-03 adicionou um ramo Pro (curto-circuita para entry.imageUrl direto, sem resolveEntryImage,
+  // já que um registro Pro já tem a arte final persistida — nunca a resolve de novo) ANTES do caminho
+  // clássico dentro destas mesmas funções — por isso a fatia usa o início da PRÓXIMA função como fim,
+  // nunca um tamanho fixo de caracteres (que ficaria curto demais para cobrir os dois ramos).
+  const marcadores = [
+    ["repeatShare", 'const repeatShare =', 'const repeatDownload ='],
+    ["repeatDownload", 'const repeatDownload =', 'const applyEntryToEditor ='],
+  ] as const;
+  for (const [nome, marcador, proximoMarcador] of marcadores) {
     const inicio = marketingPage.indexOf(marcador);
     assert.ok(inicio > 0, `${nome} precisa existir`);
-    const corpo = marketingPage.slice(inicio, inicio + 1200);
-    assert.match(corpo, /const historicalImage = await resolveEntryImage\(entry\);/, `${nome} precisa resolver a imagem da própria entrada`);
+    const fim = marketingPage.indexOf(proximoMarcador, inicio);
+    assert.ok(fim > inicio, `${nome} precisa ser seguido por ${proximoMarcador}`);
+    const corpo = marketingPage.slice(inicio, fim);
+    assert.match(corpo, /if \(entry\.mode === "pro"\) \{/, `${nome} precisa tratar um registro Pro sem recompor pelo compositor clássico`);
+    assert.match(corpo, /const historicalImage = await resolveEntryImage\(entry\);/, `${nome} precisa resolver a imagem da própria entrada no caminho clássico`);
     assert.match(corpo, /historicalImage\.identityVerified/, `${nome} precisa distinguir snapshot verificado de legacy`);
     assert.match(corpo, /preparedProductImage: historicalImage\.prepared/, `${nome} precisa usar o pacote preservado quando houver snapshot`);
   }
@@ -6814,7 +6830,9 @@ assert.match(firestoreRulesSource, /data\.get\('source', 'manual'\) in \['catalo
 assert.doesNotMatch(firestoreRulesSource, /data\.source is string;/, "source não pode ser aceito como string livre");
 
 // P0-A preservado: nada da sprint anterior pode ter regredido.
-assert.match(marketingHistoryHook, /const entryId = createMarketingEntryId\(\);/);
+// ADS-PRO-03: recordAction ganhou um explicitId opcional (para o caller Pro nomear o upload de Storage
+// com o MESMO id do documento) — sem ele, o id continua nascendo aqui exatamente como antes.
+assert.match(marketingHistoryHook, /const entryId = explicitId \|\| createMarketingEntryId\(\);/);
 assert.match(marketingHistoryHook, /marketingHistory", entryId\), \{ \.\.\.cleaned, createdAt: serverTimestamp\(\), createdAtISO \}/);
 assert.doesNotMatch(marketingHistoryHook, /addDoc\(/);
 assert.match(marketingHistoryLib, /export const isLocalOnlyMarketingEntryId/);

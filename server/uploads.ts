@@ -21,6 +21,10 @@
  *                                               (`thumb-v1.{jpg,webp}`) — o MESMO que firestore.rules já
  *                                               valida em `isValidProductImageFields` (PERFORMANCE-
  *                                               OPTIMIZATION-03B/03C), preexistente a este ticket.
+ *   POST   /api/uploads/marketing-pro-ad/:entryId → ADS-PRO-03: PNG final do Anúncios Pro (composer
+ *                                               canônico), um arquivo por registro de histórico —
+ *                                               :entryId é o mesmo id do documento marketingHistory,
+ *                                               nunca o productId (ver storagePathFor).
  *   DELETE /api/uploads/:kind[/:targetId]    → RELEASE-18: única forma de apagar um asset destes paths
  *                                               agora que storage.rules nega write/delete direto do
  *                                               client (ver `cleanupUploadedProductImages` em
@@ -56,10 +60,10 @@ function uploadError(message: string, errorMsg: string, details?: Record<string,
   logError("uploads.log", errorMsg, { message, details });
 }
 
-type UploadKind = "product" | "logo" | "cutout" | "campaign-prize" | "product-thumbnail";
+type UploadKind = "product" | "logo" | "cutout" | "campaign-prize" | "product-thumbnail" | "marketing-pro-ad";
 
 function isUploadKind(value: unknown): value is UploadKind {
-  return value === "product" || value === "logo" || value === "cutout" || value === "campaign-prize" || value === "product-thumbnail";
+  return value === "product" || value === "logo" || value === "cutout" || value === "campaign-prize" || value === "product-thumbnail" || value === "marketing-pro-ad";
 }
 
 /** Só alfanumérico/traço/underscore — nunca aceita `/`, `..` ou qualquer separador de path. */
@@ -86,6 +90,10 @@ function storagePathFor(uid: string, kind: UploadKind, targetId: string | null, 
   if (kind === "logo") return `users/${uid}/branding/store-logo.${ext}`;
   if (kind === "cutout") return `users/${uid}/product-cutouts/${targetId}/cutout-v1.png`;
   if (kind === "campaign-prize") return `users/${uid}/promotional-campaigns/${targetId}/prize.${ext}`;
+  // ADS-PRO-03 — targetId é o historyEntryId (único por geração, nunca o productId): cada anúncio Pro
+  // salvo no histórico precisa do PRÓPRIO arquivo, nunca sobrescrevendo o de uma geração anterior do
+  // mesmo produto (diferente de "cutout", que É um slot único por produto, sobrescrito por design).
+  if (kind === "marketing-pro-ad") return `users/${uid}/marketing-pro-ads/${targetId}/ad.png`;
   // PRODUCT-THUMBNAIL-01 — path canônico versionado, IDÊNTICO ao que firestore.rules exige em
   // isValidProductImageFields (`thumb-v1.jpg`/`thumb-v1.webp`, nunca `.png` — ver rejeição explícita de
   // formato em handleUpload abaixo). `.save()` sobrescreve determinísticamente o MESMO path a cada nova
@@ -144,7 +152,7 @@ async function handleUpload(req: Request, res: Response) {
   }
 
   const declaredMimeType = String(req.headers["content-type"] || "").split(";")[0].trim();
-  const limits = kind === "cutout" ? CUTOUT_UPLOAD_LIMITS : kind === "product-thumbnail" ? THUMBNAIL_UPLOAD_LIMITS : DEFAULT_IMAGE_UPLOAD_LIMITS;
+  const limits = kind === "cutout" || kind === "marketing-pro-ad" ? CUTOUT_UPLOAD_LIMITS : kind === "product-thumbnail" ? THUMBNAIL_UPLOAD_LIMITS : DEFAULT_IMAGE_UPLOAD_LIMITS;
   const validation = validateImageUploadBytes(bytes, declaredMimeType, limits);
 
   if (!validation.accepted) {
@@ -156,6 +164,12 @@ async function handleUpload(req: Request, res: Response) {
   if (kind === "cutout" && validation.format !== "image/png") {
     uploadWarn("upload_rejected", { kind, reason: "cutout-must-be-png" });
     return res.status(400).json({ error: "UPLOAD_REJECTED", reason: "cutout-must-be-png" });
+  }
+  // ADS-PRO-03 — canvasToPngBlob() (marketing-pro-real-background-composer.ts) só produz PNG; qualquer
+  // outro formato aqui já indica um caller fora do fluxo real.
+  if (kind === "marketing-pro-ad" && validation.format !== "image/png") {
+    uploadWarn("upload_rejected", { kind, reason: "marketing-pro-ad-must-be-png" });
+    return res.status(400).json({ error: "UPLOAD_REJECTED", reason: "marketing-pro-ad-must-be-png" });
   }
   // PRODUCT-THUMBNAIL-01 — firestore.rules só reconhece thumbnailStoragePath terminado em .jpg/.webp
   // (nunca .png) como path canônico válido; rejeitar aqui evita gravar um arquivo cujo path nunca
@@ -226,6 +240,7 @@ const UPLOAD_FORMATS_BY_KIND: Record<UploadKind, readonly string[]> = {
   cutout: ["image/png"],
   "campaign-prize": ["image/jpeg", "image/png", "image/webp"],
   "product-thumbnail": ["image/jpeg", "image/webp"],
+  "marketing-pro-ad": ["image/png"],
 };
 
 /** RELEASE-18 §7: só permite apagar um path que `storagePathFor` teria produzido para o PRÓPRIO uid

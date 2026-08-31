@@ -42,6 +42,38 @@ export interface MarketingHistoryEntry {
   showWhatsAppCta?: boolean;
   backgroundStyle?: MarketingBackgroundStyle;
   catalogUrl?: string;
+  /**
+   * ADS-PRO-03 — discrimina uma entrada do Anúncios Pro (composer canônico + library) de uma entrada do
+   * editor clássico. Ausente = clássico (todo histórico existente antes deste campo continua válido sem
+   * migração — ver marketingHistoryAllowedFields/isValidMarketingHistoryShape em firestore.rules).
+   */
+  mode?: "classic" | "pro";
+  /** Versão do composer canônico que produziu este registro (marketing-pro-real-background-composer.ts). */
+  composerVersion?: number;
+  /** CreativeFamily real que controlou o layout (§11 — a família, não PROFESSIONAL_LAYOUTS.productRect,
+   * é a identidade de template efetiva: resolveMarketingProProductPlacement decide a geometria por ela). */
+  creativeFamily?: string;
+  creativeConceptId?: string;
+  /** MarketingProFormat usado nesta geração — hoje sempre "square" no fluxo real, mas o campo já existe
+   * para quando 4:5 for ligado (ADS-PRO-02 §21 manteve a arquitetura pronta para portrait). */
+  format?: string;
+  /** Identidade do background resolvido (ADS-PRO-02) OU gerado por IA — nunca os pixels, só a
+   * identidade: para library, backgroundId/backgroundVersion/backgroundFamily fixam exatamente qual
+   * asset e QUAL VERSÃO foi usado, mesmo que a library evolua depois (§18/§19: histórico nunca resolve
+   * "latest" silenciosamente). Para IA, só generationId (nada mais é reproduzível hoje, §20). */
+  proBackground?: {
+    sourceType: string;
+    backgroundId?: string;
+    backgroundVersion?: number;
+    backgroundFamily?: string;
+    generationId?: string;
+  };
+  /** Identidade do cutout aprovado usado — nunca os bytes da imagem (§8/§21), só referências. */
+  proCutout?: {
+    cutoutAssetId: string;
+    storagePath: string;
+    sourceAssetId?: string;
+  };
   createdAt?: { toDate?: () => Date } | null;
   createdAtISO: string;
   updatedAt?: { toDate?: () => Date } | null;
@@ -111,19 +143,35 @@ export function useMarketingHistory() {
       unsubscribeAuth();
     };
   }, []);
-  const recordAction = useCallback(async (entry: NewMarketingEntry) => {
-    const user = getFirebaseAuth()?.currentUser; if (!user) return;
+  /**
+   * ADS-PRO-03 — `explicitId` permite a um caller (ex.: ProAdGenerationPanel) decidir o id ANTES de
+   * chamar `recordAction`, para usar o MESMO id como nome do arquivo já persistido em Storage — sem
+   * isso, o id só existiria depois que este hook o gerasse internamente, tarde demais para nomear o
+   * upload. Chamadas existentes (sem segundo argumento) continuam gerando o id aqui, como sempre.
+   *
+   * O retorno informa se a escrita REMOTA (Firestore) realmente aconteceu — a otimista local sempre
+   * acontece, mas o caller que precisa decidir se avisa o usuário que "não salvou no histórico" (§14)
+   * precisa saber a diferença, o que o comportamento anterior (void, catch silencioso) não permitia.
+   */
+  const recordAction = useCallback(async (entry: NewMarketingEntry, explicitId?: string): Promise<{ readonly id: string; readonly persisted: boolean }> => {
+    const user = getFirebaseAuth()?.currentUser;
+    const entryId = explicitId || createMarketingEntryId();
+    if (!user) return { id: entryId, persisted: false };
     const cleaned = cleanEntry(entry as unknown as Record<string, unknown>) as NewMarketingEntry;
-    // UMA ação = UMA entrada. O id é decidido AQUI, antes de qualquer persistência, e é o mesmo no
-    // estado otimista, no localStorage e no documento do Firestore. Com addDoc o servidor gerava um
-    // id diferente do `local-*` otimista e o merge — que casa por id — enxergava dois registros para
-    // a mesma ação, duplicando o histórico a cada geração/compartilhamento.
-    const entryId = createMarketingEntryId();
+    // UMA ação = UMA entrada. O id é decidido AQUI (ou recebido já decidido), antes de qualquer
+    // persistência, e é o mesmo no estado otimista, no localStorage e no documento do Firestore. Com
+    // addDoc o servidor gerava um id diferente do `local-*` otimista e o merge — que casa por id —
+    // enxergava dois registros para a mesma ação, duplicando o histórico a cada geração/compartilhamento.
     const createdAtISO = new Date().toISOString();
     const optimistic: MarketingHistoryEntry = { ...cleaned, id: entryId, createdAtISO, createdAt: null };
     setEntries(current => { const next = [optimistic, ...current].slice(0, 200); saveLocal(user.uid, next); return next; });
-    try { await setDoc(doc(getFirestore(), "users", user.uid, "marketingHistory", entryId), { ...cleaned, createdAt: serverTimestamp(), createdAtISO }); }
-    catch { /* Firestore rules may deny this optional history; local history remains available. */ }
+    try {
+      await setDoc(doc(getFirestore(), "users", user.uid, "marketingHistory", entryId), { ...cleaned, createdAt: serverTimestamp(), createdAtISO });
+      return { id: entryId, persisted: true };
+    } catch {
+      // Firestore rules may deny this optional history; local history remains available.
+      return { id: entryId, persisted: false };
+    }
   }, []);
   const updateEntry = useCallback(async (id: string, patch: Partial<NewMarketingEntry>) => {
     const user = getFirebaseAuth()?.currentUser; if (!user || !id) return;

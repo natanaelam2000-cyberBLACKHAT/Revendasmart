@@ -13,6 +13,7 @@ import {
 import {
   composeMarketingProProfessionalAdPreview,
   canvasToPngBlob,
+  MARKETING_PRO_COMPOSER_VERSION,
 } from "@/lib/marketing-pro-real-background-composer";
 import {
   resolveMarketingProBackground,
@@ -22,6 +23,9 @@ import {
 import { resolveMarketingProCategory, type MarketingProCategory } from "@shared/marketing-pro-contract";
 import { formatCurrency } from "@/lib/product-pricing";
 import { buildProductTruthFromProduct } from "@/lib/product-truth-adapter";
+import { useMarketingHistory, createMarketingEntryId, type NewMarketingEntry } from "@/hooks/useMarketingHistory";
+import { uploadImageViaServer } from "@/lib/server-upload";
+import { getFirebaseAuth } from "@/lib/firebase";
 
 /**
  * PRO-13UI — preview final do Anúncios Pro (produto → conceito escolhido → arte real → export).
@@ -91,6 +95,9 @@ interface ReadyArt {
   readonly previewUrl: string;
   readonly pngBlob: Blob;
   readonly identity: ProAdCreativeIdentity;
+  /** ADS-PRO-03 §14 — a geração visual nunca é bloqueada por uma falha de upload/histórico, mas a UI
+   * precisa saber a diferença para nunca mentir com sucesso silencioso quando o registro não foi salvo. */
+  readonly historyPersisted: boolean;
 }
 
 type GenerationState =
@@ -156,6 +163,87 @@ async function composeLibraryBackground(input: {
   throw lastError;
 }
 
+/**
+ * ADS-PRO-03 — persiste o resultado do composer canônico no MESMO histórico do editor clássico
+ * (ONE_MARKETING_HISTORY_SYSTEM), nunca uma collection paralela. Sobe o PNG JÁ GERADO (nunca
+ * re-renderiza — §26, PREVIEW_EXPORT_HISTORY_IMAGE_PARITY) pelo endpoint de upload já existente
+ * (`kind: "marketing-pro-ad"`) e grava um registro com identidade suficiente para reconstruir o
+ * criativo (§5) sem depender do estado atual do produto/branding/library (§6-§9, §18): tudo aqui é um
+ * SNAPSHOT do momento da geração, nunca uma referência que se resolve de novo no futuro. Nunca lança —
+ * uma falha de upload/histórico nunca pode invalidar uma geração visual que já funcionou (§14); o caller
+ * só recebe se persistiu de verdade, para nunca mentir com sucesso silencioso.
+ */
+async function persistProAdHistory(input: {
+  readonly entryId: string;
+  readonly pngBlob: Blob;
+  readonly product: Product;
+  readonly productTruth: ProductTruth;
+  readonly branding: { readonly storeName?: string; readonly storeLogoUrl?: string; readonly primaryColor?: string };
+  readonly identity: ProAdCreativeIdentity;
+  readonly approvedCutoutSource: ApprovedProductCutout;
+  readonly recordAction: (entry: NewMarketingEntry, explicitId?: string) => Promise<{ readonly id: string; readonly persisted: boolean }>;
+}): Promise<boolean> {
+  try {
+    const token = await getFirebaseAuth()?.currentUser?.getIdToken();
+    if (!token) return false;
+    const uploadResult = await uploadImageViaServer({ kind: "marketing-pro-ad", targetId: input.entryId, blob: input.pngBlob, token });
+
+    // §6: preço EFETIVO exibido na arte, mesma regra de drawCommercialTruth (marketing-pro-real-background-composer.ts)
+    // — o snapshot precisa representar o que foi RENDERIZADO, nunca recalcular diferente depois.
+    const { salePrice, promotionalPrice } = input.productTruth;
+    const promotional = typeof promotionalPrice === "number" && promotionalPrice > 0 && typeof salePrice === "number" && promotionalPrice < salePrice;
+    const effectivePrice = promotional ? promotionalPrice : salePrice;
+    const priceText = typeof effectivePrice === "number" ? formatCurrency(effectivePrice) : "";
+
+    // §9/§18/§19: identidade do background exatamente como resolvida para ESTA geração — nunca
+    // recalculada aqui, nunca "a versão mais recente" no momento da leitura futura.
+    const proBackground = input.identity.background.sourceType === "AI_GENERATED"
+      ? { sourceType: input.identity.background.sourceType, generationId: input.identity.background.generationId }
+      : {
+        sourceType: input.identity.background.sourceType,
+        backgroundId: input.identity.background.backgroundId,
+        backgroundVersion: input.identity.background.backgroundVersion,
+        backgroundFamily: input.identity.background.backgroundFamily,
+      };
+
+    const entry: NewMarketingEntry = {
+      action: "generated",
+      mode: "pro",
+      composerVersion: input.identity.composerVersion,
+      creativeFamily: input.identity.creativeFamily,
+      creativeConceptId: input.identity.creativeConceptId,
+      format: input.identity.format,
+      productId: input.product.id,
+      productName: input.productTruth.name,
+      productBrand: input.productTruth.brand,
+      productImageUrl: input.product.imageUrl,
+      productVolume: input.productTruth.volume,
+      // §12/§13: a MESMA imagem final já gerada — nunca uma nova renderização para o histórico.
+      imageUrl: uploadResult.downloadUrl,
+      generatedText: "",
+      template: "pro-ad",
+      price: priceText,
+      priceText,
+      headline: input.productTruth.name,
+      storeName: input.branding.storeName || "",
+      storeLogoUrl: input.branding.storeLogoUrl,
+      primaryColor: input.branding.primaryColor || "#111827",
+      proBackground,
+      // §8: identidade do cutout aprovado — nunca bytes, só as referências já existentes.
+      proCutout: {
+        cutoutAssetId: input.approvedCutoutSource.cutoutAssetId,
+        storagePath: input.approvedCutoutSource.storagePath,
+        sourceAssetId: input.approvedCutoutSource.sourceAssetId,
+      },
+    };
+
+    const result = await input.recordAction(entry, input.entryId);
+    return result.persisted;
+  } catch {
+    return false;
+  }
+}
+
 type ProAdGenerationPanelProps = {
   product: Product;
   concept: CreativeConceptWithScore;
@@ -167,6 +255,9 @@ type ProAdGenerationPanelProps = {
 };
 
 export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, productUnderstanding, realBackgroundEnabled, branding, onBackToConcepts }: ProAdGenerationPanelProps) {
+  // ADS-PRO-03 — mesma infraestrutura de histórico do editor clássico (ONE_MARKETING_HISTORY_SYSTEM),
+  // nunca uma collection paralela.
+  const { recordAction } = useMarketingHistory();
   const [state, setState] = useState<GenerationState>({ phase: "concept-selected" });
   const [serverCapabilityReady, setServerCapabilityReady] = useState(false);
   const [viewing, setViewing] = useState<"current" | "previous">("current");
@@ -220,6 +311,11 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
       const cutoutImageSrc = approvedCutoutSource.downloadUrl || approvedCutoutSource.storagePath;
       const productTruth = buildProductTruthFromProduct(product);
       const brandingInput = { storeName: branding.storeName, logoUrl: branding.storeLogoUrl, primaryColor: branding.primaryColor };
+      // ADS-PRO-03 — identidade do REGISTRO de histórico, separada de `generationId` (que é a identidade
+      // da geração em si — do provider de IA ou sintética da library). `historyEntryId` só precisa ser um
+      // nome de arquivo/documento válido (alfanumérico), então nunca reaproveita `generationId` — o da
+      // library contém `:`, que o upload endpoint rejeita como targetId.
+      const historyEntryId = createMarketingEntryId();
 
       let canvas: HTMLCanvasElement;
       let generationId: string;
@@ -247,7 +343,7 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
           branding: brandingInput,
         });
         generationId = dto.generationId;
-        identity = { composerVersion: 1, format: "square", creativeConceptId: concept.concept.id, creativeFamily: concept.concept.creativeFamily, background: { sourceType: "AI_GENERATED", generationId: dto.generationId } };
+        identity = { composerVersion: MARKETING_PRO_COMPOSER_VERSION, format: "square", creativeConceptId: concept.concept.id, creativeFamily: concept.concept.creativeFamily, background: { sourceType: "AI_GENERATED", generationId: dto.generationId } };
       } else {
         const category = resolveMarketingProCategory(product.category);
         const variantIndex = libraryVariantRef.current;
@@ -266,7 +362,7 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
         });
         canvas = libraryCanvas;
         generationId = `library:${product.id}:${resolved.backgroundId}:${variantIndex}`;
-        identity = { composerVersion: 1, format: "square", creativeConceptId: concept.concept.id, creativeFamily: concept.concept.creativeFamily, background: { sourceType: resolved.sourceType, backgroundId: resolved.backgroundId, backgroundVersion: resolved.backgroundVersion, backgroundFamily: resolved.backgroundFamily } };
+        identity = { composerVersion: MARKETING_PRO_COMPOSER_VERSION, format: "square", creativeConceptId: concept.concept.id, creativeFamily: concept.concept.creativeFamily, background: { sourceType: resolved.sourceType, backgroundId: resolved.backgroundId, backgroundVersion: resolved.backgroundVersion, backgroundFamily: resolved.backgroundFamily } };
       }
 
       const pngBlob = await canvasToPngBlob(canvas);
@@ -276,9 +372,10 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
       }
       const previewUrl = URL.createObjectURL(pngBlob);
       objectUrlsRef.current.add(previewUrl);
+      const historyPersisted = await persistProAdHistory({ entryId: historyEntryId, pngBlob, product, productTruth, branding, identity, approvedCutoutSource, recordAction });
       setState((current) => {
         const previous = current.phase === "generating" ? current.lastReady : current.phase === "ready" ? current.current : undefined;
-        return { phase: "ready", current: { generationId, previewUrl, pngBlob, identity }, previous };
+        return { phase: "ready", current: { generationId, previewUrl, pngBlob, identity, historyPersisted }, previous };
       });
       setViewing("current");
     } catch {
@@ -454,6 +551,14 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
                   data-testid="img-pro-ad-preview"
                 />
               </div>
+
+              {/* ADS-PRO-03 §14 — a arte já existe e pode ser baixada normalmente; só avisa que ESTE
+                  registro específico não entrou no histórico, nunca finge sucesso silencioso. */}
+              {!displayedArt.historyPersisted && (
+                <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[10px] font-semibold text-amber-800" role="status" data-testid="text-pro-ad-history-warning">
+                  Anúncio pronto, mas não foi salvo no histórico agora. Baixe para não perder esta versão.
+                </p>
+              )}
 
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <button

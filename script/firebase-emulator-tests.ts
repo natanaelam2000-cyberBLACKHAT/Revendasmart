@@ -617,6 +617,90 @@ async function run() {
     // Apagar o próprio registro É permitido: a UI tem "remover" e "limpar histórico".
     await expectSucceeds("owner apaga própria entrada de histórico", () => deleteDoc(historyRef(owner, ownerUid, "ad-local-1")));
 
+    // ===== ADS-PRO-03: histórico do Anúncios Pro (mode="pro" + proBackground/proCutout) =====
+    // Mesma coleção/Rule do histórico clássico (ONE_MARKETING_HISTORY_SYSTEM) — só campos adicionais,
+    // todos opcionais, validados por isValidProBackground/isValidProCutout.
+    const validProHistoryEntry = (overrides: Record<string, unknown> = {}) => ({
+      action: "generated",
+      mode: "pro",
+      productId: "product-pro-local",
+      productName: "Perfume Pro Local",
+      generatedText: "",
+      template: "pro-ad",
+      price: "R$ 189,90",
+      headline: "Perfume Pro Local",
+      storeName: "Loja Local",
+      primaryColor: "#6d5dfc",
+      composerVersion: 1,
+      creativeFamily: "luxury",
+      creativeConceptId: "concept-luxury-1",
+      format: "square",
+      proBackground: { sourceType: "GENERATED_DETERMINISTIC", backgroundId: "luxury-onyx-spotlight", backgroundVersion: 1, backgroundFamily: "luxury" },
+      proCutout: { cutoutAssetId: "product-cutout-approved:product-pro-local:sha256:abc123", storagePath: "users/owner-local/product-cutouts/product-pro-local/cutout-v1.png", sourceAssetId: "asset-original-1" },
+      createdAtISO: now,
+      ...overrides,
+    });
+
+    await expectSucceeds("owner cria entrada de histórico Pro válida", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-1"), validProHistoryEntry()));
+    await expectSucceeds("owner lê própria entrada Pro", async () => {
+      const snapshot = await getDoc(historyRef(owner, ownerUid, "ad-pro-1"));
+      assert.equal(snapshot.exists(), true);
+      assert.equal(snapshot.data()?.mode, "pro");
+      assert.equal((snapshot.data()?.proBackground as Record<string, unknown> | undefined)?.backgroundVersion, 1);
+    });
+    // H2: histórico clássico (sem nenhum campo Pro) continua válido lado a lado.
+    await expectSucceeds("histórico clássico sem campos Pro continua válido", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-classic-alongside-pro"), validHistoryEntry()));
+
+    await expectFails("mode com valor arbitrário é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-bad-mode"), validProHistoryEntry({ mode: "premium" })));
+    await expectFails("composerVersion zero é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-bad-version"), validProHistoryEntry({ composerVersion: 0 })));
+    await expectFails("composerVersion não-inteiro é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-bad-version-float"), validProHistoryEntry({ composerVersion: 1.5 })));
+    await expectFails("format inválido é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-bad-format"), validProHistoryEntry({ format: "landscape" })));
+
+    // --- proBackground ---
+    await expectFails("proBackground com sourceType inválido é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-bg-bad-source"), validProHistoryEntry({ proBackground: { sourceType: "MADE_UP" } })));
+    await expectFails("proBackground com campo extra é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-bg-extra"), validProHistoryEntry({ proBackground: { sourceType: "GENERATED_DETERMINISTIC", backgroundId: "x", hackedField: true } })));
+    await expectFails("proBackground com backgroundVersion negativo é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-bg-neg-version"), validProHistoryEntry({ proBackground: { sourceType: "GENERATED_DETERMINISTIC", backgroundId: "x", backgroundVersion: -1, backgroundFamily: "luxury" } })));
+    // H20 (variante): sourceType "ai" — só generationId é reproduzível hoje, nada mais é exigido.
+    await expectSucceeds("proBackground sourceType AI_GENERATED com só generationId é permitido", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-bg-ai"), validProHistoryEntry({ proBackground: { sourceType: "AI_GENERATED", generationId: "gen-abc123" } })));
+
+    // --- proCutout ---
+    await expectFails("proCutout sem storagePath é bloqueado", () => {
+      const bad = validProHistoryEntry() as Record<string, unknown>;
+      const cutout = { ...(bad.proCutout as Record<string, unknown>) };
+      delete cutout.storagePath;
+      return setDoc(historyRef(owner, ownerUid, "ad-pro-cutout-missing"), { ...bad, proCutout: cutout });
+    });
+    await expectFails("proCutout com storagePath inline (data:) é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-cutout-data"), validProHistoryEntry({ proCutout: { cutoutAssetId: "x", storagePath: "data:image/png;base64,AAAA" } })));
+    await expectFails("proCutout com campo extra é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-cutout-extra"), validProHistoryEntry({ proCutout: { cutoutAssetId: "x", storagePath: "users/owner-local/product-cutouts/p/cutout-v1.png", hackedField: true } })));
+    await expectSucceeds("proCutout sem sourceAssetId (opcional) é permitido", () => {
+      const entry = validProHistoryEntry() as Record<string, unknown>;
+      const cutout = { ...(entry.proCutout as Record<string, unknown>) };
+      delete cutout.sourceAssetId;
+      return setDoc(historyRef(owner, ownerUid, "ad-pro-cutout-no-source"), { ...entry, proCutout: cutout });
+    });
+
+    // --- H19/H20/H21: isolamento por tenant, mesmo padrão do histórico clássico ---
+    await expectFails("outro usuário não lê histórico Pro do owner", () => getDoc(historyRef(intruder, ownerUid, "ad-pro-1")));
+    await expectFails("outro usuário não cria histórico Pro no espaço do owner", () =>
+      setDoc(historyRef(intruder, ownerUid, "ad-pro-intruder"), validProHistoryEntry()));
+    await expectFails("outro usuário não altera histórico Pro do owner", () =>
+      updateDoc(historyRef(intruder, ownerUid, "ad-pro-1"), { note: "hackeado", updatedAtISO: laterThanNow }));
+    await expectFails("usuário anônimo não lê histórico Pro", () => getDoc(historyRef(anonymous, ownerUid, "ad-pro-1")));
+
+    await expectSucceeds("owner apaga própria entrada de histórico Pro", () => deleteDoc(historyRef(owner, ownerUid, "ad-pro-1")));
+
     // RELEASE-CHECKOUT-02 §1/§9-A/§9-B — idempotência atômica do pedido do catálogo público, contra o
     // emulador REAL (não mocada): duas reservas concorrentes com o MESMO clientOrderId só podem
     // produzir UM vencedor (Firestore optimistic concurrency control na transaction), nunca dois

@@ -8,7 +8,7 @@ import { useProductPickerData } from "@/hooks/useProductPickerData";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, logError } from "@/lib/firebase";
 import { useFeatureEnabled } from "@/lib/remote-config-context";
-import { useMarketingHistory, type MarketingHistoryEntry, type MarketingAction } from "@/hooks/useMarketingHistory";
+import { useMarketingHistory, type MarketingHistoryEntry, type MarketingAction, type NewMarketingEntry } from "@/hooks/useMarketingHistory";
 import { MarketingHistoryPanel } from "@/components/MarketingHistoryPanel";
 import { MarketingSection } from "@/components/marketing/MarketingSection";
 import { MarketingSelectedProduct } from "@/components/marketing/MarketingSelectedProduct";
@@ -601,6 +601,36 @@ export default function MarketingPage() {
     }
   };
 
+  /**
+   * ADS-PRO-03 — repetição de ação para uma entrada Pro: preserva mode/identidade (composer/family/
+   * background/cutout) exatamente como já persistidos, nunca via repeatPayload/normalizeMarketingAdConfig
+   * (que só entendem o shape clássico e descartariam os campos Pro).
+   */
+  const repeatProPayload = (entry: MarketingHistoryEntry, action: MarketingAction): NewMarketingEntry => ({
+    action,
+    mode: "pro",
+    composerVersion: entry.composerVersion,
+    creativeFamily: entry.creativeFamily,
+    creativeConceptId: entry.creativeConceptId,
+    format: entry.format,
+    productId: entry.productId,
+    productName: entry.productName,
+    productBrand: entry.productBrand,
+    productImageUrl: entry.productImageUrl,
+    productVolume: entry.productVolume,
+    imageUrl: entry.imageUrl,
+    generatedText: "",
+    template: "pro-ad",
+    price: entry.price,
+    priceText: entry.priceText,
+    headline: entry.headline,
+    storeName: entry.storeName,
+    storeLogoUrl: entry.storeLogoUrl,
+    primaryColor: entry.primaryColor,
+    proBackground: entry.proBackground,
+    proCutout: entry.proCutout,
+  });
+
   const repeatCopy = async (entry: MarketingHistoryEntry) => runHistoryAction(entry, "copy", async () => {
     const payload = repeatPayload(entry, "copied");
     await copyTextWithFallback(payload.generatedText);
@@ -608,6 +638,30 @@ export default function MarketingPage() {
     notifySuccess("Anúncio copiado.");
   });
   const repeatShare = async (entry: MarketingHistoryEntry) => runHistoryAction(entry, "share", async () => {
+    // ADS-PRO-03 §26 — um registro Pro já tem a arte final persistida (imageUrl); nunca re-renderiza
+    // pelo compositor clássico, que não entende creativeFamily/background/cutout.
+    if (entry.mode === "pro") {
+      if (!entry.imageUrl) { notifyInfo("Este anúncio não tem uma imagem salva para compartilhar."); return; }
+      try {
+        const blob = await fetch(entry.imageUrl).then((response) => response.blob());
+        const text = `${entry.productName}${entry.priceText ? ` — ${entry.priceText}` : ""}`;
+        const result = await shareMarketingCard({
+          blob,
+          productName: entry.productName,
+          text,
+          title: `${entry.productName} | ${entry.storeName || "Revenda Smart"}`,
+          dialogTitle: "Compartilhar anúncio",
+          onTextFallback: copyTextWithFallback,
+        });
+        await recordAction(repeatProPayload(entry, "shared"));
+        notifyShareResult(result);
+      } catch (error) {
+        if (isMarketingShareCancelledError(error)) { notifyInfo("Compartilhamento cancelado."); return; }
+        const failure = reportMarketingActionError(error, "share");
+        logError("ad_history_share_failed", failure.message, { context: { stage: failure.code, entryAction: entry.action } });
+      }
+      return;
+    }
     const payload = repeatPayload(entry, "shared");
     try {
       const historicalImage = await resolveEntryImage(entry);
@@ -634,6 +688,19 @@ export default function MarketingPage() {
     }
   });
   const repeatDownload = async (entry: MarketingHistoryEntry) => runHistoryAction(entry, "download", async () => {
+    if (entry.mode === "pro") {
+      if (!entry.imageUrl) { notifyInfo("Este anúncio não tem uma imagem salva para baixar."); return; }
+      try {
+        const blob = await fetch(entry.imageUrl).then((response) => response.blob());
+        const result = await saveMarketingCard({ blob, productName: entry.productName });
+        await recordAction(repeatProPayload(entry, "downloaded"));
+        notifySuccess(`Card salvo em ${result.locationLabel}.`);
+      } catch (error) {
+        const failure = reportMarketingActionError(error, "download");
+        logError("ad_history_download_failed", failure.message, { context: { stage: failure.code, entryAction: entry.action } });
+      }
+      return;
+    }
     try {
       const payload = repeatPayload(entry, "downloaded");
       const historicalImage = await resolveEntryImage(entry);

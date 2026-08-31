@@ -15,6 +15,14 @@ import type { ProductTruth, ProductVisualUnderstanding } from "@shared/marketing
 
 export class MarketingProRealBackgroundComposeError extends Error {}
 
+/**
+ * ADS-PRO-03 §10 — versão formal do composer canônico (`composeMarketingProProfessionalAdPreview`),
+ * persistida por registro de histórico. Existe só para que um anúncio criado pelo composer v1 nunca seja
+ * interpretado, no futuro, como se tivesse vindo de uma v2 com geometria/regras diferentes — não é um
+ * framework de migração, só um inteiro que muda quando este arquivo muda de forma incompatível.
+ */
+export const MARKETING_PRO_COMPOSER_VERSION = 1 as const;
+
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
