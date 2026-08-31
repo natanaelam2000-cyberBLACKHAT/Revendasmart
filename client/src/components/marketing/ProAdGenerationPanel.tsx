@@ -3,7 +3,7 @@ import { ArrowLeft, Download, RefreshCw, Sparkles } from "lucide-react";
 import type { Product } from "@/lib/mock-data";
 import type { ApprovedProductCutout } from "@shared/approved-product-cutout";
 import type { CreativeConceptWithScore } from "@shared/marketing-pro-creative-director";
-import type { ProductVisualUnderstanding } from "@shared/marketing-pro-creative-intelligence";
+import type { ProductTruth, ProductVisualUnderstanding } from "@shared/marketing-pro-creative-intelligence";
 import {
   createMarketingProGenerationRequestId,
   generateMarketingProBackgroundAndWait,
@@ -14,18 +14,27 @@ import {
   composeMarketingProProfessionalAdPreview,
   canvasToPngBlob,
 } from "@/lib/marketing-pro-real-background-composer";
+import {
+  resolveMarketingProBackground,
+  renderMarketingProBackgroundSource,
+  type MarketingProResolvedBackground,
+} from "@shared/marketing-pro-background-library";
+import { resolveMarketingProCategory, type MarketingProCategory } from "@shared/marketing-pro-contract";
 import { formatCurrency } from "@/lib/product-pricing";
 import { buildProductTruthFromProduct } from "@/lib/product-truth-adapter";
 
 /**
  * PRO-13UI — preview final do Anúncios Pro (produto → conceito escolhido → arte real → export).
  *
- * A geração em si NÃO é mockada: usa o pipeline real já existente desde PRO-08/09
- * (`generateMarketingProBackgroundAndWait` → Gemini real, com todos os safety gates, cost guard, rate
- * limit e persistência já implementados em `server/marketing-pro*.ts`) seguido da composição local real
- * (`composeMarketingProProfessionalAdPreview`, cutout aprovado + fundo real baixado do provider).
- * O client envia somente o id e a família fechada do conceito; o backend deriva a BackgroundSpec e o
- * prompt proprietário, sem aceitar texto livre do usuário.
+ * ADS-PRO-02: library-first, IA opcional. O caminho PADRÃO (`sourceMode === "library"`) resolve um
+ * background determinístico de `shared/marketing-pro-background-library.ts` — zero chamada de rede, zero
+ * dependência de Gemini — e compõe com o MESMO composer canônico de sempre
+ * (`composeMarketingProProfessionalAdPreview`). O caminho de IA real (`generateMarketingProBackgroundAndWait`
+ * → Gemini, com todos os safety gates/cost guard/rate limit já implementados em `server/marketing-pro*.ts`)
+ * continua existindo e funcional, mas só roda se o usuário ativar `sourceMode === "ai"` explicitamente —
+ * nunca é chamado por padrão, nunca bloqueia a geração quando indisponível. O client envia somente o id e
+ * a família fechada do conceito; o backend deriva a BackgroundSpec e o prompt proprietário, sem aceitar
+ * texto livre do usuário.
  */
 const CONCEPT_FAMILY_LABELS: Record<CreativeConceptWithScore["concept"]["creativeFamily"], string> = {
   luxury: "Luxo",
@@ -65,10 +74,23 @@ const GENERATION_ERROR_MESSAGES: Record<string, string> = {
   GENERATION_FAILED: "Não foi possível gerar o anúncio agora. Tente novamente.",
 };
 
+/** ADS-PRO-02 §24/§25 — identidade suficiente para reproduzir o criativo depois, mesmo sem History
+ * implementado ainda neste ticket: quem for persistir no futuro só precisa ler estes campos. */
+interface ProAdCreativeIdentity {
+  readonly composerVersion: 1;
+  readonly format: "square";
+  readonly creativeConceptId: string;
+  readonly creativeFamily: CreativeConceptWithScore["concept"]["creativeFamily"];
+  readonly background:
+    | { readonly sourceType: "GENERATED_DETERMINISTIC" | "STATIC_ASSET"; readonly backgroundId: string; readonly backgroundVersion: number; readonly backgroundFamily: string }
+    | { readonly sourceType: "AI_GENERATED"; readonly generationId: string };
+}
+
 interface ReadyArt {
   readonly generationId: string;
   readonly previewUrl: string;
   readonly pngBlob: Blob;
+  readonly identity: ProAdCreativeIdentity;
 }
 
 type GenerationState =
@@ -86,6 +108,54 @@ const LOADING_MESSAGES = [
   "Montando seu produto...",
 ];
 
+/**
+ * ADS-PRO-02 §27 — se um background falhar ao carregar (hoje só alcançável para um futuro STATIC_ASSET;
+ * os 12 seeds atuais são GENERATED_DETERMINISTIC e nunca fazem rede), tenta outro asset determinístico
+ * antes de desistir — nunca deixa a arte quebrada quando outro background está disponível. Duas
+ * tentativas no máximo: se a segunda também falhar, o erro real (ex.: cutout inválido) propaga normal.
+ */
+async function composeLibraryBackground(input: {
+  readonly creativeFamily: CreativeConceptWithScore["concept"]["creativeFamily"];
+  readonly category: MarketingProCategory;
+  readonly format: "square";
+  readonly seed: string;
+  readonly variantIndex: number;
+  readonly cutoutImageSrc: string;
+  readonly concept: CreativeConceptWithScore["concept"];
+  readonly productTruth: ProductTruth;
+  readonly productUnderstanding?: Pick<ProductVisualUnderstanding, "observed">;
+  readonly branding?: { readonly storeName?: string; readonly logoUrl?: string; readonly primaryColor?: string };
+}): Promise<{ readonly canvas: HTMLCanvasElement; readonly resolved: MarketingProResolvedBackground }> {
+  const attempted: string[] = [];
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const resolved = resolveMarketingProBackground({
+      creativeFamily: input.creativeFamily,
+      category: input.category,
+      format: input.format,
+      seed: input.seed,
+      variantIndex: input.variantIndex,
+      excludeIds: attempted,
+    });
+    attempted.push(resolved.backgroundId);
+    try {
+      const backgroundImageSrc = renderMarketingProBackgroundSource(resolved.asset, input.format);
+      const canvas = await composeMarketingProProfessionalAdPreview({
+        backgroundImageSrc,
+        cutoutImageSrc: input.cutoutImageSrc,
+        concept: input.concept,
+        productTruth: input.productTruth,
+        productUnderstanding: input.productUnderstanding,
+        branding: input.branding,
+      });
+      return { canvas, resolved };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
 type ProAdGenerationPanelProps = {
   product: Product;
   concept: CreativeConceptWithScore;
@@ -101,8 +171,14 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
   const [serverCapabilityReady, setServerCapabilityReady] = useState(false);
   const [viewing, setViewing] = useState<"current" | "previous">("current");
   const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
+  // ADS-PRO-02 §14/§15 — "library" é o caminho padrão (zero rede, zero IA); "ai" é opt-in explícito do
+  // usuário, nunca ligado sozinho mesmo quando a capability real está disponível.
+  const [sourceMode, setSourceMode] = useState<"library" | "ai">("library");
   const busyRef = useRef(false);
   const objectUrlsRef = useRef(new Set<string>());
+  // §12/§13 — cada geração consecutiva do MESMO conceito avança um variantIndex explícito e
+  // determinístico ("Outra opção" reaproveitando o botão "Gerar novamente" já existente), nunca aleatório.
+  const libraryVariantRef = useRef(0);
 
   useEffect(() => {
     if (state.phase !== "generating") return;
@@ -127,8 +203,10 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
 
   const handleGenerate = useCallback(async () => {
     // §8: fail closed — sem approvedCutoutSource não existe composição possível, nunca um fallback que
-    // altere o produto.
-    if (!approvedCutoutSource || !realBackgroundEnabled || !serverCapabilityReady || busyRef.current) return;
+    // altere o produto. ADS-PRO-02: diferente do modo IA, o modo library nunca depende de
+    // realBackgroundEnabled/serverCapabilityReady — é o caminho padrão, sempre disponível.
+    if (!approvedCutoutSource || busyRef.current) return;
+    if (sourceMode === "ai" && (!realBackgroundEnabled || !serverCapabilityReady)) return;
     busyRef.current = true;
     setLoadingMessageIndex(0);
     setState((current) => {
@@ -139,26 +217,58 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
       return { phase: "generating", lastReady: current.phase === "ready" ? current.current : current.phase === "failed" ? current.lastReady : current.phase === "generating" ? current.lastReady : undefined };
     });
     try {
-      const dto: MarketingProGenerationDto = await generateMarketingProBackgroundAndWait({
-        generationRequestId: createMarketingProGenerationRequestId(),
-        productId: product.id,
-        format: "square",
-        creativeConceptId: concept.concept.id,
-        creativeFamily: concept.concept.creativeFamily,
-      });
-      if (dto.status !== "ready" || !dto.background) {
-        const message = (dto.errorCode && GENERATION_ERROR_MESSAGES[dto.errorCode]) || "Não foi possível gerar o anúncio agora. Tente novamente.";
-        setState((current) => ({ phase: "failed", message, lastReady: current.phase === "generating" ? current.lastReady : current.phase === "ready" ? current.current : current.phase === "failed" ? current.lastReady : undefined }));
-        return;
+      const cutoutImageSrc = approvedCutoutSource.downloadUrl || approvedCutoutSource.storagePath;
+      const productTruth = buildProductTruthFromProduct(product);
+      const brandingInput = { storeName: branding.storeName, logoUrl: branding.storeLogoUrl, primaryColor: branding.primaryColor };
+
+      let canvas: HTMLCanvasElement;
+      let generationId: string;
+      let identity: ProAdCreativeIdentity;
+
+      if (sourceMode === "ai") {
+        const dto: MarketingProGenerationDto = await generateMarketingProBackgroundAndWait({
+          generationRequestId: createMarketingProGenerationRequestId(),
+          productId: product.id,
+          format: "square",
+          creativeConceptId: concept.concept.id,
+          creativeFamily: concept.concept.creativeFamily,
+        });
+        if (dto.status !== "ready" || !dto.background) {
+          const message = (dto.errorCode && GENERATION_ERROR_MESSAGES[dto.errorCode]) || "Não foi possível gerar o anúncio agora. Tente novamente.";
+          setState((current) => ({ phase: "failed", message, lastReady: current.phase === "generating" ? current.lastReady : current.phase === "ready" ? current.current : current.phase === "failed" ? current.lastReady : undefined }));
+          return;
+        }
+        canvas = await composeMarketingProProfessionalAdPreview({
+          backgroundImageSrc: dto.background.backgroundDownloadUrl || dto.background.backgroundAssetPath,
+          cutoutImageSrc,
+          concept: concept.concept,
+          productTruth,
+          productUnderstanding,
+          branding: brandingInput,
+        });
+        generationId = dto.generationId;
+        identity = { composerVersion: 1, format: "square", creativeConceptId: concept.concept.id, creativeFamily: concept.concept.creativeFamily, background: { sourceType: "AI_GENERATED", generationId: dto.generationId } };
+      } else {
+        const category = resolveMarketingProCategory(product.category);
+        const variantIndex = libraryVariantRef.current;
+        libraryVariantRef.current += 1;
+        const { canvas: libraryCanvas, resolved } = await composeLibraryBackground({
+          creativeFamily: concept.concept.creativeFamily,
+          category,
+          format: "square",
+          seed: product.id,
+          variantIndex,
+          cutoutImageSrc,
+          concept: concept.concept,
+          productTruth,
+          productUnderstanding,
+          branding: brandingInput,
+        });
+        canvas = libraryCanvas;
+        generationId = `library:${product.id}:${resolved.backgroundId}:${variantIndex}`;
+        identity = { composerVersion: 1, format: "square", creativeConceptId: concept.concept.id, creativeFamily: concept.concept.creativeFamily, background: { sourceType: resolved.sourceType, backgroundId: resolved.backgroundId, backgroundVersion: resolved.backgroundVersion, backgroundFamily: resolved.backgroundFamily } };
       }
-      const canvas = await composeMarketingProProfessionalAdPreview({
-        backgroundImageSrc: dto.background.backgroundDownloadUrl || dto.background.backgroundAssetPath,
-        cutoutImageSrc: approvedCutoutSource.downloadUrl || approvedCutoutSource.storagePath,
-        concept: concept.concept,
-        productTruth: buildProductTruthFromProduct(product),
-        productUnderstanding,
-        branding: { storeName: branding.storeName, logoUrl: branding.storeLogoUrl, primaryColor: branding.primaryColor },
-      });
+
       const pngBlob = await canvasToPngBlob(canvas);
       if (!pngBlob) {
         setState((current) => ({ phase: "failed", message: "Não foi possível gerar a prévia da arte.", lastReady: current.phase === "generating" ? current.lastReady : undefined }));
@@ -168,7 +278,7 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
       objectUrlsRef.current.add(previewUrl);
       setState((current) => {
         const previous = current.phase === "generating" ? current.lastReady : current.phase === "ready" ? current.current : undefined;
-        return { phase: "ready", current: { generationId: dto.generationId, previewUrl, pngBlob }, previous };
+        return { phase: "ready", current: { generationId, previewUrl, pngBlob, identity }, previous };
       });
       setViewing("current");
     } catch {
@@ -176,7 +286,7 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
     } finally {
       busyRef.current = false;
     }
-  }, [approvedCutoutSource, branding.primaryColor, branding.storeLogoUrl, branding.storeName, concept, product, productUnderstanding, realBackgroundEnabled, serverCapabilityReady]);
+  }, [approvedCutoutSource, branding.primaryColor, branding.storeLogoUrl, branding.storeName, concept, product, productUnderstanding, realBackgroundEnabled, serverCapabilityReady, sourceMode]);
 
   const handleUndo = useCallback(() => {
     setState((current) => {
@@ -214,7 +324,7 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
         <div>
           <h3 className="text-sm font-black text-foreground">Gerar anúncio</h3>
           <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-            Cria a arte final com IA a partir do conceito escolhido. Só o fundo é gerado — o produto nunca é redesenhado.
+            Cria a arte final a partir do conceito escolhido, usando a biblioteca de fundos Pro. Só o fundo muda — o produto nunca é redesenhado.
           </p>
         </div>
         <span className="rounded-full bg-primary/10 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-primary">beta</span>
@@ -238,20 +348,33 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
         )}
       </div>
 
-      {!realBackgroundEnabled ? (
-        <p className="mt-3 rounded-xl border border-border/60 bg-background px-3 py-2 text-xs font-semibold text-muted-foreground" role="status" data-testid="text-pro-ad-flag-off">
-          Geração real disponível somente no teste interno autorizado.
-        </p>
-      ) : !serverCapabilityReady ? (
-        <p className="mt-3 rounded-xl border border-border/60 bg-background px-3 py-2 text-xs font-semibold text-muted-foreground" role="status" data-testid="text-pro-ad-server-capability-off">
-          Geração real ainda indisponível neste ambiente.
-        </p>
-      ) : noCutout ? (
+      {noCutout ? (
         <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800" role="status" data-testid="text-pro-ad-cutout-blocker">
           Prepare o recorte do produto antes de gerar o anúncio.
         </p>
       ) : (
         <>
+          {/* ADS-PRO-02 §15/§16 — IA continua opcional/experimental, nunca ligada por padrão nem exigida
+              para gerar. Só aparece quando a flag de ambiente está ligada; se a capability real não
+              estiver pronta, a opção fica visível mas desabilitada, com o motivo explicado — o caminho
+              library nunca é bloqueado por isso. */}
+          {realBackgroundEnabled && (
+            <label className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-border/60 bg-background px-3 py-2 text-[11px] font-semibold text-muted-foreground" data-testid="toggle-pro-ad-source-mode">
+              <span>
+                Usar fundo gerado por IA (experimental)
+                {!serverCapabilityReady && <span className="block text-[10px] font-normal text-muted-foreground/80">Indisponível neste ambiente agora — a biblioteca de fundos continua funcionando normalmente.</span>}
+              </span>
+              <input
+                type="checkbox"
+                checked={sourceMode === "ai"}
+                disabled={!serverCapabilityReady || generating}
+                onChange={(event) => setSourceMode(event.target.checked ? "ai" : "library")}
+                className="h-4 w-4 shrink-0 accent-primary"
+                data-testid="checkbox-pro-ad-source-mode-ai"
+              />
+            </label>
+          )}
+
           {state.phase === "concept-selected" && (
             <button
               type="button"

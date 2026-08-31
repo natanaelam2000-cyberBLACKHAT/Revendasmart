@@ -93,6 +93,16 @@ export interface MarketingProProductDrawBounds {
   readonly productWidthShare: number;
 }
 
+/**
+ * ADS-PRO-01/02 nota de auditoria: `productRect`/`productScale` abaixo são calculados por família mas,
+ * em `composeMarketingProProfessionalAdPreview`, são imediatamente sobrescritos pelo retângulo/escala
+ * reais de `resolveMarketingProProductPlacement` (shared/marketing-pro-contract.ts) — a autoridade
+ * geométrica de fato é essa função, não este mapa. Deliberadamente NÃO removidos:
+ * script/pro14g-hardening-tests.ts:96 lê `layout.productRect` diretamente
+ * (`buildMarketingProProfessionalAdLayout`), então remover quebraria uma prova real existente; ADS-PRO-02
+ * §19 pede documentar, não misturar essa limpeza num ticket de outra coisa. `textAlign`/`textX`/`nameY`/
+ * `priceY`/`accent` continuam vivos e usados normalmente.
+ */
 const PROFESSIONAL_LAYOUTS: Record<CreativeConcept["creativeFamily"], MarketingProProfessionalAdLayout> = {
   luxury: { productRect: { x: 0.40, y: 0.18, width: 0.54, height: 0.69 }, textAlign: "left", textX: 0.08, nameY: 0.20, priceY: 0.72, productScale: 1, accent: "line" },
   editorial: { productRect: { x: 0.43, y: 0.14, width: 0.51, height: 0.72 }, textAlign: "left", textX: 0.07, nameY: 0.17, priceY: 0.76, productScale: 0.96, accent: "frame" },

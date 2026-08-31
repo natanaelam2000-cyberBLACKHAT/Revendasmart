@@ -46,8 +46,12 @@ function run(): void {
     assert.match(panelSource, new RegExp(`data-testid="${testid}"`), `E: ação ausente (${testid})`);
   }
   // "Gerar novamente" não pode disparar double-click — mesmo guard usado no resto do painel Pro.
-  assert.match(panelSource, /if \(!approvedCutoutSource \|\| !realBackgroundEnabled \|\| !serverCapabilityReady \|\| busyRef\.current\) return;/, "E: geração é fail-closed contra flag OFF, capability server-side ausente, cutout ausente e double-click");
-  assert.match(panelSource, /createMarketingProGenerationRequestId\(\)/, "E: cada geração usa um generationRequestId novo, nunca reaproveitado");
+  // ADS-PRO-02: library-first — o guard incondicional só protege cutout ausente e double-click; flag
+  // OFF/capability server-side ausente só bloqueiam quando o usuário optou pelo modo IA experimental
+  // (o caminho library, padrão, nunca depende de nenhum dos dois — AI_UNAVAILABLE_BLOCKS_PRO_GENERATION = NO).
+  assert.match(panelSource, /if \(!approvedCutoutSource \|\| busyRef\.current\) return;/, "E: geração é fail-closed contra cutout ausente e double-click, incondicionalmente");
+  assert.match(panelSource, /if \(sourceMode === "ai" && \(!realBackgroundEnabled \|\| !serverCapabilityReady\)\) return;/, "E: flag OFF/capability ausente só bloqueiam o modo IA opt-in, nunca o caminho library padrão");
+  assert.match(panelSource, /createMarketingProGenerationRequestId\(\)/, "E: cada geração via IA usa um generationRequestId novo, nunca reaproveitado");
 
   // F. Erro: mantém conceito selecionado (o componente inteiro só desmonta via onBackToConcepts,
   // nunca sozinho no catch), mantém a última arte pronta se existir, mensagem amigável, "Tentar

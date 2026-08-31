@@ -56,7 +56,9 @@ assert.deepEqual(parseMarketingProSemanticCandidate({ accepted: true, forbiddenE
 assert.ok(route.indexOf("evaluateMarketingProSemanticGateCached(") < route.indexOf("persistMarketingProBackgroundAsset({"));
 // H/I/J. Só background aprovado chega ao compositor; cutout é desenhado uma vez, sem filtros/pixel writes.
 assert.match(panel, /dto\.status !== "ready" \|\| !dto\.background/);
-assert.match(panel, /cutoutImageSrc: approvedCutoutSource\.downloadUrl \|\| approvedCutoutSource\.storagePath/);
+// ADS-PRO-02 refatorou a chamada inline para uma const reaproveitada pelos dois modos (ai/library); o
+// valor continua vindo só de approvedCutoutSource, nunca inventado.
+assert.match(panel, /const cutoutImageSrc = approvedCutoutSource\.downloadUrl \|\| approvedCutoutSource\.storagePath;/);
 const cutoutDraw = compositor.slice(compositor.indexOf("function drawContainedImage"), compositor.indexOf("function formatTruthPrice"));
 assert.equal((cutoutDraw.match(/ctx\.drawImage\(/g) || []).length, 1);
 assert.doesNotMatch(cutoutDraw, /filter|getImageData|putImageData|globalAlpha/);
