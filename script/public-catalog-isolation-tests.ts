@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { createServer, type Server } from "node:http";
+import path from "node:path";
 import express from "express";
 import { initializeApp, deleteApp, type FirebaseApp } from "firebase/app";
 import {
@@ -52,8 +54,35 @@ async function close(server: Server): Promise<void> {
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 }
 
+function ensurePublicCatalogIndexFixture(): { cleanup: () => void } {
+  const candidates = [
+    path.resolve(process.cwd(), "dist/public/index.html"),
+    path.resolve(".", "dist/public/index.html"),
+    path.resolve(process.cwd(), "public/index.html"),
+  ];
+  if (candidates.some((candidate) => fs.existsSync(candidate))) {
+    return { cleanup: () => {} };
+  }
+
+  const publicDir = path.resolve(process.cwd(), "public");
+  const publicIndex = path.join(publicDir, "index.html");
+  fs.mkdirSync(publicDir, { recursive: true });
+  fs.writeFileSync(
+    publicIndex,
+    "<!doctype html><html><head><meta charset=\"utf-8\"><title>RevendaSmart Test Catalog</title></head><body><div id=\"root\">catalog-test-shell</div></body></html>",
+    "utf8",
+  );
+
+  return {
+    cleanup: () => {
+      fs.rmSync(publicDir, { recursive: true, force: true });
+    },
+  };
+}
+
 async function run(): Promise<void> {
   requireLocalEmulators();
+  const publicIndexFixture = ensurePublicCatalogIndexFixture();
 
   const [{ registerRoutes }, { getFirebaseAdmin }] = await Promise.all([
     import("../server/routes"),
@@ -291,6 +320,7 @@ async function run(): Promise<void> {
     console.log("Public catalog isolation integration tests passed: ownership, mass assignment, atomic slug uniqueness and legacy compatibility.");
   } finally {
     await close(server);
+    publicIndexFixture.cleanup();
     await Promise.allSettled([deleteApp(tenantA.app), deleteApp(tenantB.app), deleteApp(legacy.app)]);
   }
 }
