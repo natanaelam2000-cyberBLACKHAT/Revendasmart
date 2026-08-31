@@ -9847,7 +9847,13 @@ runProductImagePreservationTests();
   // Mesmo cutout hash (embutido no assetId) e mesmo assetId nas 3 variações.
   const assetIds = new Set(payloads.map((p) => p.asset.assetId));
   assert.equal(assetIds.size, 1, "as 3 variações precisam usar exatamente o mesmo cutout aprovado (mesmo assetId)");
-  assert.match([...assetIds][0], /sha256:1329c84c0f4b9d7ab8a7814cbe7c76c0ca57b918d18a7fe5ac802052f65cc933$/, "o hash do cutout precisa ser o mesmo aprovado na Fase 2");
+  // TEST-FIX-CUTOUT-SMOKE-01 — hash do fixture determinístico gerado em memória por
+  // getApprovedCutoutPng() (script/product-cutout-smoke/marketing-pro-creative-tokens.ts), nunca mais lido
+  // de um artefato de .tmp/ gerado manualmente uma vez via PhotoRoom (nunca versionado, ausente em
+  // qualquer clone/worktree limpo). A garantia protegida por esta asserção continua a mesma: as 3
+  // variações precisam usar exatamente o mesmo cutout — só a FONTE do cutout deixou de ser um artefato
+  // não reproduzível.
+  assert.match([...assetIds][0], /sha256:a3d76d5e942ef04d52a5035b11b3835a802d0e3690be1029cfea3b535567cbe2$/, "o hash do cutout precisa ser o do fixture determinístico");
 
   // Mesmo ProductTransform (determinístico, independente de estilo) — válido (uniform-contain, sem crop).
   const transforms = new Set(payloads.map((p) => JSON.stringify(p.transform)));
@@ -9965,7 +9971,9 @@ runProductImagePreservationTests();
   assert.equal(new Set(payloads.map((item) => item.asset.assetId)).size, 1);
   assert.equal(new Set(payloads.map((item) => JSON.stringify(item.transform))).size, 1);
   assert.equal(new Set(payloads.map((item) => JSON.stringify(item.safeZones))).size, 1);
-  assert.match(payloads[0].asset.assetId, /sha256:1329c84c0f4b9d7ab8a7814cbe7c76c0ca57b918d18a7fe5ac802052f65cc933$/);
+  // TEST-FIX-CUTOUT-SMOKE-01 — mesmo fixture determinístico do bloco V1 acima (buildMarketingProCreativeV2Payload
+  // delega para buildMarketingProCreativePayload, mesmo asset).
+  assert.match(payloads[0].asset.assetId, /sha256:a3d76d5e942ef04d52a5035b11b3835a802d0e3690be1029cfea3b535567cbe2$/);
 
   // 6–8) Safe zone, crop false e uniform-contain em todas as famílias.
   for (const payload of payloads) {

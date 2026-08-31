@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import zlib from "node:zlib";
 import sharp from "sharp";
 import {
   MARKETING_PRO_TEXT_ZONE,
@@ -17,17 +18,89 @@ import {
 import type { ProductVisualUnderstanding } from "../shared/marketing-pro-creative-intelligence";
 
 const repoRoot = process.cwd();
-const outputsDir = "C:/Users/natan/Documents/Codex/2026-08-20/files-pasted-by-the-user-pro/outputs";
-const rejectedBackgroundPath = path.join(outputsDir, "pro14h-jbl-background-rejected.png");
-const fallbackRejectedBackgroundPath = path.join(repoRoot, ".tmp", "marketing-pro-safezone-quarantine", "pro14h-d2913f89-b98e-43ff-a376-ea729c46689c", "background-rejected.png");
-const cutoutPath = path.join(repoRoot, ".tmp", "pro14h", "jbl-cutout.png");
-const backgroundPath = fs.existsSync(rejectedBackgroundPath) ? rejectedBackgroundPath : fallbackRejectedBackgroundPath;
+// TEST-FIX-CUTOUT-SMOKE-01 — este teste dependia de dois caminhos nunca versionados: um path absoluto
+// pessoal fora do repositório (C:/Users/.../Codex/...) e um fallback em .tmp/ com um id de execução
+// específico, nenhum dos dois reproduzível em outro clone/worktree/máquina. Agora gera as DUAS fixtures
+// (cutout com alpha real, background RGB sem alpha) determinística e localmente, sempre em
+// .tmp/pro14i-fixtures/ (scratch da própria execução, nunca lido de fora) — ver buildSyntheticCutoutPng/
+// buildSyntheticBackgroundPng abaixo. Outputs também passam a viver dentro do repo (.tmp/pro14i-outputs),
+// nunca mais num diretório pessoal fora da árvore do projeto.
+const fixturesDir = path.join(repoRoot, ".tmp", "pro14i-fixtures");
+const outputsDir = path.join(repoRoot, ".tmp", "pro14i-outputs");
+const cutoutPath = path.join(fixturesDir, "jbl-cutout.png");
+const backgroundPath = path.join(fixturesDir, "background.png");
 
 const beforePath = path.join(outputsDir, "pro14i-horizontal-before.png");
 const afterPath = path.join(outputsDir, "pro14i-horizontal-after.png");
 const groundedPath = path.join(outputsDir, "pro14i-horizontal-grounded.png");
 const contrastDebugPath = path.join(outputsDir, "pro14i-contrast-debug.png");
 const reportPath = path.join(outputsDir, "pro14i-horizontal-composer-report.json");
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const typeBytes = Buffer.from(type, "ascii");
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length, 0);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(zlib.crc32(Buffer.concat([typeBytes, data])) >>> 0, 0);
+  return Buffer.concat([length, typeBytes, data, crc]);
+}
+
+/** Cutout sintético determinístico: RGBA (colorType 6, o que `sharp`/`alphaBounds` esperam), fundo
+ * totalmente transparente com um retângulo opaco "produto" bem no meio (margem generosa nas bordas para
+ * o bbox+pad de `alphaBounds` nunca estourar os limites da imagem). */
+function buildSyntheticCutoutPng(): Buffer {
+  const width = 1600;
+  const height = 1600;
+  const productX0 = 300, productY0 = 650, productX1 = 1300, productY1 = 950;
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; ihdr[9] = 6; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0; // 8-bit RGBA, sem interlace
+  const bytesPerPixel = 4;
+  const raw = Buffer.alloc((1 + width * bytesPerPixel) * height);
+  for (let y = 0; y < height; y += 1) {
+    const rowStart = y * (1 + width * bytesPerPixel);
+    raw[rowStart] = 0; // filtro None
+    const inProduct = y >= productY0 && y < productY1;
+    for (let x = 0; x < width; x += 1) {
+      const offset = rowStart + 1 + x * bytesPerPixel;
+      const opaque = inProduct && x >= productX0 && x < productX1;
+      raw[offset] = 40; raw[offset + 1] = 40; raw[offset + 2] = 46; // cor decorativa fixa (produto escuro)
+      raw[offset + 3] = opaque ? 255 : 0;
+    }
+  }
+  const idat = zlib.deflateSync(raw);
+  return Buffer.concat([signature, pngChunk("IHDR", ihdr), pngChunk("IDAT", idat), pngChunk("IEND", Buffer.alloc(0))]);
+}
+
+/** Background sintético determinístico: RGB SEM alpha (colorType 2, bitDepth 8, sem interlace — o único
+ * subconjunto que o decoder PNG manual em server/marketing-pro-safe-zone-gate.ts suporta). Duas faixas de
+ * luminância (clara embaixo, escura em cima) para a análise de contraste ter sinal real, nunca uma
+ * imagem completamente lisa. */
+function buildSyntheticBackgroundPng(): Buffer {
+  const width = 1080;
+  const height = 1080;
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0; // 8-bit RGB, sem interlace
+  const bytesPerPixel = 3;
+  const raw = Buffer.alloc((1 + width * bytesPerPixel) * height);
+  for (let y = 0; y < height; y += 1) {
+    const rowStart = y * (1 + width * bytesPerPixel);
+    raw[rowStart] = 0; // filtro None
+    const light = y < height / 2;
+    const shade = light ? 225 : 35;
+    for (let x = 0; x < width; x += 1) {
+      const offset = rowStart + 1 + x * bytesPerPixel;
+      raw[offset] = shade; raw[offset + 1] = shade; raw[offset + 2] = shade;
+    }
+  }
+  const idat = zlib.deflateSync(raw);
+  return Buffer.concat([signature, pngChunk("IHDR", ihdr), pngChunk("IDAT", idat), pngChunk("IEND", Buffer.alloc(0))]);
+}
 
 const CANVAS = 1080;
 
@@ -197,6 +270,11 @@ async function renderComposite(input: {
 }
 
 async function run(): Promise<void> {
+  // TEST-FIX-CUTOUT-SMOKE-01 — gera as fixtures localmente, sempre, nesta própria execução (nunca lidas
+  // de um artefato pré-existente de fora do teste) — reproduzível em qualquer clone/worktree limpo.
+  fs.mkdirSync(fixturesDir, { recursive: true });
+  fs.writeFileSync(cutoutPath, buildSyntheticCutoutPng());
+  fs.writeFileSync(backgroundPath, buildSyntheticBackgroundPng());
   assertFixtureExists(backgroundPath);
   assertFixtureExists(cutoutPath);
   fs.mkdirSync(outputsDir, { recursive: true });
