@@ -69,9 +69,10 @@ assert.match(compositor, /truth\.promotionalPrice > 0 && truth\.promotionalPrice
 const concept = (family: CreativeConcept["creativeFamily"]): Pick<CreativeConcept, "creativeFamily"> => ({ creativeFamily: family });
 assert.notDeepEqual(buildMarketingProProfessionalAdLayout(concept("luxury")), buildMarketingProProfessionalAdLayout(concept("modern")));
 assert.notDeepEqual(buildMarketingProProfessionalAdLayout(concept("minimal")), buildMarketingProProfessionalAdLayout(concept("fresh-commercial")));
-// O/P. Preview real e PNG 1080x1080.
+// O/P. Preview real continua gerando PNG canônico a partir das dimensões do formato.
 assert.match(panel, /data-testid="img-pro-ad-preview"/);
-assert.match(compositor, /canvas\.width = 1080; canvas\.height = 1080/);
+assert.match(compositor, /const dimensions = MARKETING_PRO_FORMAT_DIMENSIONS\[input\.format\];/);
+assert.match(compositor, /canvas\.width = dimensions\.width; canvas\.height = dimensions\.height/);
 assert.match(panel, /canvasToPngBlob/);
 // Q/R. Produto/original não são escritos; falha conserva lastReady.
 assert.doesNotMatch(route, /productData\.(imageUrl|imageId|approvedCutout)\s*=/);

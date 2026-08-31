@@ -20,7 +20,7 @@ import {
   renderMarketingProBackgroundSource,
   type MarketingProResolvedBackground,
 } from "@shared/marketing-pro-background-library";
-import { resolveMarketingProCategory, type MarketingProCategory } from "@shared/marketing-pro-contract";
+import { MARKETING_PRO_FORMAT_DIMENSIONS, resolveMarketingProCategory, type MarketingProCategory, type MarketingProFormat } from "@shared/marketing-pro-contract";
 import { formatCurrency } from "@/lib/product-pricing";
 import { buildProductTruthFromProduct } from "@/lib/product-truth-adapter";
 import { useMarketingHistory, createMarketingEntryId, type NewMarketingEntry } from "@/hooks/useMarketingHistory";
@@ -82,7 +82,7 @@ const GENERATION_ERROR_MESSAGES: Record<string, string> = {
  * implementado ainda neste ticket: quem for persistir no futuro só precisa ler estes campos. */
 interface ProAdCreativeIdentity {
   readonly composerVersion: 1;
-  readonly format: "square";
+  readonly format: Extract<MarketingProFormat, "portrait" | "square">;
   readonly creativeConceptId: string;
   readonly creativeFamily: CreativeConceptWithScore["concept"]["creativeFamily"];
   readonly background:
@@ -124,7 +124,7 @@ const LOADING_MESSAGES = [
 async function composeLibraryBackground(input: {
   readonly creativeFamily: CreativeConceptWithScore["concept"]["creativeFamily"];
   readonly category: MarketingProCategory;
-  readonly format: "square";
+  readonly format: Extract<MarketingProFormat, "portrait" | "square">;
   readonly seed: string;
   readonly variantIndex: number;
   readonly cutoutImageSrc: string;
@@ -150,6 +150,7 @@ async function composeLibraryBackground(input: {
       const canvas = await composeMarketingProProfessionalAdPreview({
         backgroundImageSrc,
         cutoutImageSrc: input.cutoutImageSrc,
+        format: input.format,
         concept: input.concept,
         productTruth: input.productTruth,
         productUnderstanding: input.productUnderstanding,
@@ -265,6 +266,7 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
   // ADS-PRO-02 §14/§15 — "library" é o caminho padrão (zero rede, zero IA); "ai" é opt-in explícito do
   // usuário, nunca ligado sozinho mesmo quando a capability real está disponível.
   const [sourceMode, setSourceMode] = useState<"library" | "ai">("library");
+  const [selectedFormat, setSelectedFormat] = useState<Extract<MarketingProFormat, "portrait" | "square">>("portrait");
   const busyRef = useRef(false);
   const objectUrlsRef = useRef(new Set<string>());
   // §12/§13 — cada geração consecutiva do MESMO conceito avança um variantIndex explícito e
@@ -325,7 +327,7 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
         const dto: MarketingProGenerationDto = await generateMarketingProBackgroundAndWait({
           generationRequestId: createMarketingProGenerationRequestId(),
           productId: product.id,
-          format: "square",
+          format: selectedFormat,
           creativeConceptId: concept.concept.id,
           creativeFamily: concept.concept.creativeFamily,
         });
@@ -337,13 +339,14 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
         canvas = await composeMarketingProProfessionalAdPreview({
           backgroundImageSrc: dto.background.backgroundDownloadUrl || dto.background.backgroundAssetPath,
           cutoutImageSrc,
+          format: selectedFormat,
           concept: concept.concept,
           productTruth,
           productUnderstanding,
           branding: brandingInput,
         });
         generationId = dto.generationId;
-        identity = { composerVersion: MARKETING_PRO_COMPOSER_VERSION, format: "square", creativeConceptId: concept.concept.id, creativeFamily: concept.concept.creativeFamily, background: { sourceType: "AI_GENERATED", generationId: dto.generationId } };
+        identity = { composerVersion: MARKETING_PRO_COMPOSER_VERSION, format: selectedFormat, creativeConceptId: concept.concept.id, creativeFamily: concept.concept.creativeFamily, background: { sourceType: "AI_GENERATED", generationId: dto.generationId } };
       } else {
         const category = resolveMarketingProCategory(product.category);
         const variantIndex = libraryVariantRef.current;
@@ -351,7 +354,7 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
         const { canvas: libraryCanvas, resolved } = await composeLibraryBackground({
           creativeFamily: concept.concept.creativeFamily,
           category,
-          format: "square",
+          format: selectedFormat,
           seed: product.id,
           variantIndex,
           cutoutImageSrc,
@@ -361,8 +364,8 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
           branding: brandingInput,
         });
         canvas = libraryCanvas;
-        generationId = `library:${product.id}:${resolved.backgroundId}:${variantIndex}`;
-        identity = { composerVersion: MARKETING_PRO_COMPOSER_VERSION, format: "square", creativeConceptId: concept.concept.id, creativeFamily: concept.concept.creativeFamily, background: { sourceType: resolved.sourceType, backgroundId: resolved.backgroundId, backgroundVersion: resolved.backgroundVersion, backgroundFamily: resolved.backgroundFamily } };
+        generationId = `library:${selectedFormat}:${product.id}:${resolved.backgroundId}:${variantIndex}`;
+        identity = { composerVersion: MARKETING_PRO_COMPOSER_VERSION, format: selectedFormat, creativeConceptId: concept.concept.id, creativeFamily: concept.concept.creativeFamily, background: { sourceType: resolved.sourceType, backgroundId: resolved.backgroundId, backgroundVersion: resolved.backgroundVersion, backgroundFamily: resolved.backgroundFamily } };
       }
 
       const pngBlob = await canvasToPngBlob(canvas);
@@ -383,7 +386,7 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
     } finally {
       busyRef.current = false;
     }
-  }, [approvedCutoutSource, branding.primaryColor, branding.storeLogoUrl, branding.storeName, concept, product, productUnderstanding, realBackgroundEnabled, serverCapabilityReady, sourceMode]);
+  }, [approvedCutoutSource, branding.primaryColor, branding.storeLogoUrl, branding.storeName, concept, product, productUnderstanding, realBackgroundEnabled, selectedFormat, serverCapabilityReady, sourceMode]);
 
   const handleUndo = useCallback(() => {
     setState((current) => {
@@ -412,6 +415,9 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
   const familySummary = CONCEPT_FAMILY_SUMMARY[concept.concept.creativeFamily];
   const previousPrice = product.extras?.previousPrice ?? product.extras?.originalPrice;
   const hasPromotion = typeof product.discountPercent === "number" && product.discountPercent > 0;
+  const previewDimensions = MARKETING_PRO_FORMAT_DIMENSIONS[selectedFormat];
+  const previewAspectRatio = `${previewDimensions.width} / ${previewDimensions.height}`;
+  const previewLabel = selectedFormat === "portrait" ? "4:5 Vertical" : "1:1 Quadrado";
 
   const displayedArt = state.phase === "ready" ? (viewing === "previous" && state.previous ? state.previous : state.current) : null;
 
@@ -472,6 +478,32 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
             </label>
           )}
 
+          <div className="mt-3 rounded-xl border border-border/60 bg-background p-2" data-testid="group-pro-ad-format">
+            <p className="px-1 text-[11px] font-semibold text-muted-foreground">Formato</p>
+            <div className="mt-2 grid grid-cols-2 gap-2" role="group" aria-label="Formato do anúncio">
+              <button
+                type="button"
+                onClick={() => setSelectedFormat("portrait")}
+                aria-pressed={selectedFormat === "portrait"}
+                disabled={generating}
+                className={`min-h-11 rounded-xl border px-3 text-xs font-black transition ${selectedFormat === "portrait" ? "border-primary bg-primary text-primary-foreground" : "border-border bg-white text-muted-foreground"}`}
+                data-testid="button-pro-ad-format-portrait"
+              >
+                4:5 Vertical
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedFormat("square")}
+                aria-pressed={selectedFormat === "square"}
+                disabled={generating}
+                className={`min-h-11 rounded-xl border px-3 text-xs font-black transition ${selectedFormat === "square" ? "border-primary bg-primary text-primary-foreground" : "border-border bg-white text-muted-foreground"}`}
+                data-testid="button-pro-ad-format-square"
+              >
+                1:1 Quadrado
+              </button>
+            </div>
+          </div>
+
           {state.phase === "concept-selected" && (
             <button
               type="button"
@@ -499,7 +531,7 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
           {state.phase === "failed" && (
             <div className="mt-3">
               {state.lastReady && (
-                <div className="aspect-square max-h-80 overflow-hidden rounded-xl border border-border/60 bg-white">
+                <div className="max-h-80 overflow-hidden rounded-xl border border-border/60 bg-white" style={{ aspectRatio: previewAspectRatio }}>
                   <img src={state.lastReady.previewUrl} alt="Última arte gerada com sucesso para este produto" className="h-full w-full object-contain" data-testid="img-pro-ad-last-ready" />
                 </div>
               )}
@@ -543,10 +575,10 @@ export function ProAdGenerationPanel({ product, concept, approvedCutoutSource, p
                 </div>
               )}
 
-              <div className="mt-2 aspect-square w-full overflow-hidden rounded-xl border border-border/60 bg-white">
+              <div className="mt-2 w-full overflow-hidden rounded-xl border border-border/60 bg-white" style={{ aspectRatio: previewAspectRatio }}>
                 <img
                   src={displayedArt.previewUrl}
-                  alt={`Anúncio final de ${product.name}, formato 1080x1080`}
+                  alt={`Anúncio final de ${product.name}, formato ${previewDimensions.width}x${previewDimensions.height} (${previewLabel})`}
                   className="h-full w-full object-contain"
                   data-testid="img-pro-ad-preview"
                 />

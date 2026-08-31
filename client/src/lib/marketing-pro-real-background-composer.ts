@@ -9,7 +9,7 @@
  * geometria de "zona do produto" (`MARKETING_PRO_PRODUCT_ZONE`, shared/marketing-pro-contract.ts) para
  * que o produto caia na mesma área que o provider foi instruído a deixar vazia.
  */
-import { MARKETING_PRO_FORMAT_DIMENSIONS, MARKETING_PRO_PRODUCT_ZONE, resolveMarketingProProductPlacement, type MarketingProFormat } from "@shared/marketing-pro-contract";
+import { MARKETING_PRO_FORMAT_DIMENSIONS, MARKETING_PRO_PRODUCT_ZONE, type MarketingProRect, resolveMarketingProProductPlacement, type MarketingProFormat } from "@shared/marketing-pro-contract";
 import type { CreativeConcept } from "@shared/marketing-pro-creative-intelligence";
 import type { ProductTruth, ProductVisualUnderstanding } from "@shared/marketing-pro-creative-intelligence";
 
@@ -101,6 +101,18 @@ export interface MarketingProProductDrawBounds {
   readonly productWidthShare: number;
 }
 
+export interface MarketingProEssentialContentBounds {
+  readonly canvas: { readonly width: number; readonly height: number };
+  readonly format: Extract<MarketingProFormat, "portrait" | "square">;
+  readonly centralSquareCrop: MarketingProRect;
+  readonly product: MarketingProRect;
+  readonly headline: MarketingProRect;
+  readonly price: MarketingProRect;
+  readonly badge: MarketingProRect;
+  readonly logo: MarketingProRect;
+  readonly storeName: MarketingProRect;
+}
+
 /**
  * ADS-PRO-01/02 nota de auditoria: `productRect`/`productScale` abaixo são calculados por família mas,
  * em `composeMarketingProProfessionalAdPreview`, são imediatamente sobrescritos pelo retângulo/escala
@@ -131,16 +143,94 @@ function readableTextColor(primaryColor?: string): string {
   return /^#[0-9a-f]{6}$/i.test(primaryColor || "") ? primaryColor!.toUpperCase() : "#111827";
 }
 
-function drawFamilyDecoration(ctx: CanvasRenderingContext2D, layout: MarketingProProfessionalAdLayout, color: string): void {
+function rectRight(rect: MarketingProRect): number {
+  return rect.x + rect.width;
+}
+
+function toPixels(rect: MarketingProRect, canvas: { readonly width: number; readonly height: number }): { readonly x: number; readonly y: number; readonly width: number; readonly height: number } {
+  return {
+    x: rect.x * canvas.width,
+    y: rect.y * canvas.height,
+    width: rect.width * canvas.width,
+    height: rect.height * canvas.height,
+  };
+}
+
+function scaleFromWidth(width: number, pxAt1080: number): number {
+  return (width / 1080) * pxAt1080;
+}
+
+function clipText(value: string, maxChars: number): string {
+  return value.length > maxChars ? `${value.slice(0, Math.max(1, maxChars - 1))}…` : value;
+}
+
+export function resolveMarketingProEssentialContentBounds(input: {
+  readonly format: Extract<MarketingProFormat, "portrait" | "square">;
+  readonly concept: Pick<CreativeConcept, "creativeFamily">;
+  readonly productUnderstanding?: Pick<ProductVisualUnderstanding, "observed">;
+  readonly productAspectRatio?: number;
+}): MarketingProEssentialContentBounds {
+  const canvas = MARKETING_PRO_FORMAT_DIMENSIONS[input.format];
+  const cropYOffset = Math.max(0, (canvas.height - canvas.width) / 2);
+  const centralSquareCrop = {
+    x: 0,
+    y: cropYOffset / canvas.height,
+    width: 1,
+    height: canvas.width / canvas.height,
+  } satisfies MarketingProRect;
+  const product = resolveMarketingProProductPlacement({
+    format: input.format,
+    creativeFamily: input.concept.creativeFamily,
+    productUnderstanding: input.productUnderstanding,
+    productAspectRatio: input.productAspectRatio,
+  }).rect;
+
+  if (input.format === "portrait") {
+    return {
+      canvas,
+      format: input.format,
+      centralSquareCrop,
+      product,
+      storeName: { x: 0.08, y: 0.115, width: 0.68, height: 0.04 },
+      logo: { x: 0.83, y: 0.108, width: 0.06, height: 0.048 },
+      headline: { x: 0.08, y: 0.19, width: 0.52, height: 0.09 },
+      price: { x: 0.08, y: 0.70, width: 0.44, height: 0.08 },
+      badge: { x: 0.08, y: 0.785, width: 0.20, height: 0.048 },
+    };
+  }
+
+  return {
+    canvas,
+    format: input.format,
+    centralSquareCrop,
+    product,
+    storeName: { x: 0.08, y: 0.052, width: 0.68, height: 0.045 },
+    logo: { x: 0.83, y: 0.046, width: 0.06, height: 0.06 },
+    headline: { x: 0.08, y: 0.14, width: 0.50, height: 0.10 },
+    price: { x: 0.08, y: 0.70, width: 0.44, height: 0.09 },
+    badge: { x: 0.08, y: 0.79, width: 0.20, height: 0.05 },
+  };
+}
+
+function drawFamilyDecoration(
+  ctx: CanvasRenderingContext2D,
+  layout: MarketingProProfessionalAdLayout,
+  color: string,
+  canvas: { readonly width: number; readonly height: number },
+  format: Extract<MarketingProFormat, "portrait" | "square">,
+): void {
+  const w = canvas.width;
+  const h = canvas.height;
+  const unit = w / 1080;
   ctx.save();
   ctx.globalAlpha = 0.18;
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
-  ctx.lineWidth = 8;
-  if (layout.accent === "line") ctx.fillRect(72, 125, 8, 310);
-  if (layout.accent === "circle") { ctx.beginPath(); ctx.arc(860, 185, 155, 0, Math.PI * 2); ctx.stroke(); }
-  if (layout.accent === "frame") ctx.strokeRect(56, 56, 968, 968);
-  if (layout.accent === "card") { ctx.beginPath(); ctx.roundRect(45, 635, 350, 300, 36); ctx.fill(); }
+  ctx.lineWidth = 8 * unit;
+  if (layout.accent === "line") ctx.fillRect(72 * unit, (format === "portrait" ? 185 : 125) * unit, 8 * unit, (format === "portrait" ? 360 : 310) * unit);
+  if (layout.accent === "circle") { ctx.beginPath(); ctx.arc(860 * unit, (format === "portrait" ? 240 : 185) * unit, 155 * unit, 0, Math.PI * 2); ctx.stroke(); }
+  if (layout.accent === "frame") ctx.strokeRect(56 * unit, 56 * unit, 968 * unit, h - 112 * unit);
+  if (layout.accent === "card") { ctx.beginPath(); ctx.roundRect(45 * unit, (format === "portrait" ? 860 : 635) * unit, 350 * unit, (format === "portrait" ? 250 : 300) * unit, 36 * unit); ctx.fill(); }
   ctx.restore();
 }
 
@@ -197,14 +287,21 @@ function drawProductGrounding(ctx: CanvasRenderingContext2D, bounds: Pick<Market
   ctx.restore();
 }
 
-function drawContainedImage(ctx: CanvasRenderingContext2D, image: HTMLImageElement, rect: MarketingProProfessionalAdLayout["productRect"], scaleMultiplier: number, options?: { readonly grounding?: boolean; readonly productOrientation?: ProductVisualUnderstanding["observed"]["productOrientation"] }): MarketingProProductDrawBounds {
-  const box = { x: rect.x * 1080, y: rect.y * 1080, width: rect.width * 1080, height: rect.height * 1080 };
+function drawContainedImage(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  rect: MarketingProProfessionalAdLayout["productRect"],
+  scaleMultiplier: number,
+  canvas: { readonly width: number; readonly height: number },
+  options?: { readonly grounding?: boolean; readonly productOrientation?: ProductVisualUnderstanding["observed"]["productOrientation"] },
+): MarketingProProductDrawBounds {
+  const box = { x: rect.x * canvas.width, y: rect.y * canvas.height, width: rect.width * canvas.width, height: rect.height * canvas.height };
   const source = resolveVisibleImageBounds(image);
   const visibleAspectRatio = source.sw / source.sh;
   const horizontal = options?.productOrientation === "landscape" || visibleAspectRatio >= 1.2;
   const targetHorizontalWidthShare = Math.min(0.70, Math.max(0.55, 0.58 * scaleMultiplier));
   const scale = horizontal
-    ? Math.min((1080 * targetHorizontalWidthShare) / source.sw, (box.width * 0.98) / source.sw)
+    ? Math.min((canvas.width * targetHorizontalWidthShare) / source.sw, (box.width * 0.98) / source.sw)
     : Math.min(
       Math.min(box.width / source.sw, box.height / source.sh) * scaleMultiplier,
       (box.width * 0.98) / source.sw,
@@ -216,7 +313,7 @@ function drawContainedImage(ctx: CanvasRenderingContext2D, image: HTMLImageEleme
   const y = horizontal
     ? box.y + box.height - height * (visibleAspectRatio >= 1.2 ? 1.04 : 0.72)
     : box.y + (box.height - height) / 2;
-  const bounds = { x, y, width, height, visibleAspectRatio, productWidthShare: width / 1080 };
+  const bounds = { x, y, width, height, visibleAspectRatio, productWidthShare: width / canvas.width };
   if (options?.grounding) drawProductGrounding(ctx, bounds);
   // ÚNICO desenho do approvedCutout: apenas escala e posição; os pixels-fonte não são editados.
   ctx.drawImage(image, source.sx, source.sy, source.sw, source.sh, x, y, width, height);
@@ -227,41 +324,52 @@ function formatTruthPrice(value: number): string {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
 }
 
-function drawCommercialTruth(ctx: CanvasRenderingContext2D, truth: ProductTruth, concept: CreativeConcept, layout: MarketingProProfessionalAdLayout, color: string): void {
-  const x = layout.textX * 1080;
+function drawCommercialTruth(
+  ctx: CanvasRenderingContext2D,
+  truth: ProductTruth,
+  concept: CreativeConcept,
+  color: string,
+  bounds: MarketingProEssentialContentBounds,
+): void {
+  const { canvas } = bounds;
+  const headline = toPixels(bounds.headline, canvas);
+  const price = toPixels(bounds.price, canvas);
+  const badge = toPixels(bounds.badge, canvas);
+  const unit = canvas.width / 1080;
+  const x = headline.x;
   ctx.save();
   ctx.fillStyle = "#111827";
-  ctx.textAlign = layout.textAlign;
+  ctx.textAlign = "left";
   ctx.textBaseline = "top";
-  ctx.font = concept.creativeFamily === "luxury" ? "600 54px Georgia, serif" : "800 52px Arial, sans-serif";
-  const title = truth.name.length > 28 ? `${truth.name.slice(0, 27)}…` : truth.name;
-  ctx.fillText(title, x, layout.nameY * 1080, 330);
-  if (truth.brand) { ctx.font = "700 23px Arial, sans-serif"; ctx.fillStyle = color; ctx.fillText(truth.brand.toUpperCase().slice(0, 32), x, layout.nameY * 1080 + 68, 330); }
+  ctx.font = concept.creativeFamily === "luxury" ? `600 ${Math.round(scaleFromWidth(canvas.width, 50))}px Georgia, serif` : `800 ${Math.round(scaleFromWidth(canvas.width, 48))}px Arial, sans-serif`;
+  ctx.fillText(clipText(truth.name, canvas.height > canvas.width ? 34 : 28), x, headline.y, headline.width);
+  if (truth.brand) { ctx.font = `700 ${Math.round(scaleFromWidth(canvas.width, 23))}px Arial, sans-serif`; ctx.fillStyle = color; ctx.fillText(clipText(truth.brand.toUpperCase(), 32), x, headline.y + headline.height * 0.66, headline.width); }
   if (typeof truth.salePrice === "number") {
     const promotional = typeof truth.promotionalPrice === "number" && truth.promotionalPrice > 0 && truth.promotionalPrice < truth.salePrice;
-    const price = promotional ? truth.promotionalPrice! : truth.salePrice;
+    const effectivePrice = promotional ? truth.promotionalPrice! : truth.salePrice;
     if (promotional) {
-      ctx.font = "500 23px Arial, sans-serif"; ctx.fillStyle = "#4B5563";
-      ctx.fillText(`de ${formatTruthPrice(truth.salePrice)}`, x, layout.priceY * 1080 - 34, 330);
+      ctx.font = `500 ${Math.round(scaleFromWidth(canvas.width, 23))}px Arial, sans-serif`; ctx.fillStyle = "#4B5563";
+      ctx.fillText(`de ${formatTruthPrice(truth.salePrice)}`, x, price.y - 34 * unit, price.width);
     }
-    ctx.font = concept.priceTreatment === "highlight" ? "900 54px Arial, sans-serif" : "800 43px Arial, sans-serif";
-    ctx.fillStyle = "#111827"; ctx.fillText(formatTruthPrice(price), x, layout.priceY * 1080, 340);
+    ctx.font = concept.priceTreatment === "highlight" ? `900 ${Math.round(scaleFromWidth(canvas.width, 54))}px Arial, sans-serif` : `800 ${Math.round(scaleFromWidth(canvas.width, 43))}px Arial, sans-serif`;
+    ctx.fillStyle = "#111827"; ctx.fillText(formatTruthPrice(effectivePrice), x, price.y, price.width);
     if (promotional && concept.promotionTreatment !== "none") {
-      const discount = Math.round((1 - price / truth.salePrice) * 100);
-      ctx.fillStyle = color; ctx.beginPath(); ctx.roundRect(x, layout.priceY * 1080 + 72, 154, 46, 23); ctx.fill();
-      ctx.fillStyle = "#FFFFFF"; ctx.font = "800 21px Arial, sans-serif"; ctx.fillText(`${discount}% OFF`, x + 20, layout.priceY * 1080 + 83, 120);
+      const discount = Math.round((1 - effectivePrice / truth.salePrice) * 100);
+      ctx.fillStyle = color; ctx.beginPath(); ctx.roundRect(badge.x, badge.y, badge.width, badge.height, badge.height / 2); ctx.fill();
+      ctx.fillStyle = "#FFFFFF"; ctx.font = `800 ${Math.round(scaleFromWidth(canvas.width, 21))}px Arial, sans-serif`; ctx.fillText(`${discount}% OFF`, badge.x + 18 * unit, badge.y + 10 * unit, badge.width - 30 * unit);
     }
   }
   ctx.restore();
 }
 
 /**
- * Arte Pro square real: fundo aprovado → decoração determinística → cutout intacto → ProductTruth → branding.
+ * Arte Pro real (4:5 ou 1:1): fundo aprovado → decoração determinística → cutout intacto → ProductTruth → branding.
  * O background e o cutout são entradas separadas e jamais são persistidos um sobre o outro.
  */
 export async function composeMarketingProProfessionalAdPreview(input: {
   readonly backgroundImageSrc: string;
   readonly cutoutImageSrc: string;
+  readonly format: Extract<MarketingProFormat, "portrait" | "square">;
   readonly concept: CreativeConcept;
   readonly productTruth: ProductTruth;
   readonly productUnderstanding?: Pick<ProductVisualUnderstanding, "observed">;
@@ -272,29 +380,38 @@ export async function composeMarketingProProfessionalAdPreview(input: {
     loadImage(input.cutoutImageSrc),
     input.branding?.logoUrl ? loadImage(input.branding.logoUrl).catch(() => undefined) : Promise.resolve(undefined),
   ]);
+  const dimensions = MARKETING_PRO_FORMAT_DIMENSIONS[input.format];
   const canvas = document.createElement("canvas");
-  canvas.width = 1080; canvas.height = 1080;
+  canvas.width = dimensions.width; canvas.height = dimensions.height;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new MarketingProRealBackgroundComposeError("Canvas 2D indisponível.");
-  const bgScale = Math.max(1080 / background.width, 1080 / background.height);
+  const bgScale = Math.max(canvas.width / background.width, canvas.height / background.height);
   const bgWidth = background.width * bgScale; const bgHeight = background.height * bgScale;
-  ctx.drawImage(background, (1080 - bgWidth) / 2, (1080 - bgHeight) / 2, bgWidth, bgHeight);
+  ctx.drawImage(background, (canvas.width - bgWidth) / 2, (canvas.height - bgHeight) / 2, bgWidth, bgHeight);
   const cutoutVisibleBounds = resolveVisibleImageBounds(cutout);
   const cutoutAspectRatio = cutoutVisibleBounds.sw > 0 && cutoutVisibleBounds.sh > 0 ? cutoutVisibleBounds.sw / cutoutVisibleBounds.sh : undefined;
+  const canonicalBounds = resolveMarketingProEssentialContentBounds({
+    format: input.format,
+    concept: input.concept,
+    productUnderstanding: input.productUnderstanding,
+    productAspectRatio: cutoutAspectRatio,
+  });
   const canonicalPlacement = resolveMarketingProProductPlacement({
-    format: "square",
+    format: input.format,
     creativeFamily: input.concept.creativeFamily,
     productUnderstanding: input.productUnderstanding,
     productAspectRatio: cutoutAspectRatio,
   });
   const layout = { ...buildMarketingProProfessionalAdLayout(input.concept), productRect: canonicalPlacement.rect, productScale: canonicalPlacement.scale };
   const brandColor = readableTextColor(input.branding?.primaryColor);
-  drawFamilyDecoration(ctx, layout, brandColor);
-  drawContainedImage(ctx, cutout, layout.productRect, layout.productScale, { grounding: true, productOrientation: input.productUnderstanding?.observed.productOrientation });
-  drawCommercialTruth(ctx, input.productTruth, input.concept, layout, brandColor);
-  ctx.save(); ctx.fillStyle = "#111827"; ctx.textAlign = "right"; ctx.font = "700 20px Arial, sans-serif";
-  ctx.fillText((input.branding?.storeName || "RevendaSmart").slice(0, 42), 1010, 1014);
-  if (logo) ctx.drawImage(logo, 930, 948, 64, 64);
+  drawFamilyDecoration(ctx, layout, brandColor, canvas, input.format);
+  drawContainedImage(ctx, cutout, layout.productRect, layout.productScale, canvas, { grounding: true, productOrientation: input.productUnderstanding?.observed.productOrientation });
+  drawCommercialTruth(ctx, input.productTruth, input.concept, brandColor, canonicalBounds);
+  const storeNameRect = toPixels(canonicalBounds.storeName, canvas);
+  const logoRect = toPixels(canonicalBounds.logo, canvas);
+  ctx.save(); ctx.fillStyle = "#111827"; ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.font = `700 ${Math.round(scaleFromWidth(canvas.width, 20))}px Arial, sans-serif`;
+  ctx.fillText(clipText(input.branding?.storeName || "RevendaSmart", 42), rectRight(canonicalBounds.storeName) * canvas.width, storeNameRect.y + storeNameRect.height / 2, storeNameRect.width);
+  if (logo) ctx.drawImage(logo, logoRect.x, logoRect.y, logoRect.width, logoRect.height);
   ctx.restore();
   return canvas;
 }
