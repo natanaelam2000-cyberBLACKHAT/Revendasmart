@@ -398,6 +398,11 @@ export default function ServiceAgenda() {
                   <p><span className="font-bold">Atendimento:</span> {selectedWork.status}</p>
                 ) : null}
               </div>
+              <div className="mt-4">
+                <Button type="button" variant="outline" asChild className="w-full rounded-full">
+                  <a href={`/servicos/atendimentos/${selectedBooking.workId}`} data-testid="link-booking-open-work">Ver atendimento completo</a>
+                </Button>
+              </div>
               {selectedBooking.status === "confirmed" && (
                 <div className="mt-6 flex flex-col gap-2">
                   <Button type="button" onClick={openReschedule} data-testid="button-booking-reschedule" className="rounded-full">Reagendar</Button>

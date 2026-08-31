@@ -60,9 +60,23 @@ const budgets = [
 // ~11,4 kB, e as novas funções puras de rascunho de expediente em service-agenda-helpers.ts, ~2,7 kB) é
 // conteúdo real da tela de configuração de disponibilidade (editor de expediente semanal + folgas/
 // bloqueios), 100% lazy-loaded, sem nenhuma dependência nova. INITIAL_BOOT_REGRESSION_BYTES = 0.
+//
+// SERV-UI-03 — orçamento elevado de 2333 -> 2358 kB (JS) e 710 -> 716 kB (gzip), autorizado explicitamente
+// pelo ticket após uma auditoria em duas rodadas: (1) a autoria/edição inline de orçamento (criar Quote a
+// partir de um Work já existente) foi cortada de escopo — o domínio atual não tem um campo que ligue
+// permanentemente um novo Quote a um Work pré-existente (só o caminho inverso, Quote aceito -> convert ->
+// cria um Work novo), então essa funcionalidade foi removida em vez de implementada sobre uma associação
+// inventada (dívida registrada como SERV-QUOTE-LINK-01); isso rendeu só ~2,8 kB (o formulário era pequeno
+// perto do resto da tela). (2) confirmado sem dependência nova, sem novo vendor chunk, zero Recharts/Mercado
+// Pago/lógica de Sale — o restante do peso é a tela de atendimento em si (client/src/pages/service-work-
+// detail.tsx, ~21,5 kB) usando pela primeira vez os wrappers finos de comando já aprovados (service-work-
+// commands.ts, service-payment-commands.ts, service-quotes-persistence.ts, service-payments-persistence.ts)
+// para lifecycle (iniciar/concluir/cancelar, cancelamento coerente com Booking quando existente), leitura de
+// Quote relacionado, resumo financeiro derivado e registro de Payment/Refund — tudo 100% lazy-loaded
+// (`lazy(() => import("@/pages/service-work-detail"))` em PrivateRouter.tsx). INITIAL_BOOT_REGRESSION_BYTES = 0.
 const totalBudgets = {
-  jsKb: 2333,
-  jsGzipKb: 710,
+  jsKb: 2358,
+  jsGzipKb: 716,
 };
 
 const maxSingleAssetKb = 500;

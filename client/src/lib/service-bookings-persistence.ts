@@ -53,6 +53,16 @@ export async function listServiceBookings(): Promise<Booking[]> {
   return snapshot.docs.map((item) => parseBooking(item.data()));
 }
 
+/** SERV-UI-03 — a tela de atendimento recebe só um workId (rota /servicos/atendimentos/:workId) e precisa
+ * descobrir se existe um Booking ligado a ele, para decidir se o cancelamento deve passar pelo fluxo de
+ * Booking (libera locks corretamente, §9) em vez de cancelar o Work isoladamente. Equality-only em `workId`
+ * não exige índice composto novo (Firestore mantém índice single-field automático para esse caso). */
+export async function listServiceBookingsForWork(workId: string): Promise<Booking[]> {
+  const uid = requireCurrentUid();
+  const snapshot = await getDocs(query(bookingsCollection(uid), where("workId", "==", workId)));
+  return snapshot.docs.map((item) => parseBooking(item.data()));
+}
+
 /** SERV-UI-01 §18/§19 — leitura da Agenda: limitada por resource + range temporal (nunca o histórico
  * inteiro), reaproveitando a mesma coleção/Rules já existentes (nenhum endpoint novo, nenhuma escrita).
  * `startAt` é indexado (firestore.indexes.json: bookings resourceId+startAt) para este range funcionar

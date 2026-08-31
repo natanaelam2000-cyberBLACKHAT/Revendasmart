@@ -30,6 +30,7 @@
     "test:services-availability": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:services-availability:run\"",
     "test:services-agenda-ui": "tsx script/services-agenda-ui-tests.ts",
     "test:services-availability-settings-ui": "tsx script/services-availability-settings-ui-tests.ts",
+    "test:service-work-detail-ui": "tsx script/service-work-detail-ui-tests.ts",
     "test:pro14g:hardening": "tsx script/pro14g-hardening-tests.ts",
     "test:pro14i:horizontal": "tsx script/pro14i-horizontal-composer-tests.ts",
     "test:privacy-docs": "tsx script/privacy-documentation-tests.ts",
