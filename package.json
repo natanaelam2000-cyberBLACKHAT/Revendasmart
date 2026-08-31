@@ -34,6 +34,8 @@
     "test:services-public-booking": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:services-public-booking:run\"",
     "test:services-public-booking-manage:run": "tsx script/service-public-booking-manage-tests.ts",
     "test:services-public-booking-manage": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:services-public-booking-manage:run\"",
+    "test:services-e2e:run": "tsx script/services-e2e-tests.ts",
+    "test:services-e2e": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:services-e2e:run\"",
     "test:services-agenda-ui": "tsx script/services-agenda-ui-tests.ts",
     "test:services-availability-settings-ui": "tsx script/services-availability-settings-ui-tests.ts",
     "test:service-work-detail-ui": "tsx script/service-work-detail-ui-tests.ts",

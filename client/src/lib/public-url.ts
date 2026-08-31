@@ -51,3 +51,10 @@ export function buildPublicCatalogUrl(slug: string, baseUrl = getPublicAppBaseUr
   const safeSlug = String(slug ?? "").trim().replace(/^\/+|\/+$/g, "");
   return safeSlug ? buildPublicAppUrl(`/u/${encodeURIComponent(safeSlug)}`, baseUrl) : "";
 }
+
+/** SERV-E2E-01 §19 — mesmo slug público já usado por /u/:slug (server/public-catalog-ownership.ts), nunca
+ * um segundo sistema de identificador: /agendar/:slug é resolvido pelo mesmo `catalogSlug` do tenant. */
+export function buildPublicServiceBookingUrl(slug: string, baseUrl = getPublicAppBaseUrl()): string {
+  const safeSlug = String(slug ?? "").trim().replace(/^\/+|\/+$/g, "");
+  return safeSlug ? buildPublicAppUrl(`/agendar/${encodeURIComponent(safeSlug)}`, baseUrl) : "";
+}

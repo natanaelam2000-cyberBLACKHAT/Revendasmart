@@ -39,7 +39,7 @@ import { ORDERS_FEATURE_LABEL, ORDERS_FEATURE_LABEL_MAX_LENGTH, resolveOrdersFea
 import { useTheme } from "next-themes";
 import { APPEARANCE_THEME_STORAGE_KEY } from "@/components/ThemeProvider";
 import {
-  Store, CreditCard, ClipboardList, Loader2,
+  Store, CreditCard, ClipboardList, Loader2, CalendarClock,
   Download, Save, ChevronRight, Bell, Upload, RefreshCw, Users, Share2, ExternalLink, FileSpreadsheet, QrCode, Copy, Mail, Scale, HelpCircle, ChevronDown, User, KeyRound, LogOut, ArrowLeft, Receipt, Trash2, Monitor, Sun, Moon, Gift, ShieldCheck, Ticket,
   type LucideIcon
 } from "lucide-react";
@@ -529,6 +529,9 @@ export default function Settings() {
     { title: "Indique e ganhe", subtitle: `A cada ${REFERRAL_REWARD_LIMIT} indicações, 30 dias de Premium`, icon: Gift, color: "bg-amber-100 text-amber-700", path: "/settings?tab=growth" },
     { title: "Clientes", subtitle: "Cadastro, busca e histórico de compras", icon: Users, color: "bg-cyan-100 text-cyan-700", path: "/clients" },
     { title: "Cobranças", subtitle: "Pendentes, vencidas e recebidas", icon: Receipt, color: "bg-emerald-100 text-emerald-700", path: "/billings" },
+    // SERV-E2E-01 §3/§19 — único ponto de entrada navegável para o módulo Serviços (Agenda, de onde o
+    // dono também alcança Configurar horários e cada Atendimento) — antes só existia digitando a URL.
+    { title: "Serviços", subtitle: "Agenda, horários de atendimento e agendamentos", icon: CalendarClock, color: "bg-indigo-100 text-indigo-700", path: "/servicos/agenda" },
     { title: "Minha Assinatura", subtitle: "Plano e faturamento", icon: CreditCard, color: "bg-sky-100 text-sky-700", path: "/subscribe" },
     { title: resolveOrdersFeatureLabel(firestoreSettings), subtitle: "Pedidos e encomendas da loja", icon: ClipboardList, color: "bg-purple-100 text-purple-700", path: "/orders" },
     { title: "Preferências", subtitle: "Notificações e ajustes", icon: Bell, color: "bg-slate-100 text-slate-700", path: "/settings?tab=preferences" },

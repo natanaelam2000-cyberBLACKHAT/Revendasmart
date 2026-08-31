@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Ban, CalendarClock, ChevronLeft, ChevronRight, Settings } from "lucide-react";
+import { Ban, CalendarClock, ChevronLeft, ChevronRight, Copy, Settings } from "lucide-react";
 import { Layout } from "@/components/layout";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { EmptyState } from "@/components/EmptyState";
@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useClientsLiteData } from "@/hooks/useClientsLiteData";
+import { useUserSettings } from "@/providers/UserSettingsProvider";
+import { buildPublicServiceBookingUrl } from "@/lib/public-url";
 import { getServiceResourceSchedule, listServiceAvailabilityBlocksForResource } from "@/lib/service-availability-persistence";
 import { createServiceAvailabilityBlock, deleteServiceAvailabilityBlock, getServiceAvailability, type ServiceAvailabilityResponse } from "@/lib/service-availability-commands";
 import { listServiceBookingsForResourceAndRange } from "@/lib/service-bookings-persistence";
@@ -58,6 +60,15 @@ export default function ServiceAgenda() {
   const [agendaError, setAgendaError] = useState("");
   const [reloadToken, setReloadToken] = useState(0);
   const { clients } = useClientsLiteData();
+  // SERV-E2E-01 §19 — mesmo catalogSlug já usado por /u/:slug (client/src/pages/settings.tsx, aba
+  // "Compartilhar Catálogo"); nunca gera um slug novo aqui, só reaproveita o já existente.
+  const { settings: userSettings } = useUserSettings();
+  const bookingLinkUrl = useMemo(() => buildPublicServiceBookingUrl(userSettings.catalogSlug), [userSettings.catalogSlug]);
+  const handleCopyBookingLink = useCallback(() => {
+    if (!bookingLinkUrl) return;
+    navigator.clipboard.writeText(bookingLinkUrl);
+    notifySuccess("Link de agendamento copiado!");
+  }, [bookingLinkUrl]);
 
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
   const [selectedWork, setSelectedWork] = useState<ServiceWork | null>(null);
@@ -297,6 +308,11 @@ export default function ServiceAgenda() {
               <Settings className="mr-1.5 h-4 w-4" /> Configurar horários
             </a>
           </Button>
+          {bookingLinkUrl && (
+            <Button type="button" variant="outline" size="sm" onClick={handleCopyBookingLink} data-testid="button-copy-booking-link" className="rounded-full">
+              <Copy className="mr-1.5 h-4 w-4" /> Copiar link de agendamento
+            </Button>
+          )}
         </div>
 
         {schedule === undefined || loadingAgenda ? (
