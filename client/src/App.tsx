@@ -11,6 +11,7 @@ const PublicCatalog = lazy(() => import("@/pages/public-catalog"));
 const AccountDeletion = lazy(() => import("@/pages/account-deletion"));
 const SorteioPublico = lazy(() => import("@/pages/sorteio-publico"));
 const PublicServiceBooking = lazy(() => import("@/pages/public-service-booking"));
+const PublicServiceBookingManage = lazy(() => import("@/pages/public-service-booking-manage"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 const PrivateRouter = lazy(() => import("@/routers/PrivateRouter"));
 
@@ -26,6 +27,9 @@ function PublicRouter() {
       <Route path="/u/:storeSlug" component={PublicCatalog} />
       <Route path="/sorteio/:campaignSlug" component={SorteioPublico} />
       {/* SERV-PUBLIC-01 — mesmo padrão de /u/:storeSlug: público, sem login, lazy, fora do PrivateRouter. */}
+      {/* SERV-PUBLIC-02 — rota mais específica primeiro; wouter já não confundiria (segmentos diferentes),
+       * mas a ordem deixa a intenção explícita. */}
+      <Route path="/agendar/:storeSlug/gerenciar/:token" component={PublicServiceBookingManage} />
       <Route path="/agendar/:storeSlug" component={PublicServiceBooking} />
       <Route path="/account-deletion" component={AccountDeletion} />
       <Route component={NotFound} />

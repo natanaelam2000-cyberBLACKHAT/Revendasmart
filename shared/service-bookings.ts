@@ -96,6 +96,12 @@ export type Booking = {
   readonly updatedAt: IsoUtcString;
   /** Preenchido atomicamente só no cancelamento (SERV-BOOK-02 §8-12), nunca noutro momento. */
   readonly cancelledAt?: IsoUtcString;
+  /** SERV-PUBLIC-02 — sha256 hex (64 chars) do token opaco de gerenciamento público entregue ao cliente só
+   * na confirmação (nunca persistido em plaintext, ver server/service-public-booking.ts). Só existe para
+   * Bookings source="public"; Bookings internos/legados nunca têm este campo, o que já os torna não-
+   * gerenciáveis publicamente (§34 — nenhuma migração retroativa). Server-authoritative: o client nunca
+   * pode escrevê-lo (Bookings já são 100% create/update/delete:false nas Rules). */
+  readonly publicManageTokenHash?: string;
 };
 
 export type ScheduleLockOwnerType = "hold" | "booking";
@@ -227,6 +233,9 @@ export function assertValidBooking(booking: Booking): Booking {
   }
   if (booking.status === "confirmed" && typeof booking.cancelledAt !== "undefined") {
     throw new ServiceBookingsDomainError("INVALID_BOOKING", "confirmed booking cannot contain cancelledAt.");
+  }
+  if (typeof booking.publicManageTokenHash !== "undefined" && !/^[a-f0-9]{64}$/.test(booking.publicManageTokenHash)) {
+    throw new ServiceBookingsDomainError("INVALID_BOOKING", "booking.publicManageTokenHash must be a sha256 hex digest.");
   }
   return booking;
 }

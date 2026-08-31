@@ -7,6 +7,7 @@
  * de erros para um vocabulário seguro (nunca expõe NOT_FOUND interno, ids de terceiros, ou detalhes do
  * tenant). Nenhuma rota aqui usa requireAuth — cliente público nunca tem conta/login (§ REGRA CRÍTICA).
  */
+import crypto from "node:crypto";
 import type { Express, NextFunction, Request, Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 import { getFirebaseAdmin } from "./firebase-admin-init";
@@ -19,8 +20,10 @@ import {
 } from "./service-availability-commands";
 import {
   ServiceBookingCommandError,
+  cancelServiceBookingCommand,
   createServiceBookingHoldCommand,
   confirmServiceBookingHoldCommand,
+  rescheduleServiceBookingCommand,
 } from "./service-booking-commands";
 import { ServiceBookingsDomainError, resolveBookableServiceDuration } from "../shared/service-bookings";
 import type { Service } from "../shared/services";
@@ -39,7 +42,10 @@ export class ServicePublicBookingError extends Error {
     | "SLOT_CONFLICT"
     | "HOLD_EXPIRED"
     | "HOLD_NOT_FOUND"
-    | "RESOURCE_NOT_AVAILABLE";
+    | "RESOURCE_NOT_AVAILABLE"
+    | "BOOKING_NOT_FOUND"
+    | "BOOKING_NOT_CANCELABLE"
+    | "BOOKING_NOT_RESCHEDULABLE";
 
   constructor(code: ServicePublicBookingError["code"], message: string) {
     super(message);
@@ -57,6 +63,12 @@ const COMMAND_ERROR_MESSAGES = {
   HOLD_EXPIRED: "Esse horário não está mais reservado. Escolha outro horário.",
   HOLD_NOT_FOUND: "Esta reserva temporária não foi encontrada.",
   RESOURCE_NOT_AVAILABLE: "Não há horários disponíveis neste dia.",
+  // SERV-PUBLIC-02 §11 — a mesma mensagem genérica cobre token inexistente, Booking de outro tenant e
+  // Booking não gerenciável: nunca revela QUAL desses três motivos causou a falha (nunca "Booking existe,
+  // mas token está errado").
+  BOOKING_NOT_FOUND: "Não foi possível localizar este agendamento.",
+  BOOKING_NOT_CANCELABLE: "Este agendamento não pode mais ser cancelado.",
+  BOOKING_NOT_RESCHEDULABLE: "Este agendamento não pode mais ser reagendado.",
 } as const;
 
 function db_(): Firestore {
@@ -72,7 +84,9 @@ function servicesCollection(db: Firestore, uid: string) {
  * `notFoundAs` desambigua o código genérico NOT_FOUND (reaproveitado internamente tanto para "Service
  * inexistente" quanto para "Hold inexistente", conforme o comando chamado) para o vocabulário público certo
  * em cada contexto de chamada. */
-function translateInternalError(error: unknown, notFoundAs: "SERVICE_NOT_AVAILABLE" | "HOLD_NOT_FOUND" = "HOLD_NOT_FOUND"): ServicePublicBookingError {
+type NotFoundTranslation = "SERVICE_NOT_AVAILABLE" | "HOLD_NOT_FOUND" | "BOOKING_NOT_FOUND";
+
+function translateInternalError(error: unknown, notFoundAs: NotFoundTranslation = "HOLD_NOT_FOUND"): ServicePublicBookingError {
   if (error instanceof ServiceBookingCommandError) {
     switch (error.code) {
       case "NOT_FOUND": return new ServicePublicBookingError(notFoundAs, COMMAND_ERROR_MESSAGES[notFoundAs]);
@@ -90,12 +104,18 @@ function translateInternalError(error: unknown, notFoundAs: "SERVICE_NOT_AVAILAB
         return new ServicePublicBookingError("HOLD_EXPIRED", COMMAND_ERROR_MESSAGES.HOLD_EXPIRED);
       case "OUTSIDE_WORKING_HOURS":
         return new ServicePublicBookingError("OUTSIDE_WORKING_HOURS", COMMAND_ERROR_MESSAGES.OUTSIDE_WORKING_HOURS);
+      // SERV-PUBLIC-02 — o Booking FOI encontrado pelo token (não é ambiguidade de lookup, §11 não se
+      // aplica aqui); é uma regra de negócio legítima e distinguível, reaproveitada do Booking Core.
+      case "WORK_NOT_CANCELABLE":
+        return new ServicePublicBookingError("BOOKING_NOT_CANCELABLE", COMMAND_ERROR_MESSAGES.BOOKING_NOT_CANCELABLE);
+      case "BOOKING_NOT_RESCHEDULABLE":
+        return new ServicePublicBookingError("BOOKING_NOT_RESCHEDULABLE", COMMAND_ERROR_MESSAGES.BOOKING_NOT_RESCHEDULABLE);
       default:
         return new ServicePublicBookingError("INVALID_PAYLOAD", COMMAND_ERROR_MESSAGES.INVALID_PAYLOAD);
     }
   }
   if (error instanceof ServiceAvailabilityCommandError) {
-    if (error.code === "NOT_FOUND") return new ServicePublicBookingError("SERVICE_NOT_AVAILABLE", COMMAND_ERROR_MESSAGES.SERVICE_NOT_AVAILABLE);
+    if (error.code === "NOT_FOUND") return new ServicePublicBookingError(notFoundAs, COMMAND_ERROR_MESSAGES[notFoundAs]);
     return new ServicePublicBookingError("INVALID_PAYLOAD", COMMAND_ERROR_MESSAGES.INVALID_PAYLOAD);
   }
   if (error instanceof ServiceBookingsDomainError) {
@@ -136,6 +156,26 @@ function validateCustomerPhone(value: unknown): string {
   const text = typeof value === "string" ? value.trim().slice(0, 40) : "";
   if (!text) throw new ServicePublicBookingError("INVALID_PAYLOAD", "Informe seu WhatsApp/telefone.");
   return text;
+}
+/** §11 — um token malformado é tratado como "não encontrado" (mesma resposta genérica), nunca um erro de
+ * validação distinto que revelaria "o formato está certo, mas não bate com nada". */
+function validateManageToken(value: unknown): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text || text.length > 200) throw new ServicePublicBookingError("BOOKING_NOT_FOUND", COMMAND_ERROR_MESSAGES.BOOKING_NOT_FOUND);
+  return text;
+}
+
+// ====================================================================================================
+// Token de gerenciamento público — mesmo padrão já aprovado em server/promotional-campaigns.ts
+// (hashToken/randomBytes(32).base64url para os links de sorteio): 256 bits de entropia, URL-safe, nunca
+// persistido em plaintext (só o sha256 hex vai para o Booking, ver shared/service-bookings.ts).
+// ====================================================================================================
+function hashManageToken(rawToken: string): string {
+  return crypto.createHash("sha256").update(rawToken).digest("hex");
+}
+function generateManageToken(): { rawToken: string; tokenHash: string } {
+  const rawToken = crypto.randomBytes(32).toString("base64url");
+  return { rawToken, tokenHash: hashManageToken(rawToken) };
 }
 
 export type PublicBookingStore = {
@@ -247,7 +287,16 @@ export async function createPublicServiceBookingHoldCommand(
   }
 }
 
-export type PublicConfirmResult = { readonly confirmed: true; readonly startAt: string; readonly endAt: string };
+export type PublicConfirmResult = {
+  readonly confirmed: true;
+  readonly startAt: string;
+  readonly endAt: string;
+  /** SERV-PUBLIC-02 — presente na quase totalidade dos casos (toda confirmação pública gera um). Ausente
+   * só no caso extremo em que ESTE hold já havia sido confirmado por uma chamada anterior com uma
+   * idempotencyKey DIFERENTE — o token original vive só naquela outra idempotency record (nunca
+   * reconstituível de outra forma, nunca "regerado" com um novo hash não-persistido). */
+  readonly manageToken?: string;
+};
 
 function buildPublicClientId(holdId: string): string {
   return `public-${holdId}`;
@@ -255,7 +304,8 @@ function buildPublicClientId(holdId: string): string {
 
 /** §15-19 — coleta só nome+telefone (V1), cria o Client de contato ATOMICAMENTE com o Booking/Work (dentro
  * de confirmServiceBookingHoldCommand, nunca uma segunda escrita separada) e devolve um payload de sucesso
- * já sanitizado para exibição pública (§21 — nenhum id interno, nenhum campo técnico). */
+ * já sanitizado para exibição pública (§21 — nenhum id interno, nenhum campo técnico). SERV-PUBLIC-02:
+ * também gera o token de gerenciamento público (só no confirm público, nunca no fluxo interno, §4). */
 export async function confirmPublicServiceBookingHoldCommand(
   db: Firestore,
   storeUid: string,
@@ -265,13 +315,181 @@ export async function confirmPublicServiceBookingHoldCommand(
   idempotencyKey: string,
 ): Promise<PublicConfirmResult> {
   try {
+    const candidateToken = generateManageToken();
     const result = await confirmServiceBookingHoldCommand(db, storeUid, holdId, idempotencyKey, {
       source: "public",
       publicCustomerContact: { clientId: buildPublicClientId(holdId), name: customerName, phone: customerPhone },
+      publicManageToken: candidateToken,
     });
-    return { confirmed: true, startAt: result.startAt, endAt: result.endAt };
+    // MG4 — replay da MESMA key: result.publicManageToken já vem do idempotency record original (o
+    // candidateToken gerado NESTA chamada nunca foi persistido em lugar nenhum quando idempotentReplay=true,
+    // então NUNCA é usado como fallback nesse caso — só na confirmação genuinamente nova).
+    const manageToken = result.publicManageToken ?? (result.idempotentReplay ? undefined : candidateToken.rawToken);
+    return { confirmed: true, startAt: result.startAt, endAt: result.endAt, ...(manageToken ? { manageToken } : {}) };
   } catch (error) {
     throw translateInternalError(error);
+  }
+}
+
+// ====================================================================================================
+// Gerenciamento público (SERV-PUBLIC-02) — ler/cancelar/reagendar o PRÓPRIO Booking via token opaco.
+// ====================================================================================================
+type PublicBookingRecord = {
+  readonly id: string;
+  readonly serviceId: string;
+  readonly resourceId: string;
+  readonly workId: string;
+  readonly customerId?: string;
+  readonly startAt: string;
+  readonly endAt: string;
+  readonly status: "confirmed" | "cancelled";
+  readonly source?: string;
+};
+
+/** §9 — lookup eficiente: um único where(publicManageTokenHash==hash).limit(1), já escopado ao tenant certo
+ * (a própria coleção users/{storeUid}/bookings), nunca uma listagem completa comparando hashes em memória.
+ * §32 — nunca resolve um Booking de OUTRO storeUid: a query em si só enxerga a subcoleção do tenant já
+ * resolvido pelo slug, então um token de outro tenant simplesmente não aparece aqui (0 resultados), mesmo
+ * que hipoteticamente colidisse (256 bits — nunca acontece na prática). */
+async function findBookingByManageToken(db: Firestore, storeUid: string, rawToken: string): Promise<PublicBookingRecord | null> {
+  const tokenHash = hashManageToken(rawToken);
+  const snapshot = await db.collection("users").doc(storeUid).collection("bookings")
+    .where("publicManageTokenHash", "==", tokenHash).limit(1).get();
+  if (snapshot.empty) return null;
+  const doc = snapshot.docs[0];
+  const data = doc.data() as Record<string, unknown>;
+  // Defensivo — só Bookings source="public" jamais recebem este campo, então isto nunca deveria falhar,
+  // mas nunca confiar implicitamente num campo cujo valor não foi revalidado nesta leitura.
+  if (data.source !== "public") return null;
+  return {
+    id: doc.id,
+    serviceId: data.serviceId as string,
+    resourceId: data.resourceId as string,
+    workId: data.workId as string,
+    customerId: typeof data.customerId === "string" ? data.customerId : undefined,
+    startAt: data.startAt as string,
+    endAt: data.endAt as string,
+    status: data.status as "confirmed" | "cancelled",
+    source: data.source as string,
+  };
+}
+
+function firstNameOf(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.split(/\s+/)[0] : undefined;
+}
+
+export type PublicManagedBookingProjection = {
+  readonly serviceName: string;
+  readonly storeName: string;
+  readonly startAt: string;
+  readonly endAt: string;
+  readonly timezone: string;
+  readonly status: "confirmed" | "cancelled";
+  readonly customerFirstName?: string;
+  readonly canCancel: boolean;
+  readonly canReschedule: boolean;
+};
+
+/** §8 — projeção pública mínima: relê Service/ServiceResourceSchedule/ServiceWork/Client server-side só
+ * para extrair os poucos campos exibíveis (nome, timezone, status, primeiro nome) — nunca devolve os
+ * documentos inteiros, nunca tenantUid/customerId/workId/resourceId/financialSummary/quoteId/payments (§8). */
+export async function getPublicManagedBookingCommand(
+  db: Firestore,
+  storeUid: string,
+  storeName: string,
+  rawToken: string,
+): Promise<PublicManagedBookingProjection> {
+  const record = await findBookingByManageToken(db, storeUid, rawToken);
+  if (!record) throw new ServicePublicBookingError("BOOKING_NOT_FOUND", COMMAND_ERROR_MESSAGES.BOOKING_NOT_FOUND);
+
+  const [serviceSnap, scheduleSnap, workSnap, clientSnap] = await Promise.all([
+    db.collection("users").doc(storeUid).collection("services").doc(record.serviceId).get(),
+    db.collection("users").doc(storeUid).collection("serviceResourceSchedules").doc(record.resourceId).get(),
+    db.collection("users").doc(storeUid).collection("serviceWorks").doc(record.workId).get(),
+    record.customerId ? db.collection("users").doc(storeUid).collection("clients").doc(record.customerId).get() : Promise.resolve(undefined),
+  ]);
+  const serviceName = typeof serviceSnap.data()?.name === "string" ? (serviceSnap.data()!.name as string) : "Serviço";
+  const timezone = typeof scheduleSnap.data()?.timezone === "string" ? (scheduleSnap.data()!.timezone as string) : "UTC";
+  const workStatus = workSnap.data()?.status;
+  const canManage = record.status === "confirmed" && workStatus === "planned";
+  const customerFirstName = firstNameOf(clientSnap?.data()?.name);
+
+  return {
+    serviceName,
+    storeName,
+    startAt: record.startAt,
+    endAt: record.endAt,
+    timezone,
+    status: record.status,
+    ...(customerFirstName ? { customerFirstName } : {}),
+    canCancel: canManage,
+    canReschedule: canManage,
+  };
+}
+
+export type PublicCancelResult = { readonly cancelled: true };
+
+/** §12-14 — reaproveita cancelServiceBookingCommand SEM NENHUMA MUDANÇA: mesma regra de elegibilidade
+ * (§13), mesma liberação de locks, mesmo cancelamento de Work, e a mesma garantia de NUNCA criar Refund
+ * (o comando nunca tocou Payment/Refund, ver server/service-booking-commands.ts §10). */
+export async function cancelPublicManagedBookingCommand(
+  db: Firestore,
+  storeUid: string,
+  rawToken: string,
+  idempotencyKey: string,
+): Promise<PublicCancelResult> {
+  const record = await findBookingByManageToken(db, storeUid, rawToken);
+  if (!record) throw new ServicePublicBookingError("BOOKING_NOT_FOUND", COMMAND_ERROR_MESSAGES.BOOKING_NOT_FOUND);
+  try {
+    await cancelServiceBookingCommand(db, storeUid, record.id, idempotencyKey);
+    return { cancelled: true };
+  } catch (error) {
+    throw translateInternalError(error, "BOOKING_NOT_FOUND");
+  }
+}
+
+/** §17 — availability para reagendamento deriva serviceId/resourceId do PRÓPRIO Booking resolvido pelo
+ * token, nunca aceito do client (§15: não altera Service nem Resource). Mesma leitura pública de
+ * disponibilidade já usada na criação (getServiceAvailabilityCommand), nenhuma segunda implementação. */
+export async function getPublicRescheduleAvailabilityCommand(
+  db: Firestore,
+  storeUid: string,
+  rawToken: string,
+  rangeStartAt: string,
+  rangeEndAt: string,
+): Promise<ServiceAvailabilityResult> {
+  const record = await findBookingByManageToken(db, storeUid, rawToken);
+  if (!record) throw new ServicePublicBookingError("BOOKING_NOT_FOUND", COMMAND_ERROR_MESSAGES.BOOKING_NOT_FOUND);
+  try {
+    return await getServiceAvailabilityCommand(db, storeUid, record.serviceId, record.resourceId, rangeStartAt, rangeEndAt);
+  } catch (error) {
+    throw translateInternalError(error, "BOOKING_NOT_FOUND");
+  }
+}
+
+export type PublicRescheduleResult = { readonly startAt: string; readonly endAt: string };
+
+/** §16/§18/§21 — reaproveita rescheduleServiceBookingCommand SEM NENHUMA MUDANÇA: mesmo Booking id
+ * preservado (nunca cancel+create), mesma transaction all-or-nothing (uma falha nunca perde o horário
+ * antigo), e o token continua válido depois (só o hash no Booking, que nunca é tocado por este comando). */
+export async function reschedulePublicManagedBookingCommand(
+  db: Firestore,
+  storeUid: string,
+  rawToken: string,
+  newStartAt: string,
+  idempotencyKey: string,
+): Promise<PublicRescheduleResult> {
+  const record = await findBookingByManageToken(db, storeUid, rawToken);
+  if (!record) throw new ServicePublicBookingError("BOOKING_NOT_FOUND", COMMAND_ERROR_MESSAGES.BOOKING_NOT_FOUND);
+  try {
+    const outcome = await rescheduleServiceBookingCommand(db, storeUid, record.id, newStartAt, idempotencyKey);
+    if ("conflict" in outcome) throw new ServicePublicBookingError("SLOT_CONFLICT", COMMAND_ERROR_MESSAGES.SLOT_CONFLICT);
+    return { startAt: outcome.startAt, endAt: outcome.endAt };
+  } catch (error) {
+    if (error instanceof ServicePublicBookingError) throw error;
+    throw translateInternalError(error, "BOOKING_NOT_FOUND");
   }
 }
 
@@ -291,6 +509,7 @@ const ipRateLimitMap = new Map<string, { count: number; resetAt: number }>();
 export function resetPublicServiceBookingRateLimitsForTests(): void {
   slugRateLimitMap.clear();
   ipRateLimitMap.clear();
+  managementIpRateLimitMap.clear();
 }
 
 function checkRateLimit(map: Map<string, { count: number; resetAt: number }>, key: string, max: number, now: number): boolean {
@@ -324,6 +543,24 @@ function publicServiceBookingRateLimit(req: Request, res: Response, next: NextFu
   const ipAllowed = checkRateLimit(ipRateLimitMap, clientKey, RATE_LIMIT_MAX_PER_IP, now);
   const slugAllowed = checkRateLimit(slugRateLimitMap, `${clientKey}:${slug}`, RATE_LIMIT_MAX_PER_SLUG, now);
   if (!ipAllowed || !slugAllowed) {
+    res.setHeader("Retry-After", String(Math.ceil(RATE_LIMIT_WINDOW_MS / 1000)));
+    res.status(429).json({ code: "RATE_LIMITED", message: "Muitas tentativas. Tente novamente em instantes." });
+    return;
+  }
+  next();
+}
+
+// SERV-PUBLIC-02 §23 — endpoints de gerenciamento (leem/mutam por token) recebem um limite mais restrito
+// por IP, independente do limite geral por slug acima: defesa em profundidade contra brute-force de token,
+// além dos 256 bits de entropia em si já tornarem isso inviável na prática.
+const MANAGEMENT_RATE_LIMIT_MAX_PER_IP = 30;
+const managementIpRateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+function publicBookingManagementRateLimit(req: Request, res: Response, next: NextFunction) {
+  const now = Date.now();
+  const clientKey = clientKeyFor(req);
+  const allowed = checkRateLimit(managementIpRateLimitMap, clientKey, MANAGEMENT_RATE_LIMIT_MAX_PER_IP, now);
+  if (!allowed) {
     res.setHeader("Retry-After", String(Math.ceil(RATE_LIMIT_WINDOW_MS / 1000)));
     res.status(429).json({ code: "RATE_LIMITED", message: "Muitas tentativas. Tente novamente em instantes." });
     return;
@@ -409,6 +646,88 @@ export function registerPublicServiceBookingRoutes(app: Express): void {
       }
       logError("service_public_booking.confirm_failed", error, { requestId: req.requestId });
       res.status(500).json({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível confirmar o agendamento agora." });
+    }
+  });
+
+  // ==================================================================================================
+  // SERV-PUBLIC-02 — gerenciamento público por token (nunca por bookingId sozinho, §STOP#3). Todas usam
+  // o rate limit mais restrito (§23). Nunca logam o token (§24 — só storeSlug/requestId).
+  // ==================================================================================================
+  app.get("/api/public/services/:storeSlug/bookings/manage/:token", publicBookingManagementRateLimit, async (req, res) => {
+    try {
+      const store = await resolvePublicBookingStore(db_(), validateSlugParam(req.params.storeSlug));
+      if (!store) { res.status(404).json({ code: "BOOKING_NOT_FOUND", message: COMMAND_ERROR_MESSAGES.BOOKING_NOT_FOUND }); return; }
+      const token = validateManageToken(req.params.token);
+      const result = await getPublicManagedBookingCommand(db_(), store.uid, store.name, token);
+      res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof ServicePublicBookingError) {
+        logWarn("service_public_booking.manage_lookup_rejected", { requestId: req.requestId, code: error.code });
+        res.status(error.code === "BOOKING_NOT_FOUND" ? 404 : 400).json({ code: error.code, message: error.message });
+        return;
+      }
+      logError("service_public_booking.manage_lookup_failed", error, { requestId: req.requestId });
+      res.status(500).json({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível carregar este agendamento agora." });
+    }
+  });
+
+  app.get("/api/public/services/:storeSlug/bookings/manage/:token/availability", publicBookingManagementRateLimit, async (req, res) => {
+    try {
+      const store = await resolvePublicBookingStore(db_(), validateSlugParam(req.params.storeSlug));
+      if (!store) { res.status(404).json({ code: "BOOKING_NOT_FOUND", message: COMMAND_ERROR_MESSAGES.BOOKING_NOT_FOUND }); return; }
+      const token = validateManageToken(req.params.token);
+      const rangeStartAt = typeof req.query.rangeStartAt === "string" ? req.query.rangeStartAt : "";
+      const rangeEndAt = typeof req.query.rangeEndAt === "string" ? req.query.rangeEndAt : "";
+      const result = await getPublicRescheduleAvailabilityCommand(db_(), store.uid, token, rangeStartAt, rangeEndAt);
+      res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof ServicePublicBookingError) {
+        res.status(error.code === "BOOKING_NOT_FOUND" ? 404 : 400).json({ code: error.code, message: error.message });
+        return;
+      }
+      logError("service_public_booking.manage_availability_failed", error, { requestId: req.requestId });
+      res.status(500).json({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível consultar os horários agora." });
+    }
+  });
+
+  app.post("/api/public/services/:storeSlug/bookings/manage/:token/cancel", publicBookingManagementRateLimit, async (req, res) => {
+    try {
+      const store = await resolvePublicBookingStore(db_(), validateSlugParam(req.params.storeSlug));
+      if (!store) { res.status(404).json({ code: "BOOKING_NOT_FOUND", message: COMMAND_ERROR_MESSAGES.BOOKING_NOT_FOUND }); return; }
+      const token = validateManageToken(req.params.token);
+      const idempotencyKey = validateIdempotencyKey(req.body?.idempotencyKey);
+      const result = await cancelPublicManagedBookingCommand(db_(), store.uid, token, idempotencyKey);
+      logInfo("service_public_booking.manage_cancelled", { requestId: req.requestId, storeSlug: store.slug });
+      res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof ServicePublicBookingError) {
+        logWarn("service_public_booking.manage_cancel_rejected", { requestId: req.requestId, code: error.code });
+        res.status(error.code === "BOOKING_NOT_FOUND" ? 404 : error.code === "BOOKING_NOT_CANCELABLE" ? 409 : 400).json({ code: error.code, message: error.message });
+        return;
+      }
+      logError("service_public_booking.manage_cancel_failed", error, { requestId: req.requestId });
+      res.status(500).json({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível cancelar este agendamento agora." });
+    }
+  });
+
+  app.post("/api/public/services/:storeSlug/bookings/manage/:token/reschedule", publicBookingManagementRateLimit, async (req, res) => {
+    try {
+      const store = await resolvePublicBookingStore(db_(), validateSlugParam(req.params.storeSlug));
+      if (!store) { res.status(404).json({ code: "BOOKING_NOT_FOUND", message: COMMAND_ERROR_MESSAGES.BOOKING_NOT_FOUND }); return; }
+      const token = validateManageToken(req.params.token);
+      const startAt = validateStartAt(req.body?.startAt);
+      const idempotencyKey = validateIdempotencyKey(req.body?.idempotencyKey);
+      const result = await reschedulePublicManagedBookingCommand(db_(), store.uid, token, startAt, idempotencyKey);
+      logInfo("service_public_booking.manage_rescheduled", { requestId: req.requestId, storeSlug: store.slug });
+      res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof ServicePublicBookingError) {
+        logWarn("service_public_booking.manage_reschedule_rejected", { requestId: req.requestId, code: error.code });
+        res.status(error.code === "BOOKING_NOT_FOUND" ? 404 : error.code === "SLOT_CONFLICT" || error.code === "BOOKING_NOT_RESCHEDULABLE" ? 409 : 400).json({ code: error.code, message: error.message });
+        return;
+      }
+      logError("service_public_booking.manage_reschedule_failed", error, { requestId: req.requestId });
+      res.status(500).json({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível reagendar agora." });
     }
   });
 }

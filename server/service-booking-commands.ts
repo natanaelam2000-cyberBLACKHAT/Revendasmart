@@ -61,6 +61,10 @@ type ConfirmHoldResult = {
   startAt: IsoUtcString;
   endAt: IsoUtcString;
   idempotentReplay: boolean;
+  /** SERV-PUBLIC-02 — só presente quando options.publicManageToken foi passado (fluxo público). O raw token
+   * nunca é persistido no Booking (só o hash) — esta é a ÚNICA superfície onde ele sai em texto puro, seja
+   * na confirmação original OU no replay idempotente da MESMA key (ver BookingIdempotencyRecord abaixo). */
+  publicManageToken?: string;
 };
 
 type ReleaseHoldResult = {
@@ -110,6 +114,13 @@ type BookingIdempotencyRecord = {
   workId?: string;
   cancelledAt?: IsoUtcString;
   createdAt: string;
+  /** SERV-PUBLIC-02 — raw token de gerenciamento público, só para action="confirm_hold" quando o fluxo
+   * público gerou um. Vive SÓ aqui (coleção serviceBookingCommandIdempotency, allow read/write: if false nas
+   * Rules — nunca acessível a nenhum client) e NUNCA no Booking (que só recebe o hash). Existe unicamente
+   * para permitir que um replay da MESMA idempotencyKey devolva o mesmo token ao cliente original sem
+   * precisar "descriptografar" um hash (impossível por design) — não é uma segunda cópia de longo prazo do
+   * segredo em nenhum lugar alcançável de fora do servidor. */
+  publicManageToken?: string;
 };
 
 export class ServiceBookingCommandError extends Error {
@@ -321,6 +332,9 @@ function ensureConfirmReplayCompatible(
     startAt: existing.startAt ?? "",
     endAt: "",
     idempotentReplay: true,
+    // SERV-PUBLIC-02 MG4 — o replay da MESMA key devolve o mesmo raw token que a confirmação original
+    // gerou (guardado só neste registro server-only); nunca reconstruído a partir do hash do Booking.
+    ...(typeof existing.publicManageToken === "string" ? { publicManageToken: existing.publicManageToken } : {}),
   };
 }
 
@@ -416,6 +430,10 @@ export type ConfirmServiceBookingHoldOptions = {
    * com o Booking/Work, e usa seu id como customerId. hold.customerId (já opcional hoje) continua a única
    * fonte quando isto não é informado — nenhuma mudança de comportamento para o fluxo interno existente. */
   readonly publicCustomerContact?: { readonly clientId: string; readonly name: string; readonly phone: string };
+  /** SERV-PUBLIC-02 — quando presente, ativa o token de gerenciamento público: o hash vai para o Booking
+   * (server-authoritative, nunca escrito pelo client), o raw token nunca é persistido lá — só devolvido
+   * nesta resposta e guardado no idempotency record desta MESMA key para replay seguro (MG4). */
+  readonly publicManageToken?: { readonly rawToken: string; readonly tokenHash: string };
 };
 
 export async function confirmServiceBookingHoldCommand(
@@ -536,6 +554,7 @@ export async function confirmServiceBookingHoldCommand(
       source: options.source ?? "manual",
       createdAt: serverNowIso,
       updatedAt: serverNowIso,
+      ...(options.publicManageToken ? { publicManageTokenHash: options.publicManageToken.tokenHash } : {}),
     });
     const confirmedHold: BookingHold = assertValidBookingHold({
       ...hold,
@@ -547,6 +566,7 @@ export async function confirmServiceBookingHoldCommand(
     const result: ConfirmHoldResult = {
       action: "confirm_hold", holdId, bookingId, workId, serviceId: hold.serviceId, resourceId: hold.resourceId,
       startAt: hold.startAt, endAt: hold.endAt, idempotentReplay: false,
+      ...(options.publicManageToken ? { publicManageToken: options.publicManageToken.rawToken } : {}),
     };
 
     // SERV-PUBLIC-01 — o Client de contato entra na MESMA transaction do Booking/Work (atomicidade real:
@@ -572,6 +592,7 @@ export async function confirmServiceBookingHoldCommand(
     tx.create(idemRef, {
       key: idempotencyKey, tenantUid: uid, action: "confirm_hold", serviceId: hold.serviceId, resourceId: hold.resourceId,
       holdId, bookingId, workId, createdAt: serverNowIso,
+      ...(options.publicManageToken ? { publicManageToken: options.publicManageToken.rawToken } : {}),
     } satisfies BookingIdempotencyRecord);
 
     return result;

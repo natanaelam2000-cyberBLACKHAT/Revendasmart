@@ -55,7 +55,7 @@ export default function PublicServiceBooking() {
   const [customerPhone, setCustomerPhone] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [confirmError, setConfirmError] = useState("");
-  const [success, setSuccess] = useState<{ startAt: string; endAt: string } | null>(null);
+  const [success, setSuccess] = useState<{ startAt: string; endAt: string; manageToken?: string } | null>(null);
 
   // Etapa 1 — estabelecimento + Etapa 2 — serviços (mesma resposta, um round-trip só).
   useEffect(() => {
@@ -153,7 +153,7 @@ export default function PublicServiceBooking() {
     setConfirmError("");
     try {
       const result = await confirmPublicBookingHold(storeSlug, hold.holdId, { customerName: name, customerPhone: phone });
-      setSuccess({ startAt: result.startAt, endAt: result.endAt });
+      setSuccess({ startAt: result.startAt, endAt: result.endAt, manageToken: result.manageToken });
     } catch (error) {
       setConfirmError(publicBookingErrorMessage(error));
       setHold(null);
@@ -198,6 +198,13 @@ export default function PublicServiceBooking() {
           <p className="pt-2 text-sm text-muted-foreground">Estabelecimento</p>
           <p className="text-sm font-bold text-foreground">{store.store.name}</p>
         </div>
+        {/* SERV-PUBLIC-02 §7 — o token só existe em memória nesta resposta; nunca exibido como texto, nunca
+         * logado, nunca persistido além da navegação em si. */}
+        {success.manageToken && (
+          <Button type="button" variant="outline" asChild className="mx-auto w-full max-w-xs rounded-full">
+            <a href={`/agendar/${storeSlug}/gerenciar/${success.manageToken}`} data-testid="link-manage-booking">Gerenciar agendamento</a>
+          </Button>
+        )}
       </div>
     );
   }
