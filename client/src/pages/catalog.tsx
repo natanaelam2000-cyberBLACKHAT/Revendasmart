@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { Minus, Plus, Send, ShoppingCart, Trash2, X } from "lucide-react";
 import { CatalogShowcase } from "@/components/catalog/CatalogShowcase";
-import { ShareCatalogSheet } from "@/components/catalog/ShareCatalogSheet";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Layout } from "@/components/layout";
-import { useProductsData } from "@/hooks/useProductsData";
+import { useCatalogProductsData } from "@/hooks/useCatalogProductsData";
 import { useSalesData } from "@/hooks/useSalesData";
 import { resolveCatalogExperience } from "@/lib/catalog-experience";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent } from "@/lib/firebase";
@@ -21,6 +20,11 @@ type CatalogStoreSettings = AppSettings & {
   storeDescription?: string;
 };
 
+const ShareCatalogSheet = lazy(async () => {
+  const mod = await import("@/components/catalog/ShareCatalogSheet");
+  return { default: mod.ShareCatalogSheet };
+});
+
 /**
  * CATALOG-GOLDEN-RESTORE-05 §1/§3/§7 — restaurado fielmente do commit histórico (6de2c85): carrinho de
  * PRÉVIA local à aba interna do catálogo, nunca uma venda — nenhuma Sale/Payment/StockMovement é criada
@@ -34,13 +38,24 @@ interface CartItem {
 }
 
 export default function Catalog() {
-  const { products, loading, error: productsError } = useProductsData();
-  const { sales, loading: salesLoading, error: salesError } = useSalesData();
-  const dataError = productsError || salesError;
   const { settings } = useUserSettings();
   const [search, setSearch] = useState("");
   const [genderFilter, setGenderFilter] = useState("todos");
   const [categoryFilter, setCategoryFilter] = useState("todos");
+  const {
+    products,
+    loading,
+    loadingMore,
+    error: productsError,
+    hasMore,
+    loadMore,
+    refresh,
+    searchFallbackRequired,
+  } = useCatalogProductsData({
+    searchTerm: search,
+    categoryFilter,
+  });
+  const { sales, loading: salesLoading, error: salesError } = useSalesData();
   const [showShareModal, setShowShareModal] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showCart, setShowCart] = useState(false);
@@ -111,6 +126,11 @@ export default function Catalog() {
   const hasCatalogSlug = Boolean(settings?.catalogSlug || settings?.catalog_slug);
   const catalogSlug = settings?.catalogSlug || settings?.catalog_slug || "seu-catalogo";
   const catalogUrl = buildPublicCatalogUrl(catalogSlug);
+  const trackCatalogShare = (method: "copy" | "whatsapp" | "instagram") => {
+    const user = getFirebaseAuth()?.currentUser;
+    logTelemetryEvent("catalog_link_shared", { catalogSlug }, user?.uid);
+    trackAnalyticsEvent("catalog_shared", { method });
+  };
 
   const handleCopyLink = async () => {
     if (!hasCatalogSlug) {
@@ -122,9 +142,7 @@ export default function Catalog() {
       setCopied(true);
       if (copyResetTimeoutRef.current) clearTimeout(copyResetTimeoutRef.current);
       copyResetTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
-      const user = getFirebaseAuth()?.currentUser;
-      logTelemetryEvent("catalog_link_shared", { catalogSlug }, user?.uid);
-      trackAnalyticsEvent("catalog_shared", { method: "copy" });
+      trackCatalogShare("copy");
     } catch {
       setCopied(false);
     }
@@ -138,9 +156,7 @@ export default function Catalog() {
     const message = `Confira meu catálogo de produtos! ${catalogUrl}`;
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, "_blank");
     setShowShareModal(false);
-    const user = getFirebaseAuth()?.currentUser;
-    logTelemetryEvent("catalog_link_shared", { catalogSlug }, user?.uid);
-    trackAnalyticsEvent("catalog_shared", { method: "whatsapp" });
+    trackCatalogShare("whatsapp");
   };
 
   const handleShareInstagram = async () => {
@@ -153,8 +169,7 @@ export default function Catalog() {
     if (typeof navigator.share === "function") {
       try {
         await navigator.share({ title: "Meu catálogo", text, url: catalogUrl });
-        logTelemetryEvent("catalog_link_shared", { catalogSlug }, user?.uid);
-        trackAnalyticsEvent("catalog_shared", { method: "instagram" });
+        trackCatalogShare("instagram");
       } catch {
         // Usuário cancelou o share sheet nativo — nenhuma ação necessária.
       }
@@ -163,8 +178,7 @@ export default function Catalog() {
     try {
       await navigator.clipboard.writeText(catalogUrl);
       notifyInfo("Link copiado. Cole no Instagram.");
-      logTelemetryEvent("catalog_link_shared", { catalogSlug }, user?.uid);
-      trackAnalyticsEvent("catalog_shared", { method: "instagram" });
+      trackCatalogShare("instagram");
     } catch {
       notifyWarning("Não foi possível copiar o link.");
     }
@@ -190,15 +204,17 @@ export default function Catalog() {
     return <Layout title="Catálogo"><PageSkeleton variant="cards" /></Layout>;
   }
 
+  const blockingError = salesError || (products.length === 0 ? productsError : "");
+
   // P1-03: antes, uma falha de leitura (rede/Firestore) caía direto no render normal com arrays vazios —
   // indistinguível de "catálogo sem produtos ainda". Mesmo padrão de erro+retry já usado em dashboard.tsx.
-  if (dataError) {
+  if (blockingError) {
     return (
       <Layout title="Catálogo">
         <div className="mx-auto max-w-3xl px-4 py-8 text-center">
           <p className="mb-2 font-bold text-destructive">Ocorreu um erro temporário.</p>
-          <p className="mb-4 text-sm text-muted-foreground">Não foi possível carregar seu catálogo.</p>
-          <button type="button" onClick={() => window.location.reload()} className="rounded-xl bg-primary px-5 py-3 text-sm font-bold text-white">Tentar novamente</button>
+          <p className="mb-4 text-sm text-muted-foreground">Não foi possível carregar o catálogo.</p>
+          <button type="button" onClick={refresh} className="rounded-xl bg-primary px-5 py-3 text-sm font-bold text-white">Tentar novamente</button>
         </div>
       </Layout>
     );
@@ -206,6 +222,25 @@ export default function Catalog() {
 
   return (
     <Layout title="Catálogo">
+      {(productsError || searchFallbackRequired) && (
+        <div className="mx-auto mb-4 max-w-6xl px-4 pt-4 sm:px-6">
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            {productsError
+              ? "Não foi possível atualizar a busca."
+              : "Com termo curto, a busca refina só os itens já carregados."}
+            {productsError && (
+              <button
+                type="button"
+                onClick={refresh}
+                className="ml-3 rounded-full bg-amber-900 px-3 py-1 text-xs font-bold text-white"
+              >
+                Tentar novamente
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <CatalogShowcase
         context="seller"
         experience={experience}
@@ -232,6 +267,9 @@ export default function Catalog() {
         onOpenCart={() => setShowCart(true)}
         onShareCatalog={() => setShowShareModal(true)}
         onCreateProduct={() => { window.location.href = "/add-product"; }}
+        hasMore={hasMore}
+        loadingMore={loadingMore}
+        onLoadMore={loadMore}
       />
 
       {/* CATALOG-GOLDEN-RESTORE-05 — drawer mínimo de prévia de pedido, restaurado fielmente do commit
@@ -282,16 +320,18 @@ export default function Catalog() {
         </div>
       )}
 
-      <ShareCatalogSheet
-        open={showShareModal}
-        onClose={() => setShowShareModal(false)}
-        catalogUrl={catalogUrl}
-        hasCatalogSlug={hasCatalogSlug}
-        copied={copied}
-        onCopyLink={handleCopyLink}
-        onShareWhatsApp={handleShareWhatsApp}
-        onShareInstagram={handleShareInstagram}
-      />
+      <Suspense fallback={null}>
+        <ShareCatalogSheet
+          open={showShareModal}
+          onClose={() => setShowShareModal(false)}
+          catalogUrl={catalogUrl}
+          hasCatalogSlug={hasCatalogSlug}
+          copied={copied}
+          onCopyLink={handleCopyLink}
+          onShareWhatsApp={handleShareWhatsApp}
+          onShareInstagram={handleShareInstagram}
+        />
+      </Suspense>
     </Layout>
   );
 }

@@ -43,12 +43,12 @@ O script processa fixture sintética/local. Não conecta no Firebase real e não
 
 ## Rollback
 
-Campos derivados podem permanecer nos documentos. Para voltar ao comportamento anterior, desligar `SERVER_SIDE_PRODUCT_SEARCH_ENABLED`.
+Campos derivados podem permanecer nos documentos. Para voltar ao comportamento anterior do catálogo interno, desligar `SERVER_SIDE_PRODUCT_SEARCH_ENABLED`.
 
 
-## Validação antes de ativar a flag
+## Validação para tenants com legado
 
-Antes de ligar `SERVER_SIDE_PRODUCT_SEARCH_ENABLED`, validar que o backfill gerou corretamente:
+Mesmo com `SERVER_SIDE_PRODUCT_SEARCH_ENABLED=true`, valide o backfill antes de depender da busca indexada para tenants com produtos antigos:
 
 - `nameNormalized` em todos os produtos elegíveis;
 - `categoryNormalized` coerente com `category` exibida;

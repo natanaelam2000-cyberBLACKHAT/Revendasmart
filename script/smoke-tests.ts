@@ -318,8 +318,8 @@ assert.equal(productSearchFields.searchSchemaVersion, PRODUCT_SEARCH_SCHEMA_VERS
 for (const token of ["perfume", "flor", "cafe", "natura", "perfumes", "7891234567890"]) {
   assert.ok(productSearchFields.searchTokens.includes(token), `missing product search token ${token}`);
 }
-assert.equal(CATALOG_SERVER_SEARCH_ENABLED, false);
-assert.equal(SERVER_SIDE_PRODUCT_SEARCH_ENABLED, false);
+assert.equal(CATALOG_SERVER_SEARCH_ENABLED, true);
+assert.equal(SERVER_SIDE_PRODUCT_SEARCH_ENABLED, true);
 assert.equal(SERVER_SIDE_CLIENT_SEARCH_ENABLED, false);
 assert.equal(canUseCatalogServerSearch("a"), false);
 assert.equal(canUseCatalogServerSearch("ab"), true);
@@ -343,6 +343,7 @@ assert.equal(buildProductServerSearchPlan({ term: "p", serverSearchEnabled: true
 assert.equal(buildProductServerSearchPlan({ term: "0012345678905", serverSearchEnabled: true }).kind, "barcode_exact");
 assert.equal(buildProductServerSearchPlan({ term: "perfume aguas", serverSearchEnabled: true }).kind, "token");
 assert.equal(buildProductServerSearchPlan({ term: "perf", serverSearchEnabled: true }).kind, "name_prefix");
+assert.equal(buildProductServerSearchPlan({ term: "perfume", serverSearchEnabled: true }).kind, "token");
 
 const defaultListSpec = buildProductServerSearchQuerySpec({ plan: buildProductServerSearchPlan({ term: "", serverSearchEnabled: true }), categoryFilter: "todos" });
 assert.equal(defaultListSpec.indexKey, "single:nameNormalized");
@@ -379,8 +380,8 @@ assert.equal(productMatchesLocalSearch({ name: "Perfume Águas", brand: "", cate
 assert.ok(buildProductSearchFields({ name: Array.from({ length: 40 }, (_, index) => `token${index}`).join(" ") }).searchTokens.length <= 16);
 assert.equal(buildProductSearchBackfillPatch({ ...indexedProductSearchRecord }), null);
 assert.ok(buildProductSearchBackfillPatch({ name: "Perfume Novo", brand: "Marca", category: "Perfumes", barcode: "0012345678905", productType: "Cosmeticos" }));
-assert.match(productSearch, /SERVER_SIDE_PRODUCT_SEARCH_ENABLED = false/);
-assert.match(productSearch, /CATALOG_SERVER_SEARCH_ENABLED = SERVER_SIDE_PRODUCT_SEARCH_ENABLED/);
+assert.match(productSearch, /SERVER_SIDE_PRODUCT_SEARCH_ENABLED = true/);
+assert.match(productSearch, /CATALOG_SERVER_SEARCH_ENABLED = true/);
 
 for (const skill of [minimalChangeSkill, conciseOutputSkill, terminalOutputSkill]) {
   assert.match(skill, /defaultMode: REVIEW_ONLY/);
@@ -635,7 +636,7 @@ assert.match(addProduct, /if \(isSaving\) return/);
 assert.match(mockData, /nameNormalized\?: string/);
 assert.match(firestoreRules, /searchTokens/);
 assert.match(firestoreRules, /searchSchemaVersion/);
-assert.match(catalog, /useProductsData/);
+assert.match(catalog, /useCatalogProductsData/);
 // REVENDASMART-CATALOG-VISUAL-RESTORE-02 — a referência visual correta (confirmada pelo usuário com a
 // arte original e prints antigos reais) é a vitrine de e-commerce com rails horizontais que
 // CatalogShowcase já implementa — não a grade 2 colunas de uma tentativa anterior de restauração, que
@@ -794,23 +795,19 @@ assert.match(publicCatalog, /Enviar pedido no WhatsApp/);
 assert.match(productSearch, /getProductSearchIndexField/);
 assert.match(catalogShowcase, /searchable\.includes\(normalizedSearch\)/);
 assert.match(catalogShowcase, /effectiveCategory/);
-assert.doesNotMatch(catalog, /useCatalogProductsData/);
+assert.match(catalog, /useCatalogProductsData/);
 assert.match(catalogProductsHook, /const CATALOG_PAGE_SIZE = 30/);
 assert.match(catalogProductsHook, /buildProductServerSearchPlan/);
 assert.match(catalogProductsHook, /requestIdRef/);
-assert.match(catalogProductsHook, /barcodeNormalized/);
-assert.match(catalogProductsHook, /categoryNormalized/);
-assert.match(catalogProductsHook, /orderBy\(querySpec\.orderByField\)/);
-assert.doesNotMatch(catalogProductsHook, /orderBy\("name"\)/);
-assert.doesNotMatch(catalogProductsHook, /where\("category",\s*"=="/);
-assert.match(catalogProductsHook, /name_prefix/);
-assert.match(catalogProductsHook, /array-contains/);
+assert.match(catalogProductsHook, /apiRequest<.*CatalogProductsSearchResponse>/);
+assert.doesNotMatch(catalogProductsHook, /from "firebase\/firestore"/);
+assert.match(productSearch, /name_prefix/);
 assert.match(catalogProductsHook, /searchFallbackRequired/);
-assert.match(catalogProductsHook, /getDocs/);
+assert.doesNotMatch(catalogProductsHook, /getDocs/);
 assert.match(productSearchBackfill, /dry-run/);
-assert.match(productSearchBackfill, /CATALOG_SERVER_SEARCH_ENABLED=false/);
+assert.match(productSearchBackfill, /SERVER_SIDE_PRODUCT_SEARCH_ENABLED/);
 assert.match(productSearchBackfill, /Não executar em produção/);
-assert.match(serverSideSearchDoc, /SERVER_SIDE_PRODUCT_SEARCH_ENABLED=false/);
+assert.match(serverSideSearchDoc, /SERVER_SIDE_PRODUCT_SEARCH_ENABLED=true/);
 assert.match(searchDataModelDoc, /PRODUCT_SEARCH_SCHEMA_VERSION = 1/);
 assert.match(searchBackfillDoc, /revenda-smart/);
 assert.match(searchBackfillScript, /FIRESTORE_EMULATOR_HOST/);
@@ -822,7 +819,7 @@ assertProductIndex([asc("categoryNormalized"), contains("searchTokens"), asc("na
 assertProductIndex([asc("categoryNormalized"), asc("barcodeNormalized"), asc("nameNormalized")]);
 assertNoProductIndex([contains("searchTokens"), asc("name")]);
 assertNoProductIndex([asc("barcodeNormalized"), asc("name")]);
-assertNoProductIndex([asc("category"), asc("name")]);
+assertProductIndex([asc("category"), asc("name"), asc("__name__")]);
 assert.match(firestoreIndexes, /searchTokens/);
 assert.match(firestoreIndexes, /barcodeNormalized/);
 assert.match(firestoreIndexes, /categoryNormalized/);
@@ -1660,7 +1657,7 @@ assert.match(catalogProductDetails, /getPromotionalPrice\(product\)/);
 // por ambos via CatalogShowcase, sem duplicar implementação.
 assert.match(publicCatalog, /CatalogShowcase/);
 assert.match(catalog, /CatalogShowcase/);
-assert.match(catalog, /import \{ ShareCatalogSheet \} from "@\/components\/catalog\/ShareCatalogSheet"/);
+assert.match(catalog, /lazy\(async \(\) => \{\s*const mod = await import\("@\/components\/catalog\/ShareCatalogSheet"\)/);
 assert.match(catalogProductTile, /import \{ ProductImageCard \} from "@\/components\/ProductImageCard"/);
 assert.doesNotMatch(catalogShowcase, /border border-slate-200 bg-white p-4 shadow-sm/);
 assert.doesNotMatch(catalogProductTile, /border border-slate-200/);
@@ -2041,7 +2038,7 @@ assert.match(catalog, /setCopied\(true\)/);
 
 // --- Sprint "Redesign Conta": modal de Compartilhar Catálogo virou o componente ShareCatalogSheet,
 // fiel à referência do Figma (WhatsApp / Instagram / Copiar link, sem SDK/token do Instagram) ---
-assert.match(catalog, /import \{ ShareCatalogSheet \} from "@\/components\/catalog\/ShareCatalogSheet"/);
+assert.match(catalog, /const ShareCatalogSheet = lazy\(async \(\) => \{/);
 assert.match(catalog, /<ShareCatalogSheet/);
 assert.match(catalog, /onShareInstagram=\{handleShareInstagram\}/);
 assert.match(catalog, /typeof navigator\.share === "function"/);

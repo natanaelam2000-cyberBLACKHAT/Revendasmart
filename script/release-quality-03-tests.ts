@@ -82,10 +82,11 @@ function run(): void {
 
   // ===== P1-03 — erros de fetch visíveis em Catálogo e Relatórios =====
   const catalogSource = read("client/src/pages/catalog.tsx");
-  assert.match(catalogSource, /error: productsError \} = useProductsData\(\);/, "P1-03: catalog.tsx passou a ler o error de useProductsData");
+  assert.match(catalogSource, /error: productsError,[\s\S]*\} = useCatalogProductsData\(\{/, "P1-03: catalog.tsx passou a ler o error de useCatalogProductsData");
   assert.match(catalogSource, /error: salesError \} = useSalesData\(\);/, "P1-03: catalog.tsx passou a ler o error de useSalesData");
-  assert.match(catalogSource, /if \(dataError\) \{/, "P1-03: catalog.tsx tem um branch de erro dedicado, separado do loading e do empty state");
-  assert.match(catalogSource, /Não foi possível carregar seu catálogo\./, "P1-03: mensagem curta e específica da tela, não genérica");
+  assert.match(catalogSource, /const blockingError = salesError \|\| \(products\.length === 0 \? productsError : ""\);/, "P1-03: catalog.tsx tem um branch de erro dedicado, separado do loading e do empty state");
+  assert.match(catalogSource, /if \(blockingError\) \{/, "P1-03: catalog.tsx intercepta erro bloqueante antes do render normal");
+  assert.match(catalogSource, /Não foi possível carregar o catálogo\./, "P1-03: mensagem curta e específica da tela, não genérica");
   assert.match(catalogSource, /Tentar novamente/, "P1-03: erro de catálogo oferece retry");
 
   const reportsSource = read("client/src/pages/reports.tsx");

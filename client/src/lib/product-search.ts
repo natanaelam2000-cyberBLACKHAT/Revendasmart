@@ -7,11 +7,11 @@ export const PRODUCT_SEARCH_DEFAULT_PAGE_SIZE = 20;
 export const PRODUCT_SEARCH_MAX_PAGE_SIZE = 50;
 export const PRODUCT_SEARCH_DEBOUNCE_MS = 300;
 
-// Conservative rollout flags: keep current local search until backfill coverage
-// and emulator/staging validation prove the server-side path is complete.
-export const SERVER_SIDE_PRODUCT_SEARCH_ENABLED = false;
+// SEARCH-SERVER-01 — a busca server-side fica ativada para o catálogo interno, sem reintroduzir
+// nenhum serviço externo e sem mexer nos outros fluxos de busca local que continuam fora de escopo.
+export const SERVER_SIDE_PRODUCT_SEARCH_ENABLED = true;
 export const SERVER_SIDE_CLIENT_SEARCH_ENABLED = false;
-export const CATALOG_SERVER_SEARCH_ENABLED = SERVER_SIDE_PRODUCT_SEARCH_ENABLED;
+export const CATALOG_SERVER_SEARCH_ENABLED = true;
 
 export interface ProductSearchInput {
   name?: unknown;
@@ -276,7 +276,14 @@ export function buildProductServerSearchPlan(input: BuildProductServerSearchPlan
     return { kind: "token", source: "server", enabled: true, normalizedTerm, searchToken, pageSize, debounceMs: PRODUCT_SEARCH_DEBOUNCE_MS };
   }
 
-  return { kind: "name_prefix", source: "server", enabled: true, normalizedTerm, searchToken, pageSize, debounceMs: PRODUCT_SEARCH_DEBOUNCE_MS };
+  // Termos curtos ainda usam prefixo para acompanhar a digitação ("ma" -> "mal" -> "malb"). Termos
+  // únicos mais estáveis passam para token search para cobrir marca/categoria/nome em qualquer posição
+  // prática do índice (ex.: "carolina", "perfume", "malbec", "212").
+  if (normalizedTerm.length <= 4) {
+    return { kind: "name_prefix", source: "server", enabled: true, normalizedTerm, searchToken, pageSize, debounceMs: PRODUCT_SEARCH_DEBOUNCE_MS };
+  }
+
+  return { kind: "token", source: "server", enabled: true, normalizedTerm, searchToken, pageSize, debounceMs: PRODUCT_SEARCH_DEBOUNCE_MS };
 }
 
 export function productMatchesLocalSearch(product: ProductSearchIndexedRecord & ProductSearchInput, term: unknown): boolean {
