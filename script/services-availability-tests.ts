@@ -187,8 +187,17 @@ function alignToStepUtc(date: Date, stepMinutes: number): Date {
   const ms = stepMinutes * 60_000;
   return new Date(Math.ceil(date.getTime() / ms) * ms);
 }
-function minutesFromNow(minutes: number): string {
-  return new Date(Date.now() + minutes * 60_000).toISOString();
+/**
+ * TEST-FIX-AVAIL-01 — horário seguro num dia futuro, sempre em UTC, para fixtures que só precisam de
+ * "algum horário no futuro" dentro do expediente configurado (allDayWeek = 00:00-23:45). Nunca usar
+ * `Date.now() + offset` sozinho para isso: dependendo de QUANDO o teste roda, o horário resultante pode
+ * cair perto de 00:00/23:45 e ser rejeitado como OUTSIDE_WORKING_HOURS de forma intermitente. Fixando a
+ * hora do dia (ex.: 10:00) e variando só o número de dias à frente, o resultado nunca se aproxima de um
+ * boundary de expediente, independente da hora real em que a suíte é executada.
+ */
+function futureUtcAtSafeHour(daysAhead: number, hour: number, minute = 0): Date {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + daysAhead, hour, minute, 0, 0));
 }
 
 async function runCommandTests() {
@@ -275,10 +284,9 @@ async function runCommandTests() {
       await upsertSchedule(harness.baseUrl, uid, "res-step", {
         timezone: "UTC", slotStepMinutes: 30, weeklyHours: allDayWeek(),
       }, "step-1");
-      const misaligned = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-step", resourceId: "res-step", startAt: minutesFromNow(180 + 15), idempotencyKey: "step-hold-1" }, uid);
-      // 180+15 min a partir de agora não é necessariamente múltiplo de 30 a partir de meia-noite UTC; garanta desalinhamento explicitamente:
-      void misaligned;
-      const base = alignToStepUtc(new Date(Date.now() + 3 * 60 * 60_000), 30);
+      // TEST-FIX-AVAIL-01: base fixada num horário seguro (10:00 UTC de amanhã) em vez de "Date.now() + 3h",
+      // que podia cair perto do fim do expediente (allDayWeek = 00:00-23:45) dependendo de quando a suíte roda.
+      const base = alignToStepUtc(futureUtcAtSafeHour(1, 10, 0), 30);
       const misalignedStart = new Date(base.getTime() + 15 * 60_000).toISOString();
       const b4 = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-step", resourceId: "res-step", startAt: misalignedStart, idempotencyKey: "b4-hold" }, uid);
       assert.equal(b4.status, 409, JSON.stringify(b4.body));
@@ -295,23 +303,28 @@ async function runCommandTests() {
     {
       const uid = tenantUid();
       await seedService(uid, "svc-advance", { durationMinutes: 30 });
+      // TEST-FIX-AVAIL-01: minAdvance/maxAdvance recalibrados para dias (em vez de minutos) para que os 3
+      // cenários abaixo possam usar futureUtcAtSafeHour (hora do dia fixa, sempre longe do boundary de
+      // expediente 00:00-23:45) em vez de "Date.now() + N minutos", que testava a mesma regra mas com um
+      // horário de relógio dependente de quando a suíte roda.
       await upsertSchedule(harness.baseUrl, uid, "res-advance", {
-        timezone: "UTC", slotStepMinutes: 15, minAdvanceMinutes: 120, maxAdvanceDays: 5, weeklyHours: allDayWeek(),
+        timezone: "UTC", slotStepMinutes: 15, minAdvanceMinutes: 3 * 24 * 60, maxAdvanceDays: 10, weeklyHours: allDayWeek(),
       }, "advance-1");
 
-      // E1/F5 — 30min de antecedência, menor que os 120min exigidos.
-      const tooSoon = alignToStepUtc(new Date(Date.now() + 30 * 60_000), 15).toISOString();
+      // E1/F5 — ~1 dia de antecedência, menor que os 3 dias exigidos.
+      const tooSoon = alignToStepUtc(futureUtcAtSafeHour(1, 10, 0), 15).toISOString();
       const e1 = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-advance", resourceId: "res-advance", startAt: tooSoon, idempotencyKey: "e1-hold" }, uid);
       assert.equal(e1.status, 409);
       assert.equal(e1.body?.code, "MIN_ADVANCE_VIOLATION");
 
-      // E2 — confortavelmente depois do boundary de 120min (semântica documentada: startAt >= now+minAdvance é permitido).
-      const comfortablyAfter = alignToStepUtc(new Date(Date.now() + 125 * 60_000), 15).toISOString();
+      // E2 — confortavelmente entre o mínimo (3 dias) e o máximo (10 dias): ~5 dias à frente (semântica
+      // documentada: startAt >= now+minAdvance é permitido).
+      const comfortablyAfter = alignToStepUtc(futureUtcAtSafeHour(5, 10, 0), 15).toISOString();
       const e2 = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-advance", resourceId: "res-advance", startAt: comfortablyAfter, idempotencyKey: "e2-hold" }, uid);
       assert.equal(e2.status, 200, JSON.stringify(e2.body));
 
-      // E3/F6 — 10 dias no futuro, além dos 5 dias permitidos.
-      const tooFar = alignToStepUtc(new Date(Date.now() + 10 * 24 * 60 * 60_000), 15).toISOString();
+      // E3/F6 — ~15 dias no futuro, além dos 10 dias permitidos.
+      const tooFar = alignToStepUtc(futureUtcAtSafeHour(15, 10, 0), 15).toISOString();
       const e3 = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-advance", resourceId: "res-advance", startAt: tooFar, idempotencyKey: "e3-hold" }, uid);
       assert.equal(e3.status, 409);
       assert.equal(e3.body?.code, "MAX_ADVANCE_VIOLATION");
@@ -379,7 +392,11 @@ async function runCommandTests() {
       await upsertSchedule(harness.baseUrl, uid, "res-avail-d", { timezone: "UTC", slotStepMinutes: 30, weeklyHours: allDayWeek() }, "d-sched-1");
       await upsertSchedule(harness.baseUrl, uid, "res-avail-d2", { timezone: "UTC", slotStepMinutes: 30, weeklyHours: allDayWeek() }, "d-sched-2");
 
-      const rangeStart = alignToStepUtc(new Date(Date.now() + 24 * 60 * 60_000), 30).toISOString();
+      // TEST-FIX-AVAIL-01 (D2): rangeStart fixado às 10:00 UTC de amanhã em vez de "Date.now() + 24h" — o
+      // valor antigo podia cair perto do fim do expediente (allDayWeek = 00:00-23:45) e fazer o Hold do D2
+      // (rangeStart + 30min, +30min de duração) ultrapassar 23:45, gerando OUTSIDE_WORKING_HOURS de forma
+      // intermitente dependendo da hora real em que a suíte roda. A invariante testada (D0-D5) é a mesma.
+      const rangeStart = alignToStepUtc(futureUtcAtSafeHour(1, 10, 0), 30).toISOString();
       const rangeEnd = new Date(Date.parse(rangeStart) + 4 * 60 * 60_000).toISOString();
 
       const before = await getJson(harness.baseUrl, `/api/services/availability?serviceId=svc-avail&resourceId=res-avail-d&rangeStartAt=${rangeStart}&rangeEndAt=${rangeEnd}`, uid);
