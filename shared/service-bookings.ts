@@ -73,8 +73,10 @@ export type BookingHold = {
 
 /** SERV-BOOK-02 §8-12 adiciona "cancelled" — nunca deletado (§27), só muda de status, como ServiceWork. */
 export type BookingStatus = "confirmed" | "cancelled";
-/** Único valor em V1 (sem fluxo público ainda, §19) — união já existe para não exigir redesenho depois. */
-export type BookingSource = "manual";
+/** SERV-PUBLIC-01 — "public" adicionado exatamente como este comentário sempre previu: um Booking criado
+ * pelo fluxo público de agendamento (cliente sem conta, via /agendar/:storeSlug) em vez de pelo dono da
+ * loja. Nenhuma outra regra do domínio distingue por source — é só proveniência, para auditoria/UI. */
+export type BookingSource = "manual" | "public";
 
 export type Booking = {
   readonly id: EntityId;
@@ -214,7 +216,7 @@ export function assertValidBooking(booking: Booking): Booking {
   if (booking.status !== "confirmed" && booking.status !== "cancelled") {
     throw new ServiceBookingsDomainError("INVALID_BOOKING", "booking.status is invalid.");
   }
-  if (booking.source !== "manual") {
+  if (booking.source !== "manual" && booking.source !== "public") {
     throw new ServiceBookingsDomainError("INVALID_BOOKING", "booking.source is invalid.");
   }
   assertIsoUtcString(booking.createdAt, "booking.createdAt");

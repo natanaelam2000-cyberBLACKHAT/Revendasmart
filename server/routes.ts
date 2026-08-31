@@ -20,6 +20,7 @@ import { registerServicePaymentRoutes } from "./service-payment-commands";
 import { registerServiceWorkRoutes } from "./service-work-commands";
 import { registerServiceBookingRoutes } from "./service-booking-commands";
 import { registerServiceAvailabilityRoutes } from "./service-availability-commands";
+import { registerPublicServiceBookingRoutes } from "./service-public-booking";
 import { isMarketingProRealBackgroundEnabled } from "./marketing-pro-flags";
 import { createGoogleMarketingProBackgroundProvider, isGoogleMarketingProCredentialConfigured } from "./marketing-pro-provider-google";
 import { registerAccountDeletionRoutes } from "./account-deletion";
@@ -499,6 +500,9 @@ export async function registerRoutes(
   registerServicePaymentRoutes(app, requireAuth);
   registerServiceBookingRoutes(app, requireAuth);
   registerServiceAvailabilityRoutes(app, requireAuth);
+  // SERV-PUBLIC-01 — superfície pública dedicada, sem requireAuth (§5/§26): reaproveita o mesmo Booking
+  // Core/Availability acima por dentro, nunca os expõe diretamente ao visitante anônimo.
+  registerPublicServiceBookingRoutes(app);
 
   // RELEASE-03: UID is derived exclusively by requireAuth; request bodies never control ownership.
   registerAccountDeletionRoutes(app, requireAuth);

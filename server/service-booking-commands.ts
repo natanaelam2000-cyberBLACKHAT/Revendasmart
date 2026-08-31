@@ -406,11 +406,24 @@ export async function createServiceBookingHoldCommand(
   });
 }
 
+export type ConfirmServiceBookingHoldOptions = {
+  /** SERV-PUBLIC-01 — só usado pelo fluxo público (server/service-public-booking.ts): a proveniência do
+   * Booking resultante. O fluxo interno do dono nunca passa isto — default "manual", igual ao comportamento
+   * anterior a este ticket. */
+  readonly source?: Booking["source"];
+  /** SERV-PUBLIC-01 — cria (uma única vez, tx.create — a idempotência do próprio confirm já garante que
+   * este código só roda na primeira confirmação bem-sucedida deste holdId) um Client de contato ATOMICAMENTE
+   * com o Booking/Work, e usa seu id como customerId. hold.customerId (já opcional hoje) continua a única
+   * fonte quando isto não é informado — nenhuma mudança de comportamento para o fluxo interno existente. */
+  readonly publicCustomerContact?: { readonly clientId: string; readonly name: string; readonly phone: string };
+};
+
 export async function confirmServiceBookingHoldCommand(
   db: Firestore,
   uid: string,
   holdId: string,
   idempotencyKey: string,
+  options: ConfirmServiceBookingHoldOptions = {},
 ): Promise<ConfirmHoldResult> {
   return await db.runTransaction(async (tx: Transaction) => {
     const idemRef = bookingIdempotencyRef(db, uid, idempotencyKey);
@@ -470,9 +483,13 @@ export async function confirmServiceBookingHoldCommand(
     const segments = computeScheduleSegments(hold.startAt, hold.endAt);
     const lockRefs = segments.map((segmentStartAt) => scheduleLockRef(db, uid, hold.resourceId, segmentStartAt));
     const serviceSnapRef = serviceRef(db, uid, hold.serviceId);
-    const [lockSnaps, serviceSnap] = await Promise.all([
+    const clientDocRef = options.publicCustomerContact
+      ? db.collection("users").doc(uid).collection("clients").doc(options.publicCustomerContact.clientId)
+      : undefined;
+    const [lockSnaps, serviceSnap, clientSnap] = await Promise.all([
       lockRefs.length ? tx.getAll(...lockRefs) : Promise.resolve([]),
       tx.get(serviceSnapRef),
+      clientDocRef ? tx.get(clientDocRef) : Promise.resolve(undefined),
     ]);
 
     for (const lockSnap of lockSnaps) {
@@ -490,12 +507,15 @@ export async function confirmServiceBookingHoldCommand(
     const workId = buildBookingWorkId(holdId);
     const lineItem = buildServiceLineItem(service, serverNowIso);
     const items = [lineItem];
+    // SERV-PUBLIC-01 — o contato público vira a fonte do customerId quando presente; hold.customerId
+    // continua a única fonte para o fluxo interno (publicCustomerContact nunca é passado por ele).
+    const customerId = options.publicCustomerContact?.clientId ?? hold.customerId;
     const work: ServiceWork = assertValidServiceWork({
       id: workId,
       tenantUid: uid,
       status: "planned",
       origin: "booking",
-      customerId: hold.customerId,
+      customerId,
       items,
       totals: calculateCommercialTotals(items),
       financialSummary: createZeroServiceWorkFinancialSummary(),
@@ -508,12 +528,12 @@ export async function confirmServiceBookingHoldCommand(
       tenantUid: uid,
       serviceId: hold.serviceId,
       resourceId: hold.resourceId,
-      customerId: hold.customerId,
+      customerId,
       workId,
       startAt: hold.startAt,
       endAt: hold.endAt,
       status: "confirmed",
-      source: "manual",
+      source: options.source ?? "manual",
       createdAt: serverNowIso,
       updatedAt: serverNowIso,
     });
@@ -529,6 +549,17 @@ export async function confirmServiceBookingHoldCommand(
       startAt: hold.startAt, endAt: hold.endAt, idempotentReplay: false,
     };
 
+    // SERV-PUBLIC-01 — o Client de contato entra na MESMA transaction do Booking/Work (atomicidade real:
+    // nunca um Client órfão sem Booking, nunca um Booking sem o contato do cliente). Só cria se ainda não
+    // existir (clientSnap lido acima, antes de qualquer escrita) — protege contra um clientId reaproveitado
+    // de uma tentativa anterior que falhou depois deste ponto.
+    if (options.publicCustomerContact && clientDocRef && clientSnap && !clientSnap.exists) {
+      tx.create(clientDocRef, {
+        id: options.publicCustomerContact.clientId,
+        name: options.publicCustomerContact.name,
+        phone: options.publicCustomerContact.phone,
+      });
+    }
     tx.create(serviceWorkRef(db, uid, workId), omitUndefined(work as unknown as Record<string, unknown>));
     tx.create(bookingRef(db, uid, bookingId), omitUndefined(booking as unknown as Record<string, unknown>));
     tx.set(holdDocRef, omitUndefined(confirmedHold as unknown as Record<string, unknown>));
