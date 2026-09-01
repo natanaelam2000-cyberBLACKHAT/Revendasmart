@@ -207,7 +207,15 @@ async function run() {
     const workARef = doc(tenantA.db, "users", uidA, "serviceWorks", "work-1");
     const quoteARef = doc(tenantA.db, "users", uidA, "quotes", "quote-1");
 
-    await expectSucceeds("tenant A cria Service próprio", () => setDoc(serviceARef, validService("service-1", uidA)));
+    // PLAN-IMPL-02A2-FINALIZE — Service create is now server-authoritative only (firestore.rules:
+    // allow create: if false, unconditionally — same migration as Product, proven end-to-end by
+    // script/plan-impl-02a2-authoritative-mutations-tests.ts). A direct client setDoc/create must be
+    // denied regardless of shape validity; every shape/pricing/cost case below that used to prove "an
+    // invalid CREATE is rejected" now proves "an invalid UPDATE is rejected" instead, over a fixture
+    // seeded through the Admin SDK — isValidServiceUpdate reuses the exact same shape contract as
+    // create, so no coverage is lost, only the mechanism that reaches it (§18/§19 of the ticket).
+    await expectFails("tenant A não cria Service direto via setDoc (create é server-authoritative)", () => setDoc(serviceARef, validService("service-1", uidA)));
+    await adminDb.doc(`users/${uidA}/services/service-1`).set(validService("service-1", uidA));
     await expectSucceeds("tenant A lê Service próprio", async () => {
       const snapshot = await getDoc(serviceARef);
       assert.equal(snapshot.exists(), true);
@@ -217,15 +225,24 @@ async function run() {
     await expectFails("público não lê Service published", () => getDoc(doc(anonymous.db, "users", uidA, "services", "service-1")));
     await expectFails("tenant B não altera Service de A", () => updateDoc(doc(tenantB.db, "users", uidA, "services", "service-1"), { name: "Ataque" }));
     await expectFails("tenant A não cria Service no path de B", () => setDoc(doc(tenantA.db, "users", uidB, "services", "service-path-b"), validService("service-path-b", uidA)));
-    await expectFails("tenantUid divergente em Service", () => setDoc(doc(tenantA.db, "users", uidA, "services", "service-bad-tenant"), validService("service-bad-tenant", uidB)));
-    await expectSucceeds("pricing starting_at válido", () => setDoc(doc(tenantA.db, "users", uidA, "services", "service-starting"), validService("service-starting", uidA, { pricing: { mode: "starting_at", startingAtPriceCents: 5000 } })));
-    await expectSucceeds("pricing quote válido", () => setDoc(doc(tenantA.db, "users", uidA, "services", "service-quote"), validService("service-quote", uidA, { pricing: { mode: "quote" } })));
-    await expectFails("pricing fixed sem price é negado", () => setDoc(doc(tenantA.db, "users", uidA, "services", "service-missing-price"), validService("service-missing-price", uidA, { pricing: { mode: "fixed" } })));
-    await expectFails("pricing negativo é negado", () => setDoc(doc(tenantA.db, "users", uidA, "services", "service-negative"), validService("service-negative", uidA, { pricing: { mode: "fixed", priceCents: -1 } })));
-    await expectFails("pricing fracionário é negado", () => setDoc(doc(tenantA.db, "users", uidA, "services", "service-fraction"), validService("service-fraction", uidA, { pricing: { mode: "fixed", priceCents: 19.5 } })));
-    await expectSucceeds("cost known zero válido", () => setDoc(doc(tenantA.db, "users", uidA, "services", "service-cost-zero"), validService("service-cost-zero", uidA, { cost: { kind: "known", amountCents: 0 } })));
-    await expectSucceeds("cost known positivo válido", () => setDoc(doc(tenantA.db, "users", uidA, "services", "service-cost-positive"), validService("service-cost-positive", uidA, { cost: { kind: "known", amountCents: 1500 } })));
-    await expectFails("cost negativo é negado", () => setDoc(doc(tenantA.db, "users", uidA, "services", "service-cost-negative"), validService("service-cost-negative", uidA, { cost: { kind: "known", amountCents: -1 } })));
+    await adminDb.doc(`users/${uidB}/services/service-path-b`).set(validService("service-path-b", uidB));
+    await expectFails("tenant A não altera Service no path de B", () => updateDoc(doc(tenantA.db, "users", uidB, "services", "service-path-b"), { name: "Ataque" }));
+    await adminDb.doc(`users/${uidA}/services/service-starting`).set(validService("service-starting", uidA));
+    await expectSucceeds("pricing starting_at válido via update", () => updateDoc(doc(tenantA.db, "users", uidA, "services", "service-starting"), { pricing: { mode: "starting_at", startingAtPriceCents: 5000 } }));
+    await adminDb.doc(`users/${uidA}/services/service-quote`).set(validService("service-quote", uidA));
+    await expectSucceeds("pricing quote válido via update", () => updateDoc(doc(tenantA.db, "users", uidA, "services", "service-quote"), { pricing: { mode: "quote" } }));
+    await adminDb.doc(`users/${uidA}/services/service-missing-price`).set(validService("service-missing-price", uidA));
+    await expectFails("pricing fixed sem price é negado via update", () => updateDoc(doc(tenantA.db, "users", uidA, "services", "service-missing-price"), { pricing: { mode: "fixed" } }));
+    await adminDb.doc(`users/${uidA}/services/service-negative`).set(validService("service-negative", uidA));
+    await expectFails("pricing negativo é negado via update", () => updateDoc(doc(tenantA.db, "users", uidA, "services", "service-negative"), { pricing: { mode: "fixed", priceCents: -1 } }));
+    await adminDb.doc(`users/${uidA}/services/service-fraction`).set(validService("service-fraction", uidA));
+    await expectFails("pricing fracionário é negado via update", () => updateDoc(doc(tenantA.db, "users", uidA, "services", "service-fraction"), { pricing: { mode: "fixed", priceCents: 19.5 } }));
+    await adminDb.doc(`users/${uidA}/services/service-cost-zero`).set(validService("service-cost-zero", uidA));
+    await expectSucceeds("cost known zero válido via update", () => updateDoc(doc(tenantA.db, "users", uidA, "services", "service-cost-zero"), { cost: { kind: "known", amountCents: 0 } }));
+    await adminDb.doc(`users/${uidA}/services/service-cost-positive`).set(validService("service-cost-positive", uidA));
+    await expectSucceeds("cost known positivo válido via update", () => updateDoc(doc(tenantA.db, "users", uidA, "services", "service-cost-positive"), { cost: { kind: "known", amountCents: 1500 } }));
+    await adminDb.doc(`users/${uidA}/services/service-cost-negative`).set(validService("service-cost-negative", uidA));
+    await expectFails("cost negativo é negado via update", () => updateDoc(doc(tenantA.db, "users", uidA, "services", "service-cost-negative"), { cost: { kind: "known", amountCents: -1 } }));
     await expectFails("mudar id do Service é negado", () => updateDoc(serviceARef, { id: "other-id" }));
     await expectFails("mudar tenantUid do Service é negado", () => updateDoc(serviceARef, { tenantUid: uidB }));
     await expectFails("delete de Service é negado", () => deleteDoc(serviceARef));

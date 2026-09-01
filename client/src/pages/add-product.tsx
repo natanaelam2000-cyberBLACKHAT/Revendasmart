@@ -32,6 +32,7 @@ import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { usePlanData } from "@/hooks/usePlanData";
 import { notifyError, notifySuccess } from "@/lib/notify";
 import { buildProductCreatePayload } from "@/lib/product-payload";
+import { createProduct } from "@/lib/product-commands";
 import { rememberRecentProductId } from "@/lib/recent-products";
 import { checkProductLimit } from "@/lib/plan-helpers";
 import {
@@ -157,6 +158,7 @@ function getProductSaveErrorMessage(error: unknown, stage: ProductSaveStage): st
   const code = getErrorCode(error);
   if (typeof navigator !== "undefined" && navigator.onLine === false) return "Sem conexão. Tente novamente.";
   if (code.includes("auth") || stage === "auth_check") return "Sua sessão expirou. Entre novamente para salvar o produto.";
+  if (code === "PLAN_LIMIT_REACHED") return "Você atingiu o limite de produtos do seu plano.";
   if (stage === "plan_limit_read") return code === "permission-denied" ? "Não foi possível validar seu plano. Entre novamente." : "Limite de produtos atingido.";
   if (stage === "storage_upload" || code.startsWith("storage/")) return "Falha ao enviar imagem.";
   if (code === "permission-denied") return "Permissão negada ao salvar. Entre novamente e tente de novo.";
@@ -659,7 +661,11 @@ const [, setLocation] = useLocation();
         if (id) {
           await setDoc(productRef, attemptedPayload, { merge: true });
         } else {
-          await setDoc(productRef, attemptedPayload);
+          await createProduct({
+            productId,
+            product: attemptedPayload,
+            idempotencyKey: `product-create-${productId}`,
+          });
         }
       } catch (writeErr) {
         if (uploadedAssets.length) {

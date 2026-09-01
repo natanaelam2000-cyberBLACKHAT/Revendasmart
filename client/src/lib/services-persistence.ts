@@ -26,6 +26,7 @@ import {
 import { getCurrentFirebaseUser } from "./firebase";
 import { PLAN_CONFIG, type PlanType } from "@shared/monetization";
 import { checkServiceLimit } from "./plan-helpers";
+import { apiRequest } from "./api-client";
 
 /** PLAN-IMPL-02A §7 — thrown when the tenant's service count is already at/over their plan's limit.
  * createService() has no real UI caller yet (confirmed empty at PLAN-IMPL-02A time), so this can't be
@@ -133,8 +134,16 @@ export async function createService(input: CreateServiceInput): Promise<Service>
     createdAt: timestamp,
     updatedAt: timestamp,
   });
-  await setDoc(doc(servicesCollection(uid), serviceId), service);
-  return service;
+  const result = await apiRequest<{ service: Service; serviceId: string; idempotentReplay: boolean }>("/api/services", {
+    method: "POST",
+    auth: true,
+    body: {
+      serviceId,
+      service,
+      idempotencyKey: `service-create-${serviceId}`,
+    },
+  });
+  return parseService(result.service);
 }
 
 export async function getService(serviceId: string): Promise<Service | null> {

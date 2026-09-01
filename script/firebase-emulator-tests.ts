@@ -241,7 +241,25 @@ async function run() {
     adminApp = await seedBackendOnlyData(ownerUid);
 
     const ownerProductRef = doc(owner.db, "users", ownerUid, "products", "product-local");
-    await expectSucceeds("owner cria produto válido", () => setDoc(ownerProductRef, validProduct("product-local")));
+    // PLAN-IMPL-02A2-FINALIZE — Product create is now server-authoritative only (firestore.rules:
+    // allow create: if false, unconditionally — POST /api/products via server/plan-authoritative-
+    // mutations.ts is the only path in, proven end-to-end by script/plan-impl-02a2-authoritative-
+    // mutations-tests.ts). A direct client setDoc/create must be denied regardless of shape validity;
+    // every fixture the shape/ownership tests below need is seeded through the Admin SDK instead (a
+    // trusted setup step, same pattern seedBackendOnlyData already uses for server-owned collections),
+    // and every case that used to prove "an invalid CREATE is rejected" now proves "an invalid UPDATE
+    // is rejected" instead — isValidProductUpdate reuses the exact same shape contract as create, so no
+    // coverage is lost, only the mechanism that reaches it (§18 of the ticket).
+    await expectFails("owner não cria produto direto via setDoc (create é server-authoritative)", () => setDoc(ownerProductRef, validProduct("product-local")));
+    const adminProductsDb = getAdminFirestore(adminApp!);
+    const productFixtureIds = [
+      "product-local", "product-cutout-ok", "product-legacy", "product-mass-assignment-target",
+      "product-cutout-b64", "product-cutout-b64-upper", "product-cutout-mime", "product-cutout-preserve",
+      "product-cutout-coordinate", "product-cutout-extra", "product-cutout-wrongpath",
+      "product-cutout-other-user", "product-cutout-dimensions",
+    ];
+    await Promise.all(productFixtureIds.map((id) => adminProductsDb.doc(`users/${ownerUid}/products/${id}`).set(validProduct(id))));
+
     await expectSucceeds("owner lê próprio produto", async () => {
       const snapshot = await getDoc(ownerProductRef);
       assert.equal(snapshot.exists(), true);
@@ -249,43 +267,40 @@ async function run() {
     });
     await expectFails("outro usuário não lê produto do owner", () => getDoc(doc(intruder.db, "users", ownerUid, "products", "product-local")));
     await expectFails("usuário anônimo não lê produto privado", () => getDoc(doc(anonymous.db, "users", ownerUid, "products", "product-local")));
-    await expectFails("mass assignment de produto é bloqueado", () => setDoc(doc(owner.db, "users", ownerUid, "products", "product-invalid"), { ...validProduct("product-invalid"), premiumActive: true }));
+    await expectFails("mass assignment de produto é bloqueado", () => updateDoc(doc(owner.db, "users", ownerUid, "products", "product-mass-assignment-target"), { premiumActive: true }));
 
     // ===== PRO-07K: approvedCutout persistido =====
-    await expectSucceeds("owner cria produto com approvedCutout válido", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-ok"), { ...validProduct("product-cutout-ok"), approvedCutout: validApprovedCutout(ownerUid, "product-cutout-ok") }));
+    await expectSucceeds("owner define approvedCutout válido via update", () =>
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-ok"), { approvedCutout: validApprovedCutout(ownerUid, "product-cutout-ok") }));
     await expectSucceeds("owner atualiza outro campo mantendo approvedCutout válido", () =>
       updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-ok"), { name: "Perfume Teste Local Atualizado" }));
-    await expectSucceeds("owner adiciona approvedCutout num produto legacy sem o campo", async () => {
-      await setDoc(doc(owner.db, "users", ownerUid, "products", "product-legacy"), validProduct("product-legacy"));
-      await updateDoc(doc(owner.db, "users", ownerUid, "products", "product-legacy"), { approvedCutout: validApprovedCutout(ownerUid, "product-legacy") });
-    });
+    await expectSucceeds("owner adiciona approvedCutout num produto legacy sem o campo", () =>
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-legacy"), { approvedCutout: validApprovedCutout(ownerUid, "product-legacy") }));
     await expectSucceeds("owner remove approvedCutout (invalidação manual)", () =>
       updateDoc(doc(owner.db, "users", ownerUid, "products", "product-legacy"), { approvedCutout: deleteField() }));
     await expectFails("approvedCutout com base64 inline é bloqueado", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-b64"), { ...validProduct("product-cutout-b64"), approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-b64"), downloadUrl: "data:image/png;base64,AAAA" } }));
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-b64"), { approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-b64"), downloadUrl: "data:image/png;base64,AAAA" } }));
     await expectFails("approvedCutout com DATA URL em maiúsculas é bloqueado", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-b64-upper"), { ...validProduct("product-cutout-b64-upper"), approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-b64-upper"), downloadUrl: "DATA:image/png;base64,AAAA" } }));
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-b64-upper"), { approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-b64-upper"), downloadUrl: "DATA:image/png;base64,AAAA" } }));
     await expectFails("approvedCutout com mimeType diferente de PNG é bloqueado", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-mime"), { ...validProduct("product-cutout-mime"), approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-mime"), mimeType: "image/jpeg" } }));
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-mime"), { approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-mime"), mimeType: "image/jpeg" } }));
     await expectFails("approvedCutout com preservesOriginalPixels != true é bloqueado", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-preserve"), { ...validProduct("product-cutout-preserve"), approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-preserve"), preservesOriginalPixels: false } }));
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-preserve"), { approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-preserve"), preservesOriginalPixels: false } }));
     await expectFails("approvedCutout com coordinateSpaceVersion inválida é bloqueado", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-coordinate"), { ...validProduct("product-cutout-coordinate"), approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-coordinate"), coordinateSpaceVersion: "other-coordinate-space" } }));
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-coordinate"), { approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-coordinate"), coordinateSpaceVersion: "other-coordinate-space" } }));
     await expectFails("approvedCutout com campo extra é bloqueado", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-extra"), { ...validProduct("product-cutout-extra"), approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-extra"), apiKey: "secret" } }));
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-extra"), { approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-extra"), apiKey: "secret" } }));
     await expectFails("approvedCutout apontando para storagePath de outro produto é bloqueado", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-wrongpath"), { ...validProduct("product-cutout-wrongpath"), approvedCutout: validApprovedCutout(ownerUid, "outro-produto") }));
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-wrongpath"), { approvedCutout: validApprovedCutout(ownerUid, "outro-produto") }));
     await expectFails("approvedCutout apontando para storagePath de outro usuário é bloqueado", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-other-user"), {
-        ...validProduct("product-cutout-other-user"),
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-other-user"), {
         approvedCutout: {
           ...validApprovedCutout(ownerUid, "product-cutout-other-user"),
           storagePath: `users/${intruderUid}/product-cutouts/product-cutout-other-user/cutout-v1.png`,
         },
       }));
     await expectFails("approvedCutout com dimensões inválidas é bloqueado", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-dimensions"), { ...validProduct("product-cutout-dimensions"), approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-dimensions"), width: 0 } }));
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-dimensions"), { approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-dimensions"), width: 0 } }));
     await expectFails("update não aceita approvedCutout com MIME inválido", () =>
       updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-ok"), { approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-ok"), mimeType: "image/jpeg" } }));
     await expectFails("trocar foto original sem remover approvedCutout stale é bloqueado", () =>
@@ -342,9 +357,14 @@ async function run() {
 
     await expectSucceeds("owner lista próprios produtos", async () => {
       const snapshot = await getDocs(collection(owner.db, "users", ownerUid, "products"));
-      // product-local + product-cutout-ok + product-legacy (os demais produtos de approvedCutout desta
-      // sprint foram recusados pelas Rules e nunca chegaram a ser criados).
-      assert.equal(snapshot.size, 3);
+      // PLAN-IMPL-02A2-FINALIZE — todos os productFixtureIds existem agora (seedados via Admin SDK antes
+      // de qualquer tentativa de update, diferente do fluxo antigo onde um create recusado nunca chegava
+      // a existir), mais "product-preserved" (seedado adiante, no bloco PLAN-IMPL-02B1 §29/X2). Comparar
+      // o SET de ids em vez de só o tamanho torna a asserção auto-descritiva e não silenciosamente
+      // desatualizada se um dos dois blocos de fixtures crescer no futuro.
+      const expectedIds = new Set([...productFixtureIds, "product-preserved"]);
+      const actualIds = new Set(snapshot.docs.map((docSnap) => docSnap.id));
+      assert.deepEqual(actualIds, expectedIds);
     });
     await expectFails("outro usuário não consulta coleção de produtos do owner", () => getDocs(collection(intruder.db, "users", ownerUid, "products")));
 

@@ -15,7 +15,7 @@ import { ProductImageCard } from "@/components/ProductImageCard";
 import { FilterChips } from "@/components/FilterChips";
 import { EmptyState } from "@/components/EmptyState";
 import { getFirebaseAuth, logTelemetryEvent } from "@/lib/firebase";
-import { getFirestore, doc, deleteDoc, getDoc } from "firebase/firestore";
+import { deleteProduct } from "@/lib/product-commands";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { Layout } from "@/components/layout";
 import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
@@ -179,10 +179,7 @@ export default function Products() {
     setDeletingProductId(id);
     setDeleteError("");
     try {
-      const productRef = doc(getFirestore(), "users", uid, "products", id);
-      await deleteDoc(productRef);
-      const deletedSnapshot = await getDoc(productRef);
-      if (deletedSnapshot.exists()) throw new Error("Produto ainda existe após deleteDoc");
+      await deleteProduct(id);
       if (product.imageId) await deleteImage(product.imageId);
       setDeleteConfirm({ show: false });
       refresh();

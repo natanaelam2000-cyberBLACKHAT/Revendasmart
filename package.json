@@ -51,6 +51,8 @@
     "test:privacy-docs": "tsx script/privacy-documentation-tests.ts",
     "test:plan-impl-01": "tsx script/plan-impl-01-canonical-foundation-tests.ts",
     "test:plan-impl-02a": "tsx script/plan-impl-02a-limits-tests.ts",
+    "test:plan-impl-02a2:run": "tsx script/plan-impl-02a2-authoritative-mutations-tests.ts",
+    "test:plan-impl-02a2": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:plan-impl-02a2:run\"",
     "test:plan-impl-02b1:run": "tsx script/plan-impl-02b1-downgrade-access-tests.ts",
     "test:plan-impl-02b1": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:plan-impl-02b1:run\"",
     "skills:validate": "node scripts/security/validate-agent-skills.mjs",
