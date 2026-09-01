@@ -1,6 +1,7 @@
 import {
   collection,
   doc,
+  getCountFromServer,
   getDoc,
   getDocs,
   getFirestore,
@@ -23,6 +24,19 @@ import {
   type ServiceWork,
 } from "@shared/services";
 import { getCurrentFirebaseUser } from "./firebase";
+import { PLAN_CONFIG, type PlanType } from "@shared/monetization";
+import { checkServiceLimit } from "./plan-helpers";
+
+/** PLAN-IMPL-02A §7 — thrown when the tenant's service count is already at/over their plan's limit.
+ * createService() has no real UI caller yet (confirmed empty at PLAN-IMPL-02A time), so this can't be
+ * exercised by a real user today — enforced here anyway, at the one real creation function, so it's
+ * already correct the moment a future ticket builds an "add service" page against it. */
+export class ServiceLimitError extends Error {
+  constructor(public readonly limit: number, public readonly planName: string) {
+    super(`Limite de ${limit} serviços atingido no plano ${planName}.`);
+    this.name = "ServiceLimitError";
+  }
+}
 
 type PartialServiceFields = Partial<Pick<
   Service,
@@ -32,7 +46,12 @@ type PartialServiceFields = Partial<Pick<
 export type CreateServiceInput = Pick<
   Service,
   "name" | "active" | "published" | "pricing" | "cost" | "bookingMode"
-> & Partial<Pick<Service, "description" | "imageUrl" | "durationMinutes">>;
+> & Partial<Pick<Service, "description" | "imageUrl" | "durationMinutes">> & {
+  /** PLAN-IMPL-02A §7 — createService() cannot call usePlan() itself (it's a plain module function, not
+   * a React hook), so the caller (a future "add service" page) resolves the plan the normal way and
+   * passes it in here, the same separation checkProductLimit/checkClientLimit already use elsewhere. */
+  activePlan: PlanType;
+};
 
 export type UpdateServiceInput = PartialServiceFields;
 
@@ -90,6 +109,13 @@ function asRecord(value: unknown, entity: string): Record<string, unknown> {
 
 export async function createService(input: CreateServiceInput): Promise<Service> {
   const uid = requireCurrentUid();
+  // PLAN-IMPL-02A §7/§8 — mirrors add-product.tsx's pattern exactly: a fresh server-side count
+  // (getCountFromServer), never a possibly-partial in-memory list, checked before writing.
+  const serviceCountSnapshot = await getCountFromServer(servicesCollection(uid));
+  const { allowed } = checkServiceLimit(input.activePlan, serviceCountSnapshot.data().count);
+  if (!allowed) {
+    throw new ServiceLimitError(PLAN_CONFIG[input.activePlan].limits.services, PLAN_CONFIG[input.activePlan].name);
+  }
   const serviceId = generateEntityId("service");
   const timestamp = nowIso();
   const service: Service = assertValidService({

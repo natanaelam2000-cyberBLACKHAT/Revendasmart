@@ -200,6 +200,35 @@ function futureUtcAtSafeHour(daysAhead: number, hour: number, minute = 0): Date 
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + daysAhead, hour, minute, 0, 0));
 }
 
+/**
+ * PLAN-IMPL-02A — same TEST-FIX-AVAIL-01 lesson, extended to the blocks that need a SPECIFIC day of the
+ * week (A1-A5/F1-F7/G1-G4/H1 need a Monday matching their `monday: [...]` schedules; §39 needs a Tuesday
+ * matching its `tuesday: [...]` schedules), which is why those blocks were left with a hardcoded literal
+ * date ("2026-08-31"/"2026-09-01") instead of futureUtcAtSafeHour alone — that helper picks a safe HOUR
+ * but not a specific weekday. The hardcoded date was a Monday/Tuesday when written, but a fixed calendar
+ * date inevitably becomes "the past" as real time moves on (confirmed: it started failing on 2026-09-01,
+ * the day after "2026-08-31" — the exact TEST-FIX-AVAIL-01 failure mode, just not caught for these blocks
+ * at the time). Returns a YYYY-MM-DD key, at least `daysAhead` out, on the next date whose UTC calendar
+ * weekday is `targetUtcDay` (0=Sunday..6=Saturday). Safe to treat as the SP-local weekday too: every
+ * startAt in the affected blocks is between 10:00-23:00 UTC (07:00-20:00 local, SP=UTC-3), so none of
+ * them cross the UTC midnight boundary where the UTC and SP-local calendar dates could disagree.
+ */
+function futureUtcDateKeyOnWeekday(daysAhead: number, targetUtcDay: number): string {
+  const base = new Date(Date.now() + daysAhead * 24 * 60 * 60_000);
+  const cursor = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate()));
+  while (cursor.getUTCDay() !== targetUtcDay) cursor.setUTCDate(cursor.getUTCDate() + 1);
+  return cursor.toISOString().slice(0, 10);
+}
+function addDaysToDateKey(dateKey: string, days: number): string {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
+/** At least 6 days out — comfortably clears any minAdvanceMinutes used elsewhere in this file (max 3 days)
+ * and, being a fixed weekday search, is never actually exactly 6: this is just the search floor. */
+const SAFE_MONDAY_KEY = futureUtcDateKeyOnWeekday(6, 1);
+const SAFE_SUNDAY_AFTER_MONDAY_KEY = addDaysToDateKey(SAFE_MONDAY_KEY, 6);
+const SAFE_TUESDAY_KEY = futureUtcDateKeyOnWeekday(6, 2);
+
 async function runCommandTests() {
   const harness = await createServer();
   const db = initializeFirebaseAdmin().firestore();
@@ -252,27 +281,27 @@ async function runCommandTests() {
         weeklyHours: { ...closedWeek(), monday: [{ start: "08:00", end: "12:00" }, { start: "13:00", end: "18:00" }], tuesday: [{ start: "08:00", end: "18:00" }], sunday: [] },
       }, "hours-1");
 
-      // A1/F7 — 2026-08-31 é segunda-feira; 10:00 local SP = 13:00 UTC (SP=UTC-3), dentro de 08:00-12:00.
-      const a1 = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-hours", resourceId: "res-hours", startAt: "2026-08-31T13:00:00.000Z", idempotencyKey: "a1-hold" }, uid);
+      // A1/F7 — SAFE_MONDAY_KEY é sempre uma segunda-feira futura; 10:00 local SP = 13:00 UTC (SP=UTC-3), dentro de 08:00-12:00.
+      const a1 = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-hours", resourceId: "res-hours", startAt: `${SAFE_MONDAY_KEY}T13:00:00.000Z`, idempotencyKey: "a1-hold" }, uid);
       assert.equal(a1.status, 200, `A1: ${JSON.stringify(a1.body)}`);
 
       // A2/F1 — 07:00 local SP (10:00 UTC) é antes do expediente.
-      const a2 = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-hours", resourceId: "res-hours", startAt: "2026-08-31T10:00:00.000Z", idempotencyKey: "a2-hold" }, uid);
+      const a2 = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-hours", resourceId: "res-hours", startAt: `${SAFE_MONDAY_KEY}T10:00:00.000Z`, idempotencyKey: "a2-hold" }, uid);
       assert.equal(a2.status, 409);
       assert.equal(a2.body?.code, "OUTSIDE_WORKING_HOURS");
 
       // A3 — 19:00 local SP (22:00 UTC) é depois do expediente.
-      const a3 = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-hours", resourceId: "res-hours", startAt: "2026-08-31T22:00:00.000Z", idempotencyKey: "a3-hold" }, uid);
+      const a3 = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-hours", resourceId: "res-hours", startAt: `${SAFE_MONDAY_KEY}T22:00:00.000Z`, idempotencyKey: "a3-hold" }, uid);
       assert.equal(a3.status, 409);
       assert.equal(a3.body?.code, "OUTSIDE_WORKING_HOURS");
 
-      // A4 — 2026-09-06 é domingo, fechado: qualquer horário deve ser rejeitado.
-      const a4 = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-hours", resourceId: "res-hours", startAt: "2026-09-06T13:00:00.000Z", idempotencyKey: "a4-hold" }, uid);
+      // A4 — o domingo que fecha a mesma semana do SAFE_MONDAY_KEY (Monday+6), fechado: qualquer horário deve ser rejeitado.
+      const a4 = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-hours", resourceId: "res-hours", startAt: `${SAFE_SUNDAY_AFTER_MONDAY_KEY}T13:00:00.000Z`, idempotencyKey: "a4-hold" }, uid);
       assert.equal(a4.status, 409);
       assert.equal(a4.body?.code, "OUTSIDE_WORKING_HOURS");
 
       // A5/F2 — 11:45 local SP (14:45 UTC) cruzaria a pausa 12:00-13:00 com 30min de duração.
-      const a5 = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-hours", resourceId: "res-hours", startAt: "2026-08-31T14:45:00.000Z", idempotencyKey: "a5-hold" }, uid);
+      const a5 = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-hours", resourceId: "res-hours", startAt: `${SAFE_MONDAY_KEY}T14:45:00.000Z`, idempotencyKey: "a5-hold" }, uid);
       assert.equal(a5.status, 409);
       assert.equal(a5.body?.code, "OUTSIDE_WORKING_HOURS");
     }
@@ -447,35 +476,35 @@ async function runCommandTests() {
         timezone: "America/Sao_Paulo", slotStepMinutes: 15,
         weeklyHours: { ...closedWeek(), monday: [{ start: "08:00", end: "12:00" }] },
       }, "resched-sched-1");
-      const hold = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-resched", resourceId: "res-resched", startAt: "2026-08-31T13:00:00.000Z", idempotencyKey: "g-hold" }, uid);
+      const hold = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-resched", resourceId: "res-resched", startAt: `${SAFE_MONDAY_KEY}T13:00:00.000Z`, idempotencyKey: "g-hold" }, uid);
       assert.equal(hold.status, 200, JSON.stringify(hold.body));
       const confirm = await postJson(harness.baseUrl, `/api/services/bookings/holds/${hold.body.holdId}/confirm`, { idempotencyKey: "g-confirm" }, uid);
       assert.equal(confirm.status, 200);
       const bookingId = confirm.body.bookingId as string;
 
       // G1 — reagendar para fora do expediente (Monday 20:00 local = 23:00 UTC): reject, slot antigo preservado.
-      const g1 = await postJson(harness.baseUrl, `/api/services/bookings/${bookingId}/reschedule`, { startAt: "2026-08-31T23:00:00.000Z", idempotencyKey: "g1-resched" }, uid);
+      const g1 = await postJson(harness.baseUrl, `/api/services/bookings/${bookingId}/reschedule`, { startAt: `${SAFE_MONDAY_KEY}T23:00:00.000Z`, idempotencyKey: "g1-resched" }, uid);
       assert.equal(g1.status, 409);
       assert.equal(g1.body?.code, "OUTSIDE_WORKING_HOURS");
       const bookingAfterG1 = await db.doc(`users/${uid}/bookings/${bookingId}`).get();
-      assert.equal(bookingAfterG1.data()?.startAt, "2026-08-31T13:00:00.000Z", "G1: slot antigo deve permanecer intacto após rejeição");
+      assert.equal(bookingAfterG1.data()?.startAt, `${SAFE_MONDAY_KEY}T13:00:00.000Z`, "G1: slot antigo deve permanecer intacto após rejeição");
 
       // G2 — reagendar para dentro de um block: reject, slot antigo preservado.
-      const blockTarget = "2026-08-31T14:00:00.000Z"; // 11:00 local SP, ainda dentro do expediente das 08-12
-      await postJson(harness.baseUrl, "/api/services/availability/blocks", { resourceId: "res-resched", startAt: blockTarget, endAt: "2026-08-31T14:30:00.000Z", idempotencyKey: "g2-block" }, uid);
+      const blockTarget = `${SAFE_MONDAY_KEY}T14:00:00.000Z`; // 11:00 local SP, ainda dentro do expediente das 08-12
+      await postJson(harness.baseUrl, "/api/services/availability/blocks", { resourceId: "res-resched", startAt: blockTarget, endAt: `${SAFE_MONDAY_KEY}T14:30:00.000Z`, idempotencyKey: "g2-block" }, uid);
       const g2 = await postJson(harness.baseUrl, `/api/services/bookings/${bookingId}/reschedule`, { startAt: blockTarget, idempotencyKey: "g2-resched" }, uid);
       assert.equal(g2.status, 409);
       assert.equal(g2.body?.code, "BLOCKED_INTERVAL");
       const bookingAfterG2 = await db.doc(`users/${uid}/bookings/${bookingId}`).get();
-      assert.equal(bookingAfterG2.data()?.startAt, "2026-08-31T13:00:00.000Z", "G2: slot antigo deve permanecer intacto após rejeição");
+      assert.equal(bookingAfterG2.data()?.startAt, `${SAFE_MONDAY_KEY}T13:00:00.000Z`, "G2: slot antigo deve permanecer intacto após rejeição");
 
       // G3 — reagendar para horário desalinhado ao slotStep (15min): 10:05 local não é múltiplo de 15.
-      const g3 = await postJson(harness.baseUrl, `/api/services/bookings/${bookingId}/reschedule`, { startAt: "2026-08-31T13:05:00.000Z", idempotencyKey: "g3-resched" }, uid);
+      const g3 = await postJson(harness.baseUrl, `/api/services/bookings/${bookingId}/reschedule`, { startAt: `${SAFE_MONDAY_KEY}T13:05:00.000Z`, idempotencyKey: "g3-resched" }, uid);
       assert.equal(g3.status, 409);
       assert.equal(g3.body?.code, "MISALIGNED_SLOT");
 
       // G4 — reagendar para um novo horário válido: sucesso.
-      const g4 = await postJson(harness.baseUrl, `/api/services/bookings/${bookingId}/reschedule`, { startAt: "2026-08-31T13:30:00.000Z", idempotencyKey: "g4-resched" }, uid);
+      const g4 = await postJson(harness.baseUrl, `/api/services/bookings/${bookingId}/reschedule`, { startAt: `${SAFE_MONDAY_KEY}T13:30:00.000Z`, idempotencyKey: "g4-resched" }, uid);
       assert.equal(g4.status, 200, `G4: ${JSON.stringify(g4.body)}`);
     }
 
@@ -487,7 +516,7 @@ async function runCommandTests() {
         timezone: "America/Sao_Paulo", slotStepMinutes: 15,
         weeklyHours: { ...closedWeek(), monday: [{ start: "08:00", end: "18:00" }] },
       }, "h1-sched-1");
-      const hold = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-confirm-revalidate", resourceId: "res-confirm-revalidate", startAt: "2026-08-31T13:00:00.000Z", idempotencyKey: "h1-hold" }, uid);
+      const hold = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-confirm-revalidate", resourceId: "res-confirm-revalidate", startAt: `${SAFE_MONDAY_KEY}T13:00:00.000Z`, idempotencyKey: "h1-hold" }, uid);
       assert.equal(hold.status, 200, JSON.stringify(hold.body));
 
       // Expediente muda ENQUANTO o Hold está ativo — encolhe para 08:00-09:00 local, o Hold (10:00 local) fica órfão.
@@ -525,15 +554,15 @@ async function runCommandTests() {
         weeklyHours: { ...closedWeek(), tuesday: [{ start: "08:00", end: "18:00" }] },
       }, "tz-ny-1");
 
-      // 2026-09-01T21:00:00.000Z: SP (UTC-3) => 18:00 local (30min não cabe mais, expediente termina 18:00) => reject.
-      //                            NY (UTC-4, EDT em setembro) => 17:00 local (17:00-17:30 cabe) => allowed.
+      // SAFE_TUESDAY_KEY às 21:00 UTC: SP (UTC-3) => 18:00 local (30min não cabe mais, expediente termina 18:00) => reject.
+      //                                NY (UTC-4, EDT em setembro) => 17:00 local (17:00-17:30 cabe) => allowed.
       // Mesmo instante UTC, mesmo weeklyHours configurado, resultado OPOSTO — prova de que a conversão usa a
       // timezone real de CADA agenda, nunca um offset fixo aplicado globalmente.
-      const spResult = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-tz-sp", resourceId: "res-tz-sp", startAt: "2026-09-01T21:00:00.000Z", idempotencyKey: "tz-sp-hold" }, uid);
+      const spResult = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-tz-sp", resourceId: "res-tz-sp", startAt: `${SAFE_TUESDAY_KEY}T21:00:00.000Z`, idempotencyKey: "tz-sp-hold" }, uid);
       assert.equal(spResult.status, 409, `SP deveria rejeitar 18:00 local: ${JSON.stringify(spResult.body)}`);
       assert.equal(spResult.body?.code, "OUTSIDE_WORKING_HOURS");
 
-      const nyResult = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-tz-ny", resourceId: "res-tz-ny", startAt: "2026-09-01T21:00:00.000Z", idempotencyKey: "tz-ny-hold" }, uid);
+      const nyResult = await postJson(harness.baseUrl, "/api/services/bookings/holds", { serviceId: "svc-tz-ny", resourceId: "res-tz-ny", startAt: `${SAFE_TUESDAY_KEY}T21:00:00.000Z`, idempotencyKey: "tz-ny-hold" }, uid);
       assert.equal(nyResult.status, 200, `NY deveria aceitar 17:00 local: ${JSON.stringify(nyResult.body)}`);
     }
 

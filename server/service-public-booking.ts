@@ -104,6 +104,11 @@ function translateInternalError(error: unknown, notFoundAs: NotFoundTranslation 
         return new ServicePublicBookingError("HOLD_EXPIRED", COMMAND_ERROR_MESSAGES.HOLD_EXPIRED);
       case "OUTSIDE_WORKING_HOURS":
         return new ServicePublicBookingError("OUTSIDE_WORKING_HOURS", COMMAND_ERROR_MESSAGES.OUTSIDE_WORKING_HOURS);
+      // PLAN-IMPL-02A §6 — a loja atingiu o limite de clientes do plano atual; reaproveita o vocabulário
+      // público existente (nunca expõe plano/billing da loja ao visitante anônimo, mesmo espírito do §11
+      // de nunca revelar QUAL motivo interno causou a falha).
+      case "CLIENT_LIMIT_REACHED":
+        return new ServicePublicBookingError("SERVICE_NOT_AVAILABLE", COMMAND_ERROR_MESSAGES.SERVICE_NOT_AVAILABLE);
       // SERV-PUBLIC-02 — o Booking FOI encontrado pelo token (não é ambiguidade de lookup, §11 não se
       // aplica aqui); é uma regra de negócio legítima e distinguível, reaproveitada do Booking Core.
       case "WORK_NOT_CANCELABLE":

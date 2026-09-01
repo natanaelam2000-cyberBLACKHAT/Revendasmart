@@ -39,6 +39,7 @@ import {
   ServiceAvailabilityCommandError,
   assertIntervalAllowedByScheduleCommand,
 } from "./service-availability-commands";
+import { canAddClient, resolveCommercialPlan, type PlanData } from "../shared/monetization";
 
 type CreateHoldResult = {
   action: "create_hold";
@@ -141,7 +142,8 @@ export class ServiceBookingCommandError extends Error {
     | "BLOCKED_INTERVAL"
     | "MISALIGNED_SLOT"
     | "MIN_ADVANCE_VIOLATION"
-    | "MAX_ADVANCE_VIOLATION";
+    | "MAX_ADVANCE_VIOLATION"
+    | "CLIENT_LIMIT_REACHED";
 
   constructor(code: ServiceBookingCommandError["code"], message: string) {
     super(message);
@@ -168,6 +170,7 @@ const COMMAND_ERROR_MESSAGES = {
   MISALIGNED_SLOT: "Este horário não está alinhado aos horários disponíveis.",
   MIN_ADVANCE_VIOLATION: "Este horário está muito próximo do momento atual.",
   MAX_ADVANCE_VIOLATION: "Este horário está além da janela de antecedência permitida.",
+  CLIENT_LIMIT_REACHED: "O limite de clientes do plano atual foi atingido. Não foi possível cadastrar este novo cliente.",
 } as const;
 
 function db_(): Firestore {
@@ -194,6 +197,12 @@ function scheduleLockRef(db: Firestore, uid: string, resourceId: string, segment
 }
 function bookingIdempotencyRef(db: Firestore, uid: string, key: string) {
   return db.collection("users").doc(uid).collection("serviceBookingCommandIdempotency").doc(key);
+}
+function clientsCollection(db: Firestore, uid: string) {
+  return db.collection("users").doc(uid).collection("clients");
+}
+function planDataRef(db: Firestore, uid: string) {
+  return db.collection("users").doc(uid).collection("planData").doc("main");
 }
 
 function buildBookingId(holdId: string): string {
@@ -504,10 +513,19 @@ export async function confirmServiceBookingHoldCommand(
     const clientDocRef = options.publicCustomerContact
       ? db.collection("users").doc(uid).collection("clients").doc(options.publicCustomerContact.clientId)
       : undefined;
-    const [lockSnaps, serviceSnap, clientSnap] = await Promise.all([
+    // PLAN-IMPL-02A §6 — only read the tenant's plan/client-count when a NEW client might actually be
+    // created (publicCustomerContact present): an existing/resolved client never touches this at all,
+    // and the internal owner-created flow (options.publicCustomerContact never set) never pays this
+    // extra read. Reading via tx.get() (a real AggregateQuery read, not a plain client-side count) means
+    // this participates in the same optimistic-concurrency guarantee as every other read in this
+    // transaction — two concurrent public confirmations racing the same tenant's last client slot can't
+    // both succeed.
+    const [lockSnaps, serviceSnap, clientSnap, planSnap, clientCountSnap] = await Promise.all([
       lockRefs.length ? tx.getAll(...lockRefs) : Promise.resolve([]),
       tx.get(serviceSnapRef),
       clientDocRef ? tx.get(clientDocRef) : Promise.resolve(undefined),
+      clientDocRef ? tx.get(planDataRef(db, uid)) : Promise.resolve(undefined),
+      clientDocRef ? tx.get(clientsCollection(db, uid).count()) : Promise.resolve(undefined),
     ]);
 
     for (const lockSnap of lockSnaps) {
@@ -520,6 +538,18 @@ export async function confirmServiceBookingHoldCommand(
 
     if (!serviceSnap.exists) throw new ServiceBookingCommandError("NOT_FOUND", "Serviço não encontrado.");
     const service = parseService(serviceSnap.data());
+
+    // PLAN-IMPL-02A §6 — "se cliente já existe/resolvido: booking proceeds" (clientSnap.exists, no check
+    // at all, matches the pre-existing dedupe-by-clientId guard below); "se exige criar NOVO Client e
+    // tenant atingiu limite: do not silently bypass plan" — reject atomically, before any write in this
+    // transaction happens, so the booking/hold/locks are left exactly as they were (never a partial
+    // Client-without-Booking or Booking-without-contact state).
+    if (clientDocRef && clientSnap && !clientSnap.exists && planSnap && clientCountSnap) {
+      const plan = resolveCommercialPlan(planSnap.exists ? (planSnap.data() as PlanData) : null);
+      if (!canAddClient(plan, clientCountSnap.data().count)) {
+        throw new ServiceBookingCommandError("CLIENT_LIMIT_REACHED", COMMAND_ERROR_MESSAGES.CLIENT_LIMIT_REACHED);
+      }
+    }
 
     const bookingId = buildBookingId(holdId);
     const workId = buildBookingWorkId(holdId);
@@ -894,7 +924,7 @@ function statusForError(code: ServiceBookingCommandError["code"]): number {
     || code === "HOLD_ALREADY_CONFIRMED" || code === "LOCK_OWNERSHIP_LOST"
     || code === "WORK_NOT_CANCELABLE" || code === "BOOKING_NOT_RESCHEDULABLE"
     || code === "OUTSIDE_WORKING_HOURS" || code === "BLOCKED_INTERVAL" || code === "MISALIGNED_SLOT"
-    || code === "MIN_ADVANCE_VIOLATION" || code === "MAX_ADVANCE_VIOLATION"
+    || code === "MIN_ADVANCE_VIOLATION" || code === "MAX_ADVANCE_VIOLATION" || code === "CLIENT_LIMIT_REACHED"
   ) return 409;
   return 400;
 }

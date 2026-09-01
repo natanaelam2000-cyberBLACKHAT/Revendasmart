@@ -330,6 +330,58 @@ async function run() {
       assert.equal(expiredConfirm.body.code, "HOLD_EXPIRED");
     }
 
+    // ===== PLAN-IMPL-02A §6 — a criação atômica de Client durante a confirmação pública respeita o
+    // limite de clientes do plano do tenant: se o tenant já está no limite, a confirmação inteira falha
+    // atomicamente (nenhum Client novo, nenhum Booking, nenhum Work, Hold intocado), nunca uma escrita
+    // parcial e nunca um bypass silencioso do plano. =====
+    {
+      const uid = tenantUid();
+      const slug = slugFor(uid);
+      await seedStore(uid, slug);
+      await seedService(uid, "svc-limit", { durationMinutes: 30 });
+      await upsertServiceResourceScheduleCommand(db, uid, "default", {
+        timezone: "America/Sao_Paulo", slotStepMinutes: 30, minAdvanceMinutes: 60, weeklyHours: allDayWeek(),
+      }, `sched-limit-${uid}`);
+
+      // Sem doc planData/main -> resolveCommercialPlan(null) = "free" -> limite canônico de 50 clientes
+      // (shared/monetization.ts). Semeia exatamente 50 para colocar o tenant NO limite.
+      const batch = db.batch();
+      for (let i = 0; i < 50; i += 1) {
+        batch.set(db.doc(`users/${uid}/clients/existing-${i}`), { id: `existing-${i}`, name: `Cliente ${i}`, phone: "119999999" });
+      }
+      await batch.commit();
+
+      const target = futureDateAtSafeLocalTime(6, 14, 0);
+      const rangeStartAt = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth(), target.getUTCDate(), 0, 0, 0)).toISOString();
+      const rangeEndAt = new Date(Date.parse(rangeStartAt) + 24 * 60 * 60_000).toISOString();
+      const avail = await getJson(harness.baseUrl, `/api/public/services/${slug}/availability?serviceId=svc-limit&rangeStartAt=${rangeStartAt}&rangeEndAt=${rangeEndAt}`);
+      assert.equal(avail.status, 200, JSON.stringify(avail.body));
+      const slot = avail.body.candidates[0].startAt;
+
+      const hold = await postJson(harness.baseUrl, `/api/public/services/${slug}/bookings/holds`, { serviceId: "svc-limit", startAt: slot, idempotencyKey: `limit-hold-${uid}` });
+      assert.equal(hold.status, 200, JSON.stringify(hold.body));
+
+      const confirm = await postJson(harness.baseUrl, `/api/public/services/${slug}/bookings/holds/${hold.body.holdId}/confirm`, {
+        customerName: "Cliente Excedente", customerPhone: "+55 11 98888-0000", idempotencyKey: `limit-confirm-${uid}`,
+      });
+      assert.equal(confirm.status, 400, JSON.stringify(confirm.body));
+      assert.equal(confirm.body.code, "SERVICE_NOT_AVAILABLE", "PLAN-IMPL-02A: a confirmação pública que precisaria criar um 51º cliente no plano Free deve ser rejeitada");
+
+      // Atomicidade: nenhuma escrita parcial. O Hold continua exatamente como estava (ainda confirmável
+      // assim que o tenant deixar de estar no limite).
+      const newClientId = `public-${hold.body.holdId}`;
+      const clientSnap = await db.doc(`users/${uid}/clients/${newClientId}`).get();
+      assert.equal(clientSnap.exists, false, "PLAN-IMPL-02A: nenhum Client novo pode ser criado quando a confirmação é rejeitada");
+      const bookingSnap = await db.doc(`users/${uid}/bookings/booking-${hold.body.holdId}`).get();
+      assert.equal(bookingSnap.exists, false, "PLAN-IMPL-02A: nenhum Booking pode ser criado quando a confirmação é rejeitada");
+      const workSnap = await db.doc(`users/${uid}/serviceWorks/booking-work-${hold.body.holdId}`).get();
+      assert.equal(workSnap.exists, false, "PLAN-IMPL-02A: nenhum ServiceWork pode ser criado quando a confirmação é rejeitada");
+      const holdSnap = await db.doc(`users/${uid}/bookingHolds/${hold.body.holdId}`).get();
+      assert.equal(holdSnap.data()?.status, "active", "PLAN-IMPL-02A: o Hold em si precisa continuar intocado — ainda confirmável quando o tenant deixar de estar no limite");
+      const clientsCountSnap = await db.collection(`users/${uid}/clients`).count().get();
+      assert.equal(clientsCountSnap.data().count, 50, "PLAN-IMPL-02A: a contagem de clientes do tenant precisa continuar exatamente 50, nunca 51");
+    }
+
     // ===== PUBL28-31 — segurança: usuário público (anônimo, sem conta) não lê nenhuma coleção privada =====
     {
       const uid = tenantUid();
@@ -351,7 +403,7 @@ async function run() {
       }
     }
 
-    console.log("Public service booking tests passed: store resolution never leaks internal ids (PUBL1/2), only real active/published/bookable Services are listed with server-derived price/duration (PUBL3-5), public availability correctly reflects weeklyHours/block/Booking/active-Hold/expired-Hold/minAdvance/maxAdvance/timezone through the real engine with zero customer-identity leakage (PUBL6-13/32), public Hold creation always derives duration from the real Service and rejects unknown Services (PUBL14-16), tenant-mismatch confirmation is rejected as not-found (PUBL18), same-slot concurrency yields exactly one winner (PUBL19), confirmation creates exactly one Booking+Work with zero financialSummary/no Payment/no Quote regardless of injected financial fields in the body (PUBL20-24/33), a real Client contact is created atomically, idempotent replay never duplicates (PUBL25), the public Booking is visible through the exact same query the owner's Agenda already uses, expired holds are rejected at confirm (PUBL26), and an anonymous visitor cannot read any private collection directly (PUBL28-31).");
+    console.log("Public service booking tests passed: store resolution never leaks internal ids (PUBL1/2), only real active/published/bookable Services are listed with server-derived price/duration (PUBL3-5), public availability correctly reflects weeklyHours/block/Booking/active-Hold/expired-Hold/minAdvance/maxAdvance/timezone through the real engine with zero customer-identity leakage (PUBL6-13/32), public Hold creation always derives duration from the real Service and rejects unknown Services (PUBL14-16), tenant-mismatch confirmation is rejected as not-found (PUBL18), same-slot concurrency yields exactly one winner (PUBL19), confirmation creates exactly one Booking+Work with zero financialSummary/no Payment/no Quote regardless of injected financial fields in the body (PUBL20-24/33), a real Client contact is created atomically, idempotent replay never duplicates (PUBL25), the public Booking is visible through the exact same query the owner's Agenda already uses, expired holds are rejected at confirm (PUBL26), a tenant already at their plan's client limit has a would-be-new-client public confirmation rejected atomically with zero partial writes and the Hold left confirmable (PLAN-IMPL-02A), and an anonymous visitor cannot read any private collection directly (PUBL28-31).");
   } finally {
     await harness.close();
   }

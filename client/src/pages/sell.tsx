@@ -6,7 +6,10 @@ import { ProductImageCard } from "@/components/ProductImageCard";
 import { ClientPickerSheet } from "@/components/sell/ClientPickerSheet";
 import { ChevronDown, Search, Plus, Minus, CheckCircle2, UserPlus, X, QrCode, DollarSign, CreditCard, Wallet, type LucideIcon } from "lucide-react";
 import { useLocation } from "wouter";
-import { doc, getFirestore, setDoc } from "firebase/firestore";
+import { collection, doc, getCountFromServer, getFirestore, setDoc } from "firebase/firestore";
+import { usePlan } from "@/providers/PlanProvider";
+import { checkClientLimit } from "@/lib/plan-helpers";
+import { PLAN_CONFIG } from "@shared/monetization";
 import { useProductPickerData } from "@/hooks/useProductPickerData";
 import { useClientPickerData } from "@/hooks/useClientPickerData";
 import { useDismissibleOnBack } from "@/hooks/useDismissibleOnBack";
@@ -75,6 +78,7 @@ export default function Sell() {
   const [, setLocation] = useLocation();
   const { products, loading: productsLoading, loadingMore: productsLoadingMore, error: productsError, hasMore: hasMoreProducts, search, setSearch, loadMore: loadMoreProducts } = useProductPickerData();
   const { clients, loading: clientsLoading, loadingMore: clientsLoadingMore, error: clientsError, hasMore: hasMoreClients, search: clientSearch, setSearch: setClientSearch, loadMore: loadMoreClients } = useClientPickerData();
+  const { activePlan } = usePlan();
   const [selectedClient, setSelectedClient] = useState<string>("");
   const [cart, setCart] = useState<{product: Product, quantity: number}[]>([]);
   const [genderFilter, setGenderFilter] = useState("todos");
@@ -149,6 +153,16 @@ export default function Sell() {
     setIsCreatingClient(true);
     setNewClientError("");
     try {
+      // PLAN-IMPL-02A §5 — this "quick add" flow used to write directly to Firestore with no plan-limit
+      // check at all, a completely separate path from clients.tsx's own (correctly guarded) creation
+      // flow. A fresh server count, matching add-product.tsx's pattern, rather than clients.length from
+      // useClientPickerData() — that hook may be paginated/partial, and undercounting here would let a
+      // tenant slip past their real limit.
+      const clientCountSnapshot = await getCountFromServer(collection(getFirestore(), "users", uid, "clients"));
+      if (!checkClientLimit(activePlan, clientCountSnapshot.data().count).allowed) {
+        setNewClientError(`Limite de ${PLAN_CONFIG[activePlan].limits.clients} clientes atingido no plano ${PLAN_CONFIG[activePlan].name}.`);
+        return;
+      }
       const clientId = Math.random().toString(36).slice(2, 11);
       const clientData: Client = { id: clientId, name, phone };
       await setDoc(doc(getFirestore(), "users", uid, "clients", clientId), clientData);

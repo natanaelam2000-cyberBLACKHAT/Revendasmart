@@ -483,6 +483,86 @@ export function canAddService(plan: PlanType, currentCount: number): boolean {
   return currentCount < limit;
 }
 
+/**
+ * PLAN-IMPL-02A §9 — estado derivado puro, nunca uma segunda autoridade de números (só compara `count`
+ * contra o `limit` já resolvido de PLAN_CONFIG). `limit === UNLIMITED` nunca conta como atingido/
+ * excedido, mesma semântica de `canAddProduct`/`canAddClient`/`canAddService`.
+ */
+export interface LimitStatus {
+  readonly withinLimit: boolean;
+  readonly atLimit: boolean;
+  readonly overLimit: boolean;
+  readonly remaining: number;
+  readonly overBy: number;
+}
+
+export function getLimitStatus(count: number, limit: number): LimitStatus {
+  if (limit === UNLIMITED) {
+    return { withinLimit: true, atLimit: false, overLimit: false, remaining: Infinity, overBy: 0 };
+  }
+  return {
+    withinLimit: count < limit,
+    atLimit: count === limit,
+    overLimit: count > limit,
+    remaining: Math.max(0, limit - count),
+    overBy: Math.max(0, count - limit),
+  };
+}
+
+export type PlanUsageDomainStatus = "withinLimit" | "atLimit" | "overLimit";
+
+export interface PlanUsageDomainSnapshot {
+  readonly used: number;
+  readonly limit: number;
+  readonly remaining: number;
+  readonly overBy: number;
+  readonly status: PlanUsageDomainStatus;
+}
+
+/**
+ * PLAN-IMPL-02A §20 — contrato para a futura tela de seleção pós-downgrade (PLAN-IMPL-02B), não a tela
+ * em si. `bookingsCurrentMonth` fica `null` propositalmente: a quota mensal de agendamentos foi
+ * explicitamente interrompida neste ticket (STOP — `ServiceResourceSchedule.timezone` é por recurso,
+ * sem autoridade de timezone por tenant para desambiguar "o mês" quando um tenant tem recursos em
+ * timezones diferentes; ver PLAN-IMPL-02A_REPORT). Um futuro ticket que resolva essa autoridade
+ * preenche este campo sem precisar de uma segunda forma de PlanUsageSnapshot.
+ */
+export interface PlanUsageSnapshot {
+  readonly products: PlanUsageDomainSnapshot;
+  readonly clients: PlanUsageDomainSnapshot;
+  readonly services: PlanUsageDomainSnapshot;
+  readonly bookingsCurrentMonth: PlanUsageDomainSnapshot | null;
+}
+
+function toPlanUsageDomainSnapshot(count: number, limit: number): PlanUsageDomainSnapshot {
+  const status = getLimitStatus(count, limit);
+  return {
+    used: count,
+    limit,
+    remaining: status.remaining,
+    overBy: status.overBy,
+    status: status.overLimit ? "overLimit" : status.atLimit ? "atLimit" : "withinLimit",
+  };
+}
+
+/**
+ * PLAN-IMPL-02A §20 — função pura: recebe contagens JÁ CONHECIDAS (o chamador decide como obtê-las —
+ * tipicamente `getCountFromServer`, mesmo padrão já usado em add-product.tsx/services-persistence.ts —
+ * nunca um scan client-side de todos os documentos). Não busca nada sozinha, de propósito.
+ */
+export function buildPlanUsageSnapshot(
+  plan: PlanType,
+  counts: { readonly products: number; readonly clients: number; readonly services: number },
+): PlanUsageSnapshot {
+  const limits = PLAN_CONFIG[plan].limits;
+  return {
+    products: toPlanUsageDomainSnapshot(counts.products, limits.products),
+    clients: toPlanUsageDomainSnapshot(counts.clients, limits.clients),
+    services: toPlanUsageDomainSnapshot(counts.services, limits.services),
+    bookingsCurrentMonth: null,
+  };
+}
+
 export function canUseFeature(plan: PlanType, feature: keyof PlanLimits): boolean {
   const value = PLAN_CONFIG[plan].limits[feature];
 
