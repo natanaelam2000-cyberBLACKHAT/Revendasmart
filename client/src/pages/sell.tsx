@@ -117,7 +117,11 @@ export default function Sell() {
   const [justCreatedClient, setJustCreatedClient] = useState<Client | null>(null);
 
   const normalizedProductSearch = search.trim().toLowerCase();
-  const availableProducts = useMemo(() => products.filter((product) => product.stock > 0), [products]);
+  // PLAN-IMPL-02B1 §13 — produto preservado por downgrade de plano não pode ser escolhido para uma venda
+  // NOVA (mesma filosofia do filtro de estoque ao lado). Isto é só UX — o gate real é server-side, em
+  // finalizeSaleTransaction (server/sale-finalize-transaction.ts), que rejeita mesmo que este filtro seja
+  // contornado.
+  const availableProducts = useMemo(() => products.filter((product) => product.stock > 0 && product.planAccessState !== "preserved"), [products]);
   // Só faz sentido oferecer o filtro de público quando os produtos carregados têm mais de um valor.
   const genderOptionsPresent = useMemo(() => new Set(availableProducts.map((product) => resolveProductGender(product))), [availableProducts]);
   const showGenderFilter = genderOptionsPresent.size > 1;

@@ -520,18 +520,54 @@ export interface PlanUsageDomainSnapshot {
 }
 
 /**
- * PLAN-IMPL-02A §20 — contrato para a futura tela de seleção pós-downgrade (PLAN-IMPL-02B), não a tela
+ * PLAN-IMPL-02B1 §2/§4 — os únicos dois estados de acesso operacional de um Product/Service existente:
+ * `active` opera normalmente (venda/reserva nova permitida); `preserved` significa "downgrade excedeu o
+ * limite do plano atual" — o documento continua existindo, visível ao dono e presente no histórico, só
+ * não pode ser usado para uma NOVA venda/reserva nem aparece em catálogo/agenda pública (ver
+ * server/plan-access-reconciliation.ts). Nunca confundir com `Service.active`/`Service.published`
+ * (campos pré-existentes, dormentes, reservados para a alternância manual do dono em PLAN-IMPL-02B2) —
+ * são conceitos deliberadamente separados, ver PLAN-IMPL-02B1_REPORT.
+ */
+export const PLAN_ACCESS_STATES = { ACTIVE: "active", PRESERVED: "preserved" } as const;
+export type PlanAccessState = typeof PLAN_ACCESS_STATES[keyof typeof PLAN_ACCESS_STATES];
+
+export function isPlanAccessState(value: unknown): value is PlanAccessState {
+  return value === PLAN_ACCESS_STATES.ACTIVE || value === PLAN_ACCESS_STATES.PRESERVED;
+}
+
+/** Documento antigo sem o campo (todo produto/serviço anterior a este ticket) sempre significa `active`
+ * — nunca exigir migração para continuar operando (PLAN-IMPL-02B1 §5). */
+export function resolvePlanAccessState(value: unknown): PlanAccessState {
+  return value === PLAN_ACCESS_STATES.PRESERVED ? PLAN_ACCESS_STATES.PRESERVED : PLAN_ACCESS_STATES.ACTIVE;
+}
+
+/** PLAN-IMPL-02B1 §28 — usada só por `products`/`services` em PlanUsageSnapshot; `clients` não tem
+ * conceito de active/preserved (§26 do ticket: histórico de clientes nunca é dividido, só a CRIAÇÃO de
+ * novos é bloqueada acima do limite — comportamento inalterado desde PLAN-IMPL-02A). */
+export interface PlanAccessDomainSnapshot extends PlanUsageDomainSnapshot {
+  readonly active: number;
+  readonly preserved: number;
+}
+
+/**
+ * PLAN-IMPL-02A §20 — contrato para a futura tela de seleção pós-downgrade (PLAN-IMPL-02B2), não a tela
  * em si. `bookingsCurrentMonth` fica `null` propositalmente: a quota mensal de agendamentos foi
  * explicitamente interrompida neste ticket (STOP — `ServiceResourceSchedule.timezone` é por recurso,
  * sem autoridade de timezone por tenant para desambiguar "o mês" quando um tenant tem recursos em
  * timezones diferentes; ver PLAN-IMPL-02A_REPORT). Um futuro ticket que resolva essa autoridade
  * preenche este campo sem precisar de uma segunda forma de PlanUsageSnapshot.
+ *
+ * PLAN-IMPL-02B1 §28 — `products`/`services` agora carregam `active`/`preserved` (via
+ * PlanAccessDomainSnapshot); `selectionRequired` é `true` quando QUALQUER um dos dois domínios tem pelo
+ * menos 1 documento `preserved` — sinal para uma futura UI (PLAN-IMPL-02B2) de que o default temporário
+ * determinístico está em vigor no lugar de uma escolha real do dono (§11 do ticket).
  */
 export interface PlanUsageSnapshot {
-  readonly products: PlanUsageDomainSnapshot;
+  readonly products: PlanAccessDomainSnapshot;
   readonly clients: PlanUsageDomainSnapshot;
-  readonly services: PlanUsageDomainSnapshot;
+  readonly services: PlanAccessDomainSnapshot;
   readonly bookingsCurrentMonth: PlanUsageDomainSnapshot | null;
+  readonly selectionRequired: boolean;
 }
 
 function toPlanUsageDomainSnapshot(count: number, limit: number): PlanUsageDomainSnapshot {
@@ -545,21 +581,37 @@ function toPlanUsageDomainSnapshot(count: number, limit: number): PlanUsageDomai
   };
 }
 
+function toPlanAccessDomainSnapshot(active: number, preserved: number, limit: number): PlanAccessDomainSnapshot {
+  const total = active + preserved;
+  return { ...toPlanUsageDomainSnapshot(total, limit), active, preserved };
+}
+
 /**
  * PLAN-IMPL-02A §20 — função pura: recebe contagens JÁ CONHECIDAS (o chamador decide como obtê-las —
  * tipicamente `getCountFromServer`, mesmo padrão já usado em add-product.tsx/services-persistence.ts —
  * nunca um scan client-side de todos os documentos). Não busca nada sozinha, de propósito.
+ *
+ * PLAN-IMPL-02B1 §28 — `products`/`services` agora recebem `{active, preserved}` em vez de um total
+ * único (tipicamente a saída de `reconcilePlanAccess`, server/plan-access-reconciliation.ts, ou uma
+ * contagem por `planAccessState` já carregada) — nunca um scan caro repetido aqui dentro.
  */
 export function buildPlanUsageSnapshot(
   plan: PlanType,
-  counts: { readonly products: number; readonly clients: number; readonly services: number },
+  counts: {
+    readonly products: { readonly active: number; readonly preserved: number };
+    readonly clients: number;
+    readonly services: { readonly active: number; readonly preserved: number };
+  },
 ): PlanUsageSnapshot {
   const limits = PLAN_CONFIG[plan].limits;
+  const products = toPlanAccessDomainSnapshot(counts.products.active, counts.products.preserved, limits.products);
+  const services = toPlanAccessDomainSnapshot(counts.services.active, counts.services.preserved, limits.services);
   return {
-    products: toPlanUsageDomainSnapshot(counts.products, limits.products),
+    products,
     clients: toPlanUsageDomainSnapshot(counts.clients, limits.clients),
-    services: toPlanUsageDomainSnapshot(counts.services, limits.services),
+    services,
     bookingsCurrentMonth: null,
+    selectionRequired: products.preserved > 0 || services.preserved > 0,
   };
 }
 

@@ -121,6 +121,24 @@ function validApprovedCutout(uid: string, productId: string) {
   };
 }
 
+/** PLAN-IMPL-02B1 X2 — shape mínimo válido de Service para as Rules (mesmos campos obrigatórios de
+ * isValidServiceShape em firestore.rules); `overrides` permite semear já com planAccessState="preserved". */
+function validService(id: string, uid: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id,
+    tenantUid: uid,
+    name: "Corte de Cabelo Local",
+    active: true,
+    published: true,
+    pricing: { mode: "fixed", priceCents: 8000 },
+    cost: { kind: "unknown" },
+    bookingMode: "instant",
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
 function validClient(id: string) {
   return {
     id,
@@ -279,6 +297,33 @@ async function run() {
       }));
     await expectFails("outro usuário não escreve approvedCutout no produto do owner", () =>
       updateDoc(doc(intruder.db, "users", ownerUid, "products", "product-cutout-ok"), { approvedCutout: validApprovedCutout(ownerUid, "product-cutout-ok") }));
+
+    // ===== PLAN-IMPL-02B1 §29/X2 — planAccessState nunca é alterável pelo client, mesmo pelo dono do
+    // próprio produto/serviço; só o servidor (Admin SDK, reconcilePlanAccess) grava este campo. Editar
+    // outros campos de um documento já preservado continua permitido (não quebra a edição normal). =====
+    await expectFails("owner não marca o próprio produto como preserved via updateDoc", () =>
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-local"), { planAccessState: "preserved" }));
+
+    const adminDbForAccessState = getAdminFirestore(adminApp!);
+    await adminDbForAccessState.doc(`users/${ownerUid}/products/product-preserved`).set({ ...validProduct("product-preserved"), planAccessState: "preserved" });
+    await expectFails("owner não reativa produto preserved via updateDoc", () =>
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-preserved"), { planAccessState: "active" }));
+    await expectSucceeds("owner ainda edita outros campos de um produto preserved", () =>
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-preserved"), { name: "Perfume Preservado Editado" }));
+    await expectSucceeds("owner lê o próprio produto preserved", async () => {
+      const snapshot = await getDoc(doc(owner.db, "users", ownerUid, "products", "product-preserved"));
+      assert.equal(snapshot.exists(), true);
+      assert.equal(snapshot.data()?.planAccessState, "preserved");
+    });
+
+    await adminDbForAccessState.doc(`users/${ownerUid}/services/service-local`).set(validService("service-local", ownerUid));
+    await adminDbForAccessState.doc(`users/${ownerUid}/services/service-preserved`).set(validService("service-preserved", ownerUid, { planAccessState: "preserved" }));
+    await expectFails("owner não marca o próprio serviço como preserved via updateDoc", () =>
+      updateDoc(doc(owner.db, "users", ownerUid, "services", "service-local"), { planAccessState: "preserved" }));
+    await expectFails("owner não reativa serviço preserved via updateDoc", () =>
+      updateDoc(doc(owner.db, "users", ownerUid, "services", "service-preserved"), { planAccessState: "active" }));
+    await expectSucceeds("owner ainda edita outros campos de um serviço preserved", () =>
+      updateDoc(doc(owner.db, "users", ownerUid, "services", "service-preserved"), { name: "Serviço Preservado Editado" }));
 
     const ownerClientRef = doc(owner.db, "users", ownerUid, "clients", "client-local");
     await expectSucceeds("owner cria cliente válido", () => setDoc(ownerClientRef, validClient("client-local")));

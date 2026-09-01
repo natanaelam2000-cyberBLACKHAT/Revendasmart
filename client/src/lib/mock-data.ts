@@ -1,5 +1,6 @@
 import { notifyWarning } from "@/lib/notify";
 import type { ApprovedProductCutout } from "@shared/approved-product-cutout";
+import type { PlanAccessState } from "@shared/monetization";
 
 export type Category = string;
 /** Brand agora é string livre — suporta marcas pré-definidas e digitadas manualmente */
@@ -39,6 +40,11 @@ export interface Product {
   productTypeNormalized?: string;
   searchTokens?: string[];
   searchSchemaVersion?: number;
+  /** PLAN-IMPL-02B1 — ausente ou "active" = opera normalmente; "preserved" = excedente de um downgrade
+   * de plano (server/plan-access-reconciliation.ts): preservado/visível ao dono, fora do catálogo
+   * público e indisponível para uma NOVA venda. Nunca escrito pelo client — só o servidor (Admin SDK)
+   * grava este campo (ver firestore.rules, isValidProductUpdate). */
+  planAccessState?: PlanAccessState;
 }
 
 // IndexedDB for Images
@@ -287,7 +293,7 @@ const AUTH_KEYS = {
 export const getCurrentUserId = () => {
   try {
     return localStorage.getItem('rs:session');
-  } catch (e) {
+  } catch {
     return null;
   }
 };
@@ -385,7 +391,7 @@ export const signup = (user: Omit<User, 'id' | 'createdAt'>) => {
     localStorage.setItem(scopedSettingsKey, JSON.stringify(settingsWithNoBusiness));
     
     return { success: true, user: newUser };
-  } catch (e) {
+  } catch {
     return { success: false, message: 'Erro ao salvar (armazenamento cheio)' };
   }
 };

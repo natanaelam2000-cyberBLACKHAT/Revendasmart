@@ -29,7 +29,7 @@ service cloud.firestore {
         'discountPercent', 'discount', 'promotionalPrice', 'createdAt', 'updatedAt',
         'nameNormalized', 'brandNormalized', 'categoryNormalized',
         'barcodeNormalized', 'productTypeNormalized', 'searchTokens',
-        'searchSchemaVersion', 'approvedCutout'
+        'searchSchemaVersion', 'approvedCutout', 'planAccessState'
       ];
     }
 
@@ -150,6 +150,10 @@ service cloud.firestore {
         && photo is string && photo.size() <= 2000;
     }
 
+    // PLAN-IMPL-02B1 §29 — planAccessState só entra no shape aqui (validação de VALOR, "active" ou
+    // "preserved" quando presente); quem impede o CLIENT de mudar seu valor é isValidProductUpdate
+    // abaixo (changed.hasOnly / !changed.hasAny), nunca esta função — Admin SDK ignora Rules, então
+    // reconcilePlanAccess (server) continua livre para escrever este campo.
     function isValidProductMetaFields(data) {
       let gender = data.get('gender', '');
       let lastSoldDate = data.get('lastSoldDate', '');
@@ -166,7 +170,8 @@ service cloud.firestore {
         && isOnSale is bool
         && discountPercent is number && discountPercent >= 0 && discountPercent <= 100
         && discount is number && discount >= 0
-        && promotionalPrice is number && promotionalPrice >= 0;
+        && promotionalPrice is number && promotionalPrice >= 0
+        && data.get('planAccessState', 'active') in ['active', 'preserved'];
     }
 
     function isValidProductSearchFields(data) {
@@ -209,6 +214,10 @@ service cloud.firestore {
       // deve remover approvedCutout; um novo cutout pode ser anexado depois, já derivado do novo asset.
       return (!changed.hasAny(['imageUrl', 'storagePath', 'thumbnailUrl', 'thumbnailStoragePath', 'imageId', 'photoUrl', 'image', 'photo'])
           || !keys.hasAny(['approvedCutout']))
+        // PLAN-IMPL-02B1 §29 — planAccessState é gravado SÓ pelo servidor (reconcilePlanAccess, Admin
+        // SDK, ignora Rules): o client nunca pode alterá-lo, mesmo mantendo o resto do documento válido.
+        // Isso bloqueia tanto reativar um produto preservado quanto forjar um "preserved" para outro fim.
+        && !changed.hasAny(['planAccessState'])
         // O estado final de um update obedece exatamente ao mesmo contrato do create. Isso preserva
         // todos os limites anteriores sem repetir dezenas de `changed.hasAny(...)` caros.
         && isValidProductCreate(uid, productId);
@@ -229,7 +238,7 @@ service cloud.firestore {
       return [
         'id', 'tenantUid', 'name', 'description', 'imageUrl',
         'active', 'published', 'pricing', 'durationMinutes',
-        'cost', 'bookingMode', 'createdAt', 'updatedAt', 'archivedAt'
+        'cost', 'bookingMode', 'createdAt', 'updatedAt', 'archivedAt', 'planAccessState'
       ];
     }
 
@@ -454,7 +463,12 @@ service cloud.firestore {
         && data.updatedAt.size() > 0
         && data.updatedAt.size() <= 40
         && data.get('archivedAt', '') is string
-        && data.get('archivedAt', '').size() <= 40;
+        && data.get('archivedAt', '').size() <= 40
+        // PLAN-IMPL-02B1 §29 — validação de VALOR ("active"/"preserved" quando presente); quem impede o
+        // CLIENT de mudar seu valor é isValidServiceUpdate abaixo, nunca esta função — mesmo padrão de
+        // isValidProductMetaFields/isValidProductUpdate (Admin SDK ignora Rules e continua livre para
+        // escrever este campo via reconcilePlanAccess).
+        && data.get('planAccessState', 'active') in ['active', 'preserved'];
     }
 
     function isValidServiceCreate(uid, serviceId) {
@@ -462,10 +476,14 @@ service cloud.firestore {
     }
 
     function isValidServiceUpdate(uid, serviceId) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
       return resource.data.tenantUid == uid
         && request.resource.data.tenantUid == resource.data.tenantUid
         && request.resource.data.id == resource.data.id
         && request.resource.data.createdAt == resource.data.createdAt
+        // PLAN-IMPL-02B1 §29 — mesma trava de isValidProductUpdate: planAccessState é gravado só pelo
+        // servidor, o client nunca pode alterá-lo diretamente.
+        && !changed.hasAny(['planAccessState'])
         && isValidServiceShape(uid, serviceId, request.resource.data);
     }
 
@@ -812,9 +830,9 @@ service cloud.firestore {
       // User can only read/write their own products
       match /products/{productId} {
         allow read: if userOwnsResource(uid);
-        allow create: if userOwnsResource(uid) && isValidProductCreate(uid, productId);
+        allow create: if false;
         allow update: if userOwnsResource(uid) && isValidProductUpdate(uid, productId);
-        allow delete: if userOwnsResource(uid);
+        allow delete: if false;
       }
       
       // SUBCOLLECTION: clients
@@ -828,9 +846,24 @@ service cloud.firestore {
 
       match /services/{serviceId} {
         allow read: if userOwnsResource(uid);
-        allow create: if userOwnsResource(uid) && isValidServiceCreate(uid, serviceId);
+        allow create: if false;
         allow update: if userOwnsResource(uid) && isValidServiceUpdate(uid, serviceId);
         allow delete: if false;
+      }
+
+      match /planUsage/{usageId} {
+        allow read, write: if false;
+      }
+
+      match /planMutationIdempotency/{key} {
+        allow read, write: if false;
+      }
+
+      // PLAN-IMPL-02B1 §24 — status de reconciliação de downgrade (pending/running/completed/failed),
+      // escrito só pelo caminho em chunks de reconcilePlanAccess (server/plan-access-reconciliation.ts)
+      // para tenants grandes demais para uma única transação. Mesmo padrão server-only de planUsage.
+      match /planAccessReconciliation/{docId} {
+        allow read, write: if false;
       }
 
       match /serviceWorks/{workId} {

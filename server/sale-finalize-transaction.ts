@@ -43,7 +43,8 @@ export interface SaleFinalizeResult {
  * Lança `Error` com uma das mensagens abaixo — o chamador (rota HTTP ou teste) mapeia para o código de
  * resposta apropriado, exatamente como a rota já fazia antes da extração:
  * SALE_ALREADY_EXISTS · CLIENT_NOT_FOUND · DOWN_PAYMENT_EXCEEDS_TOTAL ·
- * INSUFFICIENT_STOCK:<nome> · PRODUCT_NOT_FOUND:<id> · INVALID_PRODUCT_PRICE:<id>
+ * INSUFFICIENT_STOCK:<nome> · PRODUCT_NOT_FOUND:<id> · INVALID_PRODUCT_PRICE:<id> ·
+ * PRODUCT_NOT_AVAILABLE:<id> (PLAN-IMPL-02B1 — produto preservado por downgrade de plano)
  */
 export async function finalizeSaleTransaction(db: Firestore, input: SaleFinalizeInput): Promise<SaleFinalizeResult> {
   const { uid, saleId, clientId, paymentType, discountType, discountValue, downPayment, installmentCount, paymentMethod, downPaymentMethod } = input;
@@ -76,6 +77,13 @@ export async function finalizeSaleTransaction(db: Firestore, input: SaleFinalize
       const snapshot = productSnapshots[index];
       if (!snapshot.exists) throw new Error(`PRODUCT_NOT_FOUND:${item.productId}`);
       const product = snapshot.data() ?? {};
+      // PLAN-IMPL-02B1 §13 — produto preservado por downgrade de plano nunca entra numa venda NOVA;
+      // vendas passadas que já o referenciam continuam intactas (esta transação só roda para vendas
+      // novas — nenhuma venda existente é relida/alterada aqui). Checado ANTES do estoque: um produto
+      // preservado é indisponível independente de ter estoque > 0.
+      if (product.planAccessState === "preserved") {
+        throw new Error(`PRODUCT_NOT_AVAILABLE:${item.productId}`);
+      }
       const stock = Number(product.stock);
       if (!Number.isFinite(stock) || stock < item.quantity) {
         throw new Error(`INSUFFICIENT_STOCK:${String(product.name ?? item.productId)}`);

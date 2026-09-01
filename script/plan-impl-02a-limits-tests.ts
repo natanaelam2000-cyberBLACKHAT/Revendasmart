@@ -78,13 +78,20 @@ function run(): void {
   assert.equal(canAddClient("free", 55), false, "L11: over-limit count must block a new client");
   assert.equal(canAddService("free", 8), false, "L11: over-limit count must block a new service");
   // buildPlanUsageSnapshot: same over-limit tenant, read-only summary, still no deletion anywhere.
-  const snapshot = buildPlanUsageSnapshot("free", { products: 35, clients: 55, services: 8 });
+  // PLAN-IMPL-02B1 — signature now takes {active, preserved} per domain instead of a flat count; a
+  // pre-reconciliation tenant (never touched by reconcilePlanAccess) is represented as everything
+  // "active" with preserved=0, matching resolvePlanAccessState's own backward-compat default.
+  const snapshot = buildPlanUsageSnapshot("free", { products: { active: 35, preserved: 0 }, clients: 55, services: { active: 8, preserved: 0 } });
   assert.equal(snapshot.products.status, "overLimit");
   assert.equal(snapshot.products.overBy, 5);
   assert.equal(snapshot.clients.status, "overLimit");
   assert.equal(snapshot.services.status, "overLimit");
   // §20 — bookingsCurrentMonth is deliberately null: the booking quota was stopped, not silently guessed.
   assert.equal(snapshot.bookingsCurrentMonth, null, "PlanUsageSnapshot.bookingsCurrentMonth must stay null until the timezone STOP is resolved");
+  // PLAN-IMPL-02B1 §28 — active/preserved counts and selectionRequired now exist on the snapshot.
+  assert.equal(snapshot.products.active, 35);
+  assert.equal(snapshot.products.preserved, 0);
+  assert.equal(snapshot.selectionRequired, false, "no preserved documents yet must mean selectionRequired=false");
 
   // T1 — tenant isolation: every limit function is pure and takes counts as plain arguments, never reads
   // any shared/global state — calling the same function back-to-back with different counts (simulating
@@ -93,8 +100,8 @@ function run(): void {
   const tenantB = canAddProduct("free", 30);
   assert.equal(tenantA, true, "T1: tenant A's own count must decide tenant A's result");
   assert.equal(tenantB, false, "T1: tenant B's own count must decide tenant B's result, unaffected by A's call");
-  const snapshotA = buildPlanUsageSnapshot("free", { products: 5, clients: 5, services: 1 });
-  const snapshotB = buildPlanUsageSnapshot("premium", { products: 5, clients: 5, services: 1 });
+  const snapshotA = buildPlanUsageSnapshot("free", { products: { active: 5, preserved: 0 }, clients: 5, services: { active: 1, preserved: 0 } });
+  const snapshotB = buildPlanUsageSnapshot("premium", { products: { active: 5, preserved: 0 }, clients: 5, services: { active: 1, preserved: 0 } });
   assert.notEqual(snapshotA.products.limit, snapshotB.products.limit, "T1: identical counts under different plans must never be conflated");
 
   // T2 — admin/internal override preserved (also covered from a different angle in PLAN-IMPL-01's P23;

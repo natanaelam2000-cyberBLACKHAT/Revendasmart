@@ -22,6 +22,7 @@ import { registerServiceWorkRoutes } from "./service-work-commands";
 import { registerServiceBookingRoutes } from "./service-booking-commands";
 import { registerServiceAvailabilityRoutes } from "./service-availability-commands";
 import { registerPublicServiceBookingRoutes } from "./service-public-booking";
+import { registerPlanAuthoritativeMutationRoutes } from "./plan-authoritative-mutations";
 import { isMarketingProRealBackgroundEnabled } from "./marketing-pro-flags";
 import { createGoogleMarketingProBackgroundProvider, isGoogleMarketingProCredentialConfigured } from "./marketing-pro-provider-google";
 import { registerAccountDeletionRoutes } from "./account-deletion";
@@ -502,6 +503,7 @@ export async function registerRoutes(
   registerServicePaymentRoutes(app, requireAuth);
   registerServiceBookingRoutes(app, requireAuth);
   registerServiceAvailabilityRoutes(app, requireAuth);
+  registerPlanAuthoritativeMutationRoutes(app, requireAuth);
   // SERV-PUBLIC-01 — superfície pública dedicada, sem requireAuth (§5/§26): reaproveita o mesmo Booking
   // Core/Availability acima por dentro, nunca os expõe diretamente ao visitante anônimo.
   registerPublicServiceBookingRoutes(app);
@@ -579,7 +581,7 @@ export async function registerRoutes(
       if (code.startsWith("INSUFFICIENT_STOCK:")) {
         return res.status(409).json({ code: "INSUFFICIENT_STOCK", message: `Estoque insuficiente para ${code.slice(19)}.` });
       }
-      if (code.startsWith("PRODUCT_NOT_FOUND:") || code.startsWith("INVALID_PRODUCT_PRICE:")) {
+      if (code.startsWith("PRODUCT_NOT_FOUND:") || code.startsWith("INVALID_PRODUCT_PRICE:") || code.startsWith("PRODUCT_NOT_AVAILABLE:")) {
         return res.status(400).json({ code: code.split(":")[0], message: "Um produto da venda não está mais disponível." });
       }
       return errorResponse(res, 500, "SALE_TRANSACTION_FAILED", "Não foi possível finalizar a venda.", { uid });

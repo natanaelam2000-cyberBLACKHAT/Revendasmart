@@ -222,6 +222,11 @@ export type PublicBookableService = {
 
 function toPublicBookableService(service: Service): PublicBookableService | null {
   if (!service.active || !service.published) return null;
+  // PLAN-IMPL-02B1 §17 — serviço preservado por downgrade de plano nunca aparece na lista pública de
+  // agendamento, mesmo padrão de exclusão (retornar null) já usado acima para active/published. A
+  // rejeição do agendamento DIRETO por id (hold/confirm com um serviceId já conhecido) fica em
+  // server/service-booking-commands.ts — esta função só cobre a listagem.
+  if (service.planAccessState === "preserved") return null;
   if (service.pricing.mode !== "fixed") return null;
   try {
     const durationMinutes = resolveBookableServiceDuration(service);

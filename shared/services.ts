@@ -1,3 +1,5 @@
+import type { PlanAccessState } from "./monetization";
+
 export type EntityId = string;
 export type Uid = string;
 export type IsoUtcString = string;
@@ -37,6 +39,12 @@ export type Service = {
   readonly createdAt: IsoUtcString;
   readonly updatedAt: IsoUtcString;
   readonly archivedAt?: IsoUtcString;
+  /** PLAN-IMPL-02B1 — ausente ou "active" = opera normalmente; "preserved" = excedente de um downgrade
+   * de plano (server/plan-access-reconciliation.ts): preservado/visível ao dono, fora da lista pública de
+   * agendamento e indisponível para uma NOVA reserva. Deliberadamente separado de `active`/`published`
+   * acima (a alternância manual do dono, reservada para PLAN-IMPL-02B2) — nunca escrito pelo client, só o
+   * servidor (Admin SDK) grava este campo (ver firestore.rules, isValidServiceUpdate). */
+  readonly planAccessState?: PlanAccessState;
 };
 
 export type ServiceSnapshot =
@@ -374,6 +382,9 @@ export function assertValidService(service: Service): Service {
   assertIsoUtcString(service.updatedAt, "service.updatedAt");
   if (typeof service.archivedAt !== "undefined") {
     assertIsoUtcString(service.archivedAt, "service.archivedAt");
+  }
+  if (typeof service.planAccessState !== "undefined" && service.planAccessState !== "active" && service.planAccessState !== "preserved") {
+    throw new ServicesDomainError("INVALID_SERVICE", "service.planAccessState must be \"active\" or \"preserved\" when present.");
   }
   return service;
 }

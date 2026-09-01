@@ -369,6 +369,13 @@ export async function createServiceBookingHoldCommand(
     if (!serviceSnap.exists) throw new ServiceBookingCommandError("NOT_FOUND", "Serviço não encontrado.");
     const service = parseService(serviceSnap.data());
     if (service.tenantUid !== uid) throw new ServiceBookingCommandError("NOT_FOUND", "Serviço não encontrado.");
+    // PLAN-IMPL-02B1 §17 — serviço preservado por downgrade de plano rejeita a criação do Hold mesmo
+    // quando o serviceId é conhecido diretamente (link antigo, id copiado) — nunca depende só da listagem
+    // pública já excluir o serviço (server/service-public-booking.ts toPublicBookableService). Mesmo
+    // código de erro que já existe para "não reservável" (pricing.mode inválido, abaixo).
+    if (service.planAccessState === "preserved") {
+      throw new ServiceBookingCommandError("SERVICE_NOT_BOOKABLE", "Este serviço não pode ser reservado no momento.");
+    }
 
     const durationMinutes = resolveBookableServiceDuration(service);
     const startAt = validateStartAt(startAtInput);
@@ -538,6 +545,13 @@ export async function confirmServiceBookingHoldCommand(
 
     if (!serviceSnap.exists) throw new ServiceBookingCommandError("NOT_FOUND", "Serviço não encontrado.");
     const service = parseService(serviceSnap.data());
+    // PLAN-IMPL-02B1 §16/§17 — defesa em profundidade: o Hold pode ter sido criado ANTES do downgrade
+    // (createServiceBookingHoldCommand já rejeita na criação, mas um Hold já ativo de antes do downgrade
+    // ainda seria confirmável sem esta checagem). Nenhum Hold/Booking/Work/Quote/Payment já existente é
+    // tocado — só a CONFIRMAÇÃO de um Hold ainda não confirmado é bloqueada.
+    if (service.planAccessState === "preserved") {
+      throw new ServiceBookingCommandError("SERVICE_NOT_BOOKABLE", "Este serviço não pode ser reservado no momento.");
+    }
 
     // PLAN-IMPL-02A §6 — "se cliente já existe/resolvido: booking proceeds" (clientSnap.exists, no check
     // at all, matches the pre-existing dedupe-by-clientId guard below); "se exige criar NOVO Client e

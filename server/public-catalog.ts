@@ -165,6 +165,11 @@ export function toPublicCatalogProduct(
   const productId = cleanText(id, 256);
   const name = cleanText(data.name, 240);
   if (!productId || !name) return null;
+  // PLAN-IMPL-02B1 §14 — produto preservado por downgrade de plano nunca aparece no catálogo público,
+  // mesmo padrão de exclusão (retornar null) já usado acima para id/name ausentes. Ponto único: tanto a
+  // apresentação completa (buildPublicCatalogPayload) quanto a paginação (buildPublicCatalogProductPage)
+  // passam por esta mesma função — nunca uma segunda checagem duplicada em cada caller.
+  if (data.planAccessState === "preserved") return null;
 
   const salePrice = toNonNegativeNumber(data.salePrice);
   const availableQuantity = toAvailableQuantity(data.stock);
