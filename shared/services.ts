@@ -1,4 +1,4 @@
-import type { PlanAccessState } from "./monetization";
+import type { PlanAccessSelectionSource, PlanAccessState } from "./monetization";
 
 export type EntityId = string;
 export type Uid = string;
@@ -45,6 +45,10 @@ export type Service = {
    * acima (a alternância manual do dono, reservada para PLAN-IMPL-02B2) — nunca escrito pelo client, só o
    * servidor (Admin SDK) grava este campo (ver firestore.rules, isValidServiceUpdate). */
   readonly planAccessState?: PlanAccessState;
+  /** PLAN-IMPL-02B2 — "user" quando `planAccessState` veio de uma escolha explícita salva em
+   * setActiveServiceSelection (server/plan-access-selection.ts); ausente/"automatic" quando veio do
+   * default determinístico de reconcilePlanAccess. Nunca escrito pelo client (ver firestore.rules). */
+  readonly planAccessSelectionSource?: PlanAccessSelectionSource;
 };
 
 export type ServiceSnapshot =
@@ -385,6 +389,9 @@ export function assertValidService(service: Service): Service {
   }
   if (typeof service.planAccessState !== "undefined" && service.planAccessState !== "active" && service.planAccessState !== "preserved") {
     throw new ServicesDomainError("INVALID_SERVICE", "service.planAccessState must be \"active\" or \"preserved\" when present.");
+  }
+  if (typeof service.planAccessSelectionSource !== "undefined" && service.planAccessSelectionSource !== "automatic" && service.planAccessSelectionSource !== "user") {
+    throw new ServicesDomainError("INVALID_SERVICE", "service.planAccessSelectionSource must be \"automatic\" or \"user\" when present.");
   }
   return service;
 }

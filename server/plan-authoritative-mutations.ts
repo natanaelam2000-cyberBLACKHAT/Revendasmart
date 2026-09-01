@@ -216,7 +216,9 @@ function cleanServicePayload(uid: string, serviceId: string, value: unknown): Se
   return assertValidService({ ...(value as Record<string, unknown>), id: serviceId, tenantUid: uid } as Service);
 }
 
-async function resolveServerPlan(db: Firestore, uid: string): Promise<PlanType> {
+/** PLAN-IMPL-02B2 — exportada para server/plan-access-selection.ts reusar a MESMA resolução de plano
+ * server-side (nunca confiar no plano que o client alega ter) em vez de duplicá-la. */
+export async function resolveServerPlan(db: Firestore, uid: string): Promise<PlanType> {
   const { entitlements, planData } = await resolveUserEntitlements(db, uid);
   if (entitlements.hasPremiumAccess) return PLANS.PREMIUM;
   return resolveCommercialPlan(planData as PlanData | null);

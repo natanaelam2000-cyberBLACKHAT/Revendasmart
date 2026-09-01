@@ -16,7 +16,14 @@
 import type { Firestore, Transaction } from "firebase-admin/firestore";
 import { getFirebaseAdmin } from "./firebase-admin-init";
 import { logError, logInfo } from "./logger";
-import { PLAN_CONFIG, UNLIMITED, resolvePlanAccessState, type PlanAccessState, type PlanType } from "../shared/monetization";
+import {
+  PLAN_CONFIG,
+  UNLIMITED,
+  resolvePlanAccessSelectionSource,
+  resolvePlanAccessState,
+  type PlanAccessState,
+  type PlanType,
+} from "../shared/monetization";
 
 const FETCH_BATCH_SIZE = 500;
 /** Firestore permite até 500 mutações por transação/batch — 400 deixa margem para as demais operações
@@ -62,6 +69,13 @@ function resolveComparableTimeMs(value: unknown): number {
  * updatedAt/createdAt mais recentes, e id como desempate final (sempre presente e único — garante ordem
  * total mesmo quando todos os outros critérios empatam). `priorityRank` é o único critério específico de
  * domínio (products vs services); o resto do comparador é compartilhado entre os dois.
+ *
+ * PLAN-IMPL-02B2 §12 — dentro de `priorityRank`, um documento com `planAccessSelectionSource === "user"`
+ * E `planAccessState === "active"` (isto é: a última coisa que aconteceu a ele foi o DONO escolher
+ * explicitamente mantê-lo ativo, via setActiveProductSelection/setActiveServiceSelection) sempre vence
+ * qualquer critério automático — é isso que faz uma escolha manual sobreviver a um replay de
+ * reconciliação (mesmo plano, upgrade parcial, downgrade): o próprio documento já é sua memória, sem
+ * precisar de um histórico de seleção separado.
  */
 function compareCandidates(a: AccessCandidate, b: AccessCandidate): number {
   if (a.priorityRank !== b.priorityRank) return a.priorityRank - b.priorityRank;
@@ -70,23 +84,35 @@ function compareCandidates(a: AccessCandidate, b: AccessCandidate): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
+/** PLAN-IMPL-02B2 §12 — true só quando a ÚLTIMA decisão sobre este documento foi uma escolha explícita do
+ * dono para mantê-lo ativo. Um documento `user`+`preserved` (o dono escolheu EXCLUIR) não recebe prioridade
+ * negativa aqui de propósito: quando sobra espaço (upgrade), ele volta a competir normalmente pelos
+ * critérios automáticos, em vez de carregar uma exclusão permanente que nenhuma parte do ticket pediu —
+ * `U26/U27/U32` (upgrade com espaço suficiente restaura todos) dependem exatamente deste comportamento. */
+function isUserSelectedActive(data: Record<string, unknown>): boolean {
+  return resolvePlanAccessSelectionSource(data.planAccessSelectionSource) === "user"
+    && resolvePlanAccessState(data.planAccessState) === "active";
+}
+
 /**
  * PLAN-IMPL-02B1 §10 — Product não tem NENHUM campo real de "já publicado/visível" (auditado: nem o
  * schema TS nem os dois allowlists de escrita — client em product-payload.ts e Rules em
  * productAllowedFields — têm tal campo) e `createdAt`/`updatedAt` estão nos allowlists mas NUNCA são
  * escritos por nenhum caminho de criação real hoje (buildProductCreatePayload/cleanProductPayload
- * auditados, nenhum dos dois seta esses campos). `priorityRank` fica fixo em 0 para todos (sem sinal real
- * para diferenciar) e o comparador cai, na prática, em id ascendente puro. Isso É uma ordem determinística
- * válida (sempre a mesma para os mesmos dados, nunca instável) — só não é uma priorização rica. Documentado
- * explicitamente no relatório final em vez de inventar um campo novo para simular relevância que os dados
- * não têm (§10 do ticket proíbe isso). Se um caminho de criação futuro passar a popular createdAt/updatedAt,
- * o comparador já os usa automaticamente, sem precisar mudar este arquivo.
+ * auditados, nenhum dos dois seta esses campos). Fora da prioridade nova de seleção manual (§12 acima,
+ * PLAN-IMPL-02B2), `priorityRank` fica fixo numa única faixa para todos os demais (sem sinal real para
+ * diferenciar) e o comparador cai, na prática, em id ascendente puro dentro dela. Isso É uma ordem
+ * determinística válida (sempre a mesma para os mesmos dados, nunca instável) — só não é uma priorização
+ * rica. Documentado explicitamente no relatório final em vez de inventar um campo novo para simular
+ * relevância que os dados não têm (§10 do ticket original proíbe isso). Se um caminho de criação futuro
+ * passar a popular createdAt/updatedAt, o comparador já os usa automaticamente, sem precisar mudar este
+ * arquivo.
  */
 function toProductCandidate(id: string, data: Record<string, unknown>): AccessCandidate {
   return {
     id,
     currentState: resolvePlanAccessState(data.planAccessState),
-    priorityRank: 0,
+    priorityRank: isUserSelectedActive(data) ? 0 : 1,
     updatedAtMs: resolveComparableTimeMs(data.updatedAt),
     createdAtMs: resolveComparableTimeMs(data.createdAt),
   };
@@ -94,20 +120,23 @@ function toProductCandidate(id: string, data: Record<string, unknown>): AccessCa
 
 /** PLAN-IMPL-02B1 §10 — Service tem active/published/createdAt/updatedAt reais e sempre presentes
  * (exigidos por assertValidService, shared/services.ts) — um serviço já pronto para reserva pública
- * (active && published) tem prioridade sobre um em rascunho. */
+ * (active && published) tem prioridade sobre um em rascunho, abaixo da prioridade de seleção manual
+ * (§12, PLAN-IMPL-02B2). */
 function toServiceCandidate(id: string, data: Record<string, unknown>): AccessCandidate {
   return {
     id,
     currentState: resolvePlanAccessState(data.planAccessState),
-    priorityRank: data.active === true && data.published === true ? 0 : 1,
+    priorityRank: isUserSelectedActive(data) ? 0 : data.active === true && data.published === true ? 1 : 2,
     updatedAtMs: resolveComparableTimeMs(data.updatedAt),
     createdAtMs: resolveComparableTimeMs(data.createdAt),
   };
 }
 
 /** Mesmo padrão de paginação já usado em server/routes.ts (loadPublicCatalogPresentationInputs) para ler
- * uma coleção inteira sem depender de um único `.get()` sem limite. */
-async function fetchAllDocs(db: Firestore, uid: string, domain: DomainName): Promise<Array<{ id: string; data: Record<string, unknown> }>> {
+ * uma coleção inteira sem depender de um único `.get()` sem limite. Exportado — PLAN-IMPL-02B2
+ * (server/plan-access-selection.ts) reusa esta MESMA função para validar `selectedIds` contra o conjunto
+ * real de documentos do tenant, em vez de reimplementar a paginação. */
+export async function fetchAllDocs(db: Firestore, uid: string, domain: DomainName): Promise<Array<{ id: string; data: Record<string, unknown> }>> {
   const admin = getFirebaseAdmin();
   const documentId = admin.firestore.FieldPath.documentId();
   const results: Array<{ id: string; data: Record<string, unknown> }> = [];
@@ -124,7 +153,11 @@ async function fetchAllDocs(db: Firestore, uid: string, domain: DomainName): Pro
   return results;
 }
 
-export type PlannedChange = { readonly id: string; readonly target: PlanAccessState };
+/** PLAN-IMPL-02B2 §11 — `extra` é opcional e nunca usado por `reconcilePlanAccess` (que só alterna
+ * `planAccessState`); `setActiveProductSelection`/`setActiveServiceSelection`
+ * (server/plan-access-selection.ts) o usa para gravar `planAccessSelectionSource: "user"` JUNTO da mesma
+ * escrita seletiva, reusando esta mesma estrutura em vez de uma segunda forma de PlannedChange. */
+export type PlannedChange = { readonly id: string; readonly target: PlanAccessState; readonly extra?: Readonly<Record<string, unknown>> };
 
 /** Função pura: decide o alvo (active/preserved) de cada documento e devolve só os que REALMENTE
  * precisam mudar (§8/§21 — replay sem excesso não gera nenhuma escrita, já que o alvo recalculado bate
@@ -192,7 +225,7 @@ async function applyChangesTransactional(db: Firestore, uid: string, domain: Dom
     const snaps = await tx.getAll(...refs);
     for (let i = 0; i < changes.length; i += 1) {
       if (!snaps[i].exists) continue;
-      tx.update(refs[i], { planAccessState: changes[i].target });
+      tx.update(refs[i], { planAccessState: changes[i].target, ...changes[i].extra });
     }
   });
 }
@@ -211,13 +244,19 @@ async function applyChangesChunked(db: Firestore, uid: string, domain: DomainNam
   for (const group of chunks) {
     const batch = db.batch();
     for (const change of group) {
-      batch.update(db.collection("users").doc(uid).collection(domain).doc(change.id), { planAccessState: change.target });
+      batch.update(db.collection("users").doc(uid).collection(domain).doc(change.id), { planAccessState: change.target, ...change.extra });
     }
     await batch.commit();
   }
 }
 
-async function applyDomainChanges(db: Firestore, uid: string, domain: DomainName, changes: readonly PlannedChange[]): Promise<void> {
+/**
+ * PLAN-IMPL-02B2 §11 — exportada para setActiveProductSelection/setActiveServiceSelection
+ * (server/plan-access-selection.ts) reusarem a MESMA estratégia segura de escrita (transação para poucos
+ * documentos afetados, chunks de `db.batch()` para tenants grandes) em vez de uma segunda implementação
+ * incompatível — exatamente o que o ticket pede ("reutilizar a estratégia segura do B1").
+ */
+export async function applyDomainChanges(db: Firestore, uid: string, domain: DomainName, changes: readonly PlannedChange[]): Promise<void> {
   if (changes.length <= TRANSACTION_SAFE_MUTATION_THRESHOLD) {
     await applyChangesTransactional(db, uid, domain, changes);
   } else {

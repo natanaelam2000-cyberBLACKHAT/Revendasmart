@@ -541,6 +541,30 @@ export function resolvePlanAccessState(value: unknown): PlanAccessState {
   return value === PLAN_ACCESS_STATES.PRESERVED ? PLAN_ACCESS_STATES.PRESERVED : PLAN_ACCESS_STATES.ACTIVE;
 }
 
+/**
+ * PLAN-IMPL-02B2 §12 — distingue COMO um `planAccessState` chegou ao valor atual: `"automatic"` (o
+ * default determinístico de `reconcilePlanAccess`, server/plan-access-reconciliation.ts) vs `"user"`
+ * (uma escolha explícita salva via setActiveProductSelection/setActiveServiceSelection,
+ * server/plan-access-selection.ts). Escrito SOMENTE pelos comandos de seleção explícita — nunca por
+ * `reconcilePlanAccess`, que só LÊ este campo (como sinal de prioridade máxima: um item marcado
+ * `active`+`user` sempre vence a ordem determinística) e nunca o sobrescreve. Isso é o que faz uma
+ * escolha manual sobreviver a qualquer replay futuro de reconciliação (mesmo plano, upgrade parcial,
+ * downgrade) sem precisar de um segundo documento/histórico de seleção — o próprio par
+ * (`planAccessState`, `planAccessSelectionSource`) de cada documento já é sua única fonte de memória.
+ * Ausente em documento antigo (antes deste ticket) significa `"automatic"`, mesmo espírito de
+ * `resolvePlanAccessState`.
+ */
+export const PLAN_ACCESS_SELECTION_SOURCES = { AUTOMATIC: "automatic", USER: "user" } as const;
+export type PlanAccessSelectionSource = typeof PLAN_ACCESS_SELECTION_SOURCES[keyof typeof PLAN_ACCESS_SELECTION_SOURCES];
+
+export function isPlanAccessSelectionSource(value: unknown): value is PlanAccessSelectionSource {
+  return value === PLAN_ACCESS_SELECTION_SOURCES.AUTOMATIC || value === PLAN_ACCESS_SELECTION_SOURCES.USER;
+}
+
+export function resolvePlanAccessSelectionSource(value: unknown): PlanAccessSelectionSource {
+  return value === PLAN_ACCESS_SELECTION_SOURCES.USER ? PLAN_ACCESS_SELECTION_SOURCES.USER : PLAN_ACCESS_SELECTION_SOURCES.AUTOMATIC;
+}
+
 /** PLAN-IMPL-02B1 §28 — usada só por `products`/`services` em PlanUsageSnapshot; `clients` não tem
  * conceito de active/preserved (§26 do ticket: histórico de clientes nunca é dividido, só a CRIAÇÃO de
  * novos é bloqueada acima do limite — comportamento inalterado desde PLAN-IMPL-02A). */

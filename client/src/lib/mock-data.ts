@@ -1,6 +1,6 @@
 import { notifyWarning } from "@/lib/notify";
 import type { ApprovedProductCutout } from "@shared/approved-product-cutout";
-import type { PlanAccessState } from "@shared/monetization";
+import type { PlanAccessSelectionSource, PlanAccessState } from "@shared/monetization";
 
 export type Category = string;
 /** Brand agora é string livre — suporta marcas pré-definidas e digitadas manualmente */
@@ -45,6 +45,11 @@ export interface Product {
    * público e indisponível para uma NOVA venda. Nunca escrito pelo client — só o servidor (Admin SDK)
    * grava este campo (ver firestore.rules, isValidProductUpdate). */
   planAccessState?: PlanAccessState;
+  /** PLAN-IMPL-02B2 — "user" quando `planAccessState` veio de uma escolha explícita salva em
+   * setActiveProductSelection (server/plan-access-selection.ts); ausente/"automatic" quando veio do
+   * default determinístico de reconcilePlanAccess. Nunca escrito pelo client — mesmo servidor-somente de
+   * planAccessState (ver firestore.rules). */
+  planAccessSelectionSource?: PlanAccessSelectionSource;
 }
 
 // IndexedDB for Images

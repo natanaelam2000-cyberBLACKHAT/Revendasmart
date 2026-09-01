@@ -29,7 +29,7 @@ service cloud.firestore {
         'discountPercent', 'discount', 'promotionalPrice', 'createdAt', 'updatedAt',
         'nameNormalized', 'brandNormalized', 'categoryNormalized',
         'barcodeNormalized', 'productTypeNormalized', 'searchTokens',
-        'searchSchemaVersion', 'approvedCutout', 'planAccessState'
+        'searchSchemaVersion', 'approvedCutout', 'planAccessState', 'planAccessSelectionSource'
       ];
     }
 
@@ -171,7 +171,10 @@ service cloud.firestore {
         && discountPercent is number && discountPercent >= 0 && discountPercent <= 100
         && discount is number && discount >= 0
         && promotionalPrice is number && promotionalPrice >= 0
-        && data.get('planAccessState', 'active') in ['active', 'preserved'];
+        && data.get('planAccessState', 'active') in ['active', 'preserved']
+        // PLAN-IMPL-02B2 §30 — mesmo padrão de planAccessState: validação de VALOR aqui, bloqueio de
+        // mudança pelo client em isValidProductUpdate abaixo.
+        && data.get('planAccessSelectionSource', 'automatic') in ['automatic', 'user'];
     }
 
     function isValidProductSearchFields(data) {
@@ -217,7 +220,9 @@ service cloud.firestore {
         // PLAN-IMPL-02B1 §29 — planAccessState é gravado SÓ pelo servidor (reconcilePlanAccess, Admin
         // SDK, ignora Rules): o client nunca pode alterá-lo, mesmo mantendo o resto do documento válido.
         // Isso bloqueia tanto reativar um produto preservado quanto forjar um "preserved" para outro fim.
-        && !changed.hasAny(['planAccessState'])
+        // PLAN-IMPL-02B2 §30 — mesma trava para planAccessSelectionSource (só setActiveProductSelection,
+        // server, grava este campo).
+        && !changed.hasAny(['planAccessState', 'planAccessSelectionSource'])
         // O estado final de um update obedece exatamente ao mesmo contrato do create. Isso preserva
         // todos os limites anteriores sem repetir dezenas de `changed.hasAny(...)` caros.
         && isValidProductCreate(uid, productId);
@@ -238,7 +243,7 @@ service cloud.firestore {
       return [
         'id', 'tenantUid', 'name', 'description', 'imageUrl',
         'active', 'published', 'pricing', 'durationMinutes',
-        'cost', 'bookingMode', 'createdAt', 'updatedAt', 'archivedAt', 'planAccessState'
+        'cost', 'bookingMode', 'createdAt', 'updatedAt', 'archivedAt', 'planAccessState', 'planAccessSelectionSource'
       ];
     }
 
@@ -468,7 +473,10 @@ service cloud.firestore {
         // CLIENT de mudar seu valor é isValidServiceUpdate abaixo, nunca esta função — mesmo padrão de
         // isValidProductMetaFields/isValidProductUpdate (Admin SDK ignora Rules e continua livre para
         // escrever este campo via reconcilePlanAccess).
-        && data.get('planAccessState', 'active') in ['active', 'preserved'];
+        && data.get('planAccessState', 'active') in ['active', 'preserved']
+        // PLAN-IMPL-02B2 §30 — mesmo padrão de planAccessState: validação de VALOR aqui, bloqueio de
+        // mudança pelo client em isValidServiceUpdate abaixo.
+        && data.get('planAccessSelectionSource', 'automatic') in ['automatic', 'user'];
     }
 
     function isValidServiceCreate(uid, serviceId) {
@@ -482,8 +490,9 @@ service cloud.firestore {
         && request.resource.data.id == resource.data.id
         && request.resource.data.createdAt == resource.data.createdAt
         // PLAN-IMPL-02B1 §29 — mesma trava de isValidProductUpdate: planAccessState é gravado só pelo
-        // servidor, o client nunca pode alterá-lo diretamente.
-        && !changed.hasAny(['planAccessState'])
+        // servidor, o client nunca pode alterá-lo diretamente. PLAN-IMPL-02B2 §30 — mesma trava para
+        // planAccessSelectionSource (só setActiveServiceSelection, server, grava este campo).
+        && !changed.hasAny(['planAccessState', 'planAccessSelectionSource'])
         && isValidServiceShape(uid, serviceId, request.resource.data);
     }
 
