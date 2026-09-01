@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { getFirebaseAuth } from "@/lib/firebase";
 import { apiRequest, buildApiErrorDisplayMessage } from "@/lib/api-client";
-import { isPremiumActive, toEntitlementDate, type PlanData as MonetizationPlanData } from "@shared/monetization";
+import { isPremiumActive, toEntitlementDate, PLANS, type PlanType, type PlanData as MonetizationPlanData } from "@shared/monetization";
 
 interface PlanData {
   currentPlan?: string;
@@ -71,7 +71,10 @@ export function usePlanData() {
     ? data.hasPremiumAccess
     : isPremiumActive(data as unknown as MonetizationPlanData | null);
 
-  const activePlan = hasPremiumAccess ? "premium" : "free";
+  // PLAN-IMPL-01 §3: mesma regra de resolveCommercialPlan/resolveActivePlan (PlanProvider.tsx) —
+  // Premium sempre vence; um `currentPlan` gravado como "pro" é preservado; qualquer outro valor
+  // (incluindo documentos antigos que só conheciam "free"/"premium") cai em "free" sem migração.
+  const activePlan: PlanType = hasPremiumAccess ? PLANS.PREMIUM : data?.currentPlan === PLANS.PRO ? PLANS.PRO : PLANS.FREE;
 
   // "Cancelada, mas ainda paga até DD/MM": renovação desligada com acesso ainda válido.
   const isCancelledWithinPaidPeriod =

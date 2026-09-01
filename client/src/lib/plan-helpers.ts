@@ -1,4 +1,4 @@
-import { PLAN_CONFIG, PlanType, canAddProduct, canAddClient, canUseFeature, isPremiumOpenAccessActive, type GlobalConfig } from '@shared/monetization';
+import { PLAN_CONFIG, PlanType, canAddProduct, canAddClient, canAddService, canUseFeature, isPremiumOpenAccessActive, type GlobalConfig } from '@shared/monetization';
 
 /**
  * Client-side plan validation helpers
@@ -11,8 +11,12 @@ export function checkProductLimit(
   openAccess = false
 ): { allowed: boolean; limit: number } {
 
-  // ADMIN / PREMIUM = ILIMITADO
-  if (openAccess || plan === "premium" || plan === "admin") {
+  // PLAN-IMPL-01 §5/§8: "premium" used to be hardcoded unlimited here, back when
+  // PLAN_CONFIG.premium.limits.products really was UNLIMITED (-1). Now that Premium has a real,
+  // finite cap (2000), a plan-specific bypass would silently ignore it — canAddProduct already
+  // handles "unlimited" correctly via the UNLIMITED sentinel, for whichever tier actually has it, so
+  // there's no need to special-case any specific plan name here. ADMIN keeps its own explicit bypass.
+  if (openAccess || plan === "admin") {
     return { allowed: true, limit: Infinity };
   }
 
@@ -30,6 +34,18 @@ export function checkClientLimit(plan: PlanType, currentCount: number, openAcces
   if (openAccess) return { allowed: true, limit: Infinity };
   const allowed = canAddClient(plan, currentCount);
   const limit = PLAN_CONFIG[plan].limits.clients;
+  return { allowed, limit };
+}
+
+/**
+ * PLAN-IMPL-01 §11 — contrato/helper apenas, mesmo formato de checkClientLimit. Nenhuma tela de
+ * Serviços chama esta função ainda (SERVICES_RUNTIME_BEHAVIOR_CHANGED = NO neste ticket) — existe
+ * para PLAN-IMPL-02 aplicar de verdade.
+ */
+export function checkServiceLimit(plan: PlanType, currentCount: number, openAccess = false): { allowed: boolean; limit: number } {
+  if (openAccess) return { allowed: true, limit: Infinity };
+  const allowed = canAddService(plan, currentCount);
+  const limit = PLAN_CONFIG[plan].limits.services;
   return { allowed, limit };
 }
 export function checkChargesFeature(plan: PlanType, openAccess = false): boolean {

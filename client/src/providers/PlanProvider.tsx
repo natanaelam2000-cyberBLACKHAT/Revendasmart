@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { PLAN_CONFIG, isPremiumActive, type PlanType, type PlanData as MonetizationPlanData } from "@shared/monetization";
+import { PLAN_CONFIG, PLANS, isPremiumActive, type PlanType, type PlanLimits, type PlanData as MonetizationPlanData } from "@shared/monetization";
 import { apiRequest, buildApiErrorDisplayMessage } from "@/lib/api-client";
 import { getFirebaseAuth } from "@/lib/firebase";
 
@@ -29,15 +29,6 @@ type PlanData = {
   entitlementSource?: "commercial" | "tester_grant" | "premium_plus_grant" | "none";
 };
 
-type PlanLimits = {
-  products: number;
-  clients: number;
-  charges: boolean;
-  productHighlight: boolean;
-  categories: boolean;
-  niches: number;
-};
-
 interface PlanProviderValue {
   plan: PlanData | null;
   planData: PlanData | null;
@@ -57,41 +48,37 @@ interface PlanProviderValue {
   error: string | null;
 }
 
-const FREE_LIMITS = PLAN_CONFIG.free.limits;
 const PlanContext = createContext<PlanProviderValue | null>(null);
 
-// RELEASE-16 §3/§4, estendido em OWNER-ACCESS-02: única fonte de verdade para "tem acesso Premium" —
-// preferencialmente `data.hasPremiumAccess`, já composto pelo servidor (planData comercial + eventual
-// concessão interna Tester/Premium+, via resolveEntitlements em shared/monetization.ts). O fallback
-// local com `isPremiumActive()` só cobre um payload antigo/incompleto sem o campo (nunca deveria
-// acontecer com o servidor atual, mas evita quebrar se algum outro caminho ainda devolver o shape cru).
+// RELEASE-16 §3/§4, estendido em OWNER-ACCESS-02 e PLAN-IMPL-01 §3: única fonte de verdade para "tem
+// acesso Premium" — preferencialmente `data.hasPremiumAccess`, já composto pelo servidor (planData
+// comercial + eventual concessão interna Tester/Premium+, via resolveEntitlements em
+// shared/monetization.ts). O fallback local com `isPremiumActive()` só cobre um payload antigo/
+// incompleto sem o campo (nunca deveria acontecer com o servidor atual, mas evita quebrar se algum
+// outro caminho ainda devolver o shape cru).
+//
+// PLAN-IMPL-01: Premium continua vencendo sempre (`hasAccess` primeiro). Fora isso, um `currentPlan`
+// gravado como `"pro"` é preservado — documentos antigos, que só conheciam `"free"`/`"premium"`, caem
+// em `"free"` exatamente como antes, sem migração. Mesma regra de `resolveCommercialPlan`
+// (shared/monetization.ts), reimplementada aqui porque este payload já chega achatado do servidor
+// (não é o `PlanData` completo que aquela função espera).
 function resolveActivePlan(data: PlanData | null): ActivePlan {
   const hasAccess = typeof data?.hasPremiumAccess === "boolean"
     ? data.hasPremiumAccess
     : isPremiumActive(data as unknown as MonetizationPlanData | null);
-  return hasAccess ? "premium" : "free";
+  if (hasAccess) return PLANS.PREMIUM;
+  if (data?.currentPlan === PLANS.PRO) return PLANS.PRO;
+  return PLANS.FREE;
 }
 
+// PLAN-IMPL-01 §2: antes, esta função reconstruía um subconjunto dos limites à mão (com `Infinity`
+// hardcoded para Premium) — uma segunda configuração paralela a `PLAN_CONFIG`, e já divergente dele
+// mesmo antes deste ticket (Premium era `UNLIMITED` aqui e `Infinity` lá). Nenhum consumidor real lê
+// `usePlan().limits.<campo>` hoje (confirmado antes desta mudança) — delegar direto para
+// `PLAN_CONFIG[activePlan].limits` elimina a duplicação e já cobre `pro` e os campos novos
+// (`services`/`bookingsMonthly`/`proAdPreparationsMonthly`) sem precisar de um terceiro branch manual.
 function resolveLimits(activePlan: ActivePlan): PlanLimits {
-  if (activePlan === "premium") {
-    return {
-      products: Infinity,
-      clients: Infinity,
-      charges: true,
-      productHighlight: true,
-      categories: true,
-      niches: Infinity,
-    };
-  }
-
-  return {
-    products: FREE_LIMITS.products,
-    clients: FREE_LIMITS.clients,
-    charges: Boolean(FREE_LIMITS.charges),
-    productHighlight: Boolean(FREE_LIMITS.productHighlight),
-    categories: Boolean(FREE_LIMITS.categories),
-    niches: FREE_LIMITS.niches,
-  };
+  return PLAN_CONFIG[activePlan].limits;
 }
 
 async function fetchPlanData(user: User): Promise<PlanData> {

@@ -553,8 +553,18 @@ const [, setLocation] = useLocation();
       if (!id) {
         saveStage = "plan_limit_read";
         const productCountSnapshot = await getCountFromServer(collection(firestore, "users", uid, "products"));
-        const safePlan: PlanType = activePlan === "premium" ? "premium" : "free";
-        const { allowed } = checkProductLimit(safePlan, productCountSnapshot.data().count, true);
+        // PLAN-IMPL-01 §8 — P0 fix: this used to pass a hardcoded `true` as checkProductLimit's
+        // openAccess argument, which made the Free 30-product limit unenforceable for anyone
+        // (plan-helpers.ts short-circuits to allowed:true whenever openAccess is true). There is no
+        // live "genuine reason" for a bypass here: a real premium/tester/premium_plus user is already
+        // covered by checkProductLimit's own internal `plan === "premium"` check (activePlan already
+        // reflects those grants via the server-composed hasPremiumAccess), and the one override that
+        // WOULD be legitimate — the admin "global premium open access" promo (GlobalConfig) — is not
+        // actually wired into usePlanData() (it hardcodes globalConfig: null), so there is nothing
+        // real to pass here today. Preserving activePlan (including "pro") instead of collapsing
+        // anything non-premium to "free" so Pro users get the 500-product limit, not Free's 30.
+        const safePlan: PlanType = activePlan === "premium" || activePlan === "pro" ? activePlan : "free";
+        const { allowed } = checkProductLimit(safePlan, productCountSnapshot.data().count);
         if (!allowed) {
           setShowLimitModal(true);
           setFormError("Limite de produtos atingido.");

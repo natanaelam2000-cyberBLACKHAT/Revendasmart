@@ -183,7 +183,10 @@ async function main() {
   // L/M: Premium+ não aparece no pricing nem é comprável — verificação estática do contrato compartilhado
   {
     const { PLAN_CONFIG } = await import("../shared/monetization");
-    assert.deepEqual(Object.keys(PLAN_CONFIG).sort(), ["free", "premium"], "L: PLAN_CONFIG (pricing) não pode listar premium_plus");
+    // PLAN-IMPL-01: PLAN_CONFIG now lists a real third commercial plan ("pro", PLAN-DEFINITION-01) —
+    // the guarantee this line protects is unchanged (an internal benefit grant like "premium_plus"
+    // must never appear here as if it were a purchasable plan), it just needs the real plan list now.
+    assert.deepEqual(Object.keys(PLAN_CONFIG).sort(), ["free", "premium", "pro"], "L: PLAN_CONFIG (pricing) não pode listar premium_plus");
     // M: a única rota que escreve benefitGrant é a de admin, sempre atrás de requireAdmin — nenhuma rota
     // pública/checkout aceita `benefitGrant`/`premium_plus` no corpo (coberto pelos 403 acima, testes B/C/O).
   }

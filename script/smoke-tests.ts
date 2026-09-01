@@ -2391,8 +2391,10 @@ assert.match(privateRouter, /PlanProvider/);
 
   // --- PRO-01: capability `proAds` no contrato compartilhado ---
   //
-  // É uma feature key como as outras, consumida pelo MESMO caminho. `PlanType` continua free|premium:
-  // "Anúncios Pro" é o nome do recurso, não um plano novo.
+  // É uma feature key como as outras, consumida pelo MESMO caminho. Em PRO-01, `PlanType` era
+  // free|premium: "Anúncios Pro" era o nome do recurso, não um plano novo. PLAN-IMPL-01 introduz o
+  // terceiro nível comercial de verdade (`pro`, PLAN-DEFINITION-01) — a distinção que este bloco
+  // protege (capability != plano) continua válida entre `proAds` e `pro`, só o número de planos mudou.
   assert.equal(PLAN_CONFIG.free.limits.proAds, false, "Free não tem Anúncios Pro");
   assert.equal(PLAN_CONFIG.premium.limits.proAds, true, "Premium tem Anúncios Pro");
   assert.equal(canUseFeature("free", "proAds"), false);
@@ -2406,10 +2408,12 @@ assert.match(privateRouter, /PlanProvider/);
   }
   assert.equal(PLAN_CONFIG.free.limits.products, 30, "o limite de produtos do Free não mudou");
   assert.equal(PLAN_CONFIG.free.limits.clients, 50, "o limite de clientes do Free não mudou");
-  // `PlanType` NÃO cresceu: sem plano "pro" no runtime desta etapa.
+  // PLAN-IMPL-01: `PlanType` agora tem três níveis comerciais reais (PLAN-DEFINITION-01) — a asserção
+  // original travava em free|premium para pegar um "pro" introduzido por acidente antes de existir
+  // contrato/testes/decisão comercial para ele; agora que PLAN-IMPL-01 é exatamente essa decisão, a
+  // invariante que ainda importa é a ORDEM/composição exata, não mais a ausência de "pro".
   const { PLANS } = await import("../shared/monetization.js");
-  assert.deepEqual(Object.values(PLANS), ["free", "premium"], "PlanType continua free|premium");
-  assert.doesNotMatch(read("shared/monetization.ts"), /PRO:\s*'pro'|'pro'\s*as const/, "não existe plano 'pro' no runtime");
+  assert.deepEqual(Object.values(PLANS), ["free", "pro", "premium"], "PlanType é free|pro|premium");
   // Sem helper paralelo: o consumo é pelo caminho canônico, não por um atalho dedicado.
   for (const atalho of ["canUseProAds", "isProUser", "hasProAdsAccess"]) {
     assert.doesNotMatch(read("shared/monetization.ts"), new RegExp(atalho), `não pode existir helper paralelo ${atalho}`);

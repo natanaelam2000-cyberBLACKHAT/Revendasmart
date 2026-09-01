@@ -2,9 +2,10 @@
  * RevendaSmart — Monetization Structures
  * Plans, Referral, and Limits
  */
-const UNLIMITED = -1;
+export const UNLIMITED = -1;
 export const PLANS = {
   FREE: 'free',
+  PRO: 'pro',
   PREMIUM: 'premium',
 } as const;
 
@@ -13,6 +14,21 @@ export type PlanType = typeof PLANS[keyof typeof PLANS];
 export interface PlanLimits {
   products: number;
   clients: number;
+  /** PLAN-IMPL-01 — contrato apenas: nenhum caminho de criação de serviço lê este campo ainda
+   * (PLAN-IMPL-02 fará a aplicação real, downgrade-safe). */
+  services: number;
+  /** PLAN-IMPL-01 — contrato apenas, mesmo motivo de `services`. Usa o mesmo sentinela `UNLIMITED`
+   * (-1) de `products`/`clients` para Pro/Premium ("fair use", nunca um teto comercial baixo). */
+  bookingsMonthly: number;
+  /**
+   * Preparações NOVAS de Anúncios Pro por ciclo mensal — contrato apenas (PLAN-IMPL-01 §6).
+   *
+   * NÃO é lido pelo rate limiter (`server/marketing-pro-rate-limit-firestore.ts`, diário) nem pelo
+   * cost guard (`server/marketing-pro-cost-guard.ts`, teto global em USD) — nenhum dos dois muda
+   * neste ticket. A aplicação real deste campo (contador mensal por usuário, distinguindo geração
+   * nova de reaproveitamento de cutout aprovado) é PLAN-IMPL-05.
+   */
+  proAdPreparationsMonthly: number;
   niches: number;
   categories: boolean;
   sales: boolean;
@@ -23,12 +39,12 @@ export interface PlanLimits {
   /**
    * Recursos classificados como "Anúncios Pro".
    *
-   * É uma capability do contrato, não um plano: `PlanType` continua `free | premium`. A separação
-   * comercial Free/Pro/Premium só existirá quando houver runtime correspondente — até lá, quem tem
-   * premium tem `proAds`.
-   *
-   * Consome-se por `canUseFeature(plan, 'proAds')`, o mesmo caminho de `charges` e `categories`.
-   * Nenhum consumidor está ligado ainda: nesta etapa o contrato existe e a UI não o lê.
+   * PLAN-IMPL-01: `PlanType` agora inclui `pro`, e o contrato já expressa que Pro e Premium têm
+   * `proAds` — mas isso NUNCA muda o rollout público real. Anúncios Pro continua gated por admin no
+   * servidor (`server/marketing-pro.ts`) e por `canUseFeature(activePlan, 'proAds')` no client — e
+   * hoje não existe nenhum caminho real (checkout, admin grant) que resulte num usuário com
+   * `activePlan === 'pro'`, então este `true` é inatingível na prática até PLAN-IMPL-03/04 existirem.
+   * A liberação pública em si e a quota mensal (`proAdPreparationsMonthly`) são PLAN-IMPL-05.
    */
   proAds: boolean;
 }
@@ -50,6 +66,9 @@ export const PLAN_CONFIG: Record<PlanType, PlanInfo> = {
     limits: {
       products: 30,
       clients: 50,
+      services: 5,
+      bookingsMonthly: 20,
+      proAdPreparationsMonthly: 0,
       niches: 1,
       categories: false,
       sales: true,
@@ -62,6 +81,7 @@ export const PLAN_CONFIG: Record<PlanType, PlanInfo> = {
     features: [
       'Até 30 produtos',
       'Até 50 clientes',
+      'Até 5 serviços',
       'Cadastro de vendas',
       'Catálogo básico',
       '1 tipo de negócio',
@@ -70,14 +90,22 @@ export const PLAN_CONFIG: Record<PlanType, PlanInfo> = {
     ],
     color: 'bg-gray-100',
   },
-  premium: {
-    name: 'Plano Premium',
+  // PLAN-IMPL-01 §3/§5 — nível comercial novo, entre Free e Premium. Booleanos/niches iguais aos do
+  // Premium (a lista de recursos Pro em PLAN-DEFINITION-01 §2 já é "tudo do Free + operação
+  // profissional completa"; o que diferencia Premium de Pro é a camada de inteligência/marketing
+  // avançado — PLAN-DEFINITION-01 §3 —, não estes flags booleanos existentes). Só produtos/clientes/
+  // serviços/preparações Ads Pro têm valor próprio, menor que o do Premium.
+  pro: {
+    name: 'Plano Pro',
     price: null,
     currency: 'BRL',
     limits: {
-     products: UNLIMITED,
-    clients: UNLIMITED,
-    niches: UNLIMITED,
+      products: 500,
+      clients: 2000,
+      services: 50,
+      bookingsMonthly: UNLIMITED,
+      proAdPreparationsMonthly: 3,
+      niches: UNLIMITED,
       categories: true,
       sales: true,
       charges: true,
@@ -87,18 +115,74 @@ export const PLAN_CONFIG: Record<PlanType, PlanInfo> = {
       proAds: true,
     },
     features: [
-      'Produtos ilimitados',
-      'Clientes ilimitados',
+      'Até 500 produtos',
+      'Até 2.000 clientes',
+      'Até 50 serviços',
+      'Agendamentos sem teto comercial baixo',
+      'CRM e financeiro completos',
+      'Catálogo profissional',
+      'Serviços completo (agenda, orçamentos, reagendamento)',
+      'Campanhas e sorteios completos',
+      '3 preparações profissionais de Anúncios Pro por mês',
+      'Sem anúncios externos',
+    ],
+    color: 'bg-indigo-50',
+  },
+  premium: {
+    name: 'Plano Premium',
+    price: null,
+    currency: 'BRL',
+    limits: {
+      // PLAN-IMPL-01 §5 — antes UNLIMITED (-1): a auditoria (PLAN-AUDIT-01/02) confirmou que isso
+      // divergia do contrato comercial (PLAN-DEFINITION-01 §3, tetos generosos mas finitos, para
+      // manter o modelo de custo previsível). Vendas continuam sem limite artificial (`sales: true`,
+      // nunca comparado a uma contagem) — só produtos/clientes/serviços ganham teto.
+      products: 2000,
+      clients: 10000,
+      services: 200,
+      bookingsMonthly: UNLIMITED,
+      proAdPreparationsMonthly: 100,
+      niches: UNLIMITED,
+      categories: true,
+      sales: true,
+      charges: true,
+      productHighlight: true,
+      professionalCatalog: true,
+      noAds: true,
+      proAds: true,
+    },
+    features: [
+      'Até 2.000 produtos',
+      'Até 10.000 clientes',
+      'Até 200 serviços',
       'Multi-nicho completo',
       'Categorias personalizadas',
       'Cobranças e links de pagamento',
       'Destaque de produtos',
       'Catálogo profissional',
-      'Futuras funções de marketing e IA',
+      'Inteligência comercial e ação (Premium)',
+      '100 preparações profissionais de Anúncios Pro por mês',
       'Sem anúncios',
     ],
     color: 'bg-amber-50',
   },
+};
+
+/**
+ * PLAN-IMPL-01 §12/§13 — preço-alvo comercial (PLAN-DEFINITION-01 §2/§3), mantido SEPARADO de
+ * `PLAN_CONFIG[plan].price` de propósito: essa metadata ainda não está conectada a nenhum preço
+ * exibido ou cobrado de verdade. O preço realmente cobrado hoje (`server/subscriptions.ts`,
+ * `PREMIUM_PRICE_BRL`) e o preço exibido hoje (`client/src/pages/subscribe.tsx`,
+ * `VITE_PREMIUM_PRICE_BRL`) são cada um controlado por uma env var de produção DIFERENTE, cujo valor
+ * real não pode ser verificado nem alterado com segurança a partir deste ticket — mudar a UI sem
+ * garantir que o valor cobrado mudou junto criaria exatamente a divergência que PLAN-IMPL-01 §13
+ * proíbe. `PLAN_PRICING` existe para PLAN-IMPL-03/04 terem uma única fonte a consumir quando a
+ * ativação do preço real for resolvida — não espalhar 49.90/79.90/499/799 por arquivos novos até lá.
+ */
+export const PLAN_PRICING: Record<PlanType, { readonly monthly: number; readonly annual: number }> = {
+  free: { monthly: 0, annual: 0 },
+  pro: { monthly: 49.90, annual: 499 },
+  premium: { monthly: 79.90, annual: 799 },
 };
 
 // Subscription status from Mercado Pago PreApproval
@@ -274,8 +358,23 @@ export function resolveLegacyBillingProvider(planData: PlanData | null): Billing
   return null;
 }
 
+/**
+ * PLAN-IMPL-01 §3/§4 — resolve o NÍVEL COMERCIAL (`free`/`pro`/`premium`), separado da pergunta
+ * binária "tem acesso Premium" que `isPremiumActive` já resolvia e continua resolvendo sem mudança.
+ * Premium sempre vence (qualquer caminho que já concede Premium hoje — assinatura, admin, indicação —
+ * continua concedendo Premium, nunca rebaixado a Pro). Fora isso, um `currentPlan` gravado como
+ * `"pro"` é respeitado; qualquer outro valor (incluindo ausente, `"free"`, ou uma string
+ * desconhecida/corrompida de um documento antigo) cai em `free` com segurança — nenhuma migração é
+ * necessária para documentos antigos, que só conheciam `"free"`/`"premium"`.
+ */
+export function resolveCommercialPlan(planData: PlanData | null): PlanType {
+  if (isPremiumActive(planData)) return PLANS.PREMIUM;
+  if (planData?.currentPlan === PLANS.PRO) return PLANS.PRO;
+  return PLANS.FREE;
+}
+
 export function getActivePlan(planData: PlanData | null): PlanType {
-  return isPremiumActive(planData) ? PLANS.PREMIUM : PLANS.FREE;
+  return resolveCommercialPlan(planData);
 }
 
 export function getEffectivePlan(
@@ -289,13 +388,13 @@ export function getEffectivePlan(
   if (globalConfig?.premiumOpenAccess) {
     if (globalConfig.premiumOpenAccessUntil) {
       if (new Date() >= new Date(globalConfig.premiumOpenAccessUntil)) {
-        return PLANS.FREE;
+        return resolveCommercialPlan(planData);
       }
     }
     return PLANS.PREMIUM;
   }
 
-  return PLANS.FREE;
+  return resolveCommercialPlan(planData);
 }
 
 export function isPremiumFromGlobalAccess(
@@ -364,6 +463,20 @@ export function canAddProduct(plan: PlanType, currentCount: number): boolean {
 
 export function canAddClient(plan: PlanType, currentCount: number): boolean {
   const limit = PLAN_CONFIG[plan].limits.clients;
+
+  if (limit === UNLIMITED) return true;
+
+  return currentCount < limit;
+}
+
+/**
+ * PLAN-IMPL-01 §11 — contrato apenas, mesmo formato de `canAddProduct`/`canAddClient`. Nenhum caminho
+ * de criação de serviço chama esta função ainda (`SERVICES_RUNTIME_BEHAVIOR_CHANGED = NO`); existe
+ * para PLAN-IMPL-02 aplicar de verdade, e para os testes deste ticket validarem os números do
+ * contrato (5/50/200) sem duplicar a lógica de comparação.
+ */
+export function canAddService(plan: PlanType, currentCount: number): boolean {
+  const limit = PLAN_CONFIG[plan].limits.services;
 
   if (limit === UNLIMITED) return true;
 

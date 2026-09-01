@@ -7,6 +7,8 @@ import { Search, UserPlus, ChevronRight, Download, CheckSquare, Square, Send, Al
 import { Link, useLocation } from "wouter";
 import { usePaginatedClientsData } from "@/hooks/usePaginatedClientsData";
 import { usePlan } from "@/providers/PlanProvider";
+import { checkClientLimit } from "@/lib/plan-helpers";
+import { PLAN_CONFIG } from "@shared/monetization";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";
 import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
 import { buildPublicCatalogUrl } from "@/lib/public-url";
@@ -114,10 +116,14 @@ export default function Clients() {
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Validate plan limits for new clients
-    if ((totalCount ?? clients.length) >= 50 && activePlan === 'free') {
+    // PLAN-IMPL-01 §10 — was a hardcoded `>= 50 && activePlan === 'free'` duplicate of the canonical
+    // limit (shared/monetization.ts), which would have silently drifted from PLAN_CONFIG if the real
+    // limit ever changed, and never recognized Pro/Premium's own client caps. checkClientLimit is the
+    // canonical helper (already used nowhere until now); activePlan already reflects premium/tester/
+    // premium_plus grants via the server-composed hasPremiumAccess, so no separate bypass is needed.
+    if (!checkClientLimit(activePlan, totalCount ?? clients.length).allowed) {
       setShowLimitModal(true);
-      setCreateError("Limite de 50 clientes atingido no plano Grátis.");
+      setCreateError(`Limite de ${PLAN_CONFIG[activePlan].limits.clients} clientes atingido no plano ${PLAN_CONFIG[activePlan].name}.`);
       return;
     }
 
