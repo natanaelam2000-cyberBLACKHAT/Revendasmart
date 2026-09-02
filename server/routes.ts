@@ -22,8 +22,9 @@ import { registerServiceWorkRoutes } from "./service-work-commands";
 import { registerServiceBookingRoutes } from "./service-booking-commands";
 import { registerServiceAvailabilityRoutes } from "./service-availability-commands";
 import { registerPublicServiceBookingRoutes } from "./service-public-booking";
-import { registerPlanAuthoritativeMutationRoutes } from "./plan-authoritative-mutations";
+import { registerPlanAuthoritativeMutationRoutes, resolveServerPlan } from "./plan-authoritative-mutations";
 import { registerPlanAccessSelectionRoutes } from "./plan-access-selection";
+import { registerBookingQuotaRoutes } from "./booking-quota";
 import { isMarketingProRealBackgroundEnabled } from "./marketing-pro-flags";
 import { createGoogleMarketingProBackgroundProvider, isGoogleMarketingProCredentialConfigured } from "./marketing-pro-provider-google";
 import { registerAccountDeletionRoutes } from "./account-deletion";
@@ -506,6 +507,7 @@ export async function registerRoutes(
   registerServiceAvailabilityRoutes(app, requireAuth);
   registerPlanAuthoritativeMutationRoutes(app, requireAuth);
   registerPlanAccessSelectionRoutes(app, requireAuth);
+  registerBookingQuotaRoutes(app, requireAuth, resolveServerPlan);
   // SERV-PUBLIC-01 — superfície pública dedicada, sem requireAuth (§5/§26): reaproveita o mesmo Booking
   // Core/Availability acima por dentro, nunca os expõe diretamente ao visitante anônimo.
   registerPublicServiceBookingRoutes(app);

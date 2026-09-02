@@ -3,6 +3,7 @@ import { collection, getCountFromServer, getFirestore, query, where } from "fire
 import { getFirebaseAuth } from "@/lib/firebase";
 import { usePlanData } from "@/hooks/usePlanData";
 import { buildPlanUsageSnapshot, type PlanUsageSnapshot } from "@shared/monetization";
+import { getCurrentMonthBookingUsage } from "@/lib/booking-quota";
 
 /**
  * PLAN-IMPL-02B2 §31 — total via `getCountFromServer` puro, preservados via a MESMA aggregate query com
@@ -37,12 +38,18 @@ export function usePlanUsageSnapshot() {
     setLoading(true);
     setError("");
     try {
-      const [products, services, clientsSnap] = await Promise.all([
+      const [products, services, clientsSnap, bookingsCurrentMonth] = await Promise.all([
         fetchDomainAccessCounts(uid, "products"),
         fetchDomainAccessCounts(uid, "services"),
         getCountFromServer(collection(getFirestore(), "users", uid, "clients")),
+        // PLAN-IMPL-02C §45/§46 — o doc mensal é server-only (firestore.rules), então isto é sempre uma
+        // chamada HTTP (server/booking-quota.ts), nunca uma leitura Firestore direta como as 3 acima.
+        getCurrentMonthBookingUsage(),
       ]);
-      setSnapshot(buildPlanUsageSnapshot(activePlan, { products, clients: clientsSnap.data().count, services }));
+      setSnapshot(buildPlanUsageSnapshot(activePlan, {
+        products, clients: clientsSnap.data().count, services,
+        bookingsCurrentMonth: { used: bookingsCurrentMonth.used, monthKey: bookingsCurrentMonth.monthKey },
+      }));
     } catch (err) {
       console.error("[usePlanUsageSnapshot] load error:", err);
       setError("Não foi possível carregar o uso do seu plano.");

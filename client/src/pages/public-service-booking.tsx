@@ -124,6 +124,7 @@ export default function PublicServiceBooking() {
     setSelectedSlot(null);
     setHold(null);
     setHoldError("");
+    setConfirmError("");
   }, []);
 
   const handleSelectSlot = useCallback(async (candidate: { startAt: string; endAt: string }) => {
@@ -131,6 +132,7 @@ export default function PublicServiceBooking() {
     setSelectedSlot(candidate);
     setCreatingHold(true);
     setHoldError("");
+    setConfirmError("");
     try {
       const result = await createPublicBookingHold(storeSlug, { serviceId: selectedServiceId, startAt: candidate.startAt });
       setHold({ holdId: result.holdId, startAt: result.startAt, endAt: result.endAt });
@@ -298,6 +300,10 @@ export default function PublicServiceBooking() {
               </div>
             )}
             {holdError && <p className="text-sm text-red-600" data-testid="text-hold-error">{holdError}</p>}
+            {/* PLAN-IMPL-02C — confirmError precisa sobreviver ao setHold(null) do catch de handleConfirm
+             * (mesmo lote de estado), então fica aqui, na seção sempre visível enquanto um serviço estiver
+             * selecionado, nunca dentro do bloco `{hold && ...}` que é desmontado nesse mesmo instante. */}
+            {confirmError && <p className="text-sm text-red-600" data-testid="text-confirm-error">{confirmError}</p>}
           </section>
         </>
       )}
@@ -318,7 +324,6 @@ export default function PublicServiceBooking() {
             <Label htmlFor="public-customer-phone">WhatsApp</Label>
             <Input id="public-customer-phone" type="tel" value={customerPhone} onChange={(event) => setCustomerPhone(event.target.value)} data-testid="input-customer-phone" />
           </div>
-          {confirmError && <p className="text-sm text-red-600" data-testid="text-confirm-error">{confirmError}</p>}
           <Button type="button" onClick={handleConfirm} disabled={confirming} data-testid="button-confirm-booking" className="w-full rounded-full">
             {confirming ? "Confirmando…" : "Confirmar agendamento"}
           </Button>

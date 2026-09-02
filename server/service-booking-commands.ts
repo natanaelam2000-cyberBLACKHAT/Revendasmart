@@ -39,7 +39,15 @@ import {
   ServiceAvailabilityCommandError,
   assertIntervalAllowedByScheduleCommand,
 } from "./service-availability-commands";
-import { canAddClient, resolveCommercialPlan, type PlanData } from "../shared/monetization";
+import { canAddClient, resolveCommercialPlan, type PlanData, type PlanType } from "../shared/monetization";
+import {
+  isWithinBookingsMonthlyLimit,
+  persistBookingQuotaTimezone,
+  readOrBootstrapMonthlyUsage,
+  resolveBookingQuotaMonthKey,
+  resolveBookingQuotaTimezone,
+  writeMonthlyUsage,
+} from "./booking-quota";
 
 type CreateHoldResult = {
   action: "create_hold";
@@ -143,7 +151,8 @@ export class ServiceBookingCommandError extends Error {
     | "MISALIGNED_SLOT"
     | "MIN_ADVANCE_VIOLATION"
     | "MAX_ADVANCE_VIOLATION"
-    | "CLIENT_LIMIT_REACHED";
+    | "CLIENT_LIMIT_REACHED"
+    | "PLAN_BOOKING_LIMIT_REACHED";
 
   constructor(code: ServiceBookingCommandError["code"], message: string) {
     super(message);
@@ -171,6 +180,10 @@ const COMMAND_ERROR_MESSAGES = {
   MIN_ADVANCE_VIOLATION: "Este horário está muito próximo do momento atual.",
   MAX_ADVANCE_VIOLATION: "Este horário está além da janela de antecedência permitida.",
   CLIENT_LIMIT_REACHED: "O limite de clientes do plano atual foi atingido. Não foi possível cadastrar este novo cliente.",
+  // PLAN-IMPL-02C §23 — mensagem do DONO (owner-facing); o público nunca vê esta string — ver
+  // translateInternalError em server/service-public-booking.ts, que mapeia este código para o mesmo
+  // vocabulário genérico já usado por SERVICE_NOT_AVAILABLE.
+  PLAN_BOOKING_LIMIT_REACHED: "Você atingiu os agendamentos incluídos no seu plano atual neste mês.",
 } as const;
 
 function db_(): Firestore {
@@ -520,18 +533,17 @@ export async function confirmServiceBookingHoldCommand(
     const clientDocRef = options.publicCustomerContact
       ? db.collection("users").doc(uid).collection("clients").doc(options.publicCustomerContact.clientId)
       : undefined;
-    // PLAN-IMPL-02A §6 — only read the tenant's plan/client-count when a NEW client might actually be
-    // created (publicCustomerContact present): an existing/resolved client never touches this at all,
-    // and the internal owner-created flow (options.publicCustomerContact never set) never pays this
-    // extra read. Reading via tx.get() (a real AggregateQuery read, not a plain client-side count) means
-    // this participates in the same optimistic-concurrency guarantee as every other read in this
-    // transaction — two concurrent public confirmations racing the same tenant's last client slot can't
-    // both succeed.
+    // PLAN-IMPL-02A §6 — client-count is only read when a NEW client might actually be created
+    // (publicCustomerContact present); an existing/resolved client never pays this extra read.
+    // PLAN-IMPL-02C — planSnap is now read UNCONDITIONALLY (every confirmation, public or owner, needs
+    // the resolved plan for the booking-quota check below, not just the public-client-creation path).
+    // Reading via tx.get() (a real read/AggregateQuery, not a plain client-side count) means both
+    // participate in the same optimistic-concurrency guarantee as every other read in this transaction.
     const [lockSnaps, serviceSnap, clientSnap, planSnap, clientCountSnap] = await Promise.all([
       lockRefs.length ? tx.getAll(...lockRefs) : Promise.resolve([]),
       tx.get(serviceSnapRef),
       clientDocRef ? tx.get(clientDocRef) : Promise.resolve(undefined),
-      clientDocRef ? tx.get(planDataRef(db, uid)) : Promise.resolve(undefined),
+      tx.get(planDataRef(db, uid)),
       clientDocRef ? tx.get(clientsCollection(db, uid).count()) : Promise.resolve(undefined),
     ]);
 
@@ -553,16 +565,33 @@ export async function confirmServiceBookingHoldCommand(
       throw new ServiceBookingCommandError("SERVICE_NOT_BOOKABLE", "Este serviço não pode ser reservado no momento.");
     }
 
+    // PLAN-IMPL-02C — resolvido uma única vez, reusado tanto pelo client-limit check (§6, PLAN-IMPL-02A)
+    // quanto pelo booking-quota check abaixo (novo neste ticket) — nunca duas resoluções de plano
+    // divergentes dentro da mesma transação.
+    const plan: PlanType = resolveCommercialPlan(planSnap.exists ? (planSnap.data() as PlanData) : null);
+
     // PLAN-IMPL-02A §6 — "se cliente já existe/resolvido: booking proceeds" (clientSnap.exists, no check
     // at all, matches the pre-existing dedupe-by-clientId guard below); "se exige criar NOVO Client e
     // tenant atingiu limite: do not silently bypass plan" — reject atomically, before any write in this
     // transaction happens, so the booking/hold/locks are left exactly as they were (never a partial
     // Client-without-Booking or Booking-without-contact state).
-    if (clientDocRef && clientSnap && !clientSnap.exists && planSnap && clientCountSnap) {
-      const plan = resolveCommercialPlan(planSnap.exists ? (planSnap.data() as PlanData) : null);
+    if (clientDocRef && clientSnap && !clientSnap.exists && clientCountSnap) {
       if (!canAddClient(plan, clientCountSnap.data().count)) {
         throw new ServiceBookingCommandError("CLIENT_LIMIT_REACHED", COMMAND_ERROR_MESSAGES.CLIENT_LIMIT_REACHED);
       }
+    }
+
+    // PLAN-IMPL-02C §20/§24 — cota mensal de agendamentos: aplicada a QUALQUER confirmação (pública ou do
+    // dono, §24 — nenhum caminho de UI é bypass) que efetivamente materializa um Booking real. A timezone
+    // de cota é POR TENANT (nunca por recurso — ver server/booking-quota.ts), resolvida/bootstrapada
+    // dentro desta MESMA transação; o mês é sempre o do `hold.startAt` REAL (nunca um "agora" do
+    // servidor), já validado contra expediente/antecedência acima. Hold e falhas anteriores nunca chegam
+    // aqui (§25/§27 — nenhuma escrita de cota acontece antes deste ponto).
+    const resolvedQuotaTimezone = await resolveBookingQuotaTimezone(tx, db, uid);
+    const bookingMonthKey = resolveBookingQuotaMonthKey(hold.startAt, resolvedQuotaTimezone.timezone);
+    const monthlyUsage = await readOrBootstrapMonthlyUsage(tx, db, uid, bookingMonthKey, resolvedQuotaTimezone.timezone);
+    if (!isWithinBookingsMonthlyLimit(plan, monthlyUsage.confirmedCount)) {
+      throw new ServiceBookingCommandError("PLAN_BOOKING_LIMIT_REACHED", COMMAND_ERROR_MESSAGES.PLAN_BOOKING_LIMIT_REACHED);
     }
 
     const bookingId = buildBookingId(holdId);
@@ -627,6 +656,12 @@ export async function confirmServiceBookingHoldCommand(
     tx.create(serviceWorkRef(db, uid, workId), omitUndefined(work as unknown as Record<string, unknown>));
     tx.create(bookingRef(db, uid, bookingId), omitUndefined(booking as unknown as Record<string, unknown>));
     tx.set(holdDocRef, omitUndefined(confirmedHold as unknown as Record<string, unknown>));
+    // PLAN-IMPL-02C §10/§13/§21/§22 — persiste o bootstrap da timezone (só na primeira vez que este
+    // tenant confirma algo, nas confirmações seguintes needsPersist=false vira um no-op) e o novo
+    // confirmedCount (Free e Pro/Premium igualmente, §16 — mesmo sem limite, a contagem precisa estar
+    // correta para um downgrade no meio do mês não começar do zero).
+    persistBookingQuotaTimezone(tx, db, uid, resolvedQuotaTimezone, serverNowIso);
+    writeMonthlyUsage(tx, monthlyUsage.ref, bookingMonthKey, resolvedQuotaTimezone.timezone, monthlyUsage.confirmedCount + 1, monthlyUsage.initializedAt, serverNowIso);
     for (let i = 0; i < segments.length; i += 1) {
       const lockDoc: ScheduleLock = assertValidScheduleLock({
         tenantUid: uid, resourceId: hold.resourceId, segmentStartAt: segments[i], ownerType: "booking", ownerId: bookingId,
@@ -771,6 +806,15 @@ export async function cancelServiceBookingCommand(
     const lockRefs = segments.map((segmentStartAt) => scheduleLockRef(db, uid, booking.resourceId, segmentStartAt));
     const lockSnaps = lockRefs.length ? await tx.getAll(...lockRefs) : [];
 
+    // PLAN-IMPL-02C §28/§29/§34 — o slot de cota consumido pelo Booking ORIGINAL é liberado no mês em que
+    // ele realmente estava (booking.startAt, nunca "agora"). Só chega aqui numa cancelamento GENUÍNO — o
+    // early-return de "já cancelado" acima (§12/C2) garante que um replay nunca decrementa duas vezes, e
+    // o clamp em Math.max(0, ...) garante que o contador nunca fica negativo mesmo sob qualquer
+    // inconsistência histórica.
+    const cancelQuotaTimezone = await resolveBookingQuotaTimezone(tx, db, uid);
+    const cancelMonthKey = resolveBookingQuotaMonthKey(booking.startAt, cancelQuotaTimezone.timezone);
+    const cancelMonthlyUsage = await readOrBootstrapMonthlyUsage(tx, db, uid, cancelMonthKey, cancelQuotaTimezone.timezone);
+
     // §10 — NUNCA toca financialSummary/ServicePaymentRecord/ServiceRefundRecord: só status/timing
     // operacional do Work, exatamente os campos que cancelServiceWorkCommand também tocaria.
     const cancelledBooking: Booking = assertValidBooking({ ...booking, status: "cancelled", updatedAt: serverNowIso, cancelledAt: serverNowIso });
@@ -788,6 +832,8 @@ export async function cancelServiceBookingCommand(
         tx.delete(lockRefs[i]);
       }
     }
+    persistBookingQuotaTimezone(tx, db, uid, cancelQuotaTimezone, serverNowIso);
+    writeMonthlyUsage(tx, cancelMonthlyUsage.ref, cancelMonthKey, cancelQuotaTimezone.timezone, cancelMonthlyUsage.confirmedCount - 1, cancelMonthlyUsage.initializedAt, serverNowIso);
     tx.create(idemRef, {
       key: idempotencyKey, tenantUid: uid, action: "cancel_booking", bookingId, workId: booking.workId,
       cancelledAt: serverNowIso, createdAt: serverNowIso,
@@ -844,7 +890,9 @@ export async function rescheduleServiceBookingCommand(
 
     const workDocRef = serviceWorkRef(db, uid, booking.workId);
     const serviceDocRef = serviceRef(db, uid, booking.serviceId);
-    const [workSnap, serviceSnap] = await Promise.all([tx.get(workDocRef), tx.get(serviceDocRef)]);
+    // PLAN-IMPL-02C — plano lido aqui também (esta função nunca lia planData antes deste ticket): um
+    // reagendamento cross-month precisa da mesma checagem de cota que uma nova confirmação.
+    const [workSnap, serviceSnap, planSnap] = await Promise.all([tx.get(workDocRef), tx.get(serviceDocRef), tx.get(planDataRef(db, uid))]);
     if (!workSnap.exists) throw new ServiceBookingCommandError("NOT_FOUND", "Atendimento não encontrado.");
     const work = parseServiceWorkDoc(workSnap.data());
     if (!serviceSnap.exists) throw new ServiceBookingCommandError("NOT_FOUND", "Serviço não encontrado.");
@@ -902,6 +950,30 @@ export async function rescheduleServiceBookingCommand(
       }
     }
 
+    // PLAN-IMPL-02C §31-33 — a cota só muda quando o mês comercial realmente muda. Resolvido e validado
+    // ANTES de qualquer escrita nesta transação (nenhum lock/booking foi tocado até aqui) — um mês-alvo
+    // cheio rejeita TUDO atomicamente, o Booking permanece exatamente no mês original (§33).
+    const plan: PlanType = resolveCommercialPlan(planSnap.exists ? (planSnap.data() as PlanData) : null);
+    const rescheduleQuotaTimezone = await resolveBookingQuotaTimezone(tx, db, uid);
+    const oldMonthKey = resolveBookingQuotaMonthKey(booking.startAt, rescheduleQuotaTimezone.timezone);
+    const newMonthKey = resolveBookingQuotaMonthKey(validNewStart, rescheduleQuotaTimezone.timezone);
+    const crossesMonth = oldMonthKey !== newMonthKey;
+
+    let oldMonthlyUsage: Awaited<ReturnType<typeof readOrBootstrapMonthlyUsage>> | undefined;
+    let newMonthlyUsage: Awaited<ReturnType<typeof readOrBootstrapMonthlyUsage>> | undefined;
+    if (crossesMonth) {
+      [oldMonthlyUsage, newMonthlyUsage] = await Promise.all([
+        readOrBootstrapMonthlyUsage(tx, db, uid, oldMonthKey, rescheduleQuotaTimezone.timezone),
+        readOrBootstrapMonthlyUsage(tx, db, uid, newMonthKey, rescheduleQuotaTimezone.timezone),
+      ]);
+      // §33 — o Booking sendo movido já ocupa uma vaga no mês antigo (é ele mesmo); a checagem do mês
+      // novo é sobre o estado dele SEM este Booking, então usa a contagem do mês novo tal como está —
+      // este Booking nunca foi contado nele ainda.
+      if (!isWithinBookingsMonthlyLimit(plan, newMonthlyUsage.confirmedCount)) {
+        throw new ServiceBookingCommandError("PLAN_BOOKING_LIMIT_REACHED", COMMAND_ERROR_MESSAGES.PLAN_BOOKING_LIMIT_REACHED);
+      }
+    }
+
     const rescheduledBooking: Booking = assertValidBooking({ ...booking, startAt: validNewStart, endAt: validNewEnd, updatedAt: serverNowIso });
 
     const result: RescheduleBookingOutcome = {
@@ -916,6 +988,11 @@ export async function rescheduleServiceBookingCommand(
     }
     for (const segment of releasedSegments) {
       tx.delete(scheduleLockRef(db, uid, booking.resourceId, segment));
+    }
+    persistBookingQuotaTimezone(tx, db, uid, rescheduleQuotaTimezone, serverNowIso);
+    if (crossesMonth && oldMonthlyUsage && newMonthlyUsage) {
+      writeMonthlyUsage(tx, oldMonthlyUsage.ref, oldMonthKey, rescheduleQuotaTimezone.timezone, oldMonthlyUsage.confirmedCount - 1, oldMonthlyUsage.initializedAt, serverNowIso);
+      writeMonthlyUsage(tx, newMonthlyUsage.ref, newMonthKey, rescheduleQuotaTimezone.timezone, newMonthlyUsage.confirmedCount + 1, newMonthlyUsage.initializedAt, serverNowIso);
     }
     tx.create(idemRef, {
       key: idempotencyKey, tenantUid: uid, action: "reschedule_booking", bookingId, workId: booking.workId,
@@ -939,6 +1016,7 @@ function statusForError(code: ServiceBookingCommandError["code"]): number {
     || code === "WORK_NOT_CANCELABLE" || code === "BOOKING_NOT_RESCHEDULABLE"
     || code === "OUTSIDE_WORKING_HOURS" || code === "BLOCKED_INTERVAL" || code === "MISALIGNED_SLOT"
     || code === "MIN_ADVANCE_VIOLATION" || code === "MAX_ADVANCE_VIOLATION" || code === "CLIENT_LIMIT_REACHED"
+    || code === "PLAN_BOOKING_LIMIT_REACHED"
   ) return 409;
   return 400;
 }

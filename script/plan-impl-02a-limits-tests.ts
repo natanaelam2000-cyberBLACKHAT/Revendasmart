@@ -131,7 +131,10 @@ function run(): void {
 
   const bookingCommandsSource = readFileSync("server/service-booking-commands.ts", "utf-8");
   assert.match(bookingCommandsSource, /CLIENT_LIMIT_REACHED/, "confirmServiceBookingHoldCommand must be able to reject on the client limit");
-  assert.match(bookingCommandsSource, /clientSnap && !clientSnap\.exists && planSnap && clientCountSnap/, "the client-limit check must only fire when a NEW client is actually about to be created");
+  // PLAN-IMPL-02C: planSnap is now read unconditionally (shared with the booking-quota check), so it no
+  // longer gates this condition; clientDocRef (only set when a public customer contact was supplied) took
+  // its place as the guard for "a NEW client is actually about to be created" — same guarantee, precise source.
+  assert.match(bookingCommandsSource, /clientDocRef && clientSnap && !clientSnap\.exists && clientCountSnap/, "the client-limit check must only fire when a NEW client is actually about to be created");
   // The rejection must happen strictly before any tx.create/tx.set write in this function — confirmed by
   // its position in the source relative to the first write call.
   const clientLimitCheckIndex = bookingCommandsSource.indexOf("CLIENT_LIMIT_REACHED", bookingCommandsSource.indexOf("confirmServiceBookingHoldCommand"));

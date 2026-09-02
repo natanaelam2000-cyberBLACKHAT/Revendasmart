@@ -109,6 +109,10 @@ function translateInternalError(error: unknown, notFoundAs: NotFoundTranslation 
       // de nunca revelar QUAL motivo interno causou a falha).
       case "CLIENT_LIMIT_REACHED":
         return new ServicePublicBookingError("SERVICE_NOT_AVAILABLE", COMMAND_ERROR_MESSAGES.SERVICE_NOT_AVAILABLE);
+      // PLAN-IMPL-02C §23 — a loja atingiu a cota mensal de agendamentos do plano atual; mesmo vocabulário
+      // genérico de CLIENT_LIMIT_REACHED acima (nunca expõe plano/cota/billing ao visitante anônimo).
+      case "PLAN_BOOKING_LIMIT_REACHED":
+        return new ServicePublicBookingError("SERVICE_NOT_AVAILABLE", COMMAND_ERROR_MESSAGES.SERVICE_NOT_AVAILABLE);
       // SERV-PUBLIC-02 — o Booking FOI encontrado pelo token (não é ambiguidade de lookup, §11 não se
       // aplica aqui); é uma regra de negócio legítima e distinguível, reaproveitada do Booking Core.
       case "WORK_NOT_CANCELABLE":

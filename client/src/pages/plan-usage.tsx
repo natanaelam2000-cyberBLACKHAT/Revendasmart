@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import {
-  ArrowLeft, Loader2, Package, Users, Wrench, CheckCircle2, ArchiveRestore, Search, AlertTriangle,
+  ArrowLeft, Loader2, Package, Users, Wrench, CheckCircle2, ArchiveRestore, Search, AlertTriangle, CalendarClock,
 } from "lucide-react";
 import { Layout } from "@/components/layout";
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +12,7 @@ import { ProductImageCard } from "@/components/ProductImageCard";
 import { notifyError, notifySuccess } from "@/lib/notify";
 import type { Product } from "@/lib/mock-data";
 import type { Service } from "@shared/services";
-import { PLAN_CONFIG, UNLIMITED, resolvePlanAccessState, type PlanAccessState, type PlanType } from "@shared/monetization";
+import { PLAN_CONFIG, UNLIMITED, resolvePlanAccessState, type BookingQuotaSnapshot, type PlanAccessState, type PlanType } from "@shared/monetization";
 import { getPlanName } from "@/lib/plan-helpers";
 import { usePlanUsageSnapshot } from "@/hooks/usePlanUsageSnapshot";
 import { useProductAccessList } from "@/hooks/useProductAccessList";
@@ -366,6 +366,37 @@ function UsageDomainCard({ icon: Icon, label, active, preserved, limit, totalLab
   );
 }
 
+/**
+ * PLAN-IMPL-02C §46-48 — Free mostra "N de LIMITE" (e um aviso extra se já estiver acima, §46);
+ * Pro/Premium mostra só a contagem real ("37"), nunca "37 / infinito" nem a palavra "ilimitado" — a
+ * mensagem comercial é "sem limite comercial baixo no seu plano" (§48: o sentinel UNLIMITED continua só
+ * um detalhe interno, nunca exposto tecnicamente ao dono).
+ */
+function BookingQuotaCard({ bookingsCurrentMonth }: { bookingsCurrentMonth: BookingQuotaSnapshot }) {
+  const isUnlimited = bookingsCurrentMonth.limit === UNLIMITED;
+  const isOverLimit = !isUnlimited && bookingsCurrentMonth.used > bookingsCurrentMonth.limit;
+  return (
+    <div className="rounded-2xl border border-border/60 bg-white p-4 space-y-3" data-testid="card-usage-agendamentos">
+      <div className="flex items-center gap-2"><CalendarClock className="w-4 h-4 text-primary" /><p className="text-xs font-black uppercase tracking-widest text-muted-foreground">Agendamentos neste mês</p></div>
+      {isUnlimited ? (
+        <>
+          <p className="text-2xl font-semibold tabular-nums">{bookingsCurrentMonth.used}</p>
+          <p className="text-xs text-muted-foreground">Sem limite comercial baixo no seu plano.</p>
+        </>
+      ) : (
+        <>
+          <p className="text-2xl font-semibold tabular-nums">{bookingsCurrentMonth.used} de {bookingsCurrentMonth.limit}</p>
+          {isOverLimit && (
+            <p className="text-[11px] text-amber-700 leading-relaxed">
+              Você já possui mais agendamentos do que o limite atual. Os existentes continuam seguros. Novos agendamentos ficam indisponíveis neste mês.
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function PlanUsageHub({ onManageProducts, onManageServices }: { onManageProducts: () => void; onManageServices: () => void }) {
   const [, setLocation] = useLocation();
   const { snapshot, loading, error, activePlan } = usePlanUsageSnapshot();
@@ -394,7 +425,7 @@ function PlanUsageHub({ onManageProducts, onManageServices }: { onManageProducts
               </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <UsageDomainCard
                 icon={Package} label="Produtos"
                 active={snapshot.products.active} preserved={snapshot.products.preserved} limit={snapshot.products.limit}
@@ -415,6 +446,7 @@ function PlanUsageHub({ onManageProducts, onManageServices }: { onManageProducts
                 </p>
                 <p className="text-[11px] text-muted-foreground">Todos os seus clientes e históricos continuam seguros.</p>
               </div>
+              {snapshot.bookingsCurrentMonth && <BookingQuotaCard bookingsCurrentMonth={snapshot.bookingsCurrentMonth} />}
             </div>
 
             <div className="flex flex-col sm:flex-row gap-3 pt-2">

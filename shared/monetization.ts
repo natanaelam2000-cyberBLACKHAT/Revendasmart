@@ -573,24 +573,32 @@ export interface PlanAccessDomainSnapshot extends PlanUsageDomainSnapshot {
   readonly preserved: number;
 }
 
+/** PLAN-IMPL-02C §45 — `monthKey` ("YYYY-MM", resolveBookingQuotaMonthKey em server/booking-quota.ts)
+ * junto do shape padrão de uso/limite — a UI (Plano e uso) usa `monthKey` só para exibição/depuração,
+ * nunca para recalcular nada ela mesma. */
+export interface BookingQuotaSnapshot extends PlanUsageDomainSnapshot {
+  readonly monthKey: string;
+}
+
 /**
  * PLAN-IMPL-02A §20 — contrato para a futura tela de seleção pós-downgrade (PLAN-IMPL-02B2), não a tela
- * em si. `bookingsCurrentMonth` fica `null` propositalmente: a quota mensal de agendamentos foi
- * explicitamente interrompida neste ticket (STOP — `ServiceResourceSchedule.timezone` é por recurso,
- * sem autoridade de timezone por tenant para desambiguar "o mês" quando um tenant tem recursos em
- * timezones diferentes; ver PLAN-IMPL-02A_REPORT). Um futuro ticket que resolva essa autoridade
- * preenche este campo sem precisar de uma segunda forma de PlanUsageSnapshot.
+ * em si.
  *
  * PLAN-IMPL-02B1 §28 — `products`/`services` agora carregam `active`/`preserved` (via
  * PlanAccessDomainSnapshot); `selectionRequired` é `true` quando QUALQUER um dos dois domínios tem pelo
  * menos 1 documento `preserved` — sinal para uma futura UI (PLAN-IMPL-02B2) de que o default temporário
  * determinístico está em vigor no lugar de uma escolha real do dono (§11 do ticket).
+ *
+ * PLAN-IMPL-02C §45 — `bookingsCurrentMonth` deixa de ser sempre `null`: a autoridade de timezone
+ * mensal por tenant (server/booking-quota.ts) resolveu o bloqueador arquitetural que impedia isto em
+ * PLAN-IMPL-02A (ver PLAN-IMPL-02A_REPORT) — continua `null` só quando o chamador não passou nada (ex.
+ * um contexto que não tem acesso ao uso mensal), nunca mais um "não implementado" permanente.
  */
 export interface PlanUsageSnapshot {
   readonly products: PlanAccessDomainSnapshot;
   readonly clients: PlanUsageDomainSnapshot;
   readonly services: PlanAccessDomainSnapshot;
-  readonly bookingsCurrentMonth: PlanUsageDomainSnapshot | null;
+  readonly bookingsCurrentMonth: BookingQuotaSnapshot | null;
   readonly selectionRequired: boolean;
 }
 
@@ -625,16 +633,23 @@ export function buildPlanUsageSnapshot(
     readonly products: { readonly active: number; readonly preserved: number };
     readonly clients: number;
     readonly services: { readonly active: number; readonly preserved: number };
+    /** PLAN-IMPL-02C §45 — omitido/`null` quando o chamador não tem (ou não precisa d)o uso mensal;
+     * `limit` nunca vem daqui — é sempre PLAN_CONFIG[plan].limits.bookingsMonthly, a mesma autoridade
+     * única de todo o resto deste arquivo. */
+    readonly bookingsCurrentMonth?: { readonly used: number; readonly monthKey: string } | null;
   },
 ): PlanUsageSnapshot {
   const limits = PLAN_CONFIG[plan].limits;
   const products = toPlanAccessDomainSnapshot(counts.products.active, counts.products.preserved, limits.products);
   const services = toPlanAccessDomainSnapshot(counts.services.active, counts.services.preserved, limits.services);
+  const bookingsCurrentMonth = counts.bookingsCurrentMonth
+    ? { ...toPlanUsageDomainSnapshot(counts.bookingsCurrentMonth.used, limits.bookingsMonthly), monthKey: counts.bookingsCurrentMonth.monthKey }
+    : null;
   return {
     products,
     clients: toPlanUsageDomainSnapshot(counts.clients, limits.clients),
     services,
-    bookingsCurrentMonth: null,
+    bookingsCurrentMonth,
     selectionRequired: products.preserved > 0 || services.preserved > 0,
   };
 }
