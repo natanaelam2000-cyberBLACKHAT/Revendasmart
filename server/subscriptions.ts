@@ -685,6 +685,42 @@ await planRef.set(update, { merge: true });
 return { applied: true, reason: "applied", premiumActive };
 }
 
+export type ProviderSubscriptionLookup = {
+  status: SubscriptionStatus;
+  paymentStatus?: string;
+  nextBillingDate?: string | null;
+  mercadoPagoPaymentId?: string | null;
+  externalReference?: string | null;
+};
+
+/**
+ * PLAN-IMPL-03-VERIFY-FINALIZE §4 — extraída do handler `POST /api/app-subscription/sync-now` (única
+ * mudança: as ~10 linhas que chamavam `new PreApproval(mpClient).get(...)` e extraíam status/payment/
+ * billing/externalReference viraram esta função, chamada pelo handler exatamente como antes — mesmo
+ * shape de resposta, mesmo comportamento). Existe para permitir provar diretamente "o lookup ao provider
+ * falha -> nada em planData é tocado" com uma falha REAL (fetchFromProvider rejeitando), não uma
+ * simulação em código de teste: em produção `fetchFromProvider` é sempre a chamada real ao Mercado Pago;
+ * só em teste é substituída por uma função que falha de propósito. Uma falha de `fetchFromProvider`
+ * nunca é capturada aqui — propaga para quem chama, exatamente como o `catch` do handler real já fazia
+ * antes desta extração (nenhuma mudança de comportamento, só uma reorganização testável).
+ */
+export async function syncSubscriptionFromProviderCommand(
+  uid: string,
+  subscriptionId: string,
+  fetchFromProvider: (subscriptionId: string) => Promise<ProviderSubscriptionLookup>,
+  source: SubscriptionSyncSource = "sync-now",
+): Promise<{ ownershipMismatch: true } | (SubscriptionSyncResult & Pick<ProviderSubscriptionLookup, "status" | "paymentStatus">)> {
+  const lookup = await fetchFromProvider(subscriptionId);
+  if (lookup.externalReference && String(lookup.externalReference) !== uid) {
+    return { ownershipMismatch: true };
+  }
+  const syncResult = await syncPlanDataFromSubscription(
+    uid, subscriptionId, lookup.status, lookup.paymentStatus, lookup.nextBillingDate ?? null, lookup.mercadoPagoPaymentId ?? null,
+    { source },
+  );
+  return { ...syncResult, status: lookup.status, paymentStatus: lookup.paymentStatus };
+}
+
 // ---------------------------------------------------------------------------
 // Global Config Management (system/config)
 // ---------------------------------------------------------------------------
@@ -1001,11 +1037,26 @@ currentPlan: premiumActive ? "premium" : "free",
 
       if (sendSubscriptionCredentialError(res, "sync-now", uid)) return;
 
-      const preApproval = new PreApproval(mpClient);
-      const mpSub = await preApproval.get({ id: planData.subscriptionId });
-      const externalReference = (mpSub as any).external_reference ?? null;
+      const result = await syncSubscriptionFromProviderCommand(
+        uid,
+        planData.subscriptionId,
+        async (subscriptionId) => {
+          const preApproval = new PreApproval(mpClient);
+          const mpSub = await preApproval.get({ id: subscriptionId });
+          return {
+            status: (mpSub.status ?? planData.subscriptionStatus ?? "pending") as SubscriptionStatus,
+            paymentStatus:
+              (mpSub as any).first_payment_status ||
+              ((mpSub as any).payer_id ? "approved" : undefined),
+            nextBillingDate: (mpSub as any).next_payment_date ?? null,
+            mercadoPagoPaymentId: (mpSub as any).payment_id ?? null,
+            externalReference: (mpSub as any).external_reference ?? null,
+          };
+        },
+        "sync-now",
+      );
 
-      if (externalReference && String(externalReference) !== uid) {
+      if ("ownershipMismatch" in result) {
         subWarn("[subscriptions/sync-now] Rejected ownership mismatch", {
           uid,
           subscriptionId: maskMercadoPagoExternalId(planData.subscriptionId),
@@ -1013,31 +1064,14 @@ currentPlan: premiumActive ? "premium" : "free",
         return res.status(403).json({ error: "SUBSCRIPTION_OWNERSHIP_MISMATCH" });
       }
 
-      const status = (mpSub.status ?? planData.subscriptionStatus ?? "pending") as SubscriptionStatus;
-      const paymentStatus =
-        (mpSub as any).first_payment_status ||
-        ((mpSub as any).payer_id ? "approved" : undefined);
-      const nextBillingDate = (mpSub as any).next_payment_date ?? null;
-      const mercadoPagoPaymentId = (mpSub as any).payment_id ?? null;
-
-      const syncResult = await syncPlanDataFromSubscription(
-        uid,
-        planData.subscriptionId,
-        status,
-        paymentStatus,
-        nextBillingDate,
-        mercadoPagoPaymentId,
-        { source: "sync-now" },
-      );
-
       return res.json({
         success: true,
         subscriptionId: planData.subscriptionId,
-        subscriptionStatus: status,
-        paymentStatus: paymentStatus ?? null,
-        applied: syncResult.applied,
-        reason: syncResult.reason,
-        premiumActive: syncResult.premiumActive ?? null,
+        subscriptionStatus: result.status,
+        paymentStatus: result.paymentStatus ?? null,
+        applied: result.applied,
+        reason: result.reason,
+        premiumActive: result.premiumActive ?? null,
       });
 
     } catch (error) {

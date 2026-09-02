@@ -452,6 +452,46 @@ export function isReferralAccountOldEnough(creationTime: string | undefined | nu
   return now().getTime() - createdAtMs >= MIN_REFERRAL_ACCOUNT_AGE_MS;
 }
 
+// Catálogo público mostra "Cartão" só quando o lojista tem Mercado Pago realmente ativo — nunca
+// expõe qual/quantas conexões existem, só o booleano derivado (mesmo padrão de
+// settings-mercadopago.tsx: connections.filter(c => c.status === "active")).
+async function hasActiveMercadoPagoConnection(db: FirebaseFirestore.Firestore, uid: string): Promise<boolean> {
+  const snapshot = await db
+    .collection("users").doc(uid)
+    .collection("mercadopago_connections")
+    .where("status", "==", "active")
+    .limit(1)
+    .get();
+  return !snapshot.empty;
+}
+
+/**
+ * PLAN-IMPL-03-VERIFY §5 — hasteada para escopo de módulo e exportada (antes um closure dentro de
+ * `registerRoutes`, comportamento idêntico: nunca fechava sobre nada do escopo de `registerRoutes`, só
+ * chamava `getFirebaseAdmin()` diretamente) para F1 poder chamá-la diretamente com um `db` quebrado de
+ * propósito e provar que a superfície pública realmente falha fechado, não só por inspeção de código.
+ */
+export async function loadPublicCatalogSettings(rawSlug: string, db: FirebaseFirestore.Firestore = getFirebaseAdmin().firestore()) {
+  const slug = normalizeCatalogSlug(rawSlug);
+  if (!slug) return null;
+  const settingsDoc = await resolvePublicCatalogSettingsDoc(db, rawSlug);
+  if (!settingsDoc) return null;
+  const settings = settingsDoc.data() ?? {};
+  const catalogEnabled = settings.enablePublicCatalog ?? settings.catalogEnabled ?? settings.catalog_enabled ?? true;
+  if (catalogEnabled === false || settings.disablePublicCatalog === true) return null;
+  const cardAvailable = await hasActiveMercadoPagoConnection(db, settingsDoc.id);
+  // PLAN-IMPL-03 §3/§4/F1 — superfície pública é fail-closed: lifecycle/reconciliation precisa terminar
+  // antes de qualquer resposta de catálogo, ou o handler externo devolve 503 temporário em vez de
+  // servir Products Premium stale. Não expõe detalhes de plano/billing/trial ao visitante anônimo.
+  await ensurePlanLifecycleCurrent(db, settingsDoc.id);
+  return {
+    uid: settingsDoc.id,
+    slug,
+    settings,
+    store: buildPublicCatalogStore(settings, slug, cardAvailable),
+  };
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -592,41 +632,6 @@ export async function registerRoutes(
       return errorResponse(res, 500, "SALE_TRANSACTION_FAILED", "Não foi possível finalizar a venda.", { uid });
     }
   });
-
-  // Catálogo público mostra "Cartão" só quando o lojista tem Mercado Pago realmente ativo — nunca
-  // expõe qual/quantas conexões existem, só o booleano derivado (mesmo padrão de
-  // settings-mercadopago.tsx: connections.filter(c => c.status === "active")).
-  const hasActiveMercadoPagoConnection = async (db: FirebaseFirestore.Firestore, uid: string): Promise<boolean> => {
-    const snapshot = await db
-      .collection("users").doc(uid)
-      .collection("mercadopago_connections")
-      .where("status", "==", "active")
-      .limit(1)
-      .get();
-    return !snapshot.empty;
-  };
-
-  const loadPublicCatalogSettings = async (rawSlug: string) => {
-    const db = getFirebaseAdmin().firestore();
-    const slug = normalizeCatalogSlug(rawSlug);
-    if (!slug) return null;
-    const settingsDoc = await resolvePublicCatalogSettingsDoc(db, rawSlug);
-    if (!settingsDoc) return null;
-    const settings = settingsDoc.data() ?? {};
-    const catalogEnabled = settings.enablePublicCatalog ?? settings.catalogEnabled ?? settings.catalog_enabled ?? true;
-    if (catalogEnabled === false || settings.disablePublicCatalog === true) return null;
-    const cardAvailable = await hasActiveMercadoPagoConnection(db, settingsDoc.id);
-    // PLAN-IMPL-03 §3/§4/F1 — superfície pública é fail-closed: lifecycle/reconciliation precisa terminar
-    // antes de qualquer resposta de catálogo, ou o handler externo devolve 503 temporário em vez de
-    // servir Products Premium stale. Não expõe detalhes de plano/billing/trial ao visitante anônimo.
-    await ensurePlanLifecycleCurrent(db, settingsDoc.id);
-    return {
-      uid: settingsDoc.id,
-      slug,
-      settings,
-      store: buildPublicCatalogStore(settings, slug, cardAvailable),
-    };
-  };
 
   const loadPublicCatalogPresentationInputs = async (uid: string) => {
     const admin = getFirebaseAdmin();
