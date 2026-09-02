@@ -25,6 +25,7 @@ import { registerPublicServiceBookingRoutes } from "./service-public-booking";
 import { registerPlanAuthoritativeMutationRoutes, resolveServerPlan } from "./plan-authoritative-mutations";
 import { registerPlanAccessSelectionRoutes } from "./plan-access-selection";
 import { registerBookingQuotaRoutes } from "./booking-quota";
+import { ensurePlanLifecycleCurrent, initializePlanCommand } from "./plan-lifecycle";
 import { isMarketingProRealBackgroundEnabled } from "./marketing-pro-flags";
 import { createGoogleMarketingProBackgroundProvider, isGoogleMarketingProCredentialConfigured } from "./marketing-pro-provider-google";
 import { registerAccountDeletionRoutes } from "./account-deletion";
@@ -615,6 +616,10 @@ export async function registerRoutes(
     const catalogEnabled = settings.enablePublicCatalog ?? settings.catalogEnabled ?? settings.catalog_enabled ?? true;
     if (catalogEnabled === false || settings.disablePublicCatalog === true) return null;
     const cardAvailable = await hasActiveMercadoPagoConnection(db, settingsDoc.id);
+    // PLAN-IMPL-03 §3/§4/F1 — superfície pública é fail-closed: lifecycle/reconciliation precisa terminar
+    // antes de qualquer resposta de catálogo, ou o handler externo devolve 503 temporário em vez de
+    // servir Products Premium stale. Não expõe detalhes de plano/billing/trial ao visitante anônimo.
+    await ensurePlanLifecycleCurrent(db, settingsDoc.id);
     return {
       uid: settingsDoc.id,
       slug,
@@ -1724,21 +1729,30 @@ export async function registerRoutes(
       const db = admin.firestore();
 
       const planDocRef = db.collection("users").doc(userId).collection("planData").doc("main");
-      const [planDocSnap, { entitlements }] = await Promise.all([
+      const [planDocSnap, { entitlements }, lifecycle] = await Promise.all([
         planDocRef.get(),
         resolveUserEntitlements(db, userId),
+        // PLAN-IMPL-03 §18/§24/§25 — reconcilia Products/Services ANTES de responder se o plano efetivo
+        // acabou de transicionar (trial expirou, etc.), e devolve basePlan/effectivePlan/trial explícitos
+        // para o client nunca precisar recalcular nada localmente (§17 — client não computa entitlement).
+        ensurePlanLifecycleCurrent(db, userId),
       ]);
 
       // REVENDASMART-OWNER-ACCESS-02 — os campos comerciais abaixo continuam vindo de `planData`
       // exatamente como antes (nunca sobrescritos por uma concessão interna); `hasPremiumAccess`/
       // `isTester`/`isPremiumPlus` são a ÚNICA adição, computados por `resolveEntitlements`
       // (shared/monetization.ts) — o mesmo resolver que o client usa sobre este mesmo payload, para os
-      // dois lados nunca divergirem sobre "quem tem acesso Premium".
+      // dois lados nunca divergirem sobre "quem tem acesso Premium". PLAN-IMPL-03: basePlan/effectivePlan/
+      // trial vêm de ensurePlanLifecycleCurrent — hasPremiumAccess já reflete trial também (resolveEntitlements
+      // agora passa por resolveCommercialPlan), estes 3 campos são só para a UI distinguir base de efetivo.
       const composed = {
         hasPremiumAccess: entitlements.hasPremiumAccess,
         isTester: entitlements.isTester,
         isPremiumPlus: entitlements.isPremiumPlus,
         entitlementSource: entitlements.source,
+        basePlan: lifecycle.basePlan,
+        effectivePlan: lifecycle.effectivePlan,
+        trial: lifecycle.trial,
       };
 
       if (planDocSnap.exists) {
@@ -1768,40 +1782,19 @@ export async function registerRoutes(
     try {
       const admin = getFirebaseAdmin();
       const db = admin.firestore();
-     
 
-      // Generate referral code from UID
-      const hash = crypto.createHash("md5").update(userId).digest("hex").substring(0, 9).toUpperCase();
-      const referralCode = `USER-${hash}`;
-
-      const planDocRef = db.collection("users").doc(userId).collection("planData").doc("main");
-
-      // Set plan data with initial values
-      const existingPlan = await planDocRef.get();
-
-if (!existingPlan.exists) {
-        // RELEASE-28: índice reverso code -> uid, gravado no MESMO batch que cria o referralCode — o
-        // código só é "válido para compartilhar" se a resolução também existir, e vice-versa. Chave é o
-        // próprio código (lookup direto por doc ID, sem query/índice composto novo).
-        const referralCodeRef = db.collection("referralCodes").doc(referralCode);
-        const batch = db.batch();
-        batch.set(planDocRef, {
-          currentPlan: "free",
-          premiumActive: false,
-          premiumExpiresAt: null,
-          premiumStartedAt: null,
-          premiumSource: null,
-          referralCode,
-          referralCount: 0,
-          updatedAt: admin.firestore.Timestamp.now(),
-        });
-        batch.set(referralCodeRef, {
-          uid: userId,
-          createdAt: admin.firestore.Timestamp.now(),
-        });
-        await batch.commit();
+      // PLAN-IMPL-03 §10 — a autoridade de "conta nova" é o Firebase Auth (nunca "planData ausente"
+      // sozinho, que também é verdade para uma conta legada sem doc), lida FORA de qualquer transação
+      // (Auth não participa de transações do Firestore). Uma falha aqui (uid não encontrado etc.) só
+      // significa "sem trial" — nunca bloqueia a inicialização do plano em si.
+      let authUserCreationTime: string | undefined;
+      try {
+        authUserCreationTime = (await admin.auth().getUser(userId)).metadata.creationTime;
+      } catch {
+        authUserCreationTime = undefined;
       }
 
+      const { referralCode } = await initializePlanCommand(db, userId, authUserCreationTime);
 
       routeInfo("[plan/initialize] Plan initialized for user:", userId);
       return res.status(200).json({ referralCode });

@@ -399,7 +399,12 @@ function BookingQuotaCard({ bookingsCurrentMonth }: { bookingsCurrentMonth: Book
 
 function PlanUsageHub({ onManageProducts, onManageServices }: { onManageProducts: () => void; onManageServices: () => void }) {
   const [, setLocation] = useLocation();
-  const { snapshot, loading, error, activePlan } = usePlanUsageSnapshot();
+  const { snapshot, loading, error, activePlan, basePlan, trial } = usePlanUsageSnapshot();
+  const trialActive = trial?.status === "active";
+  // PLAN-IMPL-03 §45/§47 — só aparece para quem TEVE um trial de verdade (trialStatus real, nunca para
+  // conta legada sem o campo), e nunca bloqueia o resto da página (Free continua totalmente usável logo
+  // abaixo, §46).
+  const trialJustExpired = trial?.status === "expired";
 
   return (
     <>
@@ -407,8 +412,23 @@ function PlanUsageHub({ onManageProducts, onManageServices }: { onManageProducts
       <div className="max-w-4xl mx-auto px-4 sm:px-6 py-5 space-y-5 pb-10">
         <div className="rounded-2xl border border-primary/20 bg-primary/5 p-4">
           <p className="text-[10px] font-black uppercase tracking-widest text-primary">Plano atual</p>
-          <p className="text-lg font-semibold mt-0.5" data-testid="text-current-plan-name">{getPlanName(activePlan)}</p>
+          <p className="text-lg font-semibold mt-0.5" data-testid="text-current-plan-name">
+            {trialActive ? "Premium de teste" : getPlanName(activePlan)}
+          </p>
+          {trialActive && (
+            <p className="text-xs text-muted-foreground mt-1" data-testid="text-trial-status">
+              Seu plano base é {getPlanName(basePlan)}. Nenhuma cobrança automática ao final do teste.
+            </p>
+          )}
         </div>
+
+        {trialJustExpired && (
+          <div className="rounded-2xl border border-border/60 bg-white p-4 space-y-2" data-testid="card-trial-ended">
+            <p className="text-sm font-bold text-foreground">Seu período Premium terminou.</p>
+            <p className="text-xs text-muted-foreground leading-relaxed">Seus dados continuam seguros. Você pode continuar no {getPlanName(basePlan)} ou conhecer os planos.</p>
+            <button type="button" onClick={() => setLocation("/subscribe")} className="text-xs font-black text-primary" data-testid="button-trial-ended-see-plans">Ver planos →</button>
+          </div>
+        )}
 
         {loading ? (
           <PageSkeleton variant="products" count={3} />

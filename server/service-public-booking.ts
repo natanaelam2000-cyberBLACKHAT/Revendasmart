@@ -13,6 +13,7 @@ import type { Firestore } from "firebase-admin/firestore";
 import { getFirebaseAdmin } from "./firebase-admin-init";
 import { logError, logInfo, logWarn } from "./logger";
 import { normalizeCatalogSlug, resolvePublicCatalogSettingsDoc } from "./public-catalog-ownership";
+import { ensurePlanLifecycleCurrent } from "./plan-lifecycle";
 import {
   ServiceAvailabilityCommandError,
   getServiceAvailabilityCommand,
@@ -45,7 +46,8 @@ export class ServicePublicBookingError extends Error {
     | "RESOURCE_NOT_AVAILABLE"
     | "BOOKING_NOT_FOUND"
     | "BOOKING_NOT_CANCELABLE"
-    | "BOOKING_NOT_RESCHEDULABLE";
+    | "BOOKING_NOT_RESCHEDULABLE"
+    | "PLAN_LIFECYCLE_UNAVAILABLE";
 
   constructor(code: ServicePublicBookingError["code"], message: string) {
     super(message);
@@ -69,6 +71,7 @@ const COMMAND_ERROR_MESSAGES = {
   BOOKING_NOT_FOUND: "Não foi possível localizar este agendamento.",
   BOOKING_NOT_CANCELABLE: "Este agendamento não pode mais ser cancelado.",
   BOOKING_NOT_RESCHEDULABLE: "Este agendamento não pode mais ser reagendado.",
+  PLAN_LIFECYCLE_UNAVAILABLE: "Página temporariamente indisponível. Tente novamente em instantes.",
 } as const;
 
 function db_(): Firestore {
@@ -213,6 +216,15 @@ export async function resolvePublicBookingStore(db: Firestore, rawSlug: string):
   const logoUrl = typeof settings.storeLogo === "string" && settings.storeLogo.trim()
     ? settings.storeLogo.trim()
     : (typeof settings.storeLogoUrl === "string" && settings.storeLogoUrl.trim() ? settings.storeLogoUrl.trim() : undefined);
+  // PLAN-IMPL-03 §3/§5/F2 — superfície pública é fail-closed: lifecycle/reconciliation precisa terminar
+  // antes de expor serviços/agendamentos, ou a resposta fica temporariamente indisponível sem vazar
+  // detalhes de plano/billing/trial para o visitante anônimo.
+  try {
+    await ensurePlanLifecycleCurrent(db, settingsDoc.id);
+  } catch (error) {
+    logError("public_booking.ensure_plan_lifecycle_failed", error, { uid: settingsDoc.id });
+    throw new ServicePublicBookingError("PLAN_LIFECYCLE_UNAVAILABLE", COMMAND_ERROR_MESSAGES.PLAN_LIFECYCLE_UNAVAILABLE);
+  }
   return { uid: settingsDoc.id, slug, name, ...(description ? { description } : {}), ...(logoUrl ? { logoUrl } : {}) };
 }
 
@@ -598,7 +610,7 @@ export function registerPublicServiceBookingRoutes(app: Express): void {
         services,
       });
     } catch (error) {
-      if (error instanceof ServicePublicBookingError) { res.status(error.code === "STORE_NOT_FOUND" ? 404 : 400).json({ code: error.code, message: error.message }); return; }
+      if (error instanceof ServicePublicBookingError) { res.status(error.code === "STORE_NOT_FOUND" ? 404 : error.code === "PLAN_LIFECYCLE_UNAVAILABLE" ? 503 : 400).json({ code: error.code, message: error.message }); return; }
       logError("service_public_booking.store_lookup_failed", error, { requestId: req.requestId });
       res.status(500).json({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível carregar a página de agendamento agora." });
     }
@@ -614,7 +626,7 @@ export function registerPublicServiceBookingRoutes(app: Express): void {
       const result = await getPublicServiceAvailabilityCommand(db_(), store.uid, serviceId, rangeStartAt, rangeEndAt);
       res.status(200).json(result);
     } catch (error) {
-      if (error instanceof ServicePublicBookingError) { res.status(error.code === "STORE_NOT_FOUND" ? 404 : 400).json({ code: error.code, message: error.message }); return; }
+      if (error instanceof ServicePublicBookingError) { res.status(error.code === "STORE_NOT_FOUND" ? 404 : error.code === "PLAN_LIFECYCLE_UNAVAILABLE" ? 503 : 400).json({ code: error.code, message: error.message }); return; }
       logError("service_public_booking.availability_failed", error, { requestId: req.requestId });
       res.status(500).json({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível consultar os horários agora." });
     }
@@ -633,7 +645,7 @@ export function registerPublicServiceBookingRoutes(app: Express): void {
     } catch (error) {
       if (error instanceof ServicePublicBookingError) {
         logWarn("service_public_booking.hold_rejected", { requestId: req.requestId, code: error.code });
-        res.status(error.code === "STORE_NOT_FOUND" ? 404 : error.code === "SLOT_CONFLICT" ? 409 : 400).json({ code: error.code, message: error.message });
+        res.status(error.code === "STORE_NOT_FOUND" ? 404 : error.code === "PLAN_LIFECYCLE_UNAVAILABLE" ? 503 : error.code === "SLOT_CONFLICT" ? 409 : 400).json({ code: error.code, message: error.message });
         return;
       }
       logError("service_public_booking.hold_failed", error, { requestId: req.requestId });
@@ -655,7 +667,7 @@ export function registerPublicServiceBookingRoutes(app: Express): void {
     } catch (error) {
       if (error instanceof ServicePublicBookingError) {
         logWarn("service_public_booking.confirm_rejected", { requestId: req.requestId, code: error.code });
-        res.status(error.code === "STORE_NOT_FOUND" || error.code === "HOLD_NOT_FOUND" ? 404 : error.code === "SLOT_CONFLICT" || error.code === "HOLD_EXPIRED" ? 409 : 400).json({ code: error.code, message: error.message });
+        res.status(error.code === "STORE_NOT_FOUND" || error.code === "HOLD_NOT_FOUND" ? 404 : error.code === "PLAN_LIFECYCLE_UNAVAILABLE" ? 503 : error.code === "SLOT_CONFLICT" || error.code === "HOLD_EXPIRED" ? 409 : 400).json({ code: error.code, message: error.message });
         return;
       }
       logError("service_public_booking.confirm_failed", error, { requestId: req.requestId });
@@ -677,7 +689,7 @@ export function registerPublicServiceBookingRoutes(app: Express): void {
     } catch (error) {
       if (error instanceof ServicePublicBookingError) {
         logWarn("service_public_booking.manage_lookup_rejected", { requestId: req.requestId, code: error.code });
-        res.status(error.code === "BOOKING_NOT_FOUND" ? 404 : 400).json({ code: error.code, message: error.message });
+        res.status(error.code === "BOOKING_NOT_FOUND" ? 404 : error.code === "PLAN_LIFECYCLE_UNAVAILABLE" ? 503 : 400).json({ code: error.code, message: error.message });
         return;
       }
       logError("service_public_booking.manage_lookup_failed", error, { requestId: req.requestId });
@@ -696,7 +708,7 @@ export function registerPublicServiceBookingRoutes(app: Express): void {
       res.status(200).json(result);
     } catch (error) {
       if (error instanceof ServicePublicBookingError) {
-        res.status(error.code === "BOOKING_NOT_FOUND" ? 404 : 400).json({ code: error.code, message: error.message });
+        res.status(error.code === "BOOKING_NOT_FOUND" ? 404 : error.code === "PLAN_LIFECYCLE_UNAVAILABLE" ? 503 : 400).json({ code: error.code, message: error.message });
         return;
       }
       logError("service_public_booking.manage_availability_failed", error, { requestId: req.requestId });
@@ -716,7 +728,7 @@ export function registerPublicServiceBookingRoutes(app: Express): void {
     } catch (error) {
       if (error instanceof ServicePublicBookingError) {
         logWarn("service_public_booking.manage_cancel_rejected", { requestId: req.requestId, code: error.code });
-        res.status(error.code === "BOOKING_NOT_FOUND" ? 404 : error.code === "BOOKING_NOT_CANCELABLE" ? 409 : 400).json({ code: error.code, message: error.message });
+        res.status(error.code === "BOOKING_NOT_FOUND" ? 404 : error.code === "PLAN_LIFECYCLE_UNAVAILABLE" ? 503 : error.code === "BOOKING_NOT_CANCELABLE" ? 409 : 400).json({ code: error.code, message: error.message });
         return;
       }
       logError("service_public_booking.manage_cancel_failed", error, { requestId: req.requestId });
@@ -737,7 +749,7 @@ export function registerPublicServiceBookingRoutes(app: Express): void {
     } catch (error) {
       if (error instanceof ServicePublicBookingError) {
         logWarn("service_public_booking.manage_reschedule_rejected", { requestId: req.requestId, code: error.code });
-        res.status(error.code === "BOOKING_NOT_FOUND" ? 404 : error.code === "SLOT_CONFLICT" || error.code === "BOOKING_NOT_RESCHEDULABLE" ? 409 : 400).json({ code: error.code, message: error.message });
+        res.status(error.code === "BOOKING_NOT_FOUND" ? 404 : error.code === "PLAN_LIFECYCLE_UNAVAILABLE" ? 503 : error.code === "SLOT_CONFLICT" || error.code === "BOOKING_NOT_RESCHEDULABLE" ? 409 : 400).json({ code: error.code, message: error.message });
         return;
       }
       logError("service_public_booking.manage_reschedule_failed", error, { requestId: req.requestId });

@@ -11,6 +11,7 @@ import { getFirebaseAuth } from "@/lib/firebase";
 import { buildHomeDashboardViewModel, formatHomeCurrency } from "@/lib/home-dashboard-view-model";
 import { notifyError, notifySuccess } from "@/lib/notify";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
+import { usePlan } from "@/providers/PlanProvider";
 
 const HOME_ONBOARDING_STRIP_STORAGE_KEY = "revendasmart:home:onboarding-strip:v1";
 
@@ -34,6 +35,26 @@ function writeOnboardingStripDismissed() {
 
 function shortNumber(value: number): string {
   return value.toLocaleString("pt-BR", { maximumFractionDigits: 0 });
+}
+
+/** PLAN-IMPL-03 §43/§44 — banner discreto, nunca redesenha subscribe.tsx. `trial.endsAt` já vem do
+ * servidor (ensurePlanLifecycleCurrent); a contagem de dias em si é só apresentação client-side (§44
+ * permite isso explicitamente) — o acesso real nunca depende deste cálculo, só de `effectivePlan`. */
+function TrialBanner({ trial }: { trial: { status: "active" | "expired" | "converted"; endsAt: string | null } }) {
+  if (trial.status !== "active" || !trial.endsAt) return null;
+  const endsAtMs = new Date(trial.endsAt).getTime();
+  if (!Number.isFinite(endsAtMs)) return null;
+  const daysRemaining = Math.max(0, Math.ceil((endsAtMs - Date.now()) / (24 * 60 * 60 * 1000)));
+  return (
+    <section className="flex items-center justify-between gap-3 rounded-2xl border border-primary/20 bg-white px-4 py-3 shadow-sm" data-testid="home-trial-banner">
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-black text-foreground">Premium de teste ativo</p>
+        <p className="text-xs text-muted-foreground">
+          {daysRemaining <= 0 ? "Último dia" : `Restam ${daysRemaining} dia${daysRemaining === 1 ? "" : "s"}`} · Nenhuma cobrança automática ao final.
+        </p>
+      </div>
+    </section>
+  );
 }
 
 function SectionCard({ title, eyebrow, children, action }: { title: string; eyebrow?: string; children: ReactNode; action?: ReactNode }) {
@@ -69,6 +90,7 @@ function EmptyState({ children }: { children: ReactNode }) {
 export default function Dashboard() {
   const [, setLocation] = useLocation();
   const { onboarding_completed, loading: settingsLoading, settings, refresh: refreshSettings } = useUserSettings();
+  const { trial } = usePlan();
   const { products, loading: productsLoading, error: productsError } = useProductsData();
   const { sales, loading: salesLoading, error: salesError } = useSalesData();
   const { clients, loading: clientsLoading, error: clientsError } = useClientsLiteData();
@@ -172,6 +194,8 @@ export default function Dashboard() {
         </header>
 
         <main className="mx-auto max-w-4xl space-y-3 px-4 py-4 sm:px-6 lg:px-8">
+          {trial && <TrialBanner trial={trial} />}
+
           {showOnboardingStrip && (
             <section className="flex items-center justify-between gap-3 rounded-2xl border border-primary/10 bg-white px-4 py-3 shadow-sm" data-testid="home-onboarding-strip">
               <button type="button" onClick={() => setLocation("/onboarding")} className="min-w-0 flex-1 text-left">

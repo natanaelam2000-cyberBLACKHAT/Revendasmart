@@ -241,6 +241,25 @@ export interface PlanData {
   playPurchaseTokenHash?: string | null;
   playOrderId?: string | null;
   playPackageName?: string | null;
+
+  // --- PLAN-IMPL-03: trial Premium de 7 dias, EFFECTIVE-only — nunca escreve currentPlan/premiumActive/
+  // premiumSource (esses continuam descrevendo só o plano BASE: assinatura/admin/indicação). Ausente =
+  // conta nunca elegível/nunca concedida (nenhuma migração retroativa para contas legadas). Server-owned,
+  // sem regra dedicada em firestore.rules pelo mesmo motivo de planData inteiro (§10 do ticket): o
+  // catch-all `match /{document=**} { allow read, write: if false }` já cobre o documento inteiro.
+  trialStatus?: 'active' | 'expired' | 'converted' | null;
+  trialStartedAt?: Date | null;
+  trialEndsAt?: Date | null;
+  /** Contrato apenas — hoje sempre 'premium' (§6/§7 do ticket); existe para o resolver nunca precisar
+   * de um `if (trial) return PREMIUM` hardcoded caso um trial de outro tier venha a existir depois. */
+  trialGrantedPlan?: PlanType | null;
+
+  // --- PLAN-IMPL-03: marca de transição de plano EFETIVO já reconciliado (Products/Services), para
+  // ensurePlanLifecycleCurrent (server/plan-lifecycle.ts) nunca rodar reconcilePlanAccess mais de uma vez
+  // pela MESMA transição (§26-28 do ticket) — comparado a cada leitura, nunca usado para decidir o valor
+  // do plano efetivo em si (que é sempre recalculado do zero a partir de trial+base, nunca deste cache).
+  lastAppliedEffectivePlan?: PlanType | null;
+  lastLifecycleEvaluatedAt?: Date | null;
 }
 
 // Firestore document: system/config
@@ -359,18 +378,44 @@ export function resolveLegacyBillingProvider(planData: PlanData | null): Billing
 }
 
 /**
- * PLAN-IMPL-01 §3/§4 — resolve o NÍVEL COMERCIAL (`free`/`pro`/`premium`), separado da pergunta
- * binária "tem acesso Premium" que `isPremiumActive` já resolvia e continua resolvendo sem mudança.
- * Premium sempre vence (qualquer caminho que já concede Premium hoje — assinatura, admin, indicação —
- * continua concedendo Premium, nunca rebaixado a Pro). Fora isso, um `currentPlan` gravado como
- * `"pro"` é respeitado; qualquer outro valor (incluindo ausente, `"free"`, ou uma string
- * desconhecida/corrompida de um documento antigo) cai em `free` com segurança — nenhuma migração é
- * necessária para documentos antigos, que só conheciam `"free"`/`"premium"`.
+ * PLAN-IMPL-03 §13/§16 — puro (nunca lê Firestore), sempre pelo relógio do SERVIDOR: `now` é injetável
+ * só para teste (§50 do ticket — nenhuma data hardcoded), nunca vem do client. Um trial só conta como
+ * ativo com `trialStatus === 'active'` E `now` ainda antes de `trialEndsAt` — a expiração em si nunca
+ * precisa de um job/cron para "acontecer" (§25): ela já é verdadeira aqui no instante em que `now`
+ * ultrapassa `trialEndsAt`, mesmo que o rótulo `trialStatus` armazenado ainda diga "active" até a
+ * próxima passagem de `ensurePlanLifecycleCurrent` (server/plan-lifecycle.ts) atualizá-lo.
  */
-export function resolveCommercialPlan(planData: PlanData | null): PlanType {
+export function isTrialCurrentlyActive(planData: PlanData | null, now: Date = new Date()): boolean {
+  if (!planData || planData.trialStatus !== 'active') return false;
+  const endsAt = toEntitlementDate(planData.trialEndsAt);
+  return endsAt !== null && now.getTime() < endsAt.getTime();
+}
+
+/**
+ * PLAN-IMPL-01 §3/§4, agora SEM considerar trial (PLAN-IMPL-03 §4) — o plano BASE, isto é, o que este
+ * tenant tem de verdade via assinatura/admin/indicação, ignorando qualquer boost temporário de trial.
+ * Usado para exibição ("Seu plano base: Free") e para comparar transições de plano EFETIVO sem o
+ * trial mascarar o base por baixo (ex.: ensurePlanLifecycleCurrent precisa saber que uma trial-driven
+ * effective premium volta para "pro", não para "free", quando basePlan já era "pro" — §14 do ticket).
+ */
+export function resolveBaseCommercialPlan(planData: PlanData | null): PlanType {
   if (isPremiumActive(planData)) return PLANS.PREMIUM;
   if (planData?.currentPlan === PLANS.PRO) return PLANS.PRO;
   return PLANS.FREE;
+}
+
+/**
+ * PLAN-IMPL-01 §3/§4, estendido por PLAN-IMPL-03 §13/§14 — resolve o NÍVEL COMERCIAL EFETIVO
+ * (`free`/`pro`/`premium`): trial ativo sempre vence sobre o plano base (Premium enquanto durar,
+ * qualquer que seja o base — free, pro ou já premium, §14), nunca escrito de volta em `currentPlan`.
+ * Continua sendo a ÚNICA função que todo o resto do app usa para "qual plano este tenant tem agora"
+ * (client — plan-helpers.ts, PlanProvider/usePlanData via hasPremiumAccess — e server — booking-quota,
+ * resolveServerPlan, marketing-pro) — nenhum destes precisou mudar para ganhar consciência de trial,
+ * porque a extensão fica inteira aqui dentro (§3 do ticket: nenhuma autoridade paralela nova).
+ */
+export function resolveCommercialPlan(planData: PlanData | null, now: Date = new Date()): PlanType {
+  if (isTrialCurrentlyActive(planData, now)) return PLANS.PREMIUM;
+  return resolveBaseCommercialPlan(planData);
 }
 
 export function getActivePlan(planData: PlanData | null): PlanType {
@@ -437,6 +482,13 @@ export function getEffectivePlanWithOverrides(
  * (que mostra "X de N indicações") importam DAQUI, nunca um literal `3` duplicado em cada lugar.
  */
 export const REFERRAL_REWARD_LIMIT = 3;
+
+/**
+ * PLAN-IMPL-03 §6 — duração do trial Premium gratuito para conta nova elegível. Única fonte: o
+ * grant server-side (server/plan-lifecycle.ts) e qualquer copy de UI que precise mencionar "7 dias"
+ * importam DAQUI, nunca um literal duplicado.
+ */
+export const TRIAL_DURATION_DAYS = 7;
 
 /**
  * RELEASE-28: formato do código público de indicação (`USER-XXXXXXXXX`, gerado em
@@ -745,7 +797,10 @@ export function resolveEntitlements(
   planData: PlanData | null,
   grant: Pick<InternalGrantData, 'benefitGrant'> | null | undefined,
 ): ResolvedEntitlements {
-  const commercialPremium = isPremiumActive(planData);
+  // PLAN-IMPL-03 §17/§19 — `resolveCommercialPlan` (não mais `isPremiumActive` puro) para que
+  // `hasPremiumAccess` reflita um trial ativo, já que este é o campo que `/api/plan/data/:userId`
+  // devolve e que PlanProvider.tsx/usePlanData.ts usam como fonte primária de `activePlan` no client.
+  const commercialPremium = resolveCommercialPlan(planData) === PLANS.PREMIUM;
   const isTester = grant?.benefitGrant === 'tester';
   const isPremiumPlus = grant?.benefitGrant === 'premium_plus';
   const hasPremiumAccess = commercialPremium || isTester || isPremiumPlus;

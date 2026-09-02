@@ -24,7 +24,7 @@ async function fetchDomainAccessCounts(uid: string, domain: "products" | "servic
 }
 
 export function usePlanUsageSnapshot() {
-  const { activePlan, loading: planLoading } = usePlanData();
+  const { activePlan, basePlan, trial, loading: planLoading } = usePlanData();
   const [snapshot, setSnapshot] = useState<PlanUsageSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -63,5 +63,5 @@ export function usePlanUsageSnapshot() {
     load();
   }, [planLoading, load]);
 
-  return { snapshot, loading: loading || planLoading, error, refresh: load, activePlan };
+  return { snapshot, loading: loading || planLoading, error, refresh: load, activePlan, basePlan, trial };
 }

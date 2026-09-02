@@ -2,7 +2,8 @@ import type { Express, NextFunction, Request, Response } from "express";
 import type { Firestore, Transaction } from "firebase-admin/firestore";
 import { getFirebaseAdmin } from "./firebase-admin-init";
 import { resolveUserEntitlements } from "./admin-grants";
-import { logWarn } from "./logger";
+import { ensurePlanLifecycleCurrent } from "./plan-lifecycle";
+import { logError, logWarn } from "./logger";
 import {
   PLAN_CONFIG,
   PLANS,
@@ -64,6 +65,7 @@ type UsageSummary = {
 type MutationErrorCode =
   | "UNAUTHORIZED"
   | "INVALID_INPUT"
+  | "PLAN_LIFECYCLE_UNAVAILABLE"
   | "PLAN_LIMIT_REACHED"
   | "IDEMPOTENCY_CONFLICT"
   | "PRODUCT_NOT_FOUND"
@@ -260,11 +262,27 @@ function assertWithinLimit(kind: DomainKind, plan: PlanType, currentCount: numbe
   }
 }
 
+async function ensureLifecycleForPlanSensitiveMutation(db: Firestore, uid: string): Promise<void> {
+  try {
+    await ensurePlanLifecycleCurrent(db, uid);
+  } catch (error) {
+    logError("plan_mutation.ensure_plan_lifecycle_failed", error, { uid });
+    throw new PlanMutationError(
+      "PLAN_LIFECYCLE_UNAVAILABLE",
+      "Não foi possível validar seu plano agora. Tente novamente em instantes.",
+      503,
+    );
+  }
+}
+
 export async function createProductCommand(db: Firestore, uid: string, input: unknown) {
   const body = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
   const productId = assertEntityId(body.productId, "productId");
   const idempotencyKey = assertIdempotencyKey(body.idempotencyKey);
   const payload = cleanProductPayload(uid, productId, body.product);
+  // PLAN-IMPL-03 §6/§24/F3 — criação é plan-sensitive: se lifecycle/reconciliation não puder ficar
+  // atual agora, falha fechado com erro estável em vez de criar contra um estado Premium stale.
+  await ensureLifecycleForPlanSensitiveMutation(db, uid);
   const plan = await resolveServerPlan(db, uid);
 
   return await db.runTransaction(async (tx) => {
@@ -317,6 +335,9 @@ export async function createServiceCommand(db: Firestore, uid: string, input: un
   const serviceId = assertEntityId(body.serviceId, "serviceId");
   const idempotencyKey = assertIdempotencyKey(body.idempotencyKey);
   const service = cleanServicePayload(uid, serviceId, body.service);
+  // PLAN-IMPL-03 §6/§24/F4 — criação é plan-sensitive: se lifecycle/reconciliation não puder ficar
+  // atual agora, falha fechado com erro estável em vez de criar contra um estado Premium stale.
+  await ensureLifecycleForPlanSensitiveMutation(db, uid);
   const plan = await resolveServerPlan(db, uid);
 
   return await db.runTransaction(async (tx) => {

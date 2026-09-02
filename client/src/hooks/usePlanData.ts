@@ -27,6 +27,10 @@ interface PlanData {
   hasPremiumAccess?: boolean;
   isTester?: boolean;
   isPremiumPlus?: boolean;
+  // PLAN-IMPL-03 §17/§18 — ver PlanProvider.tsx: também computados pelo servidor.
+  basePlan?: string;
+  effectivePlan?: string;
+  trial?: { status: "active" | "expired" | "converted"; startedAt: string | null; endsAt: string | null } | null;
 }
 
 export function usePlanData() {
@@ -71,10 +75,20 @@ export function usePlanData() {
     ? data.hasPremiumAccess
     : isPremiumActive(data as unknown as MonetizationPlanData | null);
 
-  // PLAN-IMPL-01 §3: mesma regra de resolveCommercialPlan/resolveActivePlan (PlanProvider.tsx) —
-  // Premium sempre vence; um `currentPlan` gravado como "pro" é preservado; qualquer outro valor
-  // (incluindo documentos antigos que só conheciam "free"/"premium") cai em "free" sem migração.
-  const activePlan: PlanType = hasPremiumAccess ? PLANS.PREMIUM : data?.currentPlan === PLANS.PRO ? PLANS.PRO : PLANS.FREE;
+  // PLAN-IMPL-01 §3, estendido por PLAN-IMPL-03 §17/§18: preferencialmente `data.effectivePlan`, já
+  // computado pelo servidor (ensurePlanLifecycleCurrent) considerando trial. Sem o campo (payload
+  // antigo), cai na mesma regra de resolveCommercialPlan/resolveActivePlan (PlanProvider.tsx) — Premium
+  // sempre vence; um `currentPlan` gravado como "pro" é preservado; qualquer outro valor (incluindo
+  // documentos antigos que só conheciam "free"/"premium") cai em "free" sem migração.
+  const activePlan: PlanType =
+    data?.effectivePlan === PLANS.FREE || data?.effectivePlan === PLANS.PRO || data?.effectivePlan === PLANS.PREMIUM
+      ? data.effectivePlan
+      : hasPremiumAccess ? PLANS.PREMIUM : data?.currentPlan === PLANS.PRO ? PLANS.PRO : PLANS.FREE;
+  const basePlan: PlanType =
+    data?.basePlan === PLANS.FREE || data?.basePlan === PLANS.PRO || data?.basePlan === PLANS.PREMIUM
+      ? data.basePlan
+      : activePlan;
+  const trial = data?.trial ?? null;
 
   // "Cancelada, mas ainda paga até DD/MM": renovação desligada com acesso ainda válido.
   const isCancelledWithinPaidPeriod =
@@ -84,6 +98,8 @@ export function usePlanData() {
     planData: data,
     plan: data,
     activePlan,
+    basePlan,
+    trial,
     hasPremiumAccess,
     premiumPeriodEndsAt,
     isCancelledWithinPaidPeriod,

@@ -430,17 +430,12 @@ if (p === "approved" && !subscriptionTerminated) {
 return { premiumActive: true, reason: "payment_approved" };
 }
 
-// 🥉 PRIORIDADE 3 — TRIAL AUTOMÁTICO
-if (existingData?.trialActive && existingData?.trialEndsAt) {
-const trialEnd = new Date(
-existingData.trialEndsAt?.toDate?.() ?? existingData.trialEndsAt
-);
-
-if (!Number.isNaN(trialEnd.getTime()) && now < trialEnd) {
-  return { premiumActive: true, reason: "trial_active" };
-}
-
-}
+// PLAN-IMPL-03 §4/§13 — trial NUNCA é considerado aqui: esta função reconcilia o plano BASE a partir
+// de um evento de assinatura/pagamento real, e trial é puramente EFFECTIVE-only (nunca grava
+// currentPlan/premiumActive/premiumSource — ver shared/monetization.ts `resolveCommercialPlan`, que já
+// aplica o boost de trial por cima do resultado desta função, sempre, em todo o resto do app). O antigo
+// branch de trial aqui (campos `trialActive`/`trialEndsAt`, nunca alcançável em produção — nenhuma
+// chamada real jamais escreveu esses campos, ver PLAN-IMPL-03_REPORT) foi removido, não substituído.
 
 // 🔄 FALLBACK (evita perder premium por erro temporário)
 
@@ -468,40 +463,23 @@ return { premiumActive: false, reason: "no_subscription" };
 /** Só para testes (script/subscription-cancel-tests.ts): expõe a reconciliação pura sem precisar de
  * Firestore, para cobrir fronteiras de data e documentos legados. */
 export const reconcilePremiumStatusForTests = reconcilePremiumStatus;
+/** PLAN-IMPL-03 — mesmo padrão de reconcilePremiumStatusForTests: expõe syncPlanDataFromSubscription
+ * (privada) só para script/plan-impl-03-trial-lifecycle-tests.ts cobrir a marcação trialStatus="converted"
+ * quando uma assinatura real ativa durante um trial em curso, sem duplicar a lógica em código de teste. */
+export const syncPlanDataFromSubscriptionForTests = syncPlanDataFromSubscription;
 
 /**
 
 Update user's planData in Firestore based on subscription and payment status.
 */
 
-
-async function applyTrialIfEligible(uid: string, existingData: any) {
-const admin = getFirebaseAdmin();
-const db = admin.firestore();
-const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
-
-// já tem trial → não aplica de novo
-if (existingData?.trialUsed) return;
-
-// já é premium → não aplica
-if (existingData?.premiumActive) return;
-
-const trialDays = 7;
-const trialEndsAt = new Date();
-trialEndsAt.setDate(trialEndsAt.getDate() + trialDays);
-
-subInfo("[trial] Applying eligible trial");
-
-await planRef.set({
-trialActive: true,
-trialUsed: true, // 🔒 trava 1x por usuário
-trialEndsAt,
-premiumSource: "trial",
-premiumActive: true,
-currentPlan: "premium",
-updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-}, { merge: true });
-}
+// PLAN-IMPL-03 — `applyTrialIfEligible` (concedia trial escrevendo currentPlan/premiumActive/premiumSource
+// diretamente, e só era chamada do branch `!planSnap.exists` da rota de status abaixo, nunca alcançável em
+// produção — ver PLAN-IMPL-03_REPORT) foi removida. A concessão real agora vive em
+// server/plan-lifecycle.ts `computeTrialGrantFields`, chamada de dentro da transação atômica de
+// `/api/plan/initialize/:userId` (server/routes.ts) — o único caminho que o app realmente dispara no
+// primeiro login — e nunca escreve nos campos de plano BASE (ver o comentário em reconcilePremiumStatus
+// acima).
 
 type SubscriptionSyncSource = "webhook" | "sync-now" | "manual";
 type SubscriptionSyncContext = {
@@ -635,8 +613,20 @@ if (eventId) update.lastSubscriptionEventId = eventId;
 if (eventOccurredAt) update.lastSubscriptionEventAt = eventOccurredAt;
 
 // ✅ AGORA SIM — fora do objeto
-if (premiumActive && !existingData?.premiumOverride && !existingData?.trialActive) {
+// PLAN-IMPL-03: o antigo `&& !existingData?.trialActive` foi removido — trial nunca mais grava esse
+// campo (ver reconcilePremiumStatus acima), então a condição era sempre verdadeira na prática; uma
+// assinatura real que ativa DEVE poder marcar premiumSource="subscription" mesmo com um trial ainda em
+// curso (o trial em si é rastreado à parte, marcado "converted" logo abaixo, nunca bloqueado por isto).
+if (premiumActive && !existingData?.premiumOverride) {
   update.premiumSource = "subscription";
+}
+// PLAN-IMPL-03 §15 — assinatura paga real ativou enquanto o trial ainda contava como ativo: o trial
+// nunca deve "reaparecer" depois (ex.: se a assinatura for cancelada mais tarde dentro do período pago
+// e o trial, coincidentemente, ainda não tivesse expirado) — marcado "converted" uma vez, permanece
+// assim para sempre (isTrialCurrentlyActive em shared/monetization.ts só considera 'active', nunca
+// 'converted', então isto já é suficiente para nunca mais contribuir para o plano efetivo).
+if (premiumActive && existingData?.trialStatus === "active") {
+  update.trialStatus = "converted";
 }
 subInfo(`[syncPlanDataFromSubscription] subscriptionStatus=${subscriptionStatus}`);
 subInfo(`[syncPlanDataFromSubscription] paymentStatus=${paymentStatus ?? "null"}`);
@@ -947,12 +937,13 @@ subInfo("[subscriptions/create] Request received");
       const planSnap = await planRef.get();
 
      if (!planSnap.exists) {
-  await applyTrialIfEligible(uid, null);
-
+  // PLAN-IMPL-03 — concessão de trial não vive mais aqui (§10/§11: "planData ausente" sozinho nunca
+  // foi um sinal confiável de "conta nova"; ver server/routes.ts `/api/plan/initialize`, que já roda no
+  // primeiro login real e é quem de fato concede). Esta rota não tem nenhum chamador no client hoje
+  // (confirmado em auditoria) — mantida honesta: sem doc, sem trial, só o estado Free padrão.
   return res.json({
     premiumActive: false,
     currentPlan: "free",
-    trialApplied: true,
   });
 }
 

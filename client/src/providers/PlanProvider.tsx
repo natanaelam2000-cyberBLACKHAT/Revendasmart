@@ -6,6 +6,12 @@ import { getFirebaseAuth } from "@/lib/firebase";
 
 type ActivePlan = PlanType;
 
+type TrialInfo = {
+  status: "active" | "expired" | "converted";
+  startedAt: string | null;
+  endsAt: string | null;
+};
+
 type PlanData = {
   currentPlan?: string;
   premiumActive?: boolean;
@@ -27,6 +33,14 @@ type PlanData = {
   isTester?: boolean;
   isPremiumPlus?: boolean;
   entitlementSource?: "commercial" | "tester_grant" | "premium_plus_grant" | "none";
+  // PLAN-IMPL-03 §17/§18 — também computados pelo servidor (ensurePlanLifecycleCurrent, server/
+  // plan-lifecycle.ts): basePlan ignora trial (o que o tenant tem "de verdade"), effectivePlan já inclui
+  // o boost de trial (o que vale para limites/entitlements agora). `trial` é só para exibição
+  // (banner/contador) — nunca usado para decidir acesso, que já está embutido em hasPremiumAccess/
+  // effectivePlan.
+  basePlan?: string;
+  effectivePlan?: string;
+  trial?: TrialInfo | null;
 };
 
 interface PlanProviderValue {
@@ -46,23 +60,22 @@ interface PlanProviderValue {
   referralCount: number;
   shareLink: string | null;
   error: string | null;
+  basePlan: ActivePlan;
+  trial: TrialInfo | null;
 }
 
 const PlanContext = createContext<PlanProviderValue | null>(null);
 
-// RELEASE-16 §3/§4, estendido em OWNER-ACCESS-02 e PLAN-IMPL-01 §3: única fonte de verdade para "tem
-// acesso Premium" — preferencialmente `data.hasPremiumAccess`, já composto pelo servidor (planData
-// comercial + eventual concessão interna Tester/Premium+, via resolveEntitlements em
-// shared/monetization.ts). O fallback local com `isPremiumActive()` só cobre um payload antigo/
-// incompleto sem o campo (nunca deveria acontecer com o servidor atual, mas evita quebrar se algum
-// outro caminho ainda devolver o shape cru).
-//
-// PLAN-IMPL-01: Premium continua vencendo sempre (`hasAccess` primeiro). Fora isso, um `currentPlan`
-// gravado como `"pro"` é preservado — documentos antigos, que só conheciam `"free"`/`"premium"`, caem
-// em `"free"` exatamente como antes, sem migração. Mesma regra de `resolveCommercialPlan`
-// (shared/monetization.ts), reimplementada aqui porque este payload já chega achatado do servidor
-// (não é o `PlanData` completo que aquela função espera).
+// RELEASE-16 §3/§4, estendido em OWNER-ACCESS-02, PLAN-IMPL-01 §3 e PLAN-IMPL-03 §17/§18: única fonte
+// de verdade para "qual plano vale agora" — preferencialmente `data.effectivePlan`, já computado pelo
+// servidor (ensurePlanLifecycleCurrent, server/plan-lifecycle.ts) considerando trial. `hasPremiumAccess`
+// (também já trial-aware, via resolveEntitlements) é o fallback para um payload mais antigo sem
+// `effectivePlan`; `isPremiumActive()` local é o último fallback, só para um shape cru/incompleto (nunca
+// deveria acontecer com o servidor atual).
 function resolveActivePlan(data: PlanData | null): ActivePlan {
+  if (data?.effectivePlan === PLANS.FREE || data?.effectivePlan === PLANS.PRO || data?.effectivePlan === PLANS.PREMIUM) {
+    return data.effectivePlan;
+  }
   const hasAccess = typeof data?.hasPremiumAccess === "boolean"
     ? data.hasPremiumAccess
     : isPremiumActive(data as unknown as MonetizationPlanData | null);
@@ -133,6 +146,12 @@ export function PlanProvider({ children }: { children: ReactNode }) {
   const activePlan = useMemo(() => resolveActivePlan(planData), [planData]);
   const hasPremiumAccess = activePlan === "premium";
   const limits = useMemo(() => resolveLimits(activePlan), [activePlan]);
+  // PLAN-IMPL-03 §4/§18 — basePlan ignora trial (mesma validação de shape do effectivePlan acima);
+  // documento sem o campo (payload antigo) cai no próprio activePlan já resolvido, nunca undefined.
+  const basePlan: ActivePlan = planData?.basePlan === PLANS.FREE || planData?.basePlan === PLANS.PRO || planData?.basePlan === PLANS.PREMIUM
+    ? planData.basePlan
+    : activePlan;
+  const trial = planData?.trial ?? null;
   // RELEASE-28: `/signup?ref=` nunca era capturado — `/signup` é rota PÚBLICA (App.tsx), fora do
   // PrivateRouter, que é onde a captura de `?referral=` roda. Corrigido para o mesmo formato que
   // settings.tsx já usa e que de fato é capturado: origem + `?referral=<código>`.
@@ -160,7 +179,9 @@ export function PlanProvider({ children }: { children: ReactNode }) {
     referralCount: planData?.referralCount ?? 0,
     shareLink,
     error,
-  }), [activePlan, error, hasPremiumAccess, limits, loading, planData, refresh, shareLink]);
+    basePlan,
+    trial,
+  }), [activePlan, basePlan, error, hasPremiumAccess, limits, loading, planData, refresh, shareLink, trial]);
 
   return <PlanContext.Provider value={value}>{children}</PlanContext.Provider>;
 }
