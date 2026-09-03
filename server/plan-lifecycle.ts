@@ -164,7 +164,7 @@ export async function ensurePlanLifecycleCurrent(db: Firestore, uid: string, now
   if (!snap.exists) return NEVER_INITIALIZED_SNAPSHOT;
 
   const planData = snap.data() as PlanData;
-  const basePlan = resolveBaseCommercialPlan(planData);
+  const basePlan = resolveBaseCommercialPlan(planData, now);
   const trialActiveNow = isTrialCurrentlyActive(planData, now);
   const effectivePlan = trialActiveNow ? PLANS.PREMIUM : basePlan;
 

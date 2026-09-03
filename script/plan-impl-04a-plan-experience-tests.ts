@@ -186,22 +186,35 @@ function runPureLogicTests(): void {
   assert.equal(availabilityDefaultEnv.pro.reason, "provider_not_configured");
   console.log("PASS PS1 Pro purchase is structurally unavailable (no provider code path exists)");
 
-  // PS2 — Premium só fica disponível quando o preço cobrado bate o preço-alvo; hoje (19.90) não bate (79.90).
-  const originalPremiumPrice = process.env.PREMIUM_PRICE_BRL;
+  // PS2 — atualizado em PLAN-IMPL-04B (o próprio "hook 04B" que este teste sempre documentou ter
+  // chegado): Premium v2 agora exige credencial + flag de ativação + preço configurado batendo
+  // PLAN_PRICE_CENTS — não mais uma comparação isolada com PREMIUM_PRICE_BRL (a env var legada, que
+  // continua existindo só para o endpoint antigo). Prova a cadeia completa, nunca só o resultado final.
+  const envKeysToRestore = ["MERCADOPAGO_ACCESS_TOKEN", "PREMIUM_V2_SUBSCRIPTION_ENABLED", "PREMIUM_V2_PRICE_BRL_CENTS"] as const;
+  const originalEnv = Object.fromEntries(envKeysToRestore.map((key) => [key, process.env[key]]));
   try {
-    delete process.env.PREMIUM_PRICE_BRL; // mesmo default real de server/subscriptions.ts: 19.90
-    const availabilityLegacy = getPlanPurchaseAvailability();
-    assert.equal(availabilityLegacy.premium.available, false, "PS2: preço legado (19.90) não deve habilitar compra nova");
-    assert.equal(availabilityLegacy.premium.reason, "pricing_v2_not_activated");
+    delete process.env.MERCADOPAGO_ACCESS_TOKEN;
+    delete process.env.PREMIUM_V2_SUBSCRIPTION_ENABLED;
+    delete process.env.PREMIUM_V2_PRICE_BRL_CENTS;
+    assert.equal(getPlanPurchaseAvailability().premium.available, false);
+    assert.equal(getPlanPurchaseAvailability().premium.reason, "provider_not_configured", "PS2a: sem credencial, nunca disponível, mesmo com o resto configurado certo");
 
-    process.env.PREMIUM_PRICE_BRL = "79.90";
-    const availabilityActivated = getPlanPurchaseAvailability();
-    assert.equal(availabilityActivated.premium.available, true, "PS2 (hook 04B): quando o preço real bater o alvo, deve habilitar sem mudança de código");
+    process.env.MERCADOPAGO_ACCESS_TOKEN = "TEST-fake-token-for-config-check-only";
+    assert.equal(getPlanPurchaseAvailability().premium.reason, "pricing_v2_not_activated", "PS2b: credencial presente mas flag de ativação ausente");
+
+    process.env.PREMIUM_V2_SUBSCRIPTION_ENABLED = "true";
+    process.env.PREMIUM_V2_PRICE_BRL_CENTS = "1990";
+    assert.equal(getPlanPurchaseAvailability().premium.reason, "pricing_configuration_mismatch", "PS2c (price match gate, §13): preço configurado errado nunca habilita, mesmo com credencial+flag corretos — isto é o que torna R$79,90 na UI + checkout a R$19,90 estruturalmente impossível");
+
+    process.env.PREMIUM_V2_PRICE_BRL_CENTS = "7990";
+    assert.equal(getPlanPurchaseAvailability().premium.available, true, "PS2d: só com credencial+flag+preço EXATO (7990 centavos) é que fica disponível");
   } finally {
-    if (originalPremiumPrice === undefined) delete process.env.PREMIUM_PRICE_BRL;
-    else process.env.PREMIUM_PRICE_BRL = originalPremiumPrice;
+    for (const key of envKeysToRestore) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
   }
-  console.log("PASS PS2 Premium purchase availability is derived from comparing the REAL charged price to the target price, not hardcoded — proves both today's NO and the §51 future-activation hook");
+  console.log("PASS PS2 Premium v2 purchase availability requires credential + explicit activation flag + exact price match (centavos) — proves fail-closed at every step of the chain, and the §51/§13 activation hook");
 
   // PW3 — Free client limit (client-side checked, sem endpoint server dedicado — fato arquitetural real).
   assert.equal(checkClientLimit("free", 50).allowed, false, "PW3: 50/50 clientes no Free deve bloquear");
@@ -222,14 +235,34 @@ function runSourceTextTests(): void {
   assert.doesNotMatch(plansSource, /19[.,]90/, "PS4: /plans nunca pode mostrar o preço legado 19,90");
   console.log("PASS PS4 the new Plans page never renders the legacy price (19,90) anywhere in its source");
 
-  // PS5 — /plans nunca chama a API diretamente (só navega); nenhuma criação de assinatura mensal OU anual.
-  assert.doesNotMatch(plansSource, /apiRequest/, "PS5: plans.tsx não deve chamar nenhuma API diretamente — só navegar");
-  console.log("PASS PS5 Plans page never calls any mutation API directly (monthly or annual) — purely presentational + navigation");
+  // PS5 — atualizado em PLAN-IMPL-04B: /plans ganhou um fluxo real de compra (confirmar -> apiRequest ->
+  // redirecionar para o checkout), então "nunca chama API" deixou de ser a garantia certa — essa era só
+  // uma consequência de Pro/Premium v2 ainda não terem um caminho de compra real em 04A. A garantia que
+  // importa agora é a versão client-side da mesma prova PA3/PA4/PA7/SEC1 (server-side, em
+  // plan-impl-04b-provider-pricing-tests.ts): o client não escolhe o valor cobrado nem fala com o
+  // endpoint legado.
+  const apiRequestCalls = [...plansSource.matchAll(/apiRequest[<(]/g)];
+  assert.equal(apiRequestCalls.length, 1, "PS5a: plans.tsx deve ter exatamente 1 call site de apiRequest (o fluxo de compra novo)");
+  assert.match(plansSource, /apiRequest<\{[^}]*\}>\("\/api\/subscriptions\/create"/, "PS5b: a única chamada mira o endpoint v2 novo, nunca o legado");
+  assert.doesNotMatch(plansSource, /\/api\/app-subscription\/create/, "PS5c: plans.tsx nunca fala com o endpoint legado de criação");
+  assert.match(plansSource, /body:\s*\{\s*plan,\s*billingCycle:\s*"monthly"\s*\}/, "PS5d: o corpo enviado só contém plan/billingCycle — nunca amount/price/transactionAmount escolhido pelo client");
+  console.log("PASS PS5 Plans page's purchase flow (added in PLAN-IMPL-04B) calls only the new price-authoritative v2 endpoint, sends only plan/billingCycle (never an amount the client could choose), and never touches the legacy create endpoint");
 
-  // PS3 — subscribe.tsx (gestão de assinatura existente) não foi tocado por este ticket.
-  const diffStat = execSync("git diff --stat HEAD -- client/src/pages/subscribe.tsx server/subscriptions.ts", { cwd: process.cwd() }).toString().trim();
-  assert.equal(diffStat, "", "PS3: subscribe.tsx e a lógica de cancelamento/gestão em subscriptions.ts não podem ter mudado neste ticket");
-  console.log("PASS PS3 existing paid-subscriber management surface (subscribe.tsx, subscriptions.ts) has zero diff this ticket — untouched");
+  // PS3 — atualizado em PLAN-IMPL-04B: subscribe.tsx (a TELA de gestão) continua com diff zero — a
+  // premissa original ainda vale integralmente para o client. server/subscriptions.ts, por outro lado,
+  // foi LEGITIMAMENTE estendido por este ticket (endpoint novo, sync/webhook plan-aware) — "diff zero"
+  // deixou de fazer sentido como prova; a garantia real (comportamento legado inalterado) já foi
+  // verificada de forma muito mais forte pela suíte real `test:subscription-cancel`, que roda contra o
+  // emulador de verdade e continua passando. Aqui só confirma, por texto-fonte, que os pontos de
+  // ancoragem do caminho LEGADO (nunca refatorados, só envolvidos por um branch novo) continuam
+  // presentes exatamente como antes.
+  const subscribeDiffStat = execSync("git diff --stat HEAD -- client/src/pages/subscribe.tsx", { cwd: process.cwd() }).toString().trim();
+  assert.equal(subscribeDiffStat, "", "PS3a: subscribe.tsx (tela de gestão existente) não pode ter mudado neste ticket");
+  const subscriptionsSource = sourceOf("server/subscriptions.ts");
+  assert.match(subscriptionsSource, /app\.post\("\/api\/app-subscription\/create"/, "PS3b: o endpoint legado de criação continua existindo, nunca removido/renomeado");
+  assert.match(subscriptionsSource, /const PREMIUM_PRICE_BRL = parseFloat\(process\.env\.PREMIUM_PRICE_BRL/, "PS3c: a env var de preço legada continua sendo a autoridade do endpoint antigo, nunca substituída por PLAN_PRICE_CENTS");
+  assert.match(subscriptionsSource, /cancelUpdate\.premiumActive = true;\s*\n\s*cancelUpdate\.currentPlan = "premium";/, "PS3d: o ramo de cancelamento legado (dentro do período pago) continua escrevendo premiumActive/currentPlan exatamente como antes, byte a byte");
+  console.log("PASS PS3 subscribe.tsx remains fully untouched; subscriptions.ts's legacy anchors (create endpoint, PREMIUM_PRICE_BRL authority, cancel branch) remain textually intact, verified alongside the real subscription-cancel regression suite passing unchanged");
 
   // PW10 — showLimitModal só é setado pelo pré-check client-side de PLAN_LIMIT_REACHED, nunca pelo
   // mapeamento de erro de lifecycle-unavailable (getErrorMessage/plan_limit_read são um caminho

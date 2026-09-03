@@ -260,6 +260,21 @@ export const PLAN_PRESENTATION: Record<PlanType, PlanPresentation> = {
 };
 
 /**
+ * PLAN-IMPL-04B §31 — mesmos valores de PLAN_PRICING, em centavos, para o único lugar que de fato cria
+ * uma cobrança (server/subscriptions.ts's PreApproval.create) nunca precisar calcular dinheiro a partir
+ * de float. `PLAN_PRICING` continua a fonte para APRESENTAÇÃO (client, já em uso, já testada, nunca
+ * tocada por este ticket); `PLAN_PRICE_CENTS` é a fonte para COBRANÇA. Um teste garante que os dois
+ * nunca divergem (cents/100 === PLAN_PRICING), então nunca há duas verdades sobre o mesmo preço.
+ */
+export const PLAN_PRICE_CENTS: Record<PlanType, { readonly monthly: number; readonly annual: number }> = {
+  free: { monthly: 0, annual: 0 },
+  pro: { monthly: 4990, annual: 49900 },
+  premium: { monthly: 7990, annual: 79900 },
+};
+
+export type BillingCycle = 'monthly' | 'annual';
+
+/**
  * PLAN-IMPL-04A §26/§29/§57 — único lugar que define "perto do limite" (80%): nenhum componente deve
  * repetir o número 0.8. `limit === UNLIMITED` nunca é "perto do limite" (mesma semântica de
  * canAddProduct/canAddService/canAddClient — sentinel nunca comparado como se fosse um teto real).
@@ -282,11 +297,23 @@ export function recommendedUpgradePlan(currentPlan: PlanType): PlanType | null {
 }
 
 /**
- * PLAN-IMPL-04A §15/§49 — shape puro (sem lógica) de `GET /api/plans/purchase-availability`
- * (server/plan-purchase-availability.ts). Vive aqui, não em server/, para o client poder tipar a
- * resposta sem importar um módulo que lê `process.env` (Node-only, não existe no bundle do Vite).
+ * PLAN-IMPL-04A §15/§49, estendido por PLAN-IMPL-04B §12/§13/§29 — shape puro (sem lógica) de
+ * `GET /api/plans/purchase-availability` (server/plan-purchase-availability.ts). Vive aqui, não em
+ * server/, para o client poder tipar a resposta sem importar um módulo que lê `process.env` (Node-only,
+ * não existe no bundle do Vite).
+ *
+ * `pricing_configuration_mismatch` (§13) — o "price match gate": o valor realmente configurado para
+ * cobrança não bate o alvo canônico (PLAN_PRICE_CENTS). Isto é o que torna estruturalmente impossível
+ * a UI mostrar R$79,90 e o checkout cobrar R$19,90 — nunca `available: true` quando os dois divergem.
+ * `not_supported_by_provider` (§29) — cadência anual: a API do Mercado Pago (PreApproval.auto_recurring)
+ * só documenta `frequency_type: "days"|"months"`, sem cadência anual nativa; permanece `false` sempre,
+ * a UI continua mostrando o preço-alvo anual só como referência (nunca um checkout fake).
  */
-export type PurchaseUnavailableReason = "provider_not_configured" | "pricing_v2_not_activated";
+export type PurchaseUnavailableReason =
+  | "provider_not_configured"
+  | "pricing_v2_not_activated"
+  | "pricing_configuration_mismatch"
+  | "not_supported_by_provider";
 
 export interface PlanPurchaseAvailabilityEntry {
   readonly available: boolean;
@@ -296,6 +323,7 @@ export interface PlanPurchaseAvailabilityEntry {
 export interface PlanPurchaseAvailability {
   readonly pro: PlanPurchaseAvailabilityEntry;
   readonly premium: PlanPurchaseAvailabilityEntry;
+  readonly annual: PlanPurchaseAvailabilityEntry;
 }
 
 // Subscription status from Mercado Pago PreApproval
@@ -373,6 +401,20 @@ export interface PlanData {
   // do plano efetivo em si (que é sempre recalculado do zero a partir de trial+base, nunca deste cache).
   lastAppliedEffectivePlan?: PlanType | null;
   lastLifecycleEvaluatedAt?: Date | null;
+
+  // --- PLAN-IMPL-04B: representação genérica de assinatura paga para compras NOVAS (Pro ou Premium
+  // v2) — nunca escrita por uma assinatura legada (que continua inteiramente nos campos premiumActive/
+  // premiumExpiresAt/premiumSource acima, intocados). `pricingVersion` presente é o próprio sinal de
+  // "isto é uma compra nova"; sua ausência é o sinal de "isto é legado" (§4/§6 do ticket — nenhuma
+  // migração, nenhuma reescrita retroativa). `currentPlan` já é genérico (PlanType) e é reaproveitado
+  // como está — nunca um segundo campo paralelo só para "qual plano pago" (minimização de campos, §2 do
+  // ticket). `paidThrough` é o equivalente genérico de `premiumExpiresAt` (mesma semântica exata: null =
+  // renovando/sem fim conhecido; uma data = carência até quando o acesso já pago continua valendo depois
+  // de cancelar) — deliberadamente um campo NOVO e SEPARADO, nunca compartilhado com premiumExpiresAt,
+  // para nenhuma assinatura legada jamais ser afetada por esta lógica nova.
+  paidThrough?: Date | null;
+  pricingVersion?: 'v2' | null;
+  billingCycle?: BillingCycle | null;
 }
 
 // Firestore document: system/config
@@ -436,16 +478,24 @@ export function toEntitlementDate(value: unknown): Date | null {
   return null;
 }
 
-export function isPremiumActive(planData: PlanData | null): boolean {
+export function isPremiumActive(planData: PlanData | null, now: Date = new Date()): boolean {
   if (!planData) return false;
-
-  const now = new Date();
 
   // RELEASE-09: o período pago manda sobre o status. Uma assinatura `authorized` cujo período já
   // venceu não pode continuar Premium só pelo rótulo do status (antes, este early-return pulava a
   // verificação de data por completo).
   const premiumExpiresAt = toEntitlementDate(planData.premiumExpiresAt);
   if (premiumExpiresAt && now.getTime() >= premiumExpiresAt.getTime()) {
+    return false;
+  }
+
+  // PLAN-IMPL-04B: uma assinatura Premium v2 grava carência em `paidThrough`, não `premiumExpiresAt`
+  // (campo exclusivamente legado). Mesma regra RELEASE-09 acima, campo novo — sem isto, um v2 expirado
+  // "sobreviveria" via `hasDirectPremiumFlag` logo abaixo, já que `currentPlan` continua "premium" como
+  // registro histórico da última compra. Isto é sempre um no-op para documentos legados: eles nunca têm
+  // `paidThrough` gravado.
+  const paidThrough = toEntitlementDate(planData.paidThrough);
+  if (paidThrough && now.getTime() >= paidThrough.getTime()) {
     return false;
   }
 
@@ -505,15 +555,48 @@ export function isTrialCurrentlyActive(planData: PlanData | null, now: Date = ne
 }
 
 /**
+ * PLAN-IMPL-04B §2/§3 — mecanismo GENÉRICO de assinatura paga (Pro ou Premium v2), paralelo a
+ * `isPremiumActive` mas nunca compartilhando seus campos: `pricingVersion` ausente = nenhuma
+ * assinatura v2 nesta conta (toda conta legada cai aqui, devolve null, e resolveBaseCommercialPlan
+ * cai no fallback de isPremiumActive logo abaixo — comportamento 100% inalterado para quem já tinha
+ * Premium 19,90 antes deste ticket). Mesma semântica de carência de `premiumExpiresAt`: `paidThrough`
+ * null = renovando/sem fim conhecido; uma data no passado = acesso encerrado; uma data no futuro =
+ * cancelado mas ainda dentro do período já pago (§25/§26 do ticket — mesma garantia, campo separado).
+ */
+export function resolveGenericPaidPlan(planData: PlanData | null, now: Date = new Date()): PlanType | null {
+  if (!planData || !planData.pricingVersion) return null;
+  const plan = planData.currentPlan === PLANS.PRO || planData.currentPlan === PLANS.PREMIUM ? planData.currentPlan : null;
+  if (!plan) return null;
+
+  const paidThrough = toEntitlementDate(planData.paidThrough);
+  if (paidThrough && now.getTime() >= paidThrough.getTime()) return null;
+
+  if (planData.subscriptionStatus === 'authorized') return plan;
+  if (paidThrough && now.getTime() < paidThrough.getTime()) return plan;
+
+  return null;
+}
+
+/**
  * PLAN-IMPL-01 §3/§4, agora SEM considerar trial (PLAN-IMPL-03 §4) — o plano BASE, isto é, o que este
  * tenant tem de verdade via assinatura/admin/indicação, ignorando qualquer boost temporário de trial.
  * Usado para exibição ("Seu plano base: Free") e para comparar transições de plano EFETIVO sem o
  * trial mascarar o base por baixo (ex.: ensurePlanLifecycleCurrent precisa saber que uma trial-driven
  * effective premium volta para "pro", não para "free", quando basePlan já era "pro" — §14 do ticket).
+ *
+ * PLAN-IMPL-04B — `resolveGenericPaidPlan` é checado PRIMEIRO: uma assinatura v2 (Pro ou Premium)
+ * nunca depende de `isPremiumActive`/`premiumActive` (que ficam sempre `false`/ausentes para uma conta
+ * que só tem estado v2). Para qualquer conta sem `pricingVersion`, `resolveGenericPaidPlan` devolve
+ * `null` imediatamente e o resto da função roda exatamente como antes deste ticket.
  */
-export function resolveBaseCommercialPlan(planData: PlanData | null): PlanType {
-  if (isPremiumActive(planData)) return PLANS.PREMIUM;
-  if (planData?.currentPlan === PLANS.PRO) return PLANS.PRO;
+export function resolveBaseCommercialPlan(planData: PlanData | null, now: Date = new Date()): PlanType {
+  const genericPaidPlan = resolveGenericPaidPlan(planData, now);
+  if (genericPaidPlan) return genericPaidPlan;
+  if (isPremiumActive(planData, now)) return PLANS.PREMIUM;
+  // Este fallback é só para contas que NUNCA tiveram pricingVersion (legado, sem expiração própria de
+  // Pro) — uma conta v2 expirada não pode "renascer" aqui: resolveGenericPaidPlan já decidiu que o
+  // período pago acabou, e currentPlan continua "pro" só como registro histórico da última compra.
+  if (!planData?.pricingVersion && planData?.currentPlan === PLANS.PRO) return PLANS.PRO;
   return PLANS.FREE;
 }
 
@@ -528,7 +611,7 @@ export function resolveBaseCommercialPlan(planData: PlanData | null): PlanType {
  */
 export function resolveCommercialPlan(planData: PlanData | null, now: Date = new Date()): PlanType {
   if (isTrialCurrentlyActive(planData, now)) return PLANS.PREMIUM;
-  return resolveBaseCommercialPlan(planData);
+  return resolveBaseCommercialPlan(planData, now);
 }
 
 export function getActivePlan(planData: PlanData | null): PlanType {

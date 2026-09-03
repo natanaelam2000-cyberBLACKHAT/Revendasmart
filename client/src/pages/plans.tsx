@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
-import { Check, Sparkles } from "lucide-react";
+import { Check, Sparkles, Loader2 } from "lucide-react";
 import { Layout } from "@/components/layout";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { usePlan } from "@/providers/PlanProvider";
 import { usePlanPurchaseAvailability } from "@/hooks/usePlanPurchaseAvailability";
 import { formatTrialDaysRemaining } from "@/lib/plan-helpers";
+import { apiRequest, buildApiErrorDisplayMessage } from "@/lib/api-client";
 import { PLANS, PLAN_CONFIG, PLAN_PRESENTATION, PLAN_PRICING, type PlanType } from "@shared/monetization";
 
 /**
@@ -67,6 +68,31 @@ function PlanCard({
 
   const isFree = plan === PLANS.FREE;
   const priceValue = cycle === "annual" ? price.annual : price.monthly;
+
+  // PLAN-IMPL-04B §14/§34 — confirmação mínima (plano/cadência/preço) antes de chamar o endpoint real,
+  // nunca um checkout disparado direto no primeiro clique. `billingCycle` sempre "monthly" no corpo da
+  // requisição: anual nunca tem disponibilidade real (§29), então nunca chega a esta função com cycle
+  // "annual" e purchaseAvailable true ao mesmo tempo — mas o servidor também recusa por conta própria
+  // (§10), então esta tela nunca é a única linha de defesa.
+  const [purchaseState, setPurchaseState] = useState<"idle" | "confirming" | "purchasing" | "error">("idle");
+  const [purchaseError, setPurchaseError] = useState("");
+
+  async function handleConfirmPurchase() {
+    setPurchaseState("purchasing");
+    setPurchaseError("");
+    try {
+      const data = await apiRequest<{ initPoint?: string }>("/api/subscriptions/create", {
+        method: "POST",
+        auth: true,
+        body: { plan, billingCycle: "monthly" },
+      });
+      if (!data.initPoint) throw new Error("Link de checkout não retornado pela API.");
+      window.location.href = data.initPoint;
+    } catch (err) {
+      setPurchaseError(buildApiErrorDisplayMessage(err, "Não foi possível iniciar a assinatura agora. Tente novamente."));
+      setPurchaseState("error");
+    }
+  }
 
   return (
     <section
@@ -153,14 +179,46 @@ function PlanCard({
 
         {cardState.kind === "not_current" && !isFree && !(plan === PLANS.PREMIUM && hasPaidSubscription) && (
           purchaseAvailable ? (
-            <button
-              type="button"
-              onClick={() => setLocation("/subscribe")}
-              className="w-full min-h-11 rounded-2xl bg-primary text-white font-black py-3 text-sm active:scale-95 transition-all"
-              data-testid={`button-subscribe-plan-${plan}`}
-            >
-              Assinar {presentation.title}
-            </button>
+            purchaseState === "confirming" || purchaseState === "purchasing" || purchaseState === "error" ? (
+              <div className="rounded-2xl border border-primary/30 bg-primary/5 p-3 space-y-2" data-testid={`panel-confirm-purchase-${plan}`}>
+                <p className="text-xs font-bold text-foreground text-center">
+                  Confirmar {presentation.title} · R$ {formatBRL(price.monthly)}/mês
+                </p>
+                {purchaseError && (
+                  <p className="text-[11px] text-red-600 text-center" data-testid={`text-purchase-error-${plan}`}>{purchaseError}</p>
+                )}
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setPurchaseState("idle"); setPurchaseError(""); }}
+                    disabled={purchaseState === "purchasing"}
+                    className="flex-1 min-h-11 rounded-xl bg-white border border-border/60 text-foreground font-bold text-xs disabled:opacity-60"
+                    data-testid={`button-cancel-purchase-${plan}`}
+                  >
+                    Voltar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmPurchase}
+                    disabled={purchaseState === "purchasing"}
+                    className="flex-1 min-h-11 rounded-xl bg-primary text-white font-black text-xs disabled:opacity-60 flex items-center justify-center gap-1.5"
+                    data-testid={`button-confirm-purchase-${plan}`}
+                  >
+                    {purchaseState === "purchasing" && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    Confirmar
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setPurchaseState("confirming")}
+                className="w-full min-h-11 rounded-2xl bg-primary text-white font-black py-3 text-sm active:scale-95 transition-all"
+                data-testid={`button-subscribe-plan-${plan}`}
+              >
+                Assinar {presentation.title}
+              </button>
+            )
           ) : (
             <div
               className="w-full min-h-11 rounded-2xl border border-border/60 text-center py-3 text-xs font-bold text-muted-foreground flex items-center justify-center"

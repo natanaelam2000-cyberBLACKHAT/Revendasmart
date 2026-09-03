@@ -1164,9 +1164,10 @@ export function registerPaymentRoutes(
   app.delete("/api/payments/:chargeId", requireAuth, paymentDeleteRateLimit, handleDeleteCharge);
 
   // Subscription stubs — wired but not implemented (prevents 404 in future)
-  app.post("/api/subscriptions/create", requireAuth, (_req, res) => {
-    res.status(501).json({ message: "Subscription billing coming soon", prepared: true });
-  });
+  // PLAN-IMPL-04B: /create agora tem uma implementação real em registerSubscriptionRoutes
+  // (server/subscriptions.ts) — o stub aqui foi removido porque, sendo registrado antes
+  // (registerPaymentRoutes roda antes de registerSubscriptionRoutes em routes.ts), ele
+  // interceptava TODA requisição para essa rota e a implementação real nunca era alcançada.
   app.post("/api/subscriptions/cancel", requireAuth, (_req, res) => {
     res.status(501).json({ message: "Subscription billing coming soon", prepared: true });
   });

@@ -30,8 +30,9 @@ import type { Express, NextFunction, Request, Response } from "express";
 import * as crypto from "crypto";
 import { MercadoPagoConfig, PreApproval } from "mercadopago";
 import { getFirebaseAdmin } from "./firebase-admin-init";
-import type { SubscriptionStatus, GlobalConfig } from "../shared/monetization";
-import { DEFAULT_GLOBAL_CONFIG } from "../shared/monetization";
+import type { SubscriptionStatus, GlobalConfig, BillingCycle, PlanType } from "../shared/monetization";
+import { DEFAULT_GLOBAL_CONFIG, PLAN_PRICE_CENTS, PLANS, resolveGenericPaidPlan } from "../shared/monetization";
+import { getPlanPurchaseAvailability } from "./plan-purchase-availability";
 import { logError, logInfo, logWarn } from "./logger";
 import {
   maskMercadoPagoExternalId,
@@ -301,8 +302,14 @@ return s === "authorized" || s === "active" || s === "approved" || p === "approv
  * CONSERVADOR (§10 legacy): um documento antigo, já cancelado e sem nenhuma data, não ganha Premium
  * retroativo — permanece exatamente como estava antes do RELEASE-09.
  */
+// PLAN-IMPL-04B — `paidThrough` (a carência genérica de Pro/Premium v2, shared/monetization.ts) entra
+// como um fallback NO MEIO, nunca antes de `premiumExpiresAt`: para qualquer documento legado,
+// `premiumExpiresAt` (quando presente) continua decidindo sozinho, exatamente como antes deste ticket —
+// `paidThrough` nunca é escrito em um documento legado, então este fallback só participa de verdade em
+// documentos v2, onde `premiumExpiresAt` nunca existe. Comportamento 100% inalterado para quem já
+// tinha assinatura antes de PLAN-IMPL-04B.
 export function resolvePaidThroughDate(planData: any): Date | null {
-  return toDateOrNull(planData?.premiumExpiresAt) ?? toDateOrNull(planData?.nextBillingAt);
+  return toDateOrNull(planData?.premiumExpiresAt) ?? toDateOrNull(planData?.paidThrough) ?? toDateOrNull(planData?.nextBillingAt);
 }
 
 /**
@@ -342,6 +349,12 @@ return Date.now() - updated.getTime() < 15 * 60 * 1000;
 function shouldBlockNewSubscription(planData: any): { blocked: boolean; reason: string } {
 if (!planData) return { blocked: false, reason: "no_plan_data" };
 if (planData.premiumActive) return { blocked: true, reason: "premium_active_true" };
+// PLAN-IMPL-04B §17 — mesma proteção genérica para Pro/Premium v2: cobre TAMBÉM o caso "cancelado mas
+// ainda dentro do período pago" (subscriptionStatus não é mais authorized/active/approved, então a
+// checagem de baixo sozinha não pegaria), reaproveitando a MESMA função que resolveBaseCommercialPlan
+// usa — nunca uma segunda lógica de carência. Para um documento legado (sem pricingVersion), esta
+// checagem é sempre um no-op (resolveGenericPaidPlan devolve null), comportamento inalterado.
+if (resolveGenericPaidPlan(planData)) return { blocked: true, reason: "existing_generic_paid_plan_active" };
 if (isSubscriptionValid(planData.subscriptionStatus, planData.paymentStatus)) {
 return { blocked: true, reason: "existing_valid_subscription_or_payment" };
 }
@@ -693,6 +706,234 @@ export type ProviderSubscriptionLookup = {
   externalReference?: string | null;
 };
 
+// ---------------------------------------------------------------------------
+// PLAN-IMPL-04B — identidade de plano no provider
+// ---------------------------------------------------------------------------
+/**
+ * §7/§22/§43 — o `external_reference` de uma assinatura NOVA (Pro ou Premium v2) carrega uid+plano+
+ * versão+cadência, nunca só o uid cru (formato legado). `:v2:` logo após o uid é o próprio sinal de
+ * versão — qualquer coisa sem esse marcador (incluindo TODO `external_reference` já existente hoje,
+ * gravado antes deste ticket) é tratada como legado, plano sempre Premium (a única coisa que qualquer
+ * assinatura real vendida antes de PLAN-IMPL-04B poderia ser). Nunca lança em formato inesperado — um
+ * valor estranho do provider não pode derrubar o sync, só perde granularidade de plano e cai no
+ * comportamento seguro (legado) já existente.
+ */
+export type ParsedSubscriptionReference =
+  | { readonly kind: "v2"; readonly uid: string; readonly plan: "pro" | "premium"; readonly billingCycle: BillingCycle }
+  | { readonly kind: "legacy"; readonly uid: string };
+
+export function buildSubscriptionExternalReference(uid: string, plan: "pro" | "premium", billingCycle: BillingCycle): string {
+  return `${uid}:v2:${plan}:${billingCycle}`;
+}
+
+export function parseSubscriptionExternalReference(raw: string | null | undefined): ParsedSubscriptionReference | null {
+  if (!raw) return null;
+  const parts = raw.split(":");
+  if (parts.length === 4 && parts[1] === "v2" && (parts[2] === "pro" || parts[2] === "premium") && (parts[3] === "monthly" || parts[3] === "annual")) {
+    return { kind: "v2", uid: parts[0], plan: parts[2], billingCycle: parts[3] };
+  }
+  return { kind: "legacy", uid: raw };
+}
+
+/**
+ * §2/§6/§8 — caminho de sync GENÉRICO (Pro ou Premium v2), estrutural e deliberadamente SEPARADO de
+ * `syncPlanDataFromSubscription` (que continua intocada, servindo só o caminho legado). Reaproveita a
+ * MESMA classificação pura de status (`reconcilePremiumStatus` — "authorized = acesso ativo" é um fato
+ * do provider, não específico de Premium) e os MESMOS guards de dedup/staleness — nunca uma segunda
+ * implementação dessas garantias. Escreve só campos genéricos (`currentPlan`, `paidThrough`,
+ * `pricingVersion`, `billingCycle`) — nunca `premiumActive`/`premiumExpiresAt`/`premiumSource`, que
+ * ficam para sempre intocados por este caminho (§4/§6 do ticket).
+ */
+async function syncGenericPaidPlanFromSubscription(
+  uid: string,
+  subscriptionId: string,
+  purchasedPlan: "pro" | "premium",
+  billingCycle: BillingCycle,
+  subscriptionStatus: SubscriptionStatus,
+  paymentStatus?: string,
+  nextBillingDate?: string | null,
+  mercadoPagoPaymentId?: string | null,
+  eventContext: SubscriptionSyncContext = {},
+): Promise<SubscriptionSyncResult> {
+  const admin = getFirebaseAdmin();
+  const db = admin.firestore();
+  const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+
+  const existingSnap = await planRef.get();
+  const existingData = existingSnap.data();
+  const eventId = eventContext.eventId?.trim() || null;
+  const eventOccurredAt = toDateOrNull(eventContext.eventOccurredAt);
+
+  if (isDuplicateSubscriptionEvent(existingData, eventId)) {
+    subInfo("[syncGenericPaidPlanFromSubscription] duplicate_event", {
+      subscriptionId: maskMercadoPagoExternalId(subscriptionId),
+      eventId: maskMercadoPagoExternalId(eventId),
+      source: eventContext.source ?? "manual",
+    });
+    return { applied: false, reason: "duplicate_event" };
+  }
+  if (isOlderSubscriptionEvent(existingData, eventOccurredAt)) {
+    subInfo("[syncGenericPaidPlanFromSubscription] stale_event", {
+      subscriptionId: maskMercadoPagoExternalId(subscriptionId),
+      eventId: maskMercadoPagoExternalId(eventId),
+      source: eventContext.source ?? "manual",
+    });
+    return { applied: false, reason: "stale_event" };
+  }
+
+  const reconciliation = reconcilePremiumStatus(subscriptionStatus, paymentStatus, existingData);
+  const accessActive = reconciliation.premiumActive;
+  const subscriptionRenewing = isRenewingSubscriptionStatus(subscriptionStatus);
+
+  const update: Record<string, any> = {
+    billingProvider: "mercado_pago",
+    subscriptionId,
+    subscriptionStatus,
+    paymentStatus: paymentStatus ?? null,
+    mercadoPagoPaymentId: mercadoPagoPaymentId ?? null,
+    pricingVersion: "v2",
+    billingCycle,
+    currentPlan: accessActive ? purchasedPlan : "free",
+    autoRenew: subscriptionRenewing,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    lastSubscriptionSyncSource: eventContext.source ?? "manual",
+  };
+  if (eventId) update.lastSubscriptionEventId = eventId;
+  if (eventOccurredAt) update.lastSubscriptionEventAt = eventOccurredAt;
+
+  // §19/§21 — mesma regra do caminho legado: uma assinatura Premium real que ativa enquanto o trial
+  // ainda conta como ativo marca o trial "converted" (nunca reaparece depois, nunca reinicia). Só para
+  // Premium: comprar Pro durante um trial ativo NÃO "converte" nada (nada premium foi comprado) — o
+  // trial segue seu curso normal e expira sozinho, exatamente como §20 pede (basePlan=pro, effectivePlan
+  // continua premium até o trial acabar por conta própria).
+  if (accessActive && purchasedPlan === PLANS.PREMIUM && existingData?.trialStatus === "active") {
+    update.trialStatus = "converted";
+  }
+
+  if (accessActive) {
+    if (subscriptionRenewing) {
+      update.paidThrough = null;
+      update.canceledAt = null;
+      update.lastPaymentAt = admin.firestore.FieldValue.serverTimestamp();
+      if (nextBillingDate) update.nextBillingAt = new Date(nextBillingDate);
+    } else {
+      // Cancelado no provider mas ainda dentro do período pago — mesma lógica de "congelar a
+      // carência" que o caminho legado aplica a premiumExpiresAt, aqui para paidThrough.
+      const paidThrough = resolvePaidThroughDate(existingData);
+      if (paidThrough) update.paidThrough = paidThrough;
+      if (!existingData?.canceledAt) update.canceledAt = admin.firestore.FieldValue.serverTimestamp();
+    }
+  } else {
+    if (["cancelled", "paused"].includes(normalizeStatus(subscriptionStatus))) {
+      if (!existingData?.canceledAt) update.canceledAt = admin.firestore.FieldValue.serverTimestamp();
+    }
+    const existingPaidThrough = resolvePaidThroughDate(existingData);
+    const hadGenericEntitlement = existingData?.pricingVersion === "v2" && (existingData?.currentPlan === PLANS.PRO || existingData?.currentPlan === PLANS.PREMIUM);
+    if (hadGenericEntitlement && (!existingPaidThrough || existingPaidThrough.getTime() > Date.now())) {
+      update.paidThrough = new Date();
+    }
+  }
+
+  await planRef.set(update, { merge: true });
+  return { applied: true, reason: "applied", premiumActive: accessActive };
+}
+
+export class SubscriptionCreateError extends Error {
+  readonly code: string;
+  readonly status: number;
+  readonly reason?: string;
+  constructor(code: string, message: string, status = 400, reason?: string) {
+    super(message);
+    this.name = "SubscriptionCreateError";
+    this.code = code;
+    this.status = status;
+    this.reason = reason;
+  }
+}
+
+export type ProviderSubscriptionCreationResult = { id: string; init_point?: string };
+
+/**
+ * PLAN-IMPL-04B §10/§14 — comando canônico NOVO para Pro/Premium v2, extraído do handler
+ * `POST /api/subscriptions/create` no mesmo espírito de `syncSubscriptionFromProviderCommand`:
+ * `createAtProvider` é sempre a chamada real a `PreApproval.create` em produção, e uma função fake em
+ * teste — nenhuma credencial real do provider é necessária para provar a autoridade de preço/segurança
+ * deste comando. Deliberadamente separado do endpoint legado (nunca modificado por este ticket): compra
+ * nova de QUALQUER tier passa por aqui; a assinatura Premium legada (19,90) continua exclusivamente
+ * pelo endpoint antigo, gerida como sempre foi.
+ *
+ * §10 — preço é SEMPRE resolvido aqui dentro a partir de `PLAN_PRICE_CENTS`; nada do corpo da
+ * requisição além de `plan`/`billingCycle` chega a este comando (o handler não repassa mais nada).
+ */
+export async function createSubscriptionCommand(
+  db: FirebaseFirestore.Firestore,
+  uid: string,
+  userEmail: string,
+  requestedPlan: unknown,
+  requestedBillingCycle: unknown,
+  createAtProvider: (params: { reason: string; externalReference: string; payerEmail: string; transactionAmountBRL: number }) => Promise<ProviderSubscriptionCreationResult>,
+): Promise<
+  | { existing: true; response: ReturnType<typeof buildExistingSubscriptionResponse> }
+  | { subscriptionId: string; initPoint?: string; status: "pending"; plan: "pro" | "premium"; billingCycle: BillingCycle; priceCents: number }
+> {
+  if (requestedPlan !== PLANS.PRO && requestedPlan !== PLANS.PREMIUM) {
+    throw new SubscriptionCreateError("INVALID_PLAN", "Plano inválido.", 400);
+  }
+  // §29 — cadência anual não tem suporte real no provider (auto_recurring só documenta days/months) —
+  // recusada aqui, nunca "fingida" com frequency:12 sem prova de que o provider real aceita.
+  if ((requestedBillingCycle ?? "monthly") !== "monthly") {
+    throw new SubscriptionCreateError("UNSUPPORTED_BILLING_CYCLE", "Cadência de cobrança não suportada.", 400);
+  }
+  const plan: "pro" | "premium" = requestedPlan;
+  const billingCycle: BillingCycle = "monthly";
+
+  // §13 — price match gate: só chega ao provider se a disponibilidade (que já valida credencial + flag
+  // de ativação + preço configurado == PLAN_PRICE_CENTS) disser que sim.
+  const availability = getPlanPurchaseAvailability();
+  const tierAvailability = plan === PLANS.PRO ? availability.pro : availability.premium;
+  if (!tierAvailability.available) {
+    throw new SubscriptionCreateError("PLAN_PURCHASE_UNAVAILABLE", "Este plano não está disponível para assinatura agora.", 409, tierAvailability.reason ?? undefined);
+  }
+
+  const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
+  const planSnap = await planRef.get();
+  const existingData = planSnap.data();
+
+  // §17 — reaproveita a MESMA proteção contra duplicidade do endpoint legado (agora também genérica):
+  // bloqueia tanto uma segunda assinatura legada quanto uma segunda v2, ativa ou ainda dentro do
+  // período pago após cancelamento. V1 não implementa troca de plano pago em curso — usuário com
+  // QUALQUER plano pago ativo é bloqueado aqui, não redirecionado para uma troca.
+  const block = shouldBlockNewSubscription(existingData);
+  if (block.blocked) {
+    return { existing: true, response: buildExistingSubscriptionResponse(existingData, block.reason) };
+  }
+
+  // §10/§31 — preço SEMPRE do servidor, sempre a partir dos centavos canônicos (nunca um float
+  // recalculado, nunca nada vindo do chamador).
+  const priceCents = PLAN_PRICE_CENTS[plan].monthly;
+  const transactionAmountBRL = priceCents / 100;
+  const planLabel = plan === PLANS.PRO ? "RevendaSmart Pro" : "RevendaSmart Premium";
+
+  const created = await createAtProvider({
+    reason: planLabel,
+    // §7/§22/§43 — identidade de plano explícita e server-gerada, nunca inferida só do amount.
+    externalReference: buildSubscriptionExternalReference(uid, plan, billingCycle),
+    payerEmail: userEmail,
+    transactionAmountBRL,
+  });
+
+  await planRef.set({
+    billingProvider: "mercado_pago",
+    subscriptionId: created.id,
+    subscriptionStatus: "pending",
+    pricingVersion: "v2",
+    billingCycle,
+    updatedAt: getFirebaseAdmin().firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  return { subscriptionId: created.id, initPoint: created.init_point, status: "pending", plan, billingCycle, priceCents };
+}
+
 /**
  * PLAN-IMPL-03-VERIFY-FINALIZE §4 — extraída do handler `POST /api/app-subscription/sync-now` (única
  * mudança: as ~10 linhas que chamavam `new PreApproval(mpClient).get(...)` e extraíam status/payment/
@@ -711,13 +952,23 @@ export async function syncSubscriptionFromProviderCommand(
   source: SubscriptionSyncSource = "sync-now",
 ): Promise<{ ownershipMismatch: true } | (SubscriptionSyncResult & Pick<ProviderSubscriptionLookup, "status" | "paymentStatus">)> {
   const lookup = await fetchFromProvider(subscriptionId);
-  if (lookup.externalReference && String(lookup.externalReference) !== uid) {
+  // PLAN-IMPL-04B — o `external_reference` de uma assinatura v2 nunca é o uid cru (carrega plano+
+  // versão+cadência junto, §22/§43): a checagem de ownership precisa comparar contra o uid PARSEADO,
+  // nunca a string inteira, ou toda assinatura v2 real seria rejeitada aqui como se fosse de outro
+  // usuário — bug que existiria se este trecho não tivesse sido revisado nesta extensão.
+  const parsedReference = parseSubscriptionExternalReference(lookup.externalReference);
+  if (parsedReference && parsedReference.uid !== uid) {
     return { ownershipMismatch: true };
   }
-  const syncResult = await syncPlanDataFromSubscription(
-    uid, subscriptionId, lookup.status, lookup.paymentStatus, lookup.nextBillingDate ?? null, lookup.mercadoPagoPaymentId ?? null,
-    { source },
-  );
+  const syncResult = parsedReference?.kind === "v2"
+    ? await syncGenericPaidPlanFromSubscription(
+        uid, subscriptionId, parsedReference.plan, parsedReference.billingCycle, lookup.status, lookup.paymentStatus,
+        lookup.nextBillingDate ?? null, lookup.mercadoPagoPaymentId ?? null, { source },
+      )
+    : await syncPlanDataFromSubscription(
+        uid, subscriptionId, lookup.status, lookup.paymentStatus, lookup.nextBillingDate ?? null, lookup.mercadoPagoPaymentId ?? null,
+        { source },
+      );
   return { ...syncResult, status: lookup.status, paymentStatus: lookup.paymentStatus };
 }
 
@@ -866,6 +1117,72 @@ subInfo("[subscriptions/create] Request received");
 }
 });
 
+  // ---------------------------------------------------------------------------
+  // PLAN-IMPL-04B — endpoint canônico NOVO para Pro/Premium v2 (§14/§68). Handler fino: toda a lógica
+  // de preço/segurança/idempotência vive em `createSubscriptionCommand` (testável sem credencial real
+  // do provider); aqui só monta a chamada REAL a `PreApproval.create` e mapeia erros para HTTP.
+  // ---------------------------------------------------------------------------
+  app.post("/api/subscriptions/create", requireAuth, subscriptionCreateRateLimit, async (req: Request, res: Response) => {
+    const uid = (req as any).firebaseUid as string;
+
+    subInfo("[subscriptions/generic-create] Request received");
+
+    if (sendSubscriptionCredentialError(res, "create", uid)) return;
+
+    try {
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+      const userRecord = await admin.auth().getUser(uid);
+      const userEmail = userRecord.email ?? "";
+
+      const result = await createSubscriptionCommand(
+        db, uid, userEmail, (req.body as any)?.plan, (req.body as any)?.billingCycle,
+        async ({ reason, externalReference, payerEmail, transactionAmountBRL }) => {
+          const preApproval = new PreApproval(mpClient);
+          const response = await preApproval.create({
+            body: {
+              reason,
+              external_reference: externalReference,
+              payer_email: payerEmail,
+              auto_recurring: {
+                frequency: 1,
+                frequency_type: "months",
+                transaction_amount: transactionAmountBRL,
+                currency_id: "BRL",
+              },
+              back_url: `${FRONTEND_URL}/plans`,
+              status: "pending",
+            },
+          });
+          // Fronteira de sistema (resposta do provider): nunca grava um registro incompleto se o SDK
+          // devolver sem `id` — falha fechado em vez de silenciosamente persistir undefined.
+          if (!response.id) {
+            throw new Error("Mercado Pago não retornou um id de assinatura.");
+          }
+          return { id: response.id, init_point: response.init_point };
+        },
+      );
+
+      if ("existing" in result) {
+        return res.status(200).json(result.response);
+      }
+      return res.json(result);
+
+    } catch (error) {
+      if (error instanceof SubscriptionCreateError) {
+        return res.status(error.status).json({ error: error.code, ...(error.reason ? { reason: error.reason } : {}) });
+      }
+      const msg = error instanceof Error ? error.message : String(error);
+      logSubError("create_generic_subscription", uid, msg, {
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
+      return res.status(500).json({
+        error: "SUBSCRIPTION_CREATE_ERROR",
+        message: "Não foi possível iniciar a assinatura agora. Tente novamente em instantes.",
+      });
+    }
+  });
+
   // ✅ CANCEL
   app.post("/api/app-subscription/cancel", requireAuth, subscriptionMutationRateLimit, async (req: Request, res: Response) => {
     const uid = (req as any).firebaseUid as string;
@@ -890,15 +1207,25 @@ subInfo("[subscriptions/create] Request received");
 
       // RELEASE-09: cancelar = parar de renovar, preservando o período JÁ PAGO. O fim desse período é
       // resolvido ANTES de qualquer escrita, e nunca é encurtado por este endpoint.
+      // PLAN-IMPL-04B — `resolvePaidThroughDate` já foi estendida (aditivamente) para também checar
+      // `paidThrough` (v2) depois de `premiumExpiresAt` (legado) — este cálculo já funciona para os dois
+      // sem nenhuma mudança adicional aqui.
       const paidThrough = resolvePaidThroughDate(planData);
       const stillWithinPaidPeriod = Boolean(paidThrough && Date.now() < paidThrough.getTime());
+      // §8 — qual plano esta assinatura representa: para v2 (Pro ou Premium), o `currentPlan` já
+      // persistido; para legado (sem pricingVersion), sempre Premium — a única coisa que qualquer
+      // assinatura vendida antes de PLAN-IMPL-04B poderia ser.
+      const isGenericV2 = planData?.pricingVersion === "v2";
+      const purchasedPlan: PlanType = isGenericV2 && (planData?.currentPlan === PLANS.PRO || planData?.currentPlan === PLANS.PREMIUM)
+        ? planData.currentPlan
+        : PLANS.PREMIUM;
 
       const buildCancelResponse = (idempotent: boolean) => ({
         success: true,
         status: "cancelled" as const,
         ...(idempotent ? { idempotent: true } : {}),
         premiumActive: stillWithinPaidPeriod,
-        currentPlan: stillWithinPaidPeriod ? "premium" : "free",
+        currentPlan: stillWithinPaidPeriod ? purchasedPlan : "free",
         premiumExpiresAt: paidThrough ? paidThrough.toISOString() : null,
         autoRenew: false,
       });
@@ -925,9 +1252,15 @@ subInfo("[subscriptions/create] Request received");
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
 
-      if (stillWithinPaidPeriod) {
-        // O acesso continua até o fim do período pago; a data fica congelada em `premiumExpiresAt`
-        // para não depender mais de `nextBillingAt` (que o provider deixa de atualizar).
+      if (isGenericV2) {
+        // PLAN-IMPL-04B — v2 (Pro ou Premium): nunca toca premiumActive/premiumExpiresAt/premiumSource,
+        // que ficam para sempre fora do alcance deste ramo — só os campos genéricos correspondentes.
+        cancelUpdate.currentPlan = stillWithinPaidPeriod ? purchasedPlan : "free";
+        if (paidThrough) cancelUpdate.paidThrough = paidThrough;
+      } else if (stillWithinPaidPeriod) {
+        // Legado — exatamente o código original, byte a byte. O acesso continua até o fim do período
+        // pago; a data fica congelada em `premiumExpiresAt` para não depender mais de `nextBillingAt`
+        // (que o provider deixa de atualizar).
         cancelUpdate.premiumActive = true;
         cancelUpdate.currentPlan = "premium";
         cancelUpdate.premiumExpiresAt = paidThrough;
@@ -1118,11 +1451,16 @@ app.post("/api/app-subscription/webhook", subscriptionWebhookRateLimit, async (r
     const preApproval = new PreApproval(mpClient);
     const mpSub = await preApproval.get({ id: subscriptionId });
 
-    const uid = (mpSub as any).external_reference ?? null;
+    // PLAN-IMPL-04B — mesmo motivo do sync-now: o external_reference de uma assinatura v2 carrega
+    // plano+versão+cadência junto do uid, nunca só o uid cru. Parsear aqui (nunca usar a string crua
+    // como uid) é o que permite o webhook continuar identificando corretamente o dono de QUALQUER
+    // assinatura, legada ou nova.
+    const parsedReference = parseSubscriptionExternalReference((mpSub as any).external_reference ?? null);
 
-    if (!uid) {
+    if (!parsedReference) {
       return res.status(200).json({ ok: true, skipped: true });
     }
+    const uid = parsedReference.uid;
 
     const status = mpSub.status as SubscriptionStatus;
     const paymentStatus =
@@ -1133,15 +1471,15 @@ app.post("/api/app-subscription/webhook", subscriptionWebhookRateLimit, async (r
     const mercadoPagoPaymentId = (mpSub as any).payment_id ?? null;
     const eventOccurredAt = extractMercadoPagoSubscriptionEventDate(mpSub, signatureTimestamp);
 
-    const syncResult = await syncPlanDataFromSubscription(
-      uid,
-      subscriptionId,
-      status,
-      paymentStatus,
-      nextBillingDate,
-      mercadoPagoPaymentId,
-      { eventId, eventOccurredAt, source: "webhook" },
-    );
+    const syncResult = parsedReference.kind === "v2"
+      ? await syncGenericPaidPlanFromSubscription(
+          uid, subscriptionId, parsedReference.plan, parsedReference.billingCycle, status, paymentStatus,
+          nextBillingDate, mercadoPagoPaymentId, { eventId, eventOccurredAt, source: "webhook" },
+        )
+      : await syncPlanDataFromSubscription(
+          uid, subscriptionId, status, paymentStatus, nextBillingDate, mercadoPagoPaymentId,
+          { eventId, eventOccurredAt, source: "webhook" },
+        );
 
     return res.status(200).json({ ok: true, applied: syncResult.applied, reason: syncResult.reason });
 
