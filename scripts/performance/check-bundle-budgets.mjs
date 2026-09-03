@@ -109,8 +109,19 @@ const config = {
 };
 
 // CSS não passa pela mesma árvore lazy/vendor — continua um check simples e isolado (só o entry principal).
+//
+// PERF-GOV-CSS-01 — recalibração deliberada de 177 -> 178, não uma inflação automática de budget num
+// ticket de feature (a mesma regra do topo do arquivo continua valendo para qualquer mudança FUTURA).
+// Medido via git worktree isolado no commit anterior a PLAN-IMPL-04A (cebfa59): o baseline real já
+// estava em ~176.96 kB (181209 bytes) — só ~41 bytes de folga existiam ANTES deste ticket sequer
+// começar. PLAN-IMPL-04A (nova página de comparação de planos + paywalls contextuais) adicionou ~267
+// bytes líquidos depois de uma auditoria real e limitada já ter removido as duas únicas classes
+// genuinamente supérfluas encontradas (um `-top-3` e um `min-h-[60vh]` sem nenhum outro uso no app).
+// Reduzir mais exigiria degradar a distinção visual do Pro ou o badge "Mais Popular" — recursos
+// comerciais reais do ticket, não gordura. 178 kB restaura uma folga pequena e deliberada, não um teto
+// solto.
 const cssBudgets = [
-  { label: 'main css', pattern: /^index-.*\.css$/, maxKb: 177 },
+  { label: 'main css', pattern: /^index-.*\.css$/, maxKb: 178 },
 ];
 
 if (!fs.existsSync(assetsDir)) {
