@@ -4,6 +4,7 @@ import { getFirebaseAuth } from "@/lib/firebase";
 import { usePlanData } from "@/hooks/usePlanData";
 import { buildPlanUsageSnapshot, type PlanUsageSnapshot } from "@shared/monetization";
 import { getCurrentMonthBookingUsage } from "@/lib/booking-quota";
+import { getCurrentMonthPreparationUsage } from "@/lib/ads-pro-preparation-quota";
 
 /**
  * PLAN-IMPL-02B2 §31 — total via `getCountFromServer` puro, preservados via a MESMA aggregate query com
@@ -38,17 +39,20 @@ export function usePlanUsageSnapshot() {
     setLoading(true);
     setError("");
     try {
-      const [products, services, clientsSnap, bookingsCurrentMonth] = await Promise.all([
+      const [products, services, clientsSnap, bookingsCurrentMonth, adsProPreparationsCurrentMonth] = await Promise.all([
         fetchDomainAccessCounts(uid, "products"),
         fetchDomainAccessCounts(uid, "services"),
         getCountFromServer(collection(getFirestore(), "users", uid, "clients")),
         // PLAN-IMPL-02C §45/§46 — o doc mensal é server-only (firestore.rules), então isto é sempre uma
         // chamada HTTP (server/booking-quota.ts), nunca uma leitura Firestore direta como as 3 acima.
         getCurrentMonthBookingUsage(),
+        // PLAN-IMPL-05 §31 — mesmo motivo: server/ads-pro-preparation-quota.ts, server-only.
+        getCurrentMonthPreparationUsage(),
       ]);
       setSnapshot(buildPlanUsageSnapshot(activePlan, {
         products, clients: clientsSnap.data().count, services,
         bookingsCurrentMonth: { used: bookingsCurrentMonth.used, monthKey: bookingsCurrentMonth.monthKey },
+        adsProPreparationsCurrentMonth: { used: adsProPreparationsCurrentMonth.used, monthKey: adsProPreparationsCurrentMonth.monthKey },
       }));
     } catch (err) {
       console.error("[usePlanUsageSnapshot] load error:", err);

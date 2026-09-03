@@ -14,6 +14,7 @@ import { registerMarketingProRoutes, MARKETING_PRO_DEFAULT_PROVIDER_TIMEOUT_MS }
 import { registerCreativeProfileRoutes } from "./marketing-pro-creative-profile";
 import { registerProductUnderstandingRoutes } from "./marketing-pro-product-understanding";
 import { registerProductCutoutPhotoroomRoutes } from "./product-cutout-photoroom";
+import { registerAdsProPreparationQuotaRoutes } from "./ads-pro-preparation-quota";
 import { registerProductPhotoEnhancementRoutes } from "./product-photo-enhancement-routes";
 import { registerCatalogSearchRoutes } from "./catalog-search";
 import { registerServiceQuoteRoutes } from "./service-quote-commands";
@@ -529,8 +530,11 @@ export async function registerRoutes(
   // PRO-11B — análise visual Gemini opt-in; entitlement e ownership são revalidados na própria rota.
   registerProductUnderstandingRoutes(app, requireAuth);
 
-  // RELEASE V1 §6 — recorte PhotoRoom real (Premium/admin); entitlement e ownership revalidados na rota.
+  // RELEASE V1 §6 — recorte PhotoRoom real (Pro/Premium/admin, cota mensal PLAN-IMPL-05); entitlement e
+  // ownership revalidados na rota.
   registerProductCutoutPhotoroomRoutes(app, requireAuth);
+  // PLAN-IMPL-05 §31 — leitura de uso mensal para a UI (Plano e uso), mesmo padrão de registerBookingQuotaRoutes.
+  registerAdsProPreparationQuotaRoutes(app, requireAuth, resolveServerPlan);
 
   // REVENDASMART-OWNER-ACCESS-02 — concessões internas (Tester/Premium+), sempre atrás de requireAdmin.
   registerAdminGrantRoutes(app, requireAuth);

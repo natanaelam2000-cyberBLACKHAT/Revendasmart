@@ -885,13 +885,18 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
           {/* RELEASE V1 §6/§7: PhotoRoom e melhoria de foto exigem um produto JÁ SALVO (a imagem
               original precisa existir no Storage com um productId real) — por isso só aparecem em modo
               de edição, nunca durante o cadastro inicial (a foto ainda é só um blob local até salvar).
-              Premium/admin apenas — Free nunca monta estes componentes (zero chamadas ao provider). */}
+              PLAN-IMPL-05: PhotoRoom (preparação profissional) agora é Pro-ou-Premium/admin, com cota
+              mensal server-authoritative (3/100) — Free continua sem montar o componente (zero chamadas
+              ao provider). Melhoria de foto (100% local, sem custo de provider) continua Premium/admin,
+              política de produto inalterada por este ticket. */}
+          {id && formData.imageUrl && (activePlan === "pro" || activePlan === "premium" || isAdminUser) && (
+            <Suspense fallback={<div className="rounded-2xl border border-border/40 bg-white/70 p-3.5 text-xs font-semibold text-muted-foreground">Carregando ferramentas Premium...</div>}>
+              <PhotoroomCutoutTool productId={id} originalImageUrl={formData.imageUrl} />
+            </Suspense>
+          )}
           {id && formData.imageUrl && (activePlan === "premium" || isAdminUser) && (
             <Suspense fallback={<div className="rounded-2xl border border-border/40 bg-white/70 p-3.5 text-xs font-semibold text-muted-foreground">Carregando ferramentas Premium...</div>}>
-              <div className="space-y-3">
-                <PhotoroomCutoutTool productId={id} originalImageUrl={formData.imageUrl} />
-                <ProductPhotoEnhancementTool productId={id} originalImageUrl={formData.imageUrl} />
-              </div>
+              <ProductPhotoEnhancementTool productId={id} originalImageUrl={formData.imageUrl} />
             </Suspense>
           )}
 

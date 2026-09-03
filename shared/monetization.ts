@@ -240,6 +240,10 @@ export const PLAN_PRESENTATION: Record<PlanType, PlanPresentation> = {
       'Categorias personalizadas',
       'Cobranças e links de pagamento',
       'Catálogo profissional',
+      // PLAN-IMPL-05 §37 — só entrou aqui depois do runtime real existir (proAdPreparationsMonthly
+      // agora é aplicado de verdade, server/ads-pro-preparation-quota.ts). Nunca "anúncios": a unidade
+      // vendida é o produto preparado, reutilizável em quantos anúncios o dono quiser depois.
+      '3 novos produtos preparados profissionalmente por mês',
       'Sem anúncios',
     ],
   },
@@ -254,6 +258,9 @@ export const PLAN_PRESENTATION: Record<PlanType, PlanPresentation> = {
       'Até 200 serviços',
       'Agendamentos sem o limite mensal do Free',
       'Tudo do Pro',
+      // PLAN-IMPL-05 §37 — mesmo motivo do Pro acima; número próprio (não "tudo do Pro", que já cobre o
+      // resto da lista) porque a cota é diferente (100 vs. 3).
+      '100 novos produtos preparados profissionalmente por mês',
       'A maior capacidade atual da plataforma',
     ],
   },
@@ -828,6 +835,12 @@ export interface BookingQuotaSnapshot extends PlanUsageDomainSnapshot {
   readonly monthKey: string;
 }
 
+/** PLAN-IMPL-05 §31 — mesmo shape/espírito de BookingQuotaSnapshot, para a cota mensal de NOVAS
+ * preparações profissionais do Ads Pro (nunca anúncios/exports/reuso — ver proAdPreparationsMonthly). */
+export interface AdsProPreparationQuotaSnapshot extends PlanUsageDomainSnapshot {
+  readonly monthKey: string;
+}
+
 /**
  * PLAN-IMPL-02A §20 — contrato para a futura tela de seleção pós-downgrade (PLAN-IMPL-02B2), não a tela
  * em si.
@@ -847,6 +860,9 @@ export interface PlanUsageSnapshot {
   readonly clients: PlanUsageDomainSnapshot;
   readonly services: PlanAccessDomainSnapshot;
   readonly bookingsCurrentMonth: BookingQuotaSnapshot | null;
+  /** PLAN-IMPL-05 §31 — mesma semântica de bookingsCurrentMonth: `null` só quando o chamador não passou
+   * nada, nunca um "não implementado" permanente. */
+  readonly adsProPreparationsCurrentMonth: AdsProPreparationQuotaSnapshot | null;
   readonly selectionRequired: boolean;
 }
 
@@ -885,6 +901,9 @@ export function buildPlanUsageSnapshot(
      * `limit` nunca vem daqui — é sempre PLAN_CONFIG[plan].limits.bookingsMonthly, a mesma autoridade
      * única de todo o resto deste arquivo. */
     readonly bookingsCurrentMonth?: { readonly used: number; readonly monthKey: string } | null;
+    /** PLAN-IMPL-05 §31 — mesmo espírito de bookingsCurrentMonth; `limit` sempre
+     * PLAN_CONFIG[plan].limits.proAdPreparationsMonthly. */
+    readonly adsProPreparationsCurrentMonth?: { readonly used: number; readonly monthKey: string } | null;
   },
 ): PlanUsageSnapshot {
   const limits = PLAN_CONFIG[plan].limits;
@@ -893,11 +912,15 @@ export function buildPlanUsageSnapshot(
   const bookingsCurrentMonth = counts.bookingsCurrentMonth
     ? { ...toPlanUsageDomainSnapshot(counts.bookingsCurrentMonth.used, limits.bookingsMonthly), monthKey: counts.bookingsCurrentMonth.monthKey }
     : null;
+  const adsProPreparationsCurrentMonth = counts.adsProPreparationsCurrentMonth
+    ? { ...toPlanUsageDomainSnapshot(counts.adsProPreparationsCurrentMonth.used, limits.proAdPreparationsMonthly), monthKey: counts.adsProPreparationsCurrentMonth.monthKey }
+    : null;
   return {
     products,
     clients: toPlanUsageDomainSnapshot(counts.clients, limits.clients),
     services,
     bookingsCurrentMonth,
+    adsProPreparationsCurrentMonth,
     selectionRequired: products.preserved > 0 || services.preserved > 0,
   };
 }

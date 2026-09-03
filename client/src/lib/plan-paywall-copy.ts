@@ -8,17 +8,21 @@ import { PLAN_CONFIG, PLAN_PRESENTATION, UNLIMITED, recommendedUpgradePlan, type
  * ambos dizendo "ilimitados" (falso — nem Pro nem Premium são ilimitados, §9) e recomendando Premium
  * diretamente (errado — Free deve recomendar Pro primeiro, §37).
  */
-export type PaywallResource = "products" | "clients" | "services" | "bookings";
+export type PaywallResource = "products" | "clients" | "services" | "bookings" | "adsProPreparations";
 
 const RESOURCE_LABEL: Record<PaywallResource, string> = {
   products: "produtos",
   clients: "clientes",
   services: "serviços",
   bookings: "agendamentos",
+  // PLAN-IMPL-05 §32 — nunca "anúncios": a unidade cobrada é a preparação do produto, não o anúncio.
+  adsProPreparations: "preparações profissionais",
 };
 
 function limitFor(plan: PlanType, resource: PaywallResource): number {
-  return resource === "bookings" ? PLAN_CONFIG[plan].limits.bookingsMonthly : PLAN_CONFIG[plan].limits[resource];
+  if (resource === "bookings") return PLAN_CONFIG[plan].limits.bookingsMonthly;
+  if (resource === "adsProPreparations") return PLAN_CONFIG[plan].limits.proAdPreparationsMonthly;
+  return PLAN_CONFIG[plan].limits[resource];
 }
 
 /** Mesma convenção pt-BR (separador de milhar) já usada em PLAN_PRESENTATION (ex.: "Até 2.000 clientes")
@@ -49,6 +53,25 @@ export function buildLimitReachedCopy(resource: PaywallResource, currentPlan: Pl
   const recommendedTitle = recommendedPlan ? PLAN_PRESENTATION[recommendedPlan].title : null;
   const recommendedLimit = recommendedPlan ? limitFor(recommendedPlan, resource) : null;
   const isOverLimitAfterDowngrade = typeof usedOverride === "number" && limit !== UNLIMITED && usedOverride > limit;
+
+  // PLAN-IMPL-05 §35 — texto próprio (Pro recomenda Premium com reassurance; Premium não tem próximo
+  // tier, nunca finge um "Conhecer X" para um plano que não existe, §39).
+  if (resource === "adsProPreparations") {
+    if (currentPlan === "premium") {
+      return { title: "Você atingiu a cota mensal atual.", benefitLine: null, ctaLabel: "Ver planos", recommendedPlan: null };
+    }
+    // §25 — Premium com 20 preparações num mês, rebaixado para Pro (teto 3): 20 > 3, over-limit-após-
+    // downgrade. Nenhuma preparação é apagada; a mensagem só reflete o histórico real, nunca ameaça dados.
+    const title = isOverLimitAfterDowngrade
+      ? `Você já preparou ${formatCount(usedOverride as number)} produtos profissionalmente este mês.`
+      : "Você usou as preparações profissionais deste mês.";
+    return {
+      title,
+      benefitLine: "Seu produto já preparado continua disponível para novos anúncios.",
+      ctaLabel: recommendedTitle ? `Conhecer ${recommendedTitle}` : "Ver planos",
+      recommendedPlan,
+    };
+  }
 
   const title = resource === "bookings"
     ? isOverLimitAfterDowngrade

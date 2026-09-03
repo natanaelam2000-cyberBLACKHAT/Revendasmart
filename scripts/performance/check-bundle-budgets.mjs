@@ -83,7 +83,15 @@ const config = {
   // lazy de Services/Catalog); os demais só aparecem no relatório quando crescem além do limiar de
   // visibilidade — evita dezenas de regras frágeis por arquivo pequeno (ticket §8).
   sharedChunks: {
-    'PrivateRouter': 38,
+    // PLAN-IMPL-05 — recalibrado 38 -> 39 kB (auditoria, autorizado explicitamente pelo usuário, mesmo
+    // padrão de governança do PERF-GOV-CSS-01 para o CSS). Baseline pré-ticket: 37.96 kB. Depois das
+    // adições desta ticket: 38.26 kB — 0.26 kB acima do teto antigo. Causa raiz confirmada:
+    // PrivateRouter.tsx importa de shared/monetization.ts, e esta ticket precisou estender esse módulo
+    // compartilhado com o novo tipo/lógica de AdsProPreparationQuotaSnapshot/buildPlanUsageSnapshot e as
+    // duas strings de copy comercial exigidas pelo §37 ("3"/"100 novos produtos preparados
+    // profissionalmente por mês") — nenhuma delas é código morto ou redundante. Nenhum outro budget
+    // (TOTAL JS 2550 kB, CSS 178 kB, Marketing 236 kB, ou qualquer outro chunk) foi alterado.
+    'PrivateRouter': 39,
     'CatalogShowcase': 29,
     'service-agenda-helpers': 28,
   },

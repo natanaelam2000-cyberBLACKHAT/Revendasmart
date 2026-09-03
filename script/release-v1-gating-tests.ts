@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import sharp from "sharp";
+import { PLAN_CONFIG } from "../shared/monetization";
 
 function read(path: string): string {
   return fs.readFileSync(path, "utf8");
@@ -77,7 +78,9 @@ async function run(): Promise<void> {
   // N: Free nunca monta o componente (zero chamadas ao provider) — o gate é no PAI (add-product.tsx),
   // não dentro do componente (que sempre chamaria se renderizado) — por isso a garantia real está em
   // quem decide renderizar `<PhotoroomCutoutTool>`.
-  assert.match(addProductSource, /\(activePlan === "premium" \|\| isAdminUser\) && \(\s*\n\s*<Suspense[\s\S]{0,400}<PhotoroomCutoutTool/, "N: só Premium/admin chegam a montar o componente PhotoRoom — Free nunca");
+  // PLAN-IMPL-05: o gate se expandiu de Premium-ou-admin para Pro-OU-Premium-ou-admin (cada tier com sua
+  // própria cota mensal, 3 e 100) — a garantia de fundo que importa (Free nunca monta) continua idêntica.
+  assert.match(addProductSource, /\(activePlan === "pro" \|\| activePlan === "premium" \|\| isAdminUser\) && \(\s*\n\s*<Suspense[\s\S]{0,400}<PhotoroomCutoutTool/, "N: só Pro/Premium/admin chegam a montar o componente PhotoRoom — Free nunca");
   // Bundle budget: as duas ferramentas Premium são lazy (mesmo padrão do BarcodeScanner já existente
   // nesta tela) — a maioria das visitas a /add-product nunca paga o bundle delas.
   assert.match(addProductSource, /const PhotoroomCutoutTool = lazy\(/, "N: PhotoroomCutoutTool é lazy-loaded, não infla o chunk de add-product para todo mundo");
@@ -85,14 +88,21 @@ async function run(): Promise<void> {
 
   // O/P: entitlement + idempotência real (reserva transacional exclusiva via `.create`, nunca `.set`,
   // que sobrescreveria silenciosamente numa corrida).
-  assert.match(photoroomRouteSource, /async function isPhotoroomEntitled\(uid: string\): Promise<boolean> \{/);
-  assert.match(photoroomRouteSource, /if \(await isAdminUid\(uid\)\) return true;/);
-  // OWNER-ACCESS-02: admin bypass continua igual acima; o caminho comercial passou a ser resolvido por
-  // `resolveUserEntitlements` (composição planData + concessão interna Tester/Premium+) em vez de
-  // `isPremiumActive` direto — mesma garantia de fundo (Free nunca passa), agora também cobrindo Tester/
-  // Premium+ ("todos os benefícios do Premium atual", incluso PhotoRoom).
-  assert.match(photoroomRouteSource, /const \{ entitlements \} = await resolveUserEntitlements\(admin\.firestore\(\), uid\);/);
-  assert.match(photoroomRouteSource, /return entitlements\.hasPremiumAccess;/);
+  // PLAN-IMPL-05: isPhotoroomEntitled (boolean Premium-ou-admin) virou resolvePhotoroomEntitlement
+  // (plan-aware: Pro E Premium, cada um com sua própria cota mensal via
+  // PLAN_CONFIG.limits.proAdPreparationsMonthly, aplicada de verdade em server/ads-pro-preparation-quota.ts).
+  // O bypass de admin continua idêntico — testa sem nenhum teto comercial, mesma garantia de sempre.
+  assert.match(photoroomRouteSource, /async function resolvePhotoroomEntitlement\(db: FirebaseFirestore\.Firestore, uid: string\): Promise<\{ readonly allowed: boolean; readonly plan: PlanType \| null \}> \{/);
+  assert.match(photoroomRouteSource, /if \(await isAdminUid\(uid\)\) return \{ allowed: true, plan: null \};/, "admin continua sem teto comercial, mesma garantia de sempre");
+  // OWNER-ACCESS-02: resolveServerPlan (server/plan-authoritative-mutations.ts — a MESMA autoridade já
+  // reaproveitada por booking-quota.ts e todo o resto do app) compõe planData com a concessão interna
+  // (Tester/Premium+ resolvem "premium" por dentro, via resolveUserEntitlements) — mesma garantia de
+  // fundo de antes (Free nunca é entitled), agora sem uma segunda composição de entitlement duplicada
+  // só para PhotoRoom.
+  assert.match(photoroomRouteSource, /const plan = await resolveServerPlan\(db, uid\);/);
+  assert.match(photoroomRouteSource, /return \{ allowed: PLAN_CONFIG\[plan\]\.limits\.proAdPreparationsMonthly > 0, plan \};/);
+  assert.equal(PLAN_CONFIG.free.limits.proAdPreparationsMonthly, 0, "Free nunca é entitled — 0 preparações/mês, mesma garantia de fundo de N/O/P");
+  assert.ok(PLAN_CONFIG.pro.limits.proAdPreparationsMonthly > 0 && PLAN_CONFIG.premium.limits.proAdPreparationsMonthly > 0, "Pro e Premium são entitled, cada um com sua própria cota (3 e 100)");
   assert.match(photoroomRouteSource, /transaction\.create\(ref, \{ status: "processing"/, "P: a reserva usa `.create` — Firestore rejeita a segunda chamada concorrente para o MESMO generationRequestId, então um double-click nunca dispara duas chamadas reais ao provider");
   assert.doesNotMatch(photoroomRouteSource, /runPhotoroomCutoutAdapter[\s\S]{0,400}runPhotoroomCutoutAdapter/, "O: o adapter é chamado no máximo 1 vez por request — nenhum loop/retry automático");
   assert.doesNotMatch(photoroomRouteSource, /for \(|while \(|\.retry\(/, "O/P: nenhum retry automático embutido na rota — retry é sempre uma nova chamada manual do usuário (novo generationRequestId)");
@@ -116,7 +126,9 @@ async function run(): Promise<void> {
   // de sucesso, nunca no branch de erro.
   const beforeSuccessWrite = photoroomRouteSource.slice(0, photoroomRouteSource.indexOf("await productRef.set({ approvedCutout: cutout }"));
   assert.doesNotMatch(beforeSuccessWrite, /attempt\.success === false|!attempt\.success[\s\S]{0,50}productRef\.set/, "T: nenhum caminho de falha escreve no produto antes do sucesso confirmado");
-  assert.match(photoroomRouteSource, /if \(!attempt\.success \|\| !attempt\.composition \|\| attempt\.composition\.accepted !== true\) \{[\s\S]{0,400}return sendError/, "T: toda falha retorna erro SEM persistir nada — o approvedCutout anterior (se existir) permanece intocado");
+  // PLAN-IMPL-05 — a janela cresceu de 400 para 500: o branch agora também libera a vaga de cota
+  // reservada (releasePreparationSlot) antes de retornar o erro; a garantia em si (T) não mudou.
+  assert.match(photoroomRouteSource, /if \(!attempt\.success \|\| !attempt\.composition \|\| attempt\.composition\.accepted !== true\) \{[\s\S]{0,500}return sendError/, "T: toda falha retorna erro SEM persistir nada — o approvedCutout anterior (se existir) permanece intocado");
 
   // §17: credencial inexistente falha fechado, nunca finge sucesso com heurística local no lugar.
   assert.match(photoroomAdapterSource, /if \(!input\.apiKey\.trim\(\)\) \{[\s\S]{0,320}PHOTOROOM_API_KEY_MISSING/, "sem API key, falha fechado com erro claro");

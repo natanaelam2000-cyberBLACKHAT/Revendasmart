@@ -875,6 +875,12 @@ service cloud.firestore {
         allow read, write: if false;
       }
 
+      // PLAN-IMPL-05 — lock de preparação profissional do Ads Pro (server/ads-pro-preparation-quota.ts),
+      // protege concorrência do mesmo produto/mês. Mesmo padrão server-only de planUsage/planAccessReconciliation.
+      match /adsProPreparationLocks/{productId} {
+        allow read, write: if false;
+      }
+
       match /serviceWorks/{workId} {
         allow read: if userOwnsResource(uid);
         allow create: if userOwnsResource(uid) && isValidServiceWorkCreate(uid, workId);

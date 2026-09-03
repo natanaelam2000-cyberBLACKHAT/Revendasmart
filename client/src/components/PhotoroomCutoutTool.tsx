@@ -16,10 +16,13 @@ import type { ApprovedProductCutout } from "@shared/approved-product-cutout";
  * resposta — a foto original nunca é sobrescrita, o recorte é um asset derivado à parte.
  */
 const PHOTOROOM_ERROR_MESSAGES: Record<string, string> = {
-  PHOTOROOM_PREMIUM_REQUIRED: "Remover fundo com IA é um recurso Premium.",
+  PHOTOROOM_PLAN_REQUIRED: "Remover fundo com IA é um recurso dos planos Pro e Premium.",
   PHOTOROOM_NOT_CONFIGURED: "O recorte com IA está indisponível no momento. Tente novamente mais tarde.",
   RATE_LIMITED: "Você atingiu o limite de recortes por hoje. Tente novamente amanhã.",
   GENERATION_IN_PROGRESS: "Já existe um recorte em andamento para este produto.",
+  // PLAN-IMPL-05 — cota mensal de preparações profissionais (nunca de anúncios/exports/reuso).
+  ADS_PRO_PREPARATION_LIMIT_REACHED: "Você usou as preparações profissionais deste mês. Produtos já preparados continuam disponíveis para novos anúncios.",
+  ADS_PRO_PREPARATION_IN_PROGRESS: "Já existe uma preparação em andamento para este produto. Tente novamente em instantes.",
   NO_PRODUCT_IMAGE: "Este produto não tem uma foto salva para recortar.",
   ORIGINAL_DECODE_UNAVAILABLE: "Não foi possível processar esta foto para o recorte.",
   PIXEL_GATE_REJECTED: "O recorte não passou na validação de preservação do produto — nada foi alterado.",
@@ -75,8 +78,13 @@ export function PhotoroomCutoutTool({ productId, originalImageUrl, onApplied }: 
           <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
             Recorte real do produto (PhotoRoom). A foto original nunca é alterada — o recorte fica salvo à parte.
           </p>
+          {/* PLAN-IMPL-05 §32 — a unidade cobrada é a PREPARAÇÃO do produto, nunca os anúncios feitos com
+              ele depois: reforçado aqui, no único lugar onde o dono decide "gastar" uma preparação. */}
+          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground/80">
+            Conta como 1 preparação profissional do mês. Depois de preparado, reutilize o produto em quantos anúncios quiser sem gastar outra.
+          </p>
         </div>
-        <span className="rounded-full bg-primary/10 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-primary">Premium</span>
+        <span className="rounded-full bg-primary/10 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-primary">Pro</span>
       </div>
 
       {state.phase === "idle" && (

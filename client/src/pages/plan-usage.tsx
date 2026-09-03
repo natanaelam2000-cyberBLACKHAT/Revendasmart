@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import {
-  ArrowLeft, Loader2, Package, Users, Wrench, CheckCircle2, ArchiveRestore, Search, AlertTriangle, CalendarClock,
+  ArrowLeft, Loader2, Package, Users, Wrench, CheckCircle2, ArchiveRestore, Search, AlertTriangle, CalendarClock, Sparkles,
 } from "lucide-react";
 import { Layout } from "@/components/layout";
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +12,7 @@ import { ProductImageCard } from "@/components/ProductImageCard";
 import { notifyError, notifySuccess } from "@/lib/notify";
 import type { Product } from "@/lib/mock-data";
 import type { Service } from "@shared/services";
-import { PLAN_CONFIG, UNLIMITED, isNearPlanLimit, resolvePlanAccessState, type BookingQuotaSnapshot, type PlanAccessState, type PlanType } from "@shared/monetization";
+import { PLAN_CONFIG, UNLIMITED, isNearPlanLimit, resolvePlanAccessState, type AdsProPreparationQuotaSnapshot, type BookingQuotaSnapshot, type PlanAccessState, type PlanType } from "@shared/monetization";
 import { getPlanName } from "@/lib/plan-helpers";
 import { buildLimitReachedCopy, buildNearLimitCopy } from "@/lib/plan-paywall-copy";
 import { usePlanUsageSnapshot } from "@/hooks/usePlanUsageSnapshot";
@@ -436,6 +436,58 @@ function BookingQuotaCard({ bookingsCurrentMonth, activePlan }: { bookingsCurren
   );
 }
 
+/**
+ * PLAN-IMPL-05 §31-§36 — cota mensal de NOVAS preparações profissionais do Ads Pro (PhotoRoom), nunca
+ * anúncios/exports/reuso (a cópia sempre nomeia "preparações"/"produtos preparados", nunca "anúncios",
+ * §32). Free nunca chama esta cota de verdade (a ferramenta nem monta para Free, add-product.tsx) — em
+ * vez de "0 de 0" (proibido, §33), mostra que o recurso existe nos planos pagos, sem contador.
+ */
+function AdsProPreparationsCard({ preparationsCurrentMonth, activePlan }: { preparationsCurrentMonth: AdsProPreparationQuotaSnapshot; activePlan: PlanType }) {
+  const [, setLocation] = useLocation();
+  const isUnavailable = preparationsCurrentMonth.limit === 0;
+  const isOverLimit = !isUnavailable && preparationsCurrentMonth.used > preparationsCurrentMonth.limit;
+  const isAtLimit = !isUnavailable && preparationsCurrentMonth.used === preparationsCurrentMonth.limit;
+  const isNearLimit = !isUnavailable && !isOverLimit && !isAtLimit && isNearPlanLimit(preparationsCurrentMonth.used, preparationsCurrentMonth.limit);
+  const limitCopy = isOverLimit
+    ? buildLimitReachedCopy("adsProPreparations", activePlan, preparationsCurrentMonth.used)
+    : isAtLimit
+      ? buildLimitReachedCopy("adsProPreparations", activePlan)
+      : null;
+  return (
+    <div className="rounded-2xl border border-border/60 bg-white p-4 space-y-3" data-testid="card-usage-ads-pro-preparations">
+      <div className="flex items-center gap-2"><Sparkles className="w-4 h-4 text-primary" /><p className="text-xs font-black uppercase tracking-widest text-muted-foreground">Preparações profissionais do Ads Pro</p></div>
+      {isUnavailable ? (
+        <p className="text-xs text-muted-foreground" data-testid="text-ads-pro-preparations-unavailable">
+          Preparação profissional disponível nos planos Pro e Premium.
+        </p>
+      ) : (
+        <>
+          <p className="text-2xl font-semibold tabular-nums">{preparationsCurrentMonth.used} de {preparationsCurrentMonth.limit}</p>
+          <p className="text-xs text-muted-foreground">neste mês</p>
+          {isNearLimit && (
+            <p className="text-[11px] text-amber-700 leading-relaxed" data-testid="text-ads-pro-preparations-near-limit">
+              {buildNearLimitCopy("adsProPreparations", activePlan)}
+            </p>
+          )}
+          {limitCopy && (
+            <div className="space-y-2" data-testid={isOverLimit ? "text-ads-pro-preparations-over-limit" : "text-ads-pro-preparations-at-limit"}>
+              <p className="text-[11px] text-amber-700 leading-relaxed">{limitCopy.title}</p>
+              {limitCopy.benefitLine && (
+                <p className="text-[11px] text-amber-700 leading-relaxed">{limitCopy.benefitLine}</p>
+              )}
+              {limitCopy.recommendedPlan && (
+                <button type="button" onClick={() => setLocation("/plans")} className="text-[11px] font-black text-primary" data-testid="button-ads-pro-preparations-limit-cta">
+                  {limitCopy.ctaLabel} →
+                </button>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function PlanUsageHub({ onManageProducts, onManageServices }: { onManageProducts: () => void; onManageServices: () => void }) {
   const [, setLocation] = useLocation();
   const { snapshot, loading, error, activePlan, basePlan, trial } = usePlanUsageSnapshot();
@@ -508,6 +560,7 @@ function PlanUsageHub({ onManageProducts, onManageServices }: { onManageProducts
                 <p className="text-[11px] text-muted-foreground">Todos os seus clientes e históricos continuam seguros.</p>
               </div>
               {snapshot.bookingsCurrentMonth && <BookingQuotaCard bookingsCurrentMonth={snapshot.bookingsCurrentMonth} activePlan={activePlan} />}
+              {snapshot.adsProPreparationsCurrentMonth && <AdsProPreparationsCard preparationsCurrentMonth={snapshot.adsProPreparationsCurrentMonth} activePlan={activePlan} />}
             </div>
 
             <div className="flex flex-col sm:flex-row gap-3 pt-2">

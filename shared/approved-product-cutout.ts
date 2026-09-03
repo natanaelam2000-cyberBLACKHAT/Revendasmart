@@ -241,6 +241,18 @@ export function isApprovedProductCutoutStale(cutout: Pick<ApprovedProductCutout,
 }
 
 /**
+ * PLAN-IMPL-05 §9/§12/§36 — decide se uma NOVA preparação profissional (PhotoRoom) pode ser evitada: só
+ * quando já existe um cutout aprovado, gerado PELO PROVIDER (`method: "specialized-api"` — nunca o
+ * recorte local-heuristic gratuito, que nunca consumiu cota e por isso nunca "conta" como preparação já
+ * paga) e ainda não-stale para a foto ATUAL (`isApprovedProductCutoutStale` acima). Pura, sem I/O — o
+ * chamador (server/product-cutout-photoroom.ts) decide sozinho o que fazer com o resultado (nunca chama
+ * o provider nem reserva cota quando isto devolve `true`).
+ */
+export function shouldReuseExistingProductCutout(cutout: Pick<ApprovedProductCutout, "sourceAssetId" | "method"> | undefined | null, currentSourceAssetId: string): boolean {
+  return Boolean(cutout) && cutout!.method === "specialized-api" && !isApprovedProductCutoutStale(cutout!, currentSourceAssetId);
+}
+
+/**
  * Caminho canônico e único (v1) do cutout derivado — nunca o storagePath da imagem original.
  * Deliberadamente FORA de `users/{uid}/products/**`: Storage Rules avaliam TODOS os `match` que
  * casam com um path e permitem a operação se QUALQUER UM permitir (união, não "o mais específico

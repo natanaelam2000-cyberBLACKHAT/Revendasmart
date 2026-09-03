@@ -21,7 +21,7 @@ import sharp from "sharp";
 import { getFirebaseAdmin } from "./firebase-admin-init";
 import { logError, logInfo, logWarn } from "./logger";
 import { isAdminUid } from "./admin-auth";
-import { resolveUserEntitlements } from "./admin-grants";
+import { resolveServerPlan } from "./plan-authoritative-mutations";
 import { buildProductTruthFromProduct, type ProductRecordForTruth } from "../client/src/lib/product-truth-adapter";
 import { resolveOwnedProductImageSource, loadStorageImage } from "./marketing-pro-product-understanding";
 import { runPhotoroomCutoutAdapter, type ProductCutoutSourceDimensions } from "./photoroom-cutout-adapter";
@@ -29,11 +29,14 @@ import {
   buildApprovedProductCutoutForPersistence,
   buildApprovedProductCutoutStoragePath,
   isApprovedProductCutoutStale,
+  shouldReuseExistingProductCutout,
   type ApprovedProductCutout,
 } from "../shared/approved-product-cutout";
 import { PRODUCT_IMAGE_COORDINATE_SPACE_VERSION } from "../shared/product-image-coordinate-space";
 import type { ProductCutoutOriginalRgbaBuffer } from "../shared/product-cutout";
 import { decideMarketingProRateLimitWindow, dayBucketId, readWindowStateFromDocData } from "./marketing-pro-rate-limit-firestore";
+import { PLAN_CONFIG, type PlanType } from "../shared/monetization";
+import { reservePreparationSlot, completePreparationSlot, releasePreparationSlot } from "./ads-pro-preparation-quota";
 
 const GENERATION_ID_PATTERN = /^[a-zA-Z0-9_-]{6,80}$/;
 const PRODUCT_ID_PATTERN = /^[A-Za-z0-9_-]{1,200}$/;
@@ -50,16 +53,16 @@ function sendError(res: Response, status: number, error: string): void {
   res.status(status).json({ error });
 }
 
-/** Admin/dev testa independente de plano (mesma regra de `requireProAdsEntitlement`, §4.2) — Premium
- * ativo é o caminho comercial real. Free nunca passa daqui — zero chamadas ao provider (§ N do ticket).
- * OWNER-ACCESS-02: `resolveUserEntitlements` compõe `planData` com uma eventual concessão interna
- * (Tester/Premium+) — ambos "recebem todos os benefícios do Premium atual", PhotoRoom incluso; nada na
- * lógica de recorte/qualidade abaixo muda, só a decisão de quem pode chamar esta função. */
-async function isPhotoroomEntitled(uid: string): Promise<boolean> {
-  if (await isAdminUid(uid)) return true;
-  const admin = getFirebaseAdmin();
-  const { entitlements } = await resolveUserEntitlements(admin.firestore(), uid);
-  return entitlements.hasPremiumAccess;
+/** PLAN-IMPL-05 — admin/dev testa sem cota (mesma regra de `requireProAdsEntitlement`, §4.2), plan=null
+ * sinaliza "sem teto comercial" ao chamador. Para os demais, `resolveServerPlan` (já usado por
+ * server/booking-quota.ts) é a MESMA autoridade grant-aware/trial-aware de todo o resto do app — Tester
+ * e Premium+ "recebem todos os benefícios do Premium atual" automaticamente, sem lógica paralela aqui.
+ * Free (proAdPreparationsMonthly=0) nunca passa daqui — zero chamadas ao provider. Pro e Premium têm
+ * cotas distintas (3/100, PLAN_CONFIG — nunca hardcoded), Free continua bloqueado como antes. */
+async function resolvePhotoroomEntitlement(db: FirebaseFirestore.Firestore, uid: string): Promise<{ readonly allowed: boolean; readonly plan: PlanType | null }> {
+  if (await isAdminUid(uid)) return { allowed: true, plan: null };
+  const plan = await resolveServerPlan(db, uid);
+  return { allowed: PLAN_CONFIG[plan].limits.proAdPreparationsMonthly > 0, plan };
 }
 
 /**
@@ -140,12 +143,21 @@ export function registerProductCutoutPhotoroomRoutes(app: Express, requireAuth: 
     if (!uid || !PRODUCT_ID_PATTERN.test(productId)) return sendError(res, 400, "INVALID_PRODUCT_ID");
     if (!isValidGenerationId(generationRequestId)) return sendError(res, 400, "INVALID_GENERATION_REQUEST_ID");
 
+    // PLAN-IMPL-05 — rastreado fora do try para o catch-all também conseguir liberar uma vaga já
+    // reservada se algo inesperado explodir depois de reservePreparationSlot ter sucedido (§23).
+    let reservedMonthKey: string | null = null;
+    let quotaPlan: PlanType | null = null;
+
     try {
-      const entitled = await isPhotoroomEntitled(uid);
-      if (!entitled) {
+      const admin = getFirebaseAdmin();
+      const db = admin.firestore();
+
+      const entitlement = await resolvePhotoroomEntitlement(db, uid);
+      if (!entitlement.allowed) {
         logWarn("product_cutout_photoroom.entitlement_denied", { requestId: req.requestId });
-        return sendError(res, 403, "PHOTOROOM_PREMIUM_REQUIRED");
+        return sendError(res, 403, "PHOTOROOM_PLAN_REQUIRED");
       }
+      quotaPlan = entitlement.plan;
 
       const apiKey = process.env.PHOTOROOM_API_KEY?.trim() || "";
       if (!apiKey) {
@@ -154,9 +166,6 @@ export function registerProductCutoutPhotoroomRoutes(app: Express, requireAuth: 
         logWarn("product_cutout_photoroom.api_key_missing", { requestId: req.requestId });
         return sendError(res, 503, "PHOTOROOM_NOT_CONFIGURED");
       }
-
-      const admin = getFirebaseAdmin();
-      const db = admin.firestore();
 
       const reservation = await reserveGeneration(db, uid, generationRequestId);
       if (!reservation.created) {
@@ -171,12 +180,6 @@ export function registerProductCutoutPhotoroomRoutes(app: Express, requireAuth: 
         return sendError(res, 502, existing.errorCode || "GENERATION_FAILED");
       }
 
-      const rateLimitAllowed = await checkDailyRateLimit(db, uid);
-      if (!rateLimitAllowed) {
-        await finalizeGeneration(db, uid, generationRequestId, { status: "failed", errorCode: "RATE_LIMITED" });
-        return sendError(res, 429, "RATE_LIMITED");
-      }
-
       const productRef = db.collection("users").doc(uid).collection("products").doc(productId);
       const productSnapshot = await productRef.get();
       if (!productSnapshot.exists) {
@@ -184,10 +187,43 @@ export function registerProductCutoutPhotoroomRoutes(app: Express, requireAuth: 
         return sendError(res, 404, "PRODUCT_NOT_FOUND");
       }
       const truth = buildProductTruthFromProduct({ ...(productSnapshot.data() || {}), id: productId } as ProductRecordForTruth);
-      const source = resolveOwnedProductImageSource(uid, productId, truth);
+      // PLAN-IMPL-05 §10/§11 — SEMPRE a identidade da foto ORIGINAL (nunca de um approvedCutout
+      // pré-existente): sem tirar approvedCutout daqui, resolveOwnedProductImageSource prefere o cutout
+      // já aprovado quando ele existe (correto para composição de anúncios, errado para decidir o que
+      // enviar ao provider numa nova preparação — enviaria o cutout já recortado de volta ao PhotoRoom
+      // como se fosse a foto original). Mesmo padrão já usado pelo endpoint de staleness abaixo.
+      const source = resolveOwnedProductImageSource(uid, productId, { ...truth, approvedCutout: undefined });
       if (!source) {
         await finalizeGeneration(db, uid, generationRequestId, { status: "failed", errorCode: "NO_PRODUCT_IMAGE" });
         return sendError(res, 400, "NO_PRODUCT_IMAGE");
+      }
+
+      // PLAN-IMPL-05 §9/§12/§36 — reuso: um cutout PhotoRoom já aprovado e não-stale para a foto ATUAL
+      // nunca gera uma nova preparação (nunca chama o provider, nunca consome cota, nunca consome o rate
+      // limit diário abaixo) — mesmo com a cota do mês zerada, o produto já preparado continua disponível.
+      const existingCutout = truth.approvedCutout;
+      if (shouldReuseExistingProductCutout(existingCutout, source.assetId)) {
+        await finalizeGeneration(db, uid, generationRequestId, { status: "ready", cutout: existingCutout! });
+        logInfo("product_cutout_photoroom.reused_existing", { requestId: req.requestId, generationId: generationRequestId, productId });
+        return res.status(200).json(existingCutout!);
+      }
+
+      const rateLimitAllowed = await checkDailyRateLimit(db, uid);
+      if (!rateLimitAllowed) {
+        await finalizeGeneration(db, uid, generationRequestId, { status: "failed", errorCode: "RATE_LIMITED" });
+        return sendError(res, 429, "RATE_LIMITED");
+      }
+
+      // PLAN-IMPL-05 §18/§19/§20/§21 — admin (quotaPlan === null) nunca reserva vaga, testa sem teto
+      // comercial (mesmo espírito de sempre). Pro/Premium precisam de uma vaga mensal ANTES do provider.
+      if (quotaPlan !== null) {
+        const reservedSlot = await reservePreparationSlot(db, uid, productId, quotaPlan);
+        if (!reservedSlot.reserved) {
+          const errorCode = reservedSlot.reason === "in_progress" ? "ADS_PRO_PREPARATION_IN_PROGRESS" : "ADS_PRO_PREPARATION_LIMIT_REACHED";
+          await finalizeGeneration(db, uid, generationRequestId, { status: "failed", errorCode });
+          return sendError(res, 409, errorCode);
+        }
+        reservedMonthKey = reservedSlot.monthKey;
       }
 
       const loaded = await loadStorageImage(source);
@@ -197,6 +233,8 @@ export function registerProductCutoutPhotoroomRoutes(app: Express, requireAuth: 
         ? { width: originalRgba.width, height: originalRgba.height }
         : await sharp(Buffer.from(loaded.bytes)).metadata().then((meta) => ({ width: meta.width || 0, height: meta.height || 0 })).catch(() => ({ width: 0, height: 0 }));
       if (!dimensions.width || !dimensions.height) {
+        // PLAN-IMPL-05 §23 — falha depois de reservar: devolve a vaga, nunca perde cota permanentemente.
+        if (reservedMonthKey) await releasePreparationSlot(db, uid, productId, reservedMonthKey);
         await finalizeGeneration(db, uid, generationRequestId, { status: "failed", errorCode: "INVALID_IMAGE_DIMENSIONS" });
         return sendError(res, 400, "INVALID_IMAGE_DIMENSIONS");
       }
@@ -229,6 +267,8 @@ export function registerProductCutoutPhotoroomRoutes(app: Express, requireAuth: 
       if (!attempt.success || !attempt.composition || attempt.composition.accepted !== true) {
         const errorCode = attempt.errorCode
           || (attempt.localCompositionStatus === "pending-source-rgba" ? "ORIGINAL_DECODE_UNAVAILABLE" : "CUTOUT_FAILED");
+        // PLAN-IMPL-05 §23 — provider falhou (ou Pixel Preservation Gate rejeitou): +0 na cota, sempre.
+        if (reservedMonthKey) await releasePreparationSlot(db, uid, productId, reservedMonthKey);
         await finalizeGeneration(db, uid, generationRequestId, { status: "failed", errorCode });
         return sendError(res, 502, errorCode);
       }
@@ -255,6 +295,9 @@ export function registerProductCutoutPhotoroomRoutes(app: Express, requireAuth: 
       });
 
       await productRef.set({ approvedCutout: cutout }, { merge: true });
+      // PLAN-IMPL-05 — sucesso: a cota reservada em reservePreparationSlot fica consumida de verdade,
+      // só libera o lock (nunca decrementa o usado aqui — isso é exclusivo do caminho de falha).
+      if (reservedMonthKey) { await completePreparationSlot(db, uid, productId); reservedMonthKey = null; }
       await finalizeGeneration(db, uid, generationRequestId, { status: "ready", cutout });
 
       logInfo("product_cutout_photoroom.ready", { requestId: req.requestId, generationId: generationRequestId, productId });
@@ -263,7 +306,11 @@ export function registerProductCutoutPhotoroomRoutes(app: Express, requireAuth: 
       logError("product_cutout_photoroom.unhandled_error", error, { requestId: req.requestId, generationId: generationRequestId });
       try {
         const admin = getFirebaseAdmin();
-        await finalizeGeneration(admin.firestore(), uid, generationRequestId, { status: "failed", errorCode: "UNHANDLED_ERROR" });
+        const db = admin.firestore();
+        // PLAN-IMPL-05 §23 — crash inesperado depois de reservar (ex.: Storage fora do ar no file.save):
+        // ainda assim devolve a vaga, nunca deixa uma cota permanentemente presa por um erro imprevisto.
+        if (reservedMonthKey) await releasePreparationSlot(db, uid, productId, reservedMonthKey);
+        await finalizeGeneration(db, uid, generationRequestId, { status: "failed", errorCode: "UNHANDLED_ERROR" });
       } catch {
         // se nem isso funcionar, o próximo retry manual do usuário simplesmente tenta de novo — nunca
         // trava o usuário numa reserva "processing" morta para sempre além do que a UI já trata.
