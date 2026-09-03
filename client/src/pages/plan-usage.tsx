@@ -384,11 +384,21 @@ function BookingQuotaCard({ bookingsCurrentMonth, activePlan }: { bookingsCurren
   const [, setLocation] = useLocation();
   const isUnlimited = bookingsCurrentMonth.limit === UNLIMITED;
   const isOverLimit = !isUnlimited && bookingsCurrentMonth.used > bookingsCurrentMonth.limit;
+  // PLAN-IMPL-04A-VERIFY-FINAL §4/B9 — bug real encontrado ao vivo: no teto EXATO (used === limit, ex.
+  // 20/20 no Free), nem isNearLimit (exige used < limit) nem isOverLimit (exige used > limit) eram
+  // verdadeiros — o card não mostrava NENHUMA mensagem contextual, só o número cru, violando §29 do
+  // ticket original ("20/20: 'Você usou os 20 agendamentos deste mês no Free.'"). isAtLimit cobre
+  // exatamente esse terceiro estado, distinto de "perto" e de "acima" (só possível após downgrade).
+  const isAtLimit = !isUnlimited && bookingsCurrentMonth.used === bookingsCurrentMonth.limit;
   // PLAN-IMPL-04A §26/§29 — perto do limite é só um aviso discreto, nunca um bloqueio; acima do limite
   // (só possível após downgrade — a criação em si já é recusada pelo servidor antes de chegar a 21) usa
   // o mesmo texto padrão de PlanLimitPrompt (usedOverride = já possui mais do que o teto atual permite).
-  const isNearLimit = !isUnlimited && !isOverLimit && isNearPlanLimit(bookingsCurrentMonth.used, bookingsCurrentMonth.limit);
-  const overLimitCopy = isOverLimit ? buildLimitReachedCopy("bookings", activePlan, bookingsCurrentMonth.used) : null;
+  const isNearLimit = !isUnlimited && !isOverLimit && !isAtLimit && isNearPlanLimit(bookingsCurrentMonth.used, bookingsCurrentMonth.limit);
+  const limitCopy = isOverLimit
+    ? buildLimitReachedCopy("bookings", activePlan, bookingsCurrentMonth.used)
+    : isAtLimit
+      ? buildLimitReachedCopy("bookings", activePlan)
+      : null;
   return (
     <div className="rounded-2xl border border-border/60 bg-white p-4 space-y-3" data-testid="card-usage-agendamentos">
       <div className="flex items-center gap-2"><CalendarClock className="w-4 h-4 text-primary" /><p className="text-xs font-black uppercase tracking-widest text-muted-foreground">Agendamentos neste mês</p></div>
@@ -405,17 +415,17 @@ function BookingQuotaCard({ bookingsCurrentMonth, activePlan }: { bookingsCurren
               {buildNearLimitCopy("bookings", activePlan)}
             </p>
           )}
-          {overLimitCopy && (
-            <div className="space-y-2" data-testid="text-booking-over-limit">
+          {limitCopy && (
+            <div className="space-y-2" data-testid={isOverLimit ? "text-booking-over-limit" : "text-booking-at-limit"}>
               <p className="text-[11px] text-amber-700 leading-relaxed">
-                Os existentes continuam seguros. Novos agendamentos ficam indisponíveis neste mês.
+                {limitCopy.title} Os existentes continuam seguros. Novos agendamentos ficam indisponíveis neste mês.
               </p>
-              {overLimitCopy.benefitLine && (
-                <p className="text-[11px] text-amber-700 leading-relaxed">{overLimitCopy.benefitLine}</p>
+              {limitCopy.benefitLine && (
+                <p className="text-[11px] text-amber-700 leading-relaxed">{limitCopy.benefitLine}</p>
               )}
-              {overLimitCopy.recommendedPlan && (
+              {limitCopy.recommendedPlan && (
                 <button type="button" onClick={() => setLocation("/plans")} className="text-[11px] font-black text-primary" data-testid="button-booking-limit-cta">
-                  {overLimitCopy.ctaLabel} →
+                  {limitCopy.ctaLabel} →
                 </button>
               )}
             </div>
