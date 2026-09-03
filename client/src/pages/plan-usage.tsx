@@ -12,8 +12,9 @@ import { ProductImageCard } from "@/components/ProductImageCard";
 import { notifyError, notifySuccess } from "@/lib/notify";
 import type { Product } from "@/lib/mock-data";
 import type { Service } from "@shared/services";
-import { PLAN_CONFIG, UNLIMITED, resolvePlanAccessState, type BookingQuotaSnapshot, type PlanAccessState, type PlanType } from "@shared/monetization";
+import { PLAN_CONFIG, UNLIMITED, isNearPlanLimit, resolvePlanAccessState, type BookingQuotaSnapshot, type PlanAccessState, type PlanType } from "@shared/monetization";
 import { getPlanName } from "@/lib/plan-helpers";
+import { buildLimitReachedCopy, buildNearLimitCopy } from "@/lib/plan-paywall-copy";
 import { usePlanUsageSnapshot } from "@/hooks/usePlanUsageSnapshot";
 import { useProductAccessList } from "@/hooks/useProductAccessList";
 import { useServiceAccessList } from "@/hooks/useServiceAccessList";
@@ -340,9 +341,13 @@ function ServiceAccessManagerView({ limit, onBack, onSaved }: { limit: number; o
   );
 }
 
-function UsageDomainCard({ icon: Icon, label, active, preserved, limit, totalLabel, onManage }: {
-  icon: typeof Package; label: string; active: number; preserved: number; limit: number; totalLabel: string; onManage?: () => void;
+function UsageDomainCard({ icon: Icon, label, active, preserved, limit, totalLabel, onManage, nearLimitCopy }: {
+  icon: typeof Package; label: string; active: number; preserved: number; limit: number; totalLabel: string; onManage?: () => void; nearLimitCopy?: string;
 }) {
+  // PLAN-IMPL-04A §26/N1-N6 — só faz sentido "perto do limite" enquanto nada foi preservado ainda (sem
+  // preserved, o dono ainda está criando ativamente rumo ao teto; com preserved > 0, o card já mostra o
+  // aviso de itens preservados abaixo, que é o estado mais relevante nesse momento).
+  const showNearLimit = preserved === 0 && nearLimitCopy && isNearPlanLimit(active, limit);
   return (
     <div className="rounded-2xl border border-border/60 bg-white p-4 space-y-3" data-testid={`card-usage-${label.toLowerCase()}`}>
       <div className="flex items-center gap-2">
@@ -359,8 +364,11 @@ function UsageDomainCard({ icon: Icon, label, active, preserved, limit, totalLab
           Gerenciar ativos ({preserved} preservado{preserved === 1 ? "" : "s"})
         </button>
       )}
-      {preserved === 0 && (
+      {preserved === 0 && !showNearLimit && (
         <p className="text-[11px] text-green-700 font-semibold">Todos os seus {label.toLowerCase()} estão ativos no plano atual.</p>
+      )}
+      {showNearLimit && (
+        <p className="text-[11px] text-amber-700 font-semibold" data-testid={`text-near-limit-${label.toLowerCase()}`}>{nearLimitCopy}</p>
       )}
     </div>
   );
@@ -372,9 +380,15 @@ function UsageDomainCard({ icon: Icon, label, active, preserved, limit, totalLab
  * mensagem comercial é "sem limite comercial baixo no seu plano" (§48: o sentinel UNLIMITED continua só
  * um detalhe interno, nunca exposto tecnicamente ao dono).
  */
-function BookingQuotaCard({ bookingsCurrentMonth }: { bookingsCurrentMonth: BookingQuotaSnapshot }) {
+function BookingQuotaCard({ bookingsCurrentMonth, activePlan }: { bookingsCurrentMonth: BookingQuotaSnapshot; activePlan: PlanType }) {
+  const [, setLocation] = useLocation();
   const isUnlimited = bookingsCurrentMonth.limit === UNLIMITED;
   const isOverLimit = !isUnlimited && bookingsCurrentMonth.used > bookingsCurrentMonth.limit;
+  // PLAN-IMPL-04A §26/§29 — perto do limite é só um aviso discreto, nunca um bloqueio; acima do limite
+  // (só possível após downgrade — a criação em si já é recusada pelo servidor antes de chegar a 21) usa
+  // o mesmo texto padrão de PlanLimitPrompt (usedOverride = já possui mais do que o teto atual permite).
+  const isNearLimit = !isUnlimited && !isOverLimit && isNearPlanLimit(bookingsCurrentMonth.used, bookingsCurrentMonth.limit);
+  const overLimitCopy = isOverLimit ? buildLimitReachedCopy("bookings", activePlan, bookingsCurrentMonth.used) : null;
   return (
     <div className="rounded-2xl border border-border/60 bg-white p-4 space-y-3" data-testid="card-usage-agendamentos">
       <div className="flex items-center gap-2"><CalendarClock className="w-4 h-4 text-primary" /><p className="text-xs font-black uppercase tracking-widest text-muted-foreground">Agendamentos neste mês</p></div>
@@ -386,10 +400,25 @@ function BookingQuotaCard({ bookingsCurrentMonth }: { bookingsCurrentMonth: Book
       ) : (
         <>
           <p className="text-2xl font-semibold tabular-nums">{bookingsCurrentMonth.used} de {bookingsCurrentMonth.limit}</p>
-          {isOverLimit && (
-            <p className="text-[11px] text-amber-700 leading-relaxed">
-              Você já possui mais agendamentos do que o limite atual. Os existentes continuam seguros. Novos agendamentos ficam indisponíveis neste mês.
+          {isNearLimit && (
+            <p className="text-[11px] text-amber-700 leading-relaxed" data-testid="text-booking-near-limit">
+              {buildNearLimitCopy("bookings", activePlan)}
             </p>
+          )}
+          {overLimitCopy && (
+            <div className="space-y-2" data-testid="text-booking-over-limit">
+              <p className="text-[11px] text-amber-700 leading-relaxed">
+                Os existentes continuam seguros. Novos agendamentos ficam indisponíveis neste mês.
+              </p>
+              {overLimitCopy.benefitLine && (
+                <p className="text-[11px] text-amber-700 leading-relaxed">{overLimitCopy.benefitLine}</p>
+              )}
+              {overLimitCopy.recommendedPlan && (
+                <button type="button" onClick={() => setLocation("/plans")} className="text-[11px] font-black text-primary" data-testid="button-booking-limit-cta">
+                  {overLimitCopy.ctaLabel} →
+                </button>
+              )}
+            </div>
           )}
         </>
       )}
@@ -426,7 +455,7 @@ function PlanUsageHub({ onManageProducts, onManageServices }: { onManageProducts
           <div className="rounded-2xl border border-border/60 bg-white p-4 space-y-2" data-testid="card-trial-ended">
             <p className="text-sm font-bold text-foreground">Seu período Premium terminou.</p>
             <p className="text-xs text-muted-foreground leading-relaxed">Seus dados continuam seguros. Você pode continuar no {getPlanName(basePlan)} ou conhecer os planos.</p>
-            <button type="button" onClick={() => setLocation("/subscribe")} className="text-xs font-black text-primary" data-testid="button-trial-ended-see-plans">Ver planos →</button>
+            <button type="button" onClick={() => setLocation("/plans")} className="text-xs font-black text-primary" data-testid="button-trial-ended-see-plans">Ver planos →</button>
           </div>
         )}
 
@@ -451,12 +480,14 @@ function PlanUsageHub({ onManageProducts, onManageServices }: { onManageProducts
                 active={snapshot.products.active} preserved={snapshot.products.preserved} limit={snapshot.products.limit}
                 totalLabel={`${snapshot.products.used} produtos cadastrados`}
                 onManage={onManageProducts}
+                nearLimitCopy={buildNearLimitCopy("products", activePlan)}
               />
               <UsageDomainCard
                 icon={Wrench} label="Serviços"
                 active={snapshot.services.active} preserved={snapshot.services.preserved} limit={snapshot.services.limit}
                 totalLabel={`${snapshot.services.used} serviços cadastrados`}
                 onManage={onManageServices}
+                nearLimitCopy={buildNearLimitCopy("services", activePlan)}
               />
               <div className="rounded-2xl border border-border/60 bg-white p-4 space-y-3" data-testid="card-usage-clientes">
                 <div className="flex items-center gap-2"><Users className="w-4 h-4 text-primary" /><p className="text-xs font-black uppercase tracking-widest text-muted-foreground">Clientes</p></div>
@@ -466,11 +497,11 @@ function PlanUsageHub({ onManageProducts, onManageServices }: { onManageProducts
                 </p>
                 <p className="text-[11px] text-muted-foreground">Todos os seus clientes e históricos continuam seguros.</p>
               </div>
-              {snapshot.bookingsCurrentMonth && <BookingQuotaCard bookingsCurrentMonth={snapshot.bookingsCurrentMonth} />}
+              {snapshot.bookingsCurrentMonth && <BookingQuotaCard bookingsCurrentMonth={snapshot.bookingsCurrentMonth} activePlan={activePlan} />}
             </div>
 
             <div className="flex flex-col sm:flex-row gap-3 pt-2">
-              <button type="button" onClick={() => setLocation("/subscribe")} className="rs-pressable flex-1 rounded-2xl border-2 border-primary bg-white py-3.5 text-xs font-black uppercase tracking-widest text-primary" data-testid="button-know-pro">
+              <button type="button" onClick={() => setLocation("/plans")} className="rs-pressable flex-1 rounded-2xl border-2 border-primary bg-white py-3.5 text-xs font-black uppercase tracking-widest text-primary" data-testid="button-know-pro">
                 Conhecer Pro/Premium
               </button>
             </div>

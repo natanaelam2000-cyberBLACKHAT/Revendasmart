@@ -40,7 +40,7 @@ import { useTheme } from "next-themes";
 import { APPEARANCE_THEME_STORAGE_KEY } from "@/components/ThemeProvider";
 import {
   Store, CreditCard, ClipboardList, Loader2, CalendarClock,
-  Download, Save, ChevronRight, Bell, Upload, RefreshCw, Users, Share2, ExternalLink, FileSpreadsheet, QrCode, Copy, Mail, Scale, HelpCircle, ChevronDown, User, KeyRound, LogOut, ArrowLeft, Receipt, Trash2, Monitor, Sun, Moon, Gift, ShieldCheck, Ticket, Gauge,
+  Download, Save, ChevronRight, Bell, Upload, RefreshCw, Users, Share2, ExternalLink, FileSpreadsheet, QrCode, Copy, Mail, Scale, HelpCircle, ChevronDown, User, KeyRound, LogOut, ArrowLeft, Receipt, Trash2, Monitor, Sun, Moon, Gift, ShieldCheck, Ticket, Gauge, Sparkles,
   type LucideIcon
 } from "lucide-react";
 
@@ -533,6 +533,9 @@ export default function Settings() {
     // dono também alcança Configurar horários e cada Atendimento) — antes só existia digitando a URL.
     { title: "Serviços", subtitle: "Agenda, horários de atendimento e agendamentos", icon: CalendarClock, color: "bg-indigo-100 text-indigo-700", path: "/servicos/agenda" },
     { title: "Minha Assinatura", subtitle: "Plano e faturamento", icon: CreditCard, color: "bg-sky-100 text-sky-700", path: "/subscribe" },
+    // PLAN-IMPL-04A §34 — entrada nova, conceitualmente separada das outras duas: "Minha Assinatura" é
+    // gestão de cobrança, "Plano e uso" é capacidade/limites atuais, "Planos" é comparação/upgrade.
+    { title: "Planos", subtitle: "Compare Free, Pro e Premium", icon: Sparkles, color: "bg-amber-100 text-amber-700", path: "/plans" },
     { title: "Plano e uso", subtitle: "Produtos, serviços e clientes ativos no seu plano", icon: Gauge, color: "bg-cyan-100 text-cyan-700", path: "/settings/plano-e-uso" },
     { title: resolveOrdersFeatureLabel(firestoreSettings), subtitle: "Pedidos e encomendas da loja", icon: ClipboardList, color: "bg-purple-100 text-purple-700", path: "/orders" },
     { title: "Preferências", subtitle: "Notificações e ajustes", icon: Bell, color: "bg-slate-100 text-slate-700", path: "/settings?tab=preferences" },

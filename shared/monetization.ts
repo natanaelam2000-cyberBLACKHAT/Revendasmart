@@ -185,6 +185,119 @@ export const PLAN_PRICING: Record<PlanType, { readonly monthly: number; readonly
   premium: { monthly: 79.90, annual: 799 },
 };
 
+/**
+ * PLAN-IMPL-04A §5/§6/§8 — metadata de APRESENTAÇÃO comercial (posicionamento, destaque, benefícios
+ * vendáveis hoje), deliberadamente separada de `PLAN_CONFIG` (limites/flags técnicos) e `PLAN_PRICING`
+ * (preço-alvo): nome vem de `PLAN_CONFIG[plan].name`, preço de `PLAN_PRICING[plan]`, números de
+ * `PLAN_CONFIG[plan].limits` — nada aqui duplica esses valores, só adiciona o que não existia.
+ *
+ * `sellableHighlights` é uma lista NOVA e deliberadamente mais conservadora que `PLAN_CONFIG[plan].features`
+ * (que continua existindo, inalterada, para quem já a consome) — `features` inclui promessas §7 proíbe
+ * vender agora (preparações de Anúncios Pro, inteligência Premium — ver o comentário de `proAds` acima,
+ * "inatingível na prática até PLAN-IMPL-03/04 existirem"). `sellableHighlights` só lista o que o runtime
+ * atual realmente entrega. Pro e Premium hoje têm os MESMOS flags booleanos (categories/charges/
+ * productHighlight/professionalCatalog/noAds — ver o comentário acima de `PLAN_CONFIG.pro`: o que
+ * diferencia os dois ainda é só a camada de inteligência, que não existe em runtime) — por isso Premium
+ * não re-anuncia esses booleanos como se fossem exclusivos dela (seria falso); ela vende capacidade maior
+ * (§39: "Seu plano tem a maior capacidade atual"), nunca um recurso booleano inexistente.
+ */
+export interface PlanPresentation {
+  /** Forma curta para contexto compacto (card, CTA, badge) — "Pro", não "Plano Pro". Para o nome
+   * completo já usado em superfícies existentes (`plan-usage.tsx` etc.), continue usando
+   * `PLAN_CONFIG[plan].name`; os dois convivem de propósito, um não substitui o outro. */
+  readonly title: string;
+  readonly positioning: string;
+  readonly highlighted: boolean;
+  readonly badge: string | null;
+  readonly sellableHighlights: readonly string[];
+}
+
+export const PLAN_PRESENTATION: Record<PlanType, PlanPresentation> = {
+  free: {
+    title: 'Grátis',
+    positioning: 'Comece',
+    highlighted: false,
+    badge: null,
+    sellableHighlights: [
+      'Até 30 produtos',
+      'Até 50 clientes',
+      'Até 5 serviços',
+      'Até 20 agendamentos por mês',
+      'Vendas sem limite',
+      'Catálogo público',
+    ],
+  },
+  pro: {
+    title: 'Pro',
+    positioning: 'Profissionalize',
+    highlighted: true,
+    badge: 'Mais Popular',
+    sellableHighlights: [
+      'Até 500 produtos',
+      'Até 2.000 clientes',
+      'Até 50 serviços',
+      'Agendamentos sem o limite mensal do Free',
+      'Categorias personalizadas',
+      'Cobranças e links de pagamento',
+      'Catálogo profissional',
+      'Sem anúncios',
+    ],
+  },
+  premium: {
+    title: 'Premium',
+    positioning: 'Cresça',
+    highlighted: false,
+    badge: null,
+    sellableHighlights: [
+      'Até 2.000 produtos',
+      'Até 10.000 clientes',
+      'Até 200 serviços',
+      'Agendamentos sem o limite mensal do Free',
+      'Tudo do Pro',
+      'A maior capacidade atual da plataforma',
+    ],
+  },
+};
+
+/**
+ * PLAN-IMPL-04A §26/§29/§57 — único lugar que define "perto do limite" (80%): nenhum componente deve
+ * repetir o número 0.8. `limit === UNLIMITED` nunca é "perto do limite" (mesma semântica de
+ * canAddProduct/canAddService/canAddClient — sentinel nunca comparado como se fosse um teto real).
+ */
+export const PLAN_USAGE_NEAR_LIMIT_RATIO = 0.8;
+
+export function isNearPlanLimit(used: number, limit: number): boolean {
+  if (limit === UNLIMITED || limit <= 0) return false;
+  return used < limit && used >= limit * PLAN_USAGE_NEAR_LIMIT_RATIO;
+}
+
+/**
+ * PLAN-IMPL-04A §37 — regra V1 deliberadamente simples (sem IA/scoring): Free recomenda Pro, Pro
+ * recomenda Premium, Premium não recomenda nada (§39 — sem upgrade pressure, ela já é o teto comercial).
+ */
+export function recommendedUpgradePlan(currentPlan: PlanType): PlanType | null {
+  if (currentPlan === PLANS.FREE) return PLANS.PRO;
+  if (currentPlan === PLANS.PRO) return PLANS.PREMIUM;
+  return null;
+}
+
+/**
+ * PLAN-IMPL-04A §15/§49 — shape puro (sem lógica) de `GET /api/plans/purchase-availability`
+ * (server/plan-purchase-availability.ts). Vive aqui, não em server/, para o client poder tipar a
+ * resposta sem importar um módulo que lê `process.env` (Node-only, não existe no bundle do Vite).
+ */
+export type PurchaseUnavailableReason = "provider_not_configured" | "pricing_v2_not_activated";
+
+export interface PlanPurchaseAvailabilityEntry {
+  readonly available: boolean;
+  readonly reason: PurchaseUnavailableReason | null;
+}
+
+export interface PlanPurchaseAvailability {
+  readonly pro: PlanPurchaseAvailabilityEntry;
+  readonly premium: PlanPurchaseAvailabilityEntry;
+}
+
 // Subscription status from Mercado Pago PreApproval
 export type SubscriptionStatus =
   | 'authorized'

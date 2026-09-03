@@ -53,14 +53,17 @@ export function PlanStatusBadge() {
       {/* Referral Info */}
       {!hasPremiumAccess && activePlan === PLANS.FREE && !isOpenAccess && (
         <>
-          {/* Upgrade CTA */}
+          {/* PLAN-IMPL-04A §19 — antes linkava para /subscribe com "R$ 19,90/mês" hardcoded: preço legado
+              (a cobrança real de hoje), que colidiria com a nova tabela comercial (R$79,90) exibida em
+              /plans. Este badge é uma superfície de DESCOBERTA (NEW_PURCHASE_SURFACE), não de gestão de
+              assinatura existente — não pode mostrar um preço que a nova tela vai contradizer. */}
           <button
-            onClick={() => setLocation("/subscribe")}
+            onClick={() => setLocation("/plans")}
             className="w-full flex items-center justify-center gap-2 bg-amber-500 text-white text-xs font-bold px-3 py-2 rounded-xl active:scale-95 transition-all shadow-sm"
             data-testid="button-upgrade-premium"
           >
             <Sparkles className="w-3.5 h-3.5" />
-            Assinar Premium — R$ 19,90/mês
+            Conhecer os planos
           </button>
 
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-2" data-testid="section-referral-info">

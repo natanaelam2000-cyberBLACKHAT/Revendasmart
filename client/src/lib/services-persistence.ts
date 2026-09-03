@@ -24,17 +24,20 @@ import {
   type ServiceWork,
 } from "@shared/services";
 import { getCurrentFirebaseUser } from "./firebase";
-import { PLAN_CONFIG, type PlanType } from "@shared/monetization";
+import { type PlanType } from "@shared/monetization";
 import { checkServiceLimit } from "./plan-helpers";
+import { buildLimitReachedCopy } from "./plan-paywall-copy";
 import { apiRequest } from "./api-client";
 
-/** PLAN-IMPL-02A §7 — thrown when the tenant's service count is already at/over their plan's limit.
- * createService() has no real UI caller yet (confirmed empty at PLAN-IMPL-02A time), so this can't be
- * exercised by a real user today — enforced here anyway, at the one real creation function, so it's
- * already correct the moment a future ticket builds an "add service" page against it. */
+/** PLAN-IMPL-02A §7, mensagem atualizada em PLAN-IMPL-04A — thrown when the tenant's service count is
+ * already at/over their plan's limit. createService() ainda não tem um caller real de UI (confirmado
+ * também nesta rodada — nenhuma tela de "novo serviço" existe hoje, ver PLAN-IMPL-04A_REPORT
+ * `SERVICES_CREATE_UI_GAP`) — mas a mensagem já usa o mesmo texto padrão de `PlanLimitPrompt`
+ * (`buildLimitReachedCopy`), então o dia em que uma tela real existir e simplesmente renderizar
+ * `<PlanLimitPrompt resource="services" .../>` ao capturar este erro, o texto já bate. */
 export class ServiceLimitError extends Error {
-  constructor(public readonly limit: number, public readonly planName: string) {
-    super(`Limite de ${limit} serviços atingido no plano ${planName}.`);
+  constructor(public readonly plan: PlanType) {
+    super(buildLimitReachedCopy("services", plan).title);
     this.name = "ServiceLimitError";
   }
 }
@@ -115,7 +118,7 @@ export async function createService(input: CreateServiceInput): Promise<Service>
   const serviceCountSnapshot = await getCountFromServer(servicesCollection(uid));
   const { allowed } = checkServiceLimit(input.activePlan, serviceCountSnapshot.data().count);
   if (!allowed) {
-    throw new ServiceLimitError(PLAN_CONFIG[input.activePlan].limits.services, PLAN_CONFIG[input.activePlan].name);
+    throw new ServiceLimitError(input.activePlan);
   }
   const serviceId = generateEntityId("service");
   const timestamp = nowIso();

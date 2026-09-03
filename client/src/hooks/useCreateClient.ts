@@ -5,7 +5,7 @@ import { notifySuccess } from "@/lib/notify";
 import type { Client } from "@/lib/mock-data";
 import { usePlan } from "@/providers/PlanProvider";
 import { checkClientLimit } from "@/lib/plan-helpers";
-import { PLAN_CONFIG } from "@shared/monetization";
+import { buildLimitReachedCopy } from "@/lib/plan-paywall-copy";
 
 interface CreateClientInput {
   name: string;
@@ -37,7 +37,7 @@ export function useCreateClient() {
       // with no plan-limit check, a fourth independent client-creation path with no enforcement at all.
       const clientCountSnapshot = await getCountFromServer(collection(getFirestore(), "users", uid, "clients"));
       if (!checkClientLimit(activePlan, clientCountSnapshot.data().count).allowed) {
-        setError(`Limite de ${PLAN_CONFIG[activePlan].limits.clients} clientes atingido no plano ${PLAN_CONFIG[activePlan].name}.`);
+        setError(buildLimitReachedCopy("clients", activePlan).title);
         return null;
       }
       const clientId = Math.random().toString(36).slice(2, 11);

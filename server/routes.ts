@@ -26,6 +26,7 @@ import { registerPlanAuthoritativeMutationRoutes, resolveServerPlan } from "./pl
 import { registerPlanAccessSelectionRoutes } from "./plan-access-selection";
 import { registerBookingQuotaRoutes } from "./booking-quota";
 import { ensurePlanLifecycleCurrent, initializePlanCommand } from "./plan-lifecycle";
+import { getPlanPurchaseAvailability } from "./plan-purchase-availability";
 import { isMarketingProRealBackgroundEnabled } from "./marketing-pro-flags";
 import { createGoogleMarketingProBackgroundProvider, isGoogleMarketingProCredentialConfigured } from "./marketing-pro-provider-google";
 import { registerAccountDeletionRoutes } from "./account-deletion";
@@ -1724,6 +1725,13 @@ export async function registerRoutes(
     } catch {
       res.status(404).json({ error: "Terms of Service not found" });
     }
+  });
+
+  // GET /api/plans/purchase-availability — PLAN-IMPL-04A §49: sem parâmetro de usuário, mesma resposta
+  // para qualquer chamador (nenhum dado pessoal/secret) — nunca requer autenticação, para a página de
+  // planos poder decidir CTA antes mesmo do plano do usuário terminar de carregar.
+  app.get("/api/plans/purchase-availability", (_req, res) => {
+    return res.status(200).json(getPlanPurchaseAvailability());
   });
 
   // GET /api/plan/data/:userId - Get user plan data

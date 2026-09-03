@@ -28,6 +28,7 @@ const Reports = lazy(() => import("@/pages/reports"));
 const Settings = lazy(() => import("@/pages/settings"));
 const SettingsMercadoPago = lazy(() => import("@/pages/settings-mercadopago"));
 const PlanUsage = lazy(() => import("@/pages/plan-usage"));
+const Plans = lazy(() => import("@/pages/plans"));
 const Admin = lazy(() => import("@/pages/admin"));
 const SorteiosAdmin = lazy(() => import("@/pages/sorteios-admin"));
 const Subscribe = lazy(() => import("@/pages/subscribe"));
@@ -146,6 +147,7 @@ function PrivateRoutes() {
         <Route path="/settings" component={Settings} />
         <Route path="/settings/mercadopago" component={SettingsMercadoPago} />
         <Route path="/settings/plano-e-uso" component={PlanUsage} />
+        <Route path="/plans" component={Plans} />
         <Route path="/subscribe" component={Subscribe} />
         <Route path="/servicos/agenda" component={ServiceAgenda} />
         <Route path="/servicos/disponibilidade" component={ServiceAvailabilitySettings} />

@@ -1,10 +1,11 @@
 import { useState, useMemo } from "react";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Layout } from "@/components/layout";
+import { PlanLimitPrompt } from "@/components/PlanLimitPrompt";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import { Installment, defaultSettings } from "@/lib/mock-data";
-import { Search, UserPlus, ChevronRight, Download, CheckSquare, Square, Send, AlertCircle, Pencil, Trash2 } from "lucide-react";
-import { Link, useLocation } from "wouter";
+import { Search, UserPlus, ChevronRight, Download, CheckSquare, Square, Send, Pencil, Trash2 } from "lucide-react";
+import { Link } from "wouter";
 import { usePaginatedClientsData } from "@/hooks/usePaginatedClientsData";
 import { usePlan } from "@/providers/PlanProvider";
 import { checkClientLimit } from "@/lib/plan-helpers";
@@ -31,7 +32,6 @@ function readInactiveFilterFromLocation(): boolean {
 export default function Clients() {
   const { clients, loading, loadingMore, error, hasMore, totalCount, loadMore, addClient, updateClient, deleteClient } = usePaginatedClientsData();
   const { activePlan } = usePlan();
-  const [, setLocation] = useLocation();
   const { sales } = useSalesData();
   const [billings] = useState<Installment[]>([]);
   const [settings] = useState(() => defaultSettings);
@@ -196,48 +196,7 @@ export default function Clients() {
   if (showLimitModal) {
     return (
       <Layout title="Limite Atingido">
-        <div className="px-6 py-8 flex flex-col items-center justify-center min-h-screen gap-6">
-          <div className="w-20 h-20 bg-amber-100 rounded-full flex items-center justify-center">
-            <AlertCircle className="w-12 h-12 text-amber-600" />
-          </div>
-
-          <div className="text-center space-y-3">
-            <h2 className="text-2xl font-bold text-foreground">Limite de Clientes Atingido</h2>
-            <p className="text-sm text-muted-foreground">
-              Você atingiu o limite de <strong>50 clientes</strong> no plano Grátis.
-            </p>
-            <p className="text-sm text-muted-foreground">
-              Upgrade para Premium para adicionar clientes ilimitados!
-            </p>
-          </div>
-
-          <div className="bg-blue-50 border border-blue-200 rounded-3xl p-4 w-full space-y-2">
-            <p className="text-xs text-blue-700 font-bold">Plano Premium inclui:</p>
-            <ul className="text-xs text-blue-600 space-y-1 list-disc list-inside">
-              <li>Produtos ilimitados</li>
-              <li>Clientes ilimitados</li>
-              <li>Cobranças via Mercado Pago</li>
-              <li>Múltiplos tipos de negócio</li>
-            </ul>
-          </div>
-
-          <div className="flex gap-3 w-full">
-            <button
-              onClick={() => setShowLimitModal(false)}
-              className="flex-1 bg-secondary text-foreground font-bold py-3 rounded-xl"
-              data-testid="button-close-limit-modal"
-            >
-              Entendi
-            </button>
-            <button
-              onClick={() => setLocation('/subscribe')}
-              className="flex-1 bg-primary text-white font-bold py-3 rounded-xl"
-              data-testid="button-upgrade-premium"
-            >
-              Upgrade →
-            </button>
-          </div>
-        </div>
+        <PlanLimitPrompt resource="clients" currentPlan={activePlan} onClose={() => setShowLimitModal(false)} />
       </Layout>
     );
   }
