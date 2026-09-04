@@ -175,7 +175,14 @@ export interface Sale {
   id: string;
   clientId: string;
   clientName?: string;
-  products: { productId: string; quantity: number; price: number }[];
+  /**
+   * PLAN-IMPL-07B-COST-SNAPSHOT-FINAL — costPriceAtSale é gravado uma única vez, server-side, dentro da
+   * mesma transação que finaliza a venda (server/sale-finalize-transaction.ts); nunca recalculado nem
+   * aceito como input do cliente. Ausente em vendas legadas (anteriores a este campo) e em itens cujo
+   * Product.costPrice não era confiável (<= 0) no momento exato da venda — nesses casos o lucro do item
+   * fica permanentemente indisponível, nunca refeito a partir do custo atual do produto.
+   */
+  products: { productId: string; quantity: number; price: number; costPriceAtSale?: number }[];
   totalPrice: number;
   paymentType: 'cash' | 'installments' | 'avista' | 'prazo';
   legacyPaymentType?: 'cash' | 'installments';

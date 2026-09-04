@@ -5,6 +5,7 @@ import { computeOpportunities, summarizeOpportunities } from "../server/opportun
 import { hasAdvancedOpportunityAccess } from "../shared/opportunity-rules";
 import { calculateFinancialSummary, calculateIndicators, calculateRanking } from "../client/src/lib/report-metrics";
 import { buildExcelCsvContent, buildPrintableHtml } from "../client/src/lib/report-export";
+import { finalizeSaleTransaction } from "../server/sale-finalize-transaction";
 import type { Firestore as AdminFirestore } from "firebase-admin/firestore";
 
 /**
@@ -245,77 +246,166 @@ function runUiTests(): void {
 }
 
 // ===================================================================================================
-// PS1-PS7 — PLAN-IMPL-07B-VERIFY-FINAL: profit-safety. Execução real (não texto-fonte): report-
-// metrics.ts/report-export.ts só importam date-utils/mock-data(tipos)/opportunity-rules — nunca
-// firebase.ts — então rodam direto em Node via tsx, sem emulador, exatamente como qualquer outra
-// função pura já testada nesta suíte (buildExcelCsvContent/buildPrintableHtml já eram "puro de
-// propósito" antes desta ticket, comentário original do arquivo).
+// PS1-PS7 (PLAN-IMPL-07B-VERIFY-FINAL, reescrito) + CS5-CS9 (PLAN-IMPL-07B-COST-SNAPSHOT-FINAL) —
+// report-metrics.ts/report-export.ts só importam date-utils/mock-data(tipos)/opportunity-rules — nunca
+// firebase.ts — rodam direto em Node via tsx, sem emulador. Desde COST-SNAPSHOT-FINAL, a autoridade de
+// custo é sale.products[].costPriceAtSale (nunca mais Product.costPrice) — os fixtures abaixo montam o
+// snapshot diretamente no item da venda, exatamente como server/sale-finalize-transaction.ts grava; os
+// produtos usados aqui carregam um costPrice ATUAL deliberadamente diferente/alto só para provar que
+// report-metrics.ts nunca mais o consulta para lucro/margem.
 // ===================================================================================================
 function runProfitSafetyTests(): void {
-  const untrustedProduct = { id: "p1", name: "Sem custo", brand: "", category: "", costPrice: 0, salePrice: 50, stock: 5 } as any;
-  const trustedProductA = { id: "p2", name: "Com custo A", brand: "", category: "", costPrice: 20, salePrice: 50, stock: 5 } as any;
-  const trustedProductB = { id: "p3", name: "Com custo B", brand: "", category: "", costPrice: 10, salePrice: 30, stock: 5 } as any;
+  // costPrice atual dos produtos é irrelevante para lucro agora — valores "armadilha" (bem diferentes
+  // do snapshot) para provar que nunca são lidos por engano.
+  const productNoSnapshot = { id: "p1", name: "Sem snapshot", brand: "Marca A", category: "Cat A", costPrice: 999, salePrice: 50, stock: 5 } as any;
+  const productA = { id: "p2", name: "Com snapshot A", brand: "Marca B", category: "Cat B", costPrice: 999, salePrice: 50, stock: 5 } as any;
+  const productB = { id: "p3", name: "Com snapshot B", brand: "Marca B", category: "Cat B", costPrice: 999, salePrice: 30, stock: 5 } as any;
   const now = new Date();
-  const saleOf = (id: string, productId: string, price: number) => ({
+  // costPriceAtSale ausente = venda legada/sem custo confiável no momento da venda (nunca lido do
+  // Product atual). Presente = exatamente o que a transação de finalização já teria gravado.
+  const saleOf = (id: string, productId: string, price: number, costPriceAtSale?: number) => ({
     id, clientId: "c1", date: now.toISOString(), totalPrice: price, paymentType: "pix",
-    products: [{ productId, quantity: 1, price }],
+    products: [{ productId, quantity: 1, price, ...(costPriceAtSale !== undefined ? { costPriceAtSale } : {}) }],
   }) as any;
 
-  // PS1 — custo ausente/0 nunca vira custo confiável: uma única venda de um produto sem custo real.
-  const untrustedOnly = calculateFinancialSummary([saleOf("s1", "p1", 50)], [untrustedProduct]);
-  assert.equal(untrustedOnly.today.profit, null, "PS1: lucro do período com custo não confiável é null, nunca um número calculado tratando custo ausente como 0");
-  console.log("PASS PS1 missing cost does not become trusted zero");
+  // PS1/CS2 — sem costPriceAtSale (custo não confiável no momento da venda) nunca vira lucro calculado.
+  const untrustedOnly = calculateFinancialSummary([saleOf("s1", "p1", 50)]);
+  assert.equal(untrustedOnly.today.profit, null, "PS1/CS2: lucro do período sem snapshot de custo confiável é null, nunca um número calculado tratando custo ausente como 0");
+  console.log("PASS PS1/CS2 missing sale-time cost snapshot does not become a trusted zero");
 
-  // PS2/PS3 — período MISTO (uma venda com custo confiável + uma com custo não confiável): o total do
-  // período nunca mistura os dois — fica indisponível por inteiro, nunca um lucro parcial/errado.
-  const mixedSales = [saleOf("s2", "p1", 50), saleOf("s3", "p2", 50)];
-  const mixedProducts = [untrustedProduct, trustedProductA];
-  const mixedSummary = calculateFinancialSummary(mixedSales, mixedProducts);
-  assert.equal(mixedSummary.today.profit, null, "PS2: período com QUALQUER venda de custo não confiável nunca mostra lucro total (nem o parcial só das vendas confiáveis, nem um lucro subestimado) — indisponível é a única opção honesta");
-  console.log("PASS PS2 incomplete cost basis does not show total profit");
-  const mixedIndicators = calculateIndicators(mixedSales, mixedProducts);
-  assert.equal(mixedIndicators.averageMargin, null, "PS3: mesma mistura vale para margem — nunca uma margem calculada sobre uma base de custo incompleta");
-  console.log("PASS PS3 incomplete cost basis does not show total margin");
+  // PS2/PS3/CS6 — período MISTO (uma venda com snapshot + uma sem): o total nunca mistura os dois.
+  const mixedSales = [saleOf("s2", "p1", 50), saleOf("s3", "p2", 50, 20)];
+  const mixedSummary = calculateFinancialSummary(mixedSales);
+  assert.equal(mixedSummary.today.profit, null, "PS2/CS6: período com QUALQUER venda sem snapshot confiável nunca mostra lucro total (nem o parcial só das vendas com snapshot, nem um lucro subestimado) — indisponível é a única opção honesta");
+  console.log("PASS PS2/CS6 incomplete cost-snapshot basis does not show a total profit");
+  const mixedIndicators = calculateIndicators(mixedSales, [productNoSnapshot, productA]);
+  assert.equal(mixedIndicators.averageMargin, null, "PS3/CS6: mesma mistura vale para margem — nunca uma margem calculada sobre uma base de custo incompleta");
+  console.log("PASS PS3/CS6 incomplete cost-snapshot basis does not show a total margin");
 
-  // PS4 — paridade tela/export: com o MESMO payload (profit null), o export (HTML/CSV, funções puras,
-  // testáveis sem DOM) precisa mostrar a mesma indisponibilidade que a tela mostraria via formatCurrency
-  // — nunca um número fabricado escrito no PDF/CSV que a tela já recusou mostrar.
-  const rankings = calculateRanking(mixedSales, mixedProducts, []);
+  // PS4/CS9 — paridade tela/export com o MESMO payload (profit null).
+  const rankings = calculateRanking(mixedSales, [productNoSnapshot, productA], []);
   const flatComparison = { label: "x", current: 0, previous: 0, changePercent: 0, direction: "flat" as const };
   const comparisons = { today: flatComparison, week: flatComparison, month: flatComparison, year: flatComparison };
   const exportPayload = { storeName: "Loja Teste", periodLabel: "Teste", generatedAt: now, summary: mixedSummary, rankings, comparisons, indicators: mixedIndicators };
   const csv = buildExcelCsvContent(exportPayload);
   const html = buildPrintableHtml(exportPayload);
-  assert.match(csv, /Lucro hoje;Indispon[íi]vel/, "PS4: CSV mostra 'Indisponível' para lucro hoje, nunca um valor calculado a partir de custo incompleto");
-  assert.match(html, /Lucro hoje<\/td><td>Indispon[íi]vel<\/td>/, "PS4: HTML (PDF/impressão) mostra a mesma indisponibilidade — paridade tela/export");
-  console.log("PASS PS4 screen/export parity — the same profit-unavailable state reaches both the CSV and the printable HTML, never a fabricated number in one and not the other");
+  assert.match(csv, /Lucro hoje;Indispon[íi]vel/, "PS4/CS9: CSV mostra 'Indisponível' para lucro hoje, nunca um valor calculado a partir de custo incompleto");
+  assert.match(html, /Lucro hoje<\/td><td>Indispon[íi]vel<\/td>/, "PS4/CS9: HTML (PDF/impressão) mostra a mesma indisponibilidade — paridade tela/export");
+  console.log("PASS PS4/CS9 screen/export parity — the same profit-unavailable state reaches both the CSV and the printable HTML, never a fabricated number in one and not the other");
 
-  // PS5 — quando TODO o custo do período é confiável, o lucro/margem reais (matemática correta) devem
-  // aparecer — a hierarquia B nunca é conservadora além do necessário; só fica indisponível quando a
-  // ambiguidade é real.
-  const trustedSales = [saleOf("s4", "p2", 50), saleOf("s5", "p3", 30)];
-  const trustedProducts = [trustedProductA, trustedProductB];
-  const trustedSummary = calculateFinancialSummary(trustedSales, trustedProducts);
-  assert.equal(trustedSummary.today.profit, 50, "PS5: com custo 100% confiável no período, o lucro precisa ser o valor real calculado (receita 80 - custo 30 = 50), nunca indisponível por excesso de cautela");
-  const trustedIndicators = calculateIndicators(trustedSales, trustedProducts);
-  assert.equal(trustedIndicators.averageMargin, Math.round((50 / 80) * 100), "PS5: margem real (lucro/receita) quando o custo é 100% confiável — aritmética correta, não fabricada nem indisponível");
-  console.log("PASS PS5 trusted cost arithmetic is correct when fully representable — the safety fix never hides real, well-tracked data");
+  // PS5/CS7 — quando TODA venda do período tem snapshot confiável, lucro/margem reais precisam aparecer.
+  const trustedSales = [saleOf("s4", "p2", 50, 20), saleOf("s5", "p3", 30, 10)];
+  const trustedSummary = calculateFinancialSummary(trustedSales);
+  assert.equal(trustedSummary.today.profit, 50, "PS5/CS7: com snapshot de custo 100% presente no período, o lucro precisa ser o valor real calculado a partir dos snapshots (receita 80 - custo-no-momento-da-venda 30 = 50), nunca indisponível por excesso de cautela, e nunca usando o costPrice ATUAL (999) dos produtos-armadilha");
+  const trustedIndicators = calculateIndicators(trustedSales, [productA, productB]);
+  assert.equal(trustedIndicators.averageMargin, Math.round((50 / 80) * 100), "PS5/CS7: margem real (lucro/receita) quando o snapshot de custo é 100% presente — aritmética correta, não fabricada nem indisponível");
+  console.log("PASS PS5/CS7 trusted sale-time cost arithmetic is correct when fully representable — the safety fix never hides real, well-tracked data, and never reads the product's CURRENT cost");
 
-  // PS6 — as métricas BASIC (receita, ticket médio, produtos vendidos) nunca ficam null, mesmo quando o
-  // custo é totalmente não confiável: a ambiguidade de CUSTO nunca contamina RECEITA (dado sempre certo,
-  // vem direto de Sale.totalPrice, nunca depende de Product.costPrice).
-  assert.equal(mixedSummary.today.revenue, 100, "PS6: receita nunca é afetada pela confiabilidade do custo — sempre a soma real de Sale.totalPrice");
+  // CS8 — ranking granular: produto com snapshot em TODAS as contribuições mantém lucro real; produto
+  // cuja contribuição mistura snapshot presente/ausente fica indisponível só nele (precisão de ef8cef6
+  // preservada sob a nova autoridade de custo).
+  const rankingMixSales = [saleOf("r1", "p2", 50, 20), saleOf("r2", "p2", 50), saleOf("r3", "p3", 30, 10)];
+  const rankingMix = calculateRanking(rankingMixSales, [productA, productB], []);
+  const p2Ranking = rankingMix.topSellingProducts.find(item => item.id === "p2");
+  const p3Ranking = rankingMix.topSellingProducts.find(item => item.id === "p3");
+  assert.equal(p2Ranking?.profit, null, "CS8: p2 recebeu uma venda COM snapshot e outra SEM — a contribuição mista deixa o lucro do produto indisponível, nunca um total parcial");
+  assert.equal(p3Ranking?.profit, 20, "CS8: p3 só recebeu vendas com snapshot confiável — lucro real preservado independentemente do produto vizinho estar indisponível");
+  console.log("PASS CS8 mixed ranking contributions become unavailable only for the specific product/category/brand actually affected — a fully-snapshotted product elsewhere in the same report stays real");
+
+  // PS6 — métricas BASIC nunca ficam null, mesmo com custo totalmente indisponível.
+  assert.equal(mixedSummary.today.revenue, 100, "PS6: receita nunca é afetada pela confiabilidade do snapshot de custo — sempre a soma real de Sale.totalPrice");
   assert.equal(typeof mixedSummary.averageTicket, "number", "PS6: ticket médio continua um número real, nunca null");
   assert.equal(mixedSummary.totalProductsSold, 2, "PS6: produtos vendidos (volume) nunca depende de custo");
-  console.log("PASS PS6 Free basic metrics (revenue, average ticket, products sold) are never affected by cost reliability — only profit/margin can become unavailable");
+  console.log("PASS PS6 Free basic metrics (revenue, average ticket, products sold) are never affected by cost-snapshot reliability — only profit/margin can become unavailable");
 
-  // PS7 — a seção estratégica (Premium) nunca depende de custo — já provado por F4 (fonte: opportunity-
-  // engine.ts nunca menciona costPrice/profit/margin); reconfirmado aqui que os dois módulos financeiros
-  // desta correção (report-metrics.ts/report-export.ts) nunca são importados por opportunity-engine.ts —
-  // nenhum acoplamento novo foi introduzido entre o profit-safety fix e a leitura estratégica.
+  // PS7 — a seção estratégica (Premium) nunca depende de custo.
   const engineSrc = sourceOf("server/opportunity-engine.ts");
   assert.doesNotMatch(engineSrc, /report-metrics|report-export/, "PS7: opportunity-engine.ts (fonte da seção estratégica) nunca importa report-metrics.ts/report-export.ts — o profit-safety fix não introduz nenhum acoplamento novo com a leitura estratégica");
   console.log("PASS PS7 the Premium strategic summary stays fully independent of cost/profit — no new coupling introduced between the profit-safety fix and the opportunity engine");
+
+  // CS5 — venda "legada" (sem costPriceAtSale) nunca cai para o costPrice ATUAL do produto, mesmo que
+  // ele hoje seja > 0. report-metrics.ts nem recebe mais os produtos para essa finalidade (getSaleItem
+  // Metrics/calculatePeriod não aceitam productById) — a prova estrutural já está no diff; aqui a prova
+  // de comportamento: um produto com costPrice=999 (bem definido, positivo) não produz lucro para uma
+  // venda sem snapshot.
+  const legacySale = saleOf("legacy1", "p1", 70);
+  const legacySummary = calculateFinancialSummary([legacySale]);
+  assert.equal(legacySummary.today.profit, null, "CS5: venda legada sem costPriceAtSale nunca recebe o costPrice atual do produto (999) como fallback — lucro permanece indisponível para sempre");
+  console.log("PASS CS5 a legacy sale item without a trusted sale-time snapshot never falls back to the product's current cost, however high or well-defined it is today");
+}
+
+// ===================================================================================================
+// CS1/CS2/CS3/CS4/CS10 — PLAN-IMPL-07B-COST-SNAPSHOT-FINAL: captura real via finalizeSaleTransaction
+// (emulador, mesma transação de servidor que a rota HTTP chama) — nunca simulado em memória. Prova a
+// garantia central desta ticket: o snapshot é gravado no momento certo, nunca reescrito por uma mudança
+// posterior de Product.costPrice, e cada venda carrega sua própria economia histórica independente.
+// ===================================================================================================
+async function runCostSnapshotCaptureTests(db: AdminFirestore): Promise<void> {
+  // CLIENT_CAN_SET_SALE_COST_SNAPSHOT — o tipo de input do cliente só aceita productId/quantity;
+  // impossível submeter um costPriceAtSale forjado nem por acidente de tipo, e a transação nunca lê
+  // nada parecido do input — sempre deriva do Product relido dentro da própria transação.
+  const finalizeSrc = sourceOf("server/sale-finalize-transaction.ts");
+  assert.match(finalizeSrc, /products: \{ productId: string; quantity: number \}\[\];/, "CLIENT_CAN_SET_SALE_COST_SNAPSHOT: SaleFinalizeInput.products só aceita productId/quantity — nenhum campo de custo é sequer um input possível");
+  assert.doesNotMatch(finalizeSrc, /input\.products\[.*\]\.cost|costPriceAtSale:\s*input/, "CLIENT_CAN_SET_SALE_COST_SNAPSHOT: a transação nunca deriva costPriceAtSale de nada vindo do input do cliente");
+  console.log("PASS CLIENT_CAN_SET_SALE_COST_SNAPSHOT=NO the client-submitted sale input type structurally cannot carry a cost snapshot, and the transaction never reads one from it");
+
+  const uid = tenantUid("costsnap");
+  const userRef = db.collection("users").doc(uid);
+  await userRef.collection("clients").doc("c1").set({ id: "c1", name: "Cliente Snapshot", phone: "" });
+
+  const baseInput = {
+    uid, clientId: "c1", paymentType: "avista" as const, discountType: "fixed" as const, discountValue: 0,
+    downPayment: 0, installmentCount: 0, paymentMethod: "pix", downPaymentMethod: null,
+  };
+
+  // CS1 — produto com custo confiável (30), venda real (preço 80).
+  await userRef.collection("products").doc("p1").set({ id: "p1", name: "Produto A", brand: "", category: "", costPrice: 30, salePrice: 80, stock: 10 });
+  const resultA = await finalizeSaleTransaction(db, { ...baseInput, saleId: "sale-a", products: [{ productId: "p1", quantity: 1 }] });
+  const saleADoc = await userRef.collection("sales").doc(resultA.saleId).get();
+  const saleAItem = (saleADoc.data() as any).products[0];
+  assert.equal(saleAItem.costPriceAtSale, 30, "CS1: custo confiável do produto no momento da venda é gravado no item da venda, pela mesma transação que já lê o produto — nenhuma leitura extra");
+  console.log("PASS CS1 a known, trusted product cost is captured into the sale item at finalize time, via the real server transaction");
+
+  // CS2 (execução real) — produto SEM custo confiável (0/default): snapshot nunca é gravado.
+  await userRef.collection("products").doc("p2").set({ id: "p2", name: "Produto B", brand: "", category: "", costPrice: 0, salePrice: 40, stock: 10 });
+  const resultB = await finalizeSaleTransaction(db, { ...baseInput, saleId: "sale-b", products: [{ productId: "p2", quantity: 1 }] });
+  const saleBDoc = await userRef.collection("sales").doc(resultB.saleId).get();
+  const saleBItem = (saleBDoc.data() as any).products[0];
+  assert.equal("costPriceAtSale" in saleBItem, false, "CS2 (execução real): produto com custo não confiável (0) nunca produz um snapshot gravado — o campo fica ausente, nunca um 0 fabricado como \"confiável\"");
+  console.log("PASS CS2 (real execution) an untrusted product cost (0/default) never produces a persisted trusted snapshot — the field is simply absent, never a fabricated trusted zero");
+
+  // CS3/§21 — mudar o custo do produto DEPOIS da venda A não reescreve o snapshot já gravado.
+  await userRef.collection("products").doc("p1").update({ costPrice: 60 });
+  const saleADocAfterChange = await userRef.collection("sales").doc(resultA.saleId).get();
+  const saleAItemAfterChange = (saleADocAfterChange.data() as any).products[0];
+  assert.equal(saleAItemAfterChange.costPriceAtSale, 30, "CS3/§21: mudar Product.costPrice DEPOIS da venda (30 -> 60) não altera o snapshot já persistido — a venda histórica mantém sua própria economia (30), confirmado relendo o documento real do Firestore");
+  console.log("PASS CS3 changing the product's current cost after a sale never rewrites that sale's already-persisted snapshot — confirmed by re-reading the real Firestore document");
+
+  // CS4/§22 — uma SEGUNDA venda do MESMO produto, feita DEPOIS da mudança de custo, captura o custo
+  // NOVO (60) de forma independente — cada venda carrega sua própria economia histórica.
+  const resultC = await finalizeSaleTransaction(db, { ...baseInput, saleId: "sale-c", products: [{ productId: "p1", quantity: 1 }] });
+  const saleCDoc = await userRef.collection("sales").doc(resultC.saleId).get();
+  const saleCItem = (saleCDoc.data() as any).products[0];
+  assert.equal(saleCItem.costPriceAtSale, 60, "CS4/§22: uma segunda venda do mesmo produto, após a mudança de custo, captura o custo NOVO (60) de forma totalmente independente da venda anterior (30) — cada venda é sua própria fotografia histórica");
+  console.log("PASS CS4 a second sale of the same product, made after the cost change, independently captures the new cost — each sale carries its own historical economics");
+
+  // §22 — relatório do período combinando as duas vendas reais (A: preço 80/custo 30, C: preço 80/custo
+  // 60) precisa refletir a soma das duas economias históricas independentes: receita 160, lucro 70 —
+  // nunca as duas vendas usando o mesmo custo (nem o antigo nem o novo) por engano.
+  const saleAFinal = saleADocAfterChange.data() as any;
+  const saleCFinal = saleCDoc.data() as any;
+  const combinedSummary = calculateFinancialSummary([saleAFinal, saleCFinal], new Date(saleAFinal.date));
+  assert.equal(combinedSummary.today.revenue, 160, "§22: receita combinada das duas vendas reais");
+  assert.equal(combinedSummary.today.profit, 70, "§22: lucro combinado usa CADA venda com seu PRÓPRIO snapshot histórico (80-30) + (80-60) = 50+20 = 70 — nunca (80-30)*2=100 nem (80-60)*2=40");
+  console.log("PASS §22 a report period spanning both real sales correctly sums each sale's own independent historical cost snapshot — never one snapshot applied to both");
+
+  // CS10 — apagar o Product depois não muda a autoridade do snapshot: calculateFinancialSummary nem
+  // aceita mais um mapa de produtos para custo (prova estrutural já no diff). Prova de comportamento:
+  // apagar p1 de verdade e recalcular a partir só das Sales já lidas confirma que nada quebra.
+  await userRef.collection("products").doc("p1").delete();
+  const afterDeleteSummary = calculateFinancialSummary([saleAFinal, saleCFinal], new Date(saleAFinal.date));
+  assert.equal(afterDeleteSummary.today.profit, 70, "CS10: apagar o Product não muda a autoridade do snapshot já gravado na venda — lucro histórico idêntico mesmo sem o produto mais existir");
+  console.log("PASS CS10 deleting the product afterward never changes the sale's snapshot authority — historical profit is identical whether or not the product still exists");
 }
 
 // ===================================================================================================
@@ -361,8 +451,9 @@ async function run(): Promise<void> {
   initializeFirebaseAdmin();
   const db = initializeFirebaseAdmin().firestore();
   await runStrategicSummaryExecutionTests(db);
+  await runCostSnapshotCaptureTests(db);
 
-  console.log("\nPLAN-IMPL-07B report differentiation — all RC/PG/OR/F/SC/UI/PS assertions passed, plus real-execution proof that the report summary never drifts from the canonical opportunity engine and that profit/margin are never fabricated from unreliable cost data. B1-B27 (browser) status: see final report.");
+  console.log("\nPLAN-IMPL-07B report differentiation — all RC/PG/OR/F/SC/UI/PS/CS assertions passed, plus real-execution proof that the report summary never drifts from the canonical opportunity engine, that profit/margin are never fabricated from unreliable cost data, and that historical Sale cost snapshots survive Product cost changes and deletion. B1-B27 (browser, PLAN-IMPL-07B-VERIFY-FINAL) + B1-B10 (browser, COST-SNAPSHOT-FINAL) status: see final report.");
 }
 
 run().catch((error) => {

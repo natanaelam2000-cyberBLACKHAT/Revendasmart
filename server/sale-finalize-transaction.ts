@@ -103,7 +103,14 @@ export async function finalizeSaleTransaction(db: Firestore, input: SaleFinalize
         throw pricingError;
       }
       subtotalCents += priceCents * item.quantity;
-      return { productId: item.productId, quantity: item.quantity, price: priceCents / 100, stock };
+      // PLAN-IMPL-07B-COST-SNAPSHOT-FINAL — custo histórico capturado AQUI, da mesma leitura de Product já
+      // feita para preço/estoque (nenhuma leitura extra), nunca do que o cliente enviou (products[] do
+      // input só carrega productId/quantity — ver SaleFinalizeInput acima). Mesma regra de confiança já
+      // estabelecida para relatórios: só um custo > 0 é confiável (0/ausente nunca vira um snapshot
+      // fabricado); em centavos para evitar deriva de ponto flutuante, convertido a decimal só ao gravar.
+      const rawCostPrice = Number(product.costPrice);
+      const costPriceAtSaleCents = Number.isFinite(rawCostPrice) && rawCostPrice > 0 ? Math.round(rawCostPrice * 100) : null;
+      return { productId: item.productId, quantity: item.quantity, price: priceCents / 100, stock, costPriceAtSaleCents };
     });
 
     const requestedDiscountCents = discountType === "percent"
@@ -124,6 +131,9 @@ export async function finalizeSaleTransaction(db: Firestore, input: SaleFinalize
         productId: product.productId,
         quantity: product.quantity,
         price: product.price,
+        // Campo omitido (nunca `null`/`undefined` gravado) quando o custo não era confiável — mesmo
+        // padrão aditivo de Client.lastPurchaseAt/Product.lastSoldDate (PLAN-IMPL-07A).
+        ...(product.costPriceAtSaleCents !== null ? { costPriceAtSale: product.costPriceAtSaleCents / 100 } : {}),
       })),
       subtotal: subtotalCents / 100,
       discountType,

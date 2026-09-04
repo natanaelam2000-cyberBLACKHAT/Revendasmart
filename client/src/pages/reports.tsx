@@ -166,9 +166,9 @@ export default function Reports() {
     return () => { cancelled = true; };
   }, [planLoading, hasPremiumAccess]);
 
-  const summary = useMemo(() => calculateFinancialSummary(sales, products), [sales, products]);
+  const summary = useMemo(() => calculateFinancialSummary(sales), [sales]);
   const rankings = useMemo(() => calculateRanking(sales, products, clients), [sales, products, clients]);
-  const comparisons = useMemo(() => calculateComparisons(sales, products), [sales, products]);
+  const comparisons = useMemo(() => calculateComparisons(sales), [sales]);
   const charts = useMemo(() => calculateReportCharts(sales, products), [sales, products]);
   const indicators = useMemo(() => calculateIndicators(sales, products), [sales, products]);
   const margin = indicators.averageMargin;

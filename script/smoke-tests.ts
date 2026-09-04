@@ -6146,8 +6146,16 @@ assert.match(sharedProductPricingSource, /typeof value === "number" && Number\.i
 
 // 6. Snapshot histórico: o item salvo guarda o preço EFETIVAMENTE cobrado, não uma referência ao
 // produto. Uma venda antiga não pode ser recalculada quando o preço/promoção do produto mudar.
-assert.match(saleFinalizeTransactionSource, /return \{ productId: item\.productId, quantity: item\.quantity, price: priceCents \/ 100, stock \};/);
-assert.match(saleFinalizeTransactionSource, /products: saleProducts\.map\(\(product\) => \(\{\s*\n\s*productId: product\.productId,\s*\n\s*quantity: product\.quantity,\s*\n\s*price: product\.price,\s*\n\s*\}\)\),/);
+assert.match(saleFinalizeTransactionSource, /return \{ productId: item\.productId, quantity: item\.quantity, price: priceCents \/ 100, stock, costPriceAtSaleCents \};/);
+assert.match(saleFinalizeTransactionSource, /products: saleProducts\.map\(\(product\) => \(\{\s*\n\s*productId: product\.productId,\s*\n\s*quantity: product\.quantity,\s*\n\s*price: product\.price,/);
+// PLAN-IMPL-07B-COST-SNAPSHOT-FINAL — mesmo princípio de snapshot histórico, agora também para custo:
+// gravado uma única vez a partir do Product relido AQUI DENTRO da transação (nunca do input do cliente,
+// que só carrega productId/quantity — ver SaleFinalizeInput), só quando > 0 (nunca um 0 fabricado como
+// confiável), e omitido (nunca sobrescrito depois) quando o produto não tinha custo confiável no momento.
+assert.match(saleFinalizeTransactionSource, /const rawCostPrice = Number\(product\.costPrice\);/);
+assert.match(saleFinalizeTransactionSource, /costPriceAtSaleCents = Number\.isFinite\(rawCostPrice\) && rawCostPrice > 0 \? Math\.round\(rawCostPrice \* 100\) : null;/);
+assert.match(saleFinalizeTransactionSource, /\.\.\.\(product\.costPriceAtSaleCents !== null \? \{ costPriceAtSale: product\.costPriceAtSaleCents \/ 100 \} : \{\}\),/);
+assert.doesNotMatch(saleFinalizeTransactionSource, /input\.products\[.*\]\.cost|costPriceAtSale:\s*input\./, "custo histórico nunca vem do input do cliente — sempre derivado do Product relido dentro da própria transação");
 {
   const saleDocBlock = saleFinalizeTransactionSource.slice(saleFinalizeTransactionSource.indexOf("const sale = {"), saleFinalizeTransactionSource.indexOf("transaction.create(saleRef, sale);"));
   assert.doesNotMatch(saleDocBlock, /discountPercent|promotionalPrice/, "a venda salva não guarda parâmetros de promoção — só o preço cobrado, senão o histórico mudaria junto com o produto");
