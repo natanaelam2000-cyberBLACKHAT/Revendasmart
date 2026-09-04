@@ -1,6 +1,7 @@
 import { getAnalytics, logEvent as firebaseLogEvent, setUserId as firebaseSetUserId, Analytics } from "firebase/analytics";
 import { FirebaseApp } from "firebase/app";
 import { maskId } from "@/lib/safe-logger";
+import type { PlanType, BillingCycle } from "@shared/monetization";
 
 /**
  * FIREBASE ANALYTICS OFFICIAL — WEB
@@ -19,6 +20,17 @@ import { maskId } from "@/lib/safe-logger";
 
 let analytics: Analytics | null = null;
 let isInitialized = false;
+
+/** PLAN-IMPL-06 §39 — sink injetável para testes: quando definido, `trackAnalyticsEvent` chama ESTE em
+ * vez do Firebase Analytics real (nenhum tráfego real de GA/Firebase sai de testes automatizados).
+ * Nunca setado em produção — só scripts de teste chamam `__setAnalyticsTestSinkForTesting`. */
+type AnalyticsTestSink = <K extends keyof FirebaseAnalyticsEvents>(eventName: K, eventData: Partial<FirebaseAnalyticsEvents[K]>) => void;
+let testSink: AnalyticsTestSink | null = null;
+
+/** PLAN-IMPL-06 §39 — só para testes: injeta (ou, com `null`, remove) um sink mock. */
+export function __setAnalyticsTestSinkForTesting(sink: AnalyticsTestSink | null): void {
+  testSink = sink;
+}
 
 /**
  * Firebase Analytics event definitions
@@ -116,7 +128,133 @@ export interface FirebaseAnalyticsEvents {
   ad_image_downloaded: {
     item_id: string;
   };
+
+  // PLAN-IMPL-06 §8-§14 — ativação: cada um só no limite real correspondente (ver os call sites), nunca
+  // em render de página/abertura de formulário. Nenhum payload leva id/nome de produto/cliente/venda —
+  // "primeiro" é sinalizado pela OCORRÊNCIA do evento em si, não por um parâmetro.
+  first_product_created: Record<string, never>;
+  first_sale_completed: Record<string, never>;
+  catalog_published: Record<string, never>;
+  first_booking_created: Record<string, never>;
+  first_marketing_created: Record<string, never>;
+
+  // PLAN-IMPL-06 §21-§23 — funil de paywall. `reason`/`resource_type`/`source` são enums fechados
+  // (AnalyticsPaywallReason/AnalyticsResourceType/AnalyticsSource abaixo), nunca uma string livre.
+  paywall_viewed: {
+    reason: AnalyticsPaywallReason;
+    resource_type?: AnalyticsResourceType;
+    current_plan: PlanType;
+    recommended_plan?: PlanType;
+    usage?: number;
+    limit?: number;
+    source: AnalyticsSource;
+  };
+  paywall_cta_clicked: {
+    reason: AnalyticsPaywallReason;
+    resource_type?: AnalyticsResourceType;
+    current_plan: PlanType;
+    recommended_plan?: PlanType;
+    source: AnalyticsSource;
+  };
+
+  // PLAN-IMPL-06 §24-§28/§45 — funil de assinatura: plans_viewed -> plan_selected -> checkout_started ->
+  // subscription_activated, com checkout_failed como ramo de erro. Nunca leva valor/amount do client
+  // (§26 — o preço é derivado depois de plan/billing_cycle, nunca enviado como autoridade).
+  plans_viewed: {
+    current_plan: PlanType;
+    effective_plan: PlanType;
+    is_trial: boolean;
+    source: AnalyticsSource;
+  };
+  plan_selected: {
+    selected_plan: PlanType;
+    billing_cycle: BillingCycle;
+    current_plan: PlanType;
+    is_trial: boolean;
+  };
+  checkout_started: {
+    plan: PlanType;
+    billing_cycle: BillingCycle;
+    pricing_version: "v2";
+  };
+  checkout_failed: {
+    plan: PlanType;
+    reason: AnalyticsCheckoutFailureReason;
+  };
+  subscription_activated: {
+    plan: PlanType;
+    billing_cycle: BillingCycle;
+  };
+
+  // PLAN-IMPL-06 §15-§20/§43/§44 — funil econômico do Ads Pro (PLAN-IMPL-05). Mede só a preparação
+  // (chamada cara ao provider), nunca o anúncio gerado a partir dela — ver marketing_created acima, um
+  // evento deliberadamente distinto. Nenhum productId/preparedAssetId (alta cardinalidade, §43).
+  ads_pro_preparation_started: {
+    plan: PlanType;
+  };
+  ads_pro_preparation_completed: {
+    plan: PlanType;
+    quota_used: number;
+    quota_limit: number;
+  };
+  ads_pro_preparation_failed: {
+    plan: PlanType;
+    failure_category: AnalyticsPreparationFailureCategory;
+  };
+  ads_pro_preparation_reused: {
+    plan: PlanType;
+  };
+  ads_pro_preparation_limit_reached: {
+    plan: PlanType;
+    quota_used: number;
+    quota_limit: number;
+  };
+
+  // PLAN-IMPL-06 §30-§34 — ciclo de vida do plano, sempre a partir de uma transição real observada pelo
+  // client (nunca a cada render de um estado já conhecido — ver PlanProvider.tsx).
+  trial_started: {
+    plan: PlanType;
+  };
+  trial_expired: {
+    base_plan: PlanType;
+  };
+  plan_upgraded: {
+    from_plan: PlanType;
+    to_plan: PlanType;
+  };
+  plan_downgraded: {
+    from_plan: PlanType;
+    to_plan: PlanType;
+  };
+
+  // PLAN-IMPL-06 §33/§34 — cancellation_completed significa só que o provider aceitou a solicitação de
+  // não-renovar; o acesso pago continua até o fim do período já pago (PLAN-IMPL-03/04B), nunca implica
+  // downgrade imediato.
+  cancellation_started: {
+    plan: PlanType;
+  };
+  cancellation_completed: {
+    plan: PlanType;
+  };
 }
+
+/** PLAN-IMPL-06 §21/§47 — motivo fechado de paywall: um por recurso com cota real aplicada. */
+export type AnalyticsPaywallReason = "product_limit" | "client_limit" | "service_limit" | "booking_limit" | "ads_pro_preparation_limit";
+
+/** PLAN-IMPL-06 — mesmo domínio de PaywallResource (client/src/lib/plan-paywall-copy.ts), redeclarado
+ * aqui como tipo (não importado) para este módulo nunca depender do módulo de cópia — analytics e texto
+ * de UI são preocupações independentes, mesmo cobrindo o mesmo conjunto de recursos. */
+export type AnalyticsResourceType = "products" | "clients" | "services" | "bookings" | "adsProPreparations";
+
+/** PLAN-IMPL-06 §24/§47 — de onde a navegação para /plans (ou o paywall) partiu. Fechado: nunca uma URL
+ * completa, nunca uma string arbitrária montada em runtime (§24 — "Do not include arbitrary URL"). */
+export type AnalyticsSource = "dashboard" | "settings" | "plan_usage" | "product_limit" | "client_limit" | "booking_limit" | "ads_pro_preparation_limit" | "direct";
+
+/** PLAN-IMPL-06 §27 — nunca a string de erro real da API/provider. */
+export type AnalyticsCheckoutFailureReason = "purchase_unavailable" | "provider_unavailable" | "configuration_error" | "already_subscribed" | "authorization" | "temporary_error" | "unknown";
+
+/** PLAN-IMPL-06 §19 — nunca o payload/erro bruto do PhotoRoom. */
+export type AnalyticsPreparationFailureCategory = "provider_unavailable" | "provider_failed" | "storage_failed" | "invalid_result" | "temporary_error";
 
 /**
  * Initialize Firebase Analytics
@@ -139,6 +277,11 @@ export function trackAnalyticsEvent<K extends keyof FirebaseAnalyticsEvents>(
   eventName: K,
   eventData: Partial<FirebaseAnalyticsEvents[K]> = {}
 ): void {
+  if (testSink) {
+    testSink(eventName, eventData);
+    return;
+  }
+
   if (!isInitialized || !analytics) {
     console.warn("[FirebaseAnalytics] Not initialized, event not tracked");
     return;

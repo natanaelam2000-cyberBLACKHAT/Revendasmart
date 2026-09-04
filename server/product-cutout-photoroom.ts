@@ -90,6 +90,10 @@ interface PhotoroomCutoutGenerationDoc {
   readonly createdAt: string;
   readonly errorCode?: string;
   readonly cutout?: ApprovedProductCutout;
+  // PLAN-IMPL-06 §15/§43 — bookkeeping só deste doc de idempotência (nunca no ApprovedProductCutout
+  // persistido em products/{id}, que continua sem esse campo): se esta preparação reaproveitou um cutout
+  // já aprovado em vez de chamar o provider de novo. Alimenta só o campo `reused` da resposta HTTP.
+  readonly reused?: boolean;
 }
 
 /** §6.8: idempotência real via transação — a MESMA `generationRequestId` nunca chama o provider duas
@@ -147,6 +151,10 @@ export function registerProductCutoutPhotoroomRoutes(app: Express, requireAuth: 
     // reservada se algo inesperado explodir depois de reservePreparationSlot ter sucedido (§23).
     let reservedMonthKey: string | null = null;
     let quotaPlan: PlanType | null = null;
+    // PLAN-IMPL-06 §15/§43 — só preenchido quando reservePreparationSlot reservou de verdade (Pro/
+    // Premium); admin (quotaPlan === null) nunca reserva, então nunca tem "pressão de cota" real para
+    // reportar — fica null, e a resposta HTTP simplesmente omite quotaUsed/quotaLimit nesse caso.
+    let reservedQuota: { readonly used: number; readonly limit: number } | null = null;
 
     try {
       const admin = getFirebaseAdmin();
@@ -172,7 +180,7 @@ export function registerProductCutoutPhotoroomRoutes(app: Express, requireAuth: 
         const existing = reservation.existing!;
         if (existing.status === "ready" && existing.cutout) {
           logInfo("product_cutout_photoroom.idempotent_replay", { requestId: req.requestId, generationId: generationRequestId });
-          return res.status(200).json(existing.cutout);
+          return res.status(200).json({ ...existing.cutout, reused: existing.reused ?? false });
         }
         if (existing.status === "processing") {
           return sendError(res, 409, "GENERATION_IN_PROGRESS");
@@ -203,9 +211,9 @@ export function registerProductCutoutPhotoroomRoutes(app: Express, requireAuth: 
       // limit diário abaixo) — mesmo com a cota do mês zerada, o produto já preparado continua disponível.
       const existingCutout = truth.approvedCutout;
       if (shouldReuseExistingProductCutout(existingCutout, source.assetId)) {
-        await finalizeGeneration(db, uid, generationRequestId, { status: "ready", cutout: existingCutout! });
+        await finalizeGeneration(db, uid, generationRequestId, { status: "ready", cutout: existingCutout!, reused: true });
         logInfo("product_cutout_photoroom.reused_existing", { requestId: req.requestId, generationId: generationRequestId, productId });
-        return res.status(200).json(existingCutout!);
+        return res.status(200).json({ ...existingCutout!, reused: true });
       }
 
       const rateLimitAllowed = await checkDailyRateLimit(db, uid);
@@ -224,6 +232,7 @@ export function registerProductCutoutPhotoroomRoutes(app: Express, requireAuth: 
           return sendError(res, 409, errorCode);
         }
         reservedMonthKey = reservedSlot.monthKey;
+        reservedQuota = { used: reservedSlot.used, limit: reservedSlot.limit };
       }
 
       const loaded = await loadStorageImage(source);
@@ -298,10 +307,13 @@ export function registerProductCutoutPhotoroomRoutes(app: Express, requireAuth: 
       // PLAN-IMPL-05 — sucesso: a cota reservada em reservePreparationSlot fica consumida de verdade,
       // só libera o lock (nunca decrementa o usado aqui — isso é exclusivo do caminho de falha).
       if (reservedMonthKey) { await completePreparationSlot(db, uid, productId); reservedMonthKey = null; }
-      await finalizeGeneration(db, uid, generationRequestId, { status: "ready", cutout });
+      await finalizeGeneration(db, uid, generationRequestId, { status: "ready", cutout, reused: false });
 
       logInfo("product_cutout_photoroom.ready", { requestId: req.requestId, generationId: generationRequestId, productId });
-      return res.status(200).json(cutout);
+      // PLAN-IMPL-06 §15/§43 — quotaUsed/quotaLimit (wire-only, nunca persistidos em ApprovedProductCutout)
+      // só quando reservedQuota existe (Pro/Premium real); admin não reservou, então a resposta não inclui
+      // esses campos — o client sabe não fabricar um número que o servidor nunca teve.
+      return res.status(200).json({ ...cutout, reused: false, ...(reservedQuota ? { quotaUsed: reservedQuota.used, quotaLimit: reservedQuota.limit } : {}) });
     } catch (error) {
       logError("product_cutout_photoroom.unhandled_error", error, { requestId: req.requestId, generationId: generationRequestId });
       try {

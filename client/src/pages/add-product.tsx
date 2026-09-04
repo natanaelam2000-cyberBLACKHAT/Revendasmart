@@ -17,7 +17,7 @@ const ProductPhotoEnhancementTool = lazy(
 );
 import { Product, defaultSettings } from "@/lib/mock-data";
 import type { PlanType } from "@shared/monetization";
-import { getFirebaseAuth, logTelemetryEvent } from "@/lib/firebase";
+import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent } from "@/lib/firebase";
 import { useAdminAccess } from "@/hooks/useAdminAccess";
 import {
   getFirestore,
@@ -662,11 +662,14 @@ const [, setLocation] = useLocation();
         if (id) {
           await setDoc(productRef, attemptedPayload, { merge: true });
         } else {
-          await createProduct({
+          const created = await createProduct({
             productId,
             product: attemptedPayload,
             idempotencyKey: `product-create-${productId}`,
           });
+          // PLAN-IMPL-06 §10 — sinal server-authoritative (0 -> 1 dentro da MESMA transação de criação),
+          // nunca inferido do tamanho de uma lista em cache local.
+          if (created.isFirstProduct) trackAnalyticsEvent("first_product_created");
         }
       } catch (writeErr) {
         if (uploadedAssets.length) {
@@ -891,7 +894,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
               política de produto inalterada por este ticket. */}
           {id && formData.imageUrl && (activePlan === "pro" || activePlan === "premium" || isAdminUser) && (
             <Suspense fallback={<div className="rounded-2xl border border-border/40 bg-white/70 p-3.5 text-xs font-semibold text-muted-foreground">Carregando ferramentas Premium...</div>}>
-              <PhotoroomCutoutTool productId={id} originalImageUrl={formData.imageUrl} />
+              <PhotoroomCutoutTool productId={id} originalImageUrl={formData.imageUrl} plan={activePlan} />
             </Suspense>
           )}
           {id && formData.imageUrl && (activePlan === "premium" || isAdminUser) && (

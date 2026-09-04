@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getFirestore, collection, deleteDoc, doc, limit, onSnapshot, orderBy, query, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
+import { getFirestore, collection, deleteDoc, doc, getCountFromServer, limit, onSnapshot, orderBy, query, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { getFirebaseAuth } from "@/lib/firebase";
 import { sanitizeMarketingHistoryPayload, type MarketingAdThemeId, type MarketingBackgroundStyle, type MarketingTemplateId } from "@/lib/marketing-ad";
@@ -80,6 +80,17 @@ export interface MarketingHistoryEntry {
   updatedAtISO?: string;
 }
 export type NewMarketingEntry = Omit<MarketingHistoryEntry, "id" | "createdAt" | "createdAtISO" | "updatedAt">;
+
+/**
+ * PLAN-IMPL-06 §14 — contagem real de users/{uid}/marketingHistory para first_marketing_created
+ * (analytics-milestones.ts's fireServerCountedFirstOccurrence), exportada por este hook porque é ele
+ * quem já é dono desta coleção (leitura/escrita/exclusão) — marketing.tsx nunca abre sua própria
+ * consulta ao Firestore (garantia existente, script/smoke-tests.ts: "a página não abre consulta própria
+ * ao Firestore"), então a contagem precisa vir daqui, não de um import direto de firebase/firestore lá.
+ */
+export async function countMarketingHistoryEntries(uid: string): Promise<number> {
+  return (await getCountFromServer(collection(getFirestore(), "users", uid, "marketingHistory"))).data().count;
+}
 const storageKey = (uid: string) => `rs:marketing-history:${uid}`;
 const deletedStorageKey = (uid: string) => `rs:marketing-history-deleted:${uid}`;
 const cleanEntry = <T extends Record<string, unknown>>(entry: T) => sanitizeMarketingHistoryPayload(entry);

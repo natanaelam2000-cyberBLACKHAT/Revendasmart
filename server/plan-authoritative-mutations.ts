@@ -310,7 +310,10 @@ export async function createProductCommand(db: Firestore, uid: string, input: un
     tx.set(productDoc, payload);
     tx.set(usageRef(db, uid), { productsCount: usage.productsCount + 1, updatedAt: now }, { merge: true });
     tx.set(idem, { key: idempotencyKey, tenantUid: uid, action: PRODUCT_CREATE_ACTION, productId, createdAt: now });
-    return { productId, product: payload, idempotentReplay: false };
+    // PLAN-IMPL-06 §10 — sinal transacional de "0 -> 1", sem custo extra (usage.productsCount já lido
+    // acima para o próprio gate de limite): o client usa isto para disparar first_product_created sem
+    // precisar inferir de uma lista em cache local.
+    return { productId, product: payload, idempotentReplay: false, isFirstProduct: usage.productsCount === 0 };
   });
 }
 

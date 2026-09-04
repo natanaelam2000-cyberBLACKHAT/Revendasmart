@@ -11,6 +11,9 @@ export type CreateProductCommandResponse = {
   productId: string;
   product: Product;
   idempotentReplay: boolean;
+  /** PLAN-IMPL-06 §10 — sinal transacional real (usage.productsCount === 0 antes desta criação), nunca
+   * inferido de uma lista em cache local. Ausente/`false` numa réplica idempotente. */
+  isFirstProduct?: boolean;
 };
 
 export async function createProduct(input: CreateProductCommandInput): Promise<CreateProductCommandResponse> {

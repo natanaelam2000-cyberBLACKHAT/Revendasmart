@@ -14,6 +14,7 @@ import { useProductPickerData } from "@/hooks/useProductPickerData";
 import { useClientPickerData } from "@/hooks/useClientPickerData";
 import { useDismissibleOnBack } from "@/hooks/useDismissibleOnBack";
 import { getFirebaseAuth, logError, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";
+import { fireServerCountedFirstOccurrence } from "@/lib/analytics-milestones";
 import { notifyError, notifySuccess, notifyWarning } from "@/lib/notify";
 import { getApiUrl } from "@/lib/api-config";
 import { resolveEffectiveProductPrice } from "@/lib/product-pricing";
@@ -380,6 +381,16 @@ export default function Sell() {
           quantity: item.quantity,
         })),
       });
+
+      // PLAN-IMPL-06 §11 — sem contador transacional de "total histórico de vendas" (só cota mensal
+      // existe, PLAN-IMPL-02C, que reseta e não serve para "alguma vez na vida"): confirma com uma
+      // contagem real do servidor (mesmo padrão leve de usePlanUsageSnapshot.ts), nunca client cache.
+      void fireServerCountedFirstOccurrence(
+        currentUser.uid,
+        "first_sale_completed",
+        "first_sale_completed",
+        async () => (await getCountFromServer(collection(getFirestore(), "users", currentUser.uid, "sales"))).data().count,
+      );
 
       for (const productId of saleResult.depletedProductIds ?? []) {
         const product = productById.get(productId);

@@ -1361,8 +1361,13 @@ export async function registerRoutes(
       routeInfo(`[/api/user/settings POST] Saving to Firestore: user_settings/${userId}`);
       await persistUserSettingsWithCatalogOwnership({ db, ownerUid: userId, payload: body });
       const catalogEnabled = body.enablePublicCatalog ?? body.catalogEnabled ?? body.catalog_enabled;
+      // PLAN-IMPL-06 §12 — `created` já distingue "slug provisionado agora pela primeira vez" de "já
+      // existia, só confirmado de novo" — o client usa isto para disparar catalog_published só na
+      // transição real, nunca a cada salvamento de configurações.
+      let catalogSlugJustCreated = false;
       if (catalogEnabled === true) {
-        await ensurePublicCatalogSlug({ db, ownerUid: userId });
+        const slugResult = await ensurePublicCatalogSlug({ db, ownerUid: userId });
+        catalogSlugJustCreated = slugResult.created;
       }
       routeInfo("[/api/user/settings POST] Successfully saved to Firestore");
 
@@ -1440,7 +1445,8 @@ export async function registerRoutes(
         success: true,
         onboarding_completed: updatedSettings?.onboarding_completed === true,
         settings: updatedSettings,
-        referralValidation: body.referral_source ? { result: "success", referralSourceUid: body.referral_source } : undefined
+        referralValidation: body.referral_source ? { result: "success", referralSourceUid: body.referral_source } : undefined,
+        catalogSlugJustCreated,
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";

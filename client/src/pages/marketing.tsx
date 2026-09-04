@@ -7,8 +7,9 @@ import { defaultSettings, getProductImage } from "@/lib/mock-data";
 import { useProductPickerData } from "@/hooks/useProductPickerData";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, logError } from "@/lib/firebase";
+import { fireServerCountedFirstOccurrence } from "@/lib/analytics-milestones";
 import { useFeatureEnabled } from "@/lib/remote-config-context";
-import { useMarketingHistory, type MarketingHistoryEntry, type MarketingAction, type NewMarketingEntry } from "@/hooks/useMarketingHistory";
+import { useMarketingHistory, countMarketingHistoryEntries, type MarketingHistoryEntry, type MarketingAction, type NewMarketingEntry } from "@/hooks/useMarketingHistory";
 import { MarketingHistoryPanel } from "@/components/MarketingHistoryPanel";
 import { MarketingSection } from "@/components/marketing/MarketingSection";
 import { MarketingSelectedProduct } from "@/components/marketing/MarketingSelectedProduct";
@@ -408,7 +409,25 @@ export default function MarketingPage() {
 
   const registerAction = async (action: MarketingAction) => {
     const payload = entryPayload(action);
-    if (payload) await recordAction(payload).catch(error => logError("marketing_history_record_failed", error instanceof Error ? error.message : "Falha ao registrar histórico", { context: { action } }));
+    if (!payload) return;
+    try {
+      await recordAction(payload);
+      // PLAN-IMPL-06 §14 — "primeiro Marketing" é o primeiro registro REAL persistido em
+      // users/{uid}/marketingHistory (useMarketingHistory.ts), nunca só abrir a tela — mesma contagem
+      // real de servidor de fireServerCountedFirstOccurrence, reaproveitada (não um marcador local só,
+      // já que este histórico é de fato persistido no Firestore).
+      const uid = getFirebaseAuth()?.currentUser?.uid;
+      if (uid) {
+        void fireServerCountedFirstOccurrence(
+          uid,
+          "first_marketing_created",
+          "first_marketing_created",
+          () => countMarketingHistoryEntries(uid),
+        );
+      }
+    } catch (error) {
+      logError("marketing_history_record_failed", error instanceof Error ? error.message : "Falha ao registrar histórico", { context: { action } });
+    }
   };
 
   useEffect(() => () => {

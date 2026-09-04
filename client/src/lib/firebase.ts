@@ -190,11 +190,16 @@ setPersistence(authInstance, browserLocalPersistence)
       console.warn("[Firebase] Internal telemetry initialization failed, continuing without it");
     }
 
-    // Initialize Firebase Analytics official
-    try {
-      initializeFirebaseAnalytics(app);
-    } catch (err) {
-      console.warn("[Firebase] Firebase Analytics initialization failed, continuing without it");
+    // PLAN-IMPL-06 §38 — nunca inicializa Analytics contra o emulador/dev local: sem este gate, uma
+    // sessão de dev com credenciais REAIS de Analytics no .env.local (ou CI/QA local) mandaria eventos
+    // de teste para a propriedade de produção do Google Analytics, poluindo as métricas reais. Mesmo
+    // flag já usado para Firestore/Auth/Storage emulator — nenhum segundo mecanismo de detecção.
+    if (!shouldUseFirebaseEmulators()) {
+      try {
+        initializeFirebaseAnalytics(app);
+      } catch (err) {
+        console.warn("[Firebase] Firebase Analytics initialization failed, continuing without it");
+      }
     }
 
     // Initialize Firebase Performance Monitoring
@@ -297,6 +302,11 @@ export {
   setFirebaseAnalyticsUserId,
   setFirebaseAnalyticsUserProperty,
   type FirebaseAnalyticsEvents,
+  type AnalyticsPaywallReason,
+  type AnalyticsResourceType,
+  type AnalyticsSource,
+  type AnalyticsCheckoutFailureReason,
+  type AnalyticsPreparationFailureCategory,
 } from "./firebase-analytics";
 
 // Export performance monitoring utilities for use in other modules

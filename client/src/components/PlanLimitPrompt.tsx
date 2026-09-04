@@ -1,7 +1,28 @@
+import { useEffect } from "react";
 import { AlertCircle } from "lucide-react";
 import { useLocation } from "wouter";
 import { PLAN_PRESENTATION, type PlanType } from "@shared/monetization";
 import { buildLimitReachedCopy, type PaywallResource } from "@/lib/plan-paywall-copy";
+import { trackAnalyticsEvent, type AnalyticsPaywallReason, type AnalyticsSource } from "@/lib/firebase";
+
+/** PLAN-IMPL-06 §21/§47 — mesmo domínio de recurso já usado pela cópia (PaywallResource), mapeado para
+ * os enums fechados de analytics — nunca uma string solta montada em cada call site. */
+const RESOURCE_TO_PAYWALL_REASON: Record<PaywallResource, AnalyticsPaywallReason> = {
+  products: "product_limit",
+  clients: "client_limit",
+  services: "service_limit",
+  bookings: "booking_limit",
+  adsProPreparations: "ads_pro_preparation_limit",
+};
+const RESOURCE_TO_SOURCE: Record<PaywallResource, AnalyticsSource> = {
+  products: "product_limit",
+  clients: "client_limit",
+  // §47 — sem UI real de criação de Service (PW2, PLAN-IMPL-04A/05): nunca alcançado na prática. "direct"
+  // é o fallback neutro já existente no enum, nunca um valor que fingiria uma origem que não existe.
+  services: "direct",
+  bookings: "booking_limit",
+  adsProPreparations: "ads_pro_preparation_limit",
+};
 
 /**
  * PLAN-IMPL-04A §23/§25/§27/§28/§32 — componente ÚNICO para "limite de criação atingido", full-page.
@@ -26,6 +47,28 @@ export function PlanLimitPrompt({
 }) {
   const [, setLocation] = useLocation();
   const copy = buildLimitReachedCopy(resource, currentPlan, usedOverride);
+  const reason = RESOURCE_TO_PAYWALL_REASON[resource];
+  const source = RESOURCE_TO_SOURCE[resource];
+
+  // PLAN-IMPL-06 §22 — este componente só existe no DOM enquanto o paywall deve estar visível (quem
+  // chama monta/desmonta condicionalmente, nunca o mantém oculto via CSS) — `useEffect` com deps vazias
+  // dispara exatamente uma vez por montagem real, nunca a cada re-render de uma instância já visível.
+  useEffect(() => {
+    trackAnalyticsEvent("paywall_viewed", {
+      reason, resource_type: resource, source, current_plan: currentPlan,
+      ...(copy.recommendedPlan ? { recommended_plan: copy.recommendedPlan } : {}),
+    });
+  }, []);
+
+  const handleCtaClick = () => {
+    trackAnalyticsEvent("paywall_cta_clicked", {
+      reason, resource_type: resource, source, current_plan: currentPlan,
+      ...(copy.recommendedPlan ? { recommended_plan: copy.recommendedPlan } : {}),
+    });
+    // PLAN-IMPL-06 §46 — propaga a MESMA source do clique até plans_viewed, para o funil
+    // paywall_viewed -> paywall_cta_clicked -> plans_viewed manter um `source` consistente ponta a ponta.
+    setLocation(`/plans?source=${source}`);
+  };
 
   return (
     <div className="px-6 py-8 flex flex-col items-center justify-center min-h-screen gap-6">
@@ -62,7 +105,7 @@ export function PlanLimitPrompt({
           Entendi
         </button>
         <button
-          onClick={() => setLocation("/plans")}
+          onClick={handleCtaClick}
           className="flex-1 bg-primary text-white font-bold py-3 rounded-xl"
           data-testid="button-plan-limit-cta"
         >

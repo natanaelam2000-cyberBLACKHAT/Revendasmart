@@ -58,7 +58,7 @@ export function PlanStatusBadge() {
               /plans. Este badge é uma superfície de DESCOBERTA (NEW_PURCHASE_SURFACE), não de gestão de
               assinatura existente — não pode mostrar um preço que a nova tela vai contradizer. */}
           <button
-            onClick={() => setLocation("/plans")}
+            onClick={() => setLocation("/plans?source=dashboard")}
             className="w-full flex items-center justify-center gap-2 bg-amber-500 text-white text-xs font-bold px-3 py-2 rounded-xl active:scale-95 transition-all shadow-sm"
             data-testid="button-upgrade-premium"
           >

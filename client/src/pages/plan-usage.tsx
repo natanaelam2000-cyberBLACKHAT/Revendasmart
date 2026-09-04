@@ -19,6 +19,22 @@ import { usePlanUsageSnapshot } from "@/hooks/usePlanUsageSnapshot";
 import { useProductAccessList } from "@/hooks/useProductAccessList";
 import { useServiceAccessList } from "@/hooks/useServiceAccessList";
 import { setActiveProductSelection, setActiveServiceSelection } from "@/lib/plan-access-selection";
+import { trackAnalyticsEvent, type AnalyticsPaywallReason, type AnalyticsSource } from "@/lib/firebase";
+
+/** PLAN-IMPL-06 §21/§22 — os cards de "perto do teto" desta página (agendamentos, preparações do Ads
+ * Pro) já estão SEMPRE montados; só a seção de "no limite" dentro deles aparece/some condicionalmente.
+ * `useEffect` com `[visible]` dispara só na transição real false->true (inclusive "já visível na
+ * primeira renderização"), nunca de novo enquanto `visible` continuar true — mesmo padrão de
+ * PlanLimitPrompt.tsx, adaptado para uma seção que nunca desmonta o componente pai. */
+function usePaywallViewedOnLimit(visible: boolean, reason: AnalyticsPaywallReason, source: AnalyticsSource, currentPlan: PlanType, recommendedPlan?: PlanType | null) {
+  useEffect(() => {
+    if (!visible) return;
+    trackAnalyticsEvent("paywall_viewed", {
+      reason, source, current_plan: currentPlan,
+      ...(recommendedPlan ? { recommended_plan: recommendedPlan } : {}),
+    });
+  }, [visible]);
+}
 
 type PlanAccessView = "hub" | "products" | "services";
 const VIEW_QUERY_PARAM = "view";
@@ -399,6 +415,14 @@ function BookingQuotaCard({ bookingsCurrentMonth, activePlan }: { bookingsCurren
     : isAtLimit
       ? buildLimitReachedCopy("bookings", activePlan)
       : null;
+  usePaywallViewedOnLimit(Boolean(limitCopy), "booking_limit", "booking_limit", activePlan, limitCopy?.recommendedPlan);
+  const handleCtaClick = () => {
+    trackAnalyticsEvent("paywall_cta_clicked", {
+      reason: "booking_limit", source: "booking_limit", current_plan: activePlan,
+      ...(limitCopy?.recommendedPlan ? { recommended_plan: limitCopy.recommendedPlan } : {}),
+    });
+    setLocation("/plans?source=booking_limit");
+  };
   return (
     <div className="rounded-2xl border border-border/60 bg-white p-4 space-y-3" data-testid="card-usage-agendamentos">
       <div className="flex items-center gap-2"><CalendarClock className="w-4 h-4 text-primary" /><p className="text-xs font-black uppercase tracking-widest text-muted-foreground">Agendamentos neste mês</p></div>
@@ -424,7 +448,7 @@ function BookingQuotaCard({ bookingsCurrentMonth, activePlan }: { bookingsCurren
                 <p className="text-[11px] text-amber-700 leading-relaxed">{limitCopy.benefitLine}</p>
               )}
               {limitCopy.recommendedPlan && (
-                <button type="button" onClick={() => setLocation("/plans")} className="text-[11px] font-black text-primary" data-testid="button-booking-limit-cta">
+                <button type="button" onClick={handleCtaClick} className="text-[11px] font-black text-primary" data-testid="button-booking-limit-cta">
                   {limitCopy.ctaLabel} →
                 </button>
               )}
@@ -453,6 +477,14 @@ function AdsProPreparationsCard({ preparationsCurrentMonth, activePlan }: { prep
     : isAtLimit
       ? buildLimitReachedCopy("adsProPreparations", activePlan)
       : null;
+  usePaywallViewedOnLimit(Boolean(limitCopy), "ads_pro_preparation_limit", "ads_pro_preparation_limit", activePlan, limitCopy?.recommendedPlan);
+  const handleCtaClick = () => {
+    trackAnalyticsEvent("paywall_cta_clicked", {
+      reason: "ads_pro_preparation_limit", source: "ads_pro_preparation_limit", current_plan: activePlan,
+      ...(limitCopy?.recommendedPlan ? { recommended_plan: limitCopy.recommendedPlan } : {}),
+    });
+    setLocation("/plans?source=ads_pro_preparation_limit");
+  };
   return (
     <div className="rounded-2xl border border-border/60 bg-white p-4 space-y-3" data-testid="card-usage-ads-pro-preparations">
       <div className="flex items-center gap-2"><Sparkles className="w-4 h-4 text-primary" /><p className="text-xs font-black uppercase tracking-widest text-muted-foreground">Preparações profissionais do Ads Pro</p></div>
@@ -476,7 +508,7 @@ function AdsProPreparationsCard({ preparationsCurrentMonth, activePlan }: { prep
                 <p className="text-[11px] text-amber-700 leading-relaxed">{limitCopy.benefitLine}</p>
               )}
               {limitCopy.recommendedPlan && (
-                <button type="button" onClick={() => setLocation("/plans")} className="text-[11px] font-black text-primary" data-testid="button-ads-pro-preparations-limit-cta">
+                <button type="button" onClick={handleCtaClick} className="text-[11px] font-black text-primary" data-testid="button-ads-pro-preparations-limit-cta">
                   {limitCopy.ctaLabel} →
                 </button>
               )}
@@ -517,7 +549,7 @@ function PlanUsageHub({ onManageProducts, onManageServices }: { onManageProducts
           <div className="rounded-2xl border border-border/60 bg-white p-4 space-y-2" data-testid="card-trial-ended">
             <p className="text-sm font-bold text-foreground">Seu período Premium terminou.</p>
             <p className="text-xs text-muted-foreground leading-relaxed">Seus dados continuam seguros. Você pode continuar no {getPlanName(basePlan)} ou conhecer os planos.</p>
-            <button type="button" onClick={() => setLocation("/plans")} className="text-xs font-black text-primary" data-testid="button-trial-ended-see-plans">Ver planos →</button>
+            <button type="button" onClick={() => setLocation("/plans?source=plan_usage")} className="text-xs font-black text-primary" data-testid="button-trial-ended-see-plans">Ver planos →</button>
           </div>
         )}
 
@@ -564,7 +596,7 @@ function PlanUsageHub({ onManageProducts, onManageServices }: { onManageProducts
             </div>
 
             <div className="flex flex-col sm:flex-row gap-3 pt-2">
-              <button type="button" onClick={() => setLocation("/plans")} className="rs-pressable flex-1 rounded-2xl border-2 border-primary bg-white py-3.5 text-xs font-black uppercase tracking-widest text-primary" data-testid="button-know-pro">
+              <button type="button" onClick={() => setLocation("/plans?source=plan_usage")} className="rs-pressable flex-1 rounded-2xl border-2 border-primary bg-white py-3.5 text-xs font-black uppercase tracking-widest text-primary" data-testid="button-know-pro">
                 Conhecer Pro/Premium
               </button>
             </div>

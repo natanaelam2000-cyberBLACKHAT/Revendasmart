@@ -91,7 +91,26 @@ const config = {
     // duas strings de copy comercial exigidas pelo §37 ("3"/"100 novos produtos preparados
     // profissionalmente por mês") — nenhuma delas é código morto ou redundante. Nenhum outro budget
     // (TOTAL JS 2550 kB, CSS 178 kB, Marketing 236 kB, ou qualquer outro chunk) foi alterado.
-    'PrivateRouter': 39,
+    //
+    // PLAN-IMPL-06 (PERF-GOV-PRIVATE-ROUTER-02) — recalibrado 39 -> 41 kB, autorizado explicitamente pelo
+    // usuário após uma tentativa limitada e documentada de otimização (SAFE_BYTES_REMOVED=0,
+    // FURTHER_SAFE_OPTIMIZATION_FOUND=NO). Baseline pré-ticket (fim de PLAN-IMPL-05): 38.26 kB. Depois das
+    // adições desta ticket: 39.89 kB — crescimento líquido de ~1.63 kB. Causa raiz confirmada via
+    // dist/public/.vite/manifest.json + grep de strings características no chunk final: PlanProvider.tsx
+    // (que envolve toda a árvore privada, sem nenhum lazy boundary abaixo dele) agora importa
+    // client/src/lib/plan-lifecycle-analytics.ts e (transitivamente) client/src/lib/
+    // subscription-activation-marker.ts, para disparar trial_started/trial_expired/plan_upgraded/
+    // plan_downgraded/subscription_activated a partir de transições de plano/trial já resolvidas
+    // server-side — instrumentação que precisa observar o app inteiro, não uma rota específica, então não
+    // existe um lazy boundary correto para empurrar esse código para fora deste chunk. Checado e
+    // descartado: (1) duplicação entre os dois arquivos novos — as duas famílias de helper de
+    // localStorage têm formatos genuinamente diferentes (flag booleana simples vs. objeto JSON com TTL),
+    // unificá-las exigiria uma nova abstração genérica, não remoção de código redundante; (2) import mais
+    // estreito de shared/monetization.ts — o único import de VALOR (PLANS) já é custo marginal zero, pois
+    // PlanProvider.tsx já importava PLANS antes desta ticket. 41 kB (não 40) deixado deliberadamente com
+    // ~1.11 kB de folga para o restante do trabalho já cabido neste ticket. Nenhum outro budget (TOTAL JS
+    // 2550 kB, CSS 178 kB, Marketing 236 kB, ou qualquer outro chunk) foi alterado.
+    'PrivateRouter': 41,
     'CatalogShowcase': 29,
     'service-agenda-helpers': 28,
   },

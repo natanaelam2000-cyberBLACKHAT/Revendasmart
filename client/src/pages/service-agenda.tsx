@@ -18,6 +18,9 @@ import { listServiceBookingsForResourceAndRange } from "@/lib/service-bookings-p
 import { cancelServiceBooking, rescheduleServiceBooking } from "@/lib/service-booking-commands";
 import { listServices, getServiceWork } from "@/lib/services-persistence";
 import { notifyError, notifySuccess } from "@/lib/notify";
+import { getFirebaseAuth } from "@/lib/firebase";
+import { fireServerCountedFirstOccurrence } from "@/lib/analytics-milestones";
+import { collection, getCountFromServer, getFirestore } from "firebase/firestore";
 import { format as formatLocalDate, ptBR } from "@/lib/date-utils";
 import {
   addDaysToDateKey,
@@ -94,6 +97,23 @@ export default function ServiceAgenda() {
   const clientNameById = useMemo(() => new Map(clients.map((client) => [client.id, client.name])), [clients]);
 
   const refresh = useCallback(() => setReloadToken((token) => token + 1), []);
+
+  // PLAN-IMPL-06 §13 — a confirmação em si acontece na sessão ANÔNIMA do cliente público
+  // (client/src/lib/service-public-booking-commands.ts, sem tenant logado — nunca atribuível ao dono
+  // via Analytics). Esta é a primeira sessão REAL do próprio dono onde um Booking confirmado pode ser
+  // observado (lifetime, não por dia — nunca o `bookings` do dia selecionado abaixo), então é aqui que
+  // first_booking_created dispara, uma vez por tenant, via a mesma contagem real de servidor de
+  // fireServerCountedFirstOccurrence (nunca inferido do cache do dia).
+  useEffect(() => {
+    const uid = getFirebaseAuth()?.currentUser?.uid;
+    if (!uid) return;
+    void fireServerCountedFirstOccurrence(
+      uid,
+      "first_booking_created",
+      "first_booking_created",
+      async () => (await getCountFromServer(collection(getFirestore(), "users", uid, "bookings"))).data().count,
+    );
+  }, []);
 
   // Carrega schedule + services + blocks uma vez (não dependem da data selecionada, só do resource).
   useEffect(() => {

@@ -59,7 +59,10 @@ interface PreparationLockDoc {
 }
 
 export type ReservePreparationSlotResult =
-  | { readonly reserved: true; readonly monthKey: string }
+  // PLAN-IMPL-06 §15/§43 — used/limit aqui são o MESMO valor já commitado nesta transação (used + 1),
+  // carregados até a resposta HTTP só para o evento ads_pro_preparation_completed (analytics); nunca
+  // recalculados/re-lidos depois — nunca a fonte de verdade de cota, que continua sendo só este documento.
+  | { readonly reserved: true; readonly monthKey: string; readonly used: number; readonly limit: number }
   | { readonly reserved: false; readonly reason: "limit_reached"; readonly monthKey: string; readonly used: number; readonly limit: number }
   | { readonly reserved: false; readonly reason: "in_progress" };
 
@@ -96,7 +99,7 @@ export async function reservePreparationSlot(
     } satisfies AdsProPreparationMonthlyUsage, { merge: true });
     tx.create(lockRef, { status: "processing", monthKey, createdAt: nowIso } satisfies PreparationLockDoc);
 
-    return { reserved: true, monthKey } as const;
+    return { reserved: true, monthKey, used: used + 1, limit } as const;
   });
 }
 

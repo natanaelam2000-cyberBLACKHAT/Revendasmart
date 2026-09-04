@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { execSync } from "node:child_process";
 import { initializeFirebaseAdmin } from "../server/firebase-admin-init";
 import { initializePlanCommand, ensurePlanLifecycleCurrent } from "../server/plan-lifecycle";
 import { createProductCommand, createServiceCommand, PlanMutationError } from "../server/plan-authoritative-mutations";
@@ -248,21 +247,30 @@ function runSourceTextTests(): void {
   assert.match(plansSource, /body:\s*\{\s*plan,\s*billingCycle:\s*"monthly"\s*\}/, "PS5d: o corpo enviado só contém plan/billingCycle — nunca amount/price/transactionAmount escolhido pelo client");
   console.log("PASS PS5 Plans page's purchase flow (added in PLAN-IMPL-04B) calls only the new price-authoritative v2 endpoint, sends only plan/billingCycle (never an amount the client could choose), and never touches the legacy create endpoint");
 
-  // PS3 — atualizado em PLAN-IMPL-04B: subscribe.tsx (a TELA de gestão) continua com diff zero — a
-  // premissa original ainda vale integralmente para o client. server/subscriptions.ts, por outro lado,
+  // PS3 — atualizado em PLAN-IMPL-04B: subscribe.tsx (a TELA de gestão) continuava com diff zero — a
+  // premissa original ainda valia integralmente para o client. server/subscriptions.ts, por outro lado,
   // foi LEGITIMAMENTE estendido por este ticket (endpoint novo, sync/webhook plan-aware) — "diff zero"
-  // deixou de fazer sentido como prova; a garantia real (comportamento legado inalterado) já foi
+  // deixou de fazer sentido como prova ali; a garantia real (comportamento legado inalterado) já foi
   // verificada de forma muito mais forte pela suíte real `test:subscription-cancel`, que roda contra o
   // emulador de verdade e continua passando. Aqui só confirma, por texto-fonte, que os pontos de
   // ancoragem do caminho LEGADO (nunca refatorados, só envolvidos por um branch novo) continuam
   // presentes exatamente como antes.
-  const subscribeDiffStat = execSync("git diff --stat HEAD -- client/src/pages/subscribe.tsx", { cwd: process.cwd() }).toString().trim();
-  assert.equal(subscribeDiffStat, "", "PS3a: subscribe.tsx (tela de gestão existente) não pode ter mudado neste ticket");
+  //
+  // PS3a — atualizado em PLAN-IMPL-06: subscribe.tsx deixou de ter diff zero pela PRIMEIRA vez desde
+  // 04A — LEGITIMAMENTE, para instrumentar cancellation_started/cancellation_completed (mesmo raciocínio
+  // acima, agora também para o client: "diff zero" deixa de ser a prova certa quando um ticket precisa
+  // tocar o arquivo por um motivo real; a garantia que importa é o fluxo LEGADO continuar byte-idêntico,
+  // provado abaixo por âncora de texto-fonte + pela mesma suíte real `test:subscription-cancel` — ver
+  // script/plan-impl-06-analytics-conversion-instrumentation-tests.ts's S5/S6 para a prova completa da
+  // instrumentação nova em si).
+  const subscribeSource = sourceOf("client/src/pages/subscribe.tsx");
+  assert.match(subscribeSource, /await apiRequest\("\/api\/app-subscription\/cancel", \{\s*method: "POST",\s*auth: true,\s*\}\);/, "PS3a: a chamada real de cancelamento (endpoint/método/corpo) continua byte-idêntica ao que era antes de PLAN-IMPL-06");
+  assert.match(subscribeSource, /setStatus\("cancelled"\);\s*setShowCancelConfirm\(false\);/, "PS3a: a transição de estado do cancelamento (status/painel) continua idêntica");
   const subscriptionsSource = sourceOf("server/subscriptions.ts");
   assert.match(subscriptionsSource, /app\.post\("\/api\/app-subscription\/create"/, "PS3b: o endpoint legado de criação continua existindo, nunca removido/renomeado");
   assert.match(subscriptionsSource, /const PREMIUM_PRICE_BRL = parseFloat\(process\.env\.PREMIUM_PRICE_BRL/, "PS3c: a env var de preço legada continua sendo a autoridade do endpoint antigo, nunca substituída por PLAN_PRICE_CENTS");
   assert.match(subscriptionsSource, /cancelUpdate\.premiumActive = true;\s*\n\s*cancelUpdate\.currentPlan = "premium";/, "PS3d: o ramo de cancelamento legado (dentro do período pago) continua escrevendo premiumActive/currentPlan exatamente como antes, byte a byte");
-  console.log("PASS PS3 subscribe.tsx remains fully untouched; subscriptions.ts's legacy anchors (create endpoint, PREMIUM_PRICE_BRL authority, cancel branch) remain textually intact, verified alongside the real subscription-cancel regression suite passing unchanged");
+  console.log("PASS PS3 subscribe.tsx's legacy cancel call/state-transition remain byte-identical (its diff since PLAN-IMPL-06 is limited to cancellation analytics, no longer zero — legitimately, see that ticket's S5/S6); subscriptions.ts's legacy anchors (create endpoint, PREMIUM_PRICE_BRL authority, cancel branch) remain textually intact, verified alongside the real subscription-cancel regression suite passing unchanged");
 
   // PW10 — showLimitModal só é setado pelo pré-check client-side de PLAN_LIMIT_REACHED, nunca pelo
   // mapeamento de erro de lifecycle-unavailable (getErrorMessage/plan_limit_read são um caminho
@@ -278,10 +286,13 @@ function runSourceTextTests(): void {
   assert.doesNotMatch(publicBookingSource, /plan-paywall-copy|PlanLimitPrompt|PLAN_PRESENTATION/, "PW11: tela pública nunca pode importar copy comercial");
   console.log("PASS PW11 the public consumer booking page never imports any commercial/paywall copy module");
 
-  // N5 — CTA de perto-do-limite abre /plans.
+  // N5 — CTA de perto-do-limite abre /plans. Atualizado em PLAN-IMPL-06: todo CTA para /plans nesta
+  // página agora propaga `?source=...` (funil de analytics, ver plan-impl-06-analytics-conversion-
+  // instrumentation-tests.ts's P3) — "/plans" sem query deixou de aparecer, mas a garantia real (abre
+  // /plans, nunca outra rota) continua idêntica, só com o path prefixado em vez de exato.
   const planUsageSource = sourceOf("client/src/pages/plan-usage.tsx");
-  assert.match(planUsageSource, /setLocation\("\/plans"\)/, "N5: pelo menos um CTA em plan-usage.tsx deve abrir /plans");
-  console.log("PASS N5 near-limit/upgrade CTAs in Plan Usage open /plans");
+  assert.match(planUsageSource, /setLocation\("\/plans\?source=/, "N5: pelo menos um CTA em plan-usage.tsx deve abrir /plans");
+  console.log("PASS N5 near-limit/upgrade CTAs in Plan Usage open /plans (now with a ?source= analytics tag, PLAN-IMPL-06)");
 
   // N6 — aviso de perto-do-limite é só texto renderizado condicionalmente, nunca dispara um dialog/modal
   // via efeito colateral (nenhum useEffect chamando um setState de modal a partir de isNearPlanLimit).

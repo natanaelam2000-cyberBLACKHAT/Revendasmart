@@ -13,7 +13,7 @@ import {
   AppSettings,
   logout, getCurrentUserId, getStored, STORAGE_KEYS
 } from "@/lib/mock-data";
-import { clearTelemetryUserId, clearUserContext, getFirebaseIdToken, getFirebaseAuth, measureOperation, logTelemetryEvent, clearFirestoreOfflineCache } from "@/lib/firebase";
+import { clearTelemetryUserId, clearUserContext, getFirebaseIdToken, getFirebaseAuth, measureOperation, logTelemetryEvent, clearFirestoreOfflineCache, trackAnalyticsEvent } from "@/lib/firebase";
 import { onAuthStateChanged, signOut, type User as FirebaseAuthUser } from "firebase/auth";
 import { useLocation } from "wouter";
 import { getApiUrl } from "@/lib/api-config";
@@ -354,6 +354,9 @@ export default function Settings() {
         notifySuccess("Configurações salvas.");
         setFormSettings(confirmedSettings);
         patchUserSettingsOptimistic(confirmedSettings);
+        // PLAN-IMPL-06 §12 — dispara só na transição real "slug provisionado agora pela primeira vez"
+        // (sinal do servidor, ensurePublicCatalogSlug's `created`), nunca a cada salvamento de config.
+        if (result.catalogSlugJustCreated) trackAnalyticsEvent("catalog_published");
         setTimeout(() => setSaveMessage(""), 3000);
       } else {
         throw new Error(result.error || "Erro ao salvar");
@@ -535,7 +538,7 @@ export default function Settings() {
     { title: "Minha Assinatura", subtitle: "Plano e faturamento", icon: CreditCard, color: "bg-sky-100 text-sky-700", path: "/subscribe" },
     // PLAN-IMPL-04A §34 — entrada nova, conceitualmente separada das outras duas: "Minha Assinatura" é
     // gestão de cobrança, "Plano e uso" é capacidade/limites atuais, "Planos" é comparação/upgrade.
-    { title: "Planos", subtitle: "Compare Free, Pro e Premium", icon: Sparkles, color: "bg-amber-100 text-amber-700", path: "/plans" },
+    { title: "Planos", subtitle: "Compare Free, Pro e Premium", icon: Sparkles, color: "bg-amber-100 text-amber-700", path: "/plans?source=settings" },
     { title: "Plano e uso", subtitle: "Produtos, serviços e clientes ativos no seu plano", icon: Gauge, color: "bg-cyan-100 text-cyan-700", path: "/settings/plano-e-uso" },
     { title: resolveOrdersFeatureLabel(firestoreSettings), subtitle: "Pedidos e encomendas da loja", icon: ClipboardList, color: "bg-purple-100 text-purple-700", path: "/orders" },
     { title: "Preferências", subtitle: "Notificações e ajustes", icon: Bell, color: "bg-slate-100 text-slate-700", path: "/settings?tab=preferences" },

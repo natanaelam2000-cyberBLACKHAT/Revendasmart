@@ -20,8 +20,8 @@ import {
 } from "lucide-react";
 import { ApiError, apiRequest, buildApiErrorDisplayMessage } from "@/lib/api-client";
 import { usePlanData } from "@/hooks/usePlanData";
-import { isPremiumFromGlobalAccess, resolveLegacyBillingProvider, type GlobalConfig, type PlanData as MonetizationPlanData } from "@shared/monetization";
-import { getFirebaseAuth } from "@/lib/firebase";
+import { isPremiumFromGlobalAccess, resolveLegacyBillingProvider, PLANS, type GlobalConfig, type PlanData as MonetizationPlanData } from "@shared/monetization";
+import { getFirebaseAuth, trackAnalyticsEvent } from "@/lib/firebase";
 import {
   isAndroidNativeApp,
   getAndroidPremiumOffers,
@@ -233,6 +233,9 @@ export default function Subscribe() {
 
       setStatus("cancelled");
       setShowCancelConfirm(false);
+      // PLAN-IMPL-06 §33/§34 — só o resultado aceito pelo provider conta como "completed"; esta seção
+      // inteira já é gated a hasPremiumAccess (linha ~720), então o plano cancelado é sempre Premium.
+      trackAnalyticsEvent("cancellation_completed", { plan: PLANS.PREMIUM });
       refresh?.();
     } catch (err) {
       setErrorMsg(buildApiErrorDisplayMessage(err, "Erro inesperado."));
@@ -721,7 +724,13 @@ export default function Subscribe() {
           <div className="mt-4">
             {!showCancelConfirm ? (
               <button
-                onClick={() => setShowCancelConfirm(true)}
+                onClick={() => {
+                  // PLAN-IMPL-06 §33/§34 — intenção declarada de cancelar (abre o painel de confirmação),
+                  // não o cancelamento em si; "Manter Premium" não dispara nada (não é abandono de intenção
+                  // relevante para o funil, só fechar o painel).
+                  trackAnalyticsEvent("cancellation_started", { plan: PLANS.PREMIUM });
+                  setShowCancelConfirm(true);
+                }}
                 className="w-full text-muted-foreground text-sm font-medium py-3 border border-gray-200 rounded-2xl active:scale-95 transition-all"
                 data-testid="button-show-cancel"
               >

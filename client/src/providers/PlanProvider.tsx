@@ -3,6 +3,7 @@ import { onAuthStateChanged, type User } from "firebase/auth";
 import { PLAN_CONFIG, PLANS, isPremiumActive, type PlanType, type PlanLimits, type PlanData as MonetizationPlanData } from "@shared/monetization";
 import { apiRequest, buildApiErrorDisplayMessage } from "@/lib/api-client";
 import { getFirebaseAuth } from "@/lib/firebase";
+import { firePlanLifecycleAnalytics, type PlanLifecycleSnapshot } from "@/lib/plan-lifecycle-analytics";
 
 type ActivePlan = PlanType;
 
@@ -152,6 +153,21 @@ export function PlanProvider({ children }: { children: ReactNode }) {
     ? planData.basePlan
     : activePlan;
   const trial = planData?.trial ?? null;
+
+  // PLAN-IMPL-06 §30-§32 — reage a transições de plano/trial já resolvidas (nunca decide nada sozinho,
+  // ver plan-lifecycle-analytics.ts para o raciocínio completo). `previousSnapshotRef` começa `null` e só
+  // grava a baseline na primeira observação da sessão atual — nunca finge uma transição que já existia
+  // antes desta sessão começar.
+  const previousSnapshotRef = useRef<PlanLifecycleSnapshot | null>(null);
+  useEffect(() => {
+    if (!planData) return;
+    const uid = currentUserRef.current?.uid;
+    if (!uid) return;
+    const current: PlanLifecycleSnapshot = { basePlan, trialStatus: planData.trial?.status ?? null };
+    firePlanLifecycleAnalytics(uid, previousSnapshotRef.current, current);
+    previousSnapshotRef.current = current;
+  }, [planData, basePlan]);
+
   // RELEASE-28: `/signup?ref=` nunca era capturado — `/signup` é rota PÚBLICA (App.tsx), fora do
   // PrivateRouter, que é onde a captura de `?referral=` roda. Corrigido para o mesmo formato que
   // settings.tsx já usa e que de fato é capturado: origem + `?referral=<código>`.

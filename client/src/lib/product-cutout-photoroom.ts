@@ -12,8 +12,17 @@ export function createPhotoroomCutoutGenerationRequestId(): string {
   return crypto.randomUUID();
 }
 
-export async function requestPhotoroomCutout(productId: string, generationRequestId: string): Promise<ApprovedProductCutout> {
-  return apiRequest<ApprovedProductCutout>(`/api/products/${encodeURIComponent(productId)}/photoroom-cutout`, {
+/** PLAN-IMPL-06 §15/§43 — `reused`/`quotaUsed`/`quotaLimit` são campos só desta resposta HTTP (nunca
+ * persistidos no ApprovedProductCutout salvo em products/{id}) — alimentam só os eventos
+ * ads_pro_preparation_*, nunca a UI de "antes/depois" do recorte, que continua usando só o shape base. */
+export interface PhotoroomCutoutRequestResult extends ApprovedProductCutout {
+  readonly reused: boolean;
+  readonly quotaUsed?: number;
+  readonly quotaLimit?: number;
+}
+
+export async function requestPhotoroomCutout(productId: string, generationRequestId: string): Promise<PhotoroomCutoutRequestResult> {
+  return apiRequest<PhotoroomCutoutRequestResult>(`/api/products/${encodeURIComponent(productId)}/photoroom-cutout`, {
     method: "POST",
     auth: true,
     body: { generationRequestId },

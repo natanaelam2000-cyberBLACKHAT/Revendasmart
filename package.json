@@ -67,6 +67,8 @@
     "test:plan-impl-04b": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:plan-impl-04b:run\"",
     "test:plan-impl-05:run": "tsx script/plan-impl-05-ads-pro-preparation-quota-tests.ts",
     "test:plan-impl-05": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:plan-impl-05:run\"",
+    "test:plan-impl-06:run": "tsx script/plan-impl-06-analytics-conversion-instrumentation-tests.ts",
+    "test:plan-impl-06": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:plan-impl-06:run\"",
     "skills:validate": "node scripts/security/validate-agent-skills.mjs",
     "security:preflight": "npm run skills:validate && npm run check && npm run lint && npm run test",
     "performance:bundle-check": "node scripts/performance/check-bundle-budgets.mjs",

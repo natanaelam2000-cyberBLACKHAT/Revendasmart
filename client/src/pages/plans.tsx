@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { Check, Sparkles, Loader2 } from "lucide-react";
 import { Layout } from "@/components/layout";
@@ -6,8 +6,35 @@ import { PageSkeleton } from "@/components/PageSkeleton";
 import { usePlan } from "@/providers/PlanProvider";
 import { usePlanPurchaseAvailability } from "@/hooks/usePlanPurchaseAvailability";
 import { formatTrialDaysRemaining } from "@/lib/plan-helpers";
-import { apiRequest, buildApiErrorDisplayMessage } from "@/lib/api-client";
+import { apiRequest, buildApiErrorDisplayMessage, ApiError } from "@/lib/api-client";
 import { PLANS, PLAN_CONFIG, PLAN_PRESENTATION, PLAN_PRICING, type PlanType } from "@shared/monetization";
+import { trackAnalyticsEvent, type AnalyticsCheckoutFailureReason, type AnalyticsSource } from "@/lib/firebase";
+import { markPendingSubscriptionActivation } from "@/lib/subscription-activation-marker";
+
+/** PLAN-IMPL-06 §27 — mapeia os códigos REAIS de erro (server/subscriptions.ts's createSubscriptionCommand,
+ * PLAN-IMPL-04B) para o enum fechado — nunca a string de erro bruta da API. */
+function toCheckoutFailureReason(error: unknown): AnalyticsCheckoutFailureReason {
+  if (!(error instanceof ApiError)) return "unknown";
+  switch (error.code) {
+    case "PLAN_PURCHASE_UNAVAILABLE": return "purchase_unavailable";
+    case "INVALID_PLAN":
+    case "UNSUPPORTED_BILLING_CYCLE": return "configuration_error";
+    case "UNAUTHORIZED": return "authorization";
+    case "TIMEOUT":
+    case "NETWORK_ERROR": return "temporary_error";
+    case "EXTERNAL_SERVICE_ERROR": return "provider_unavailable";
+    default: return "unknown";
+  }
+}
+
+/** PLAN-IMPL-06 §24 — lê `?source=` sem nunca repassar a URL inteira/arbitrária (§24: "Do not include
+ * arbitrary URL") — um valor fora do enum fechado cai em "direct", nunca uma string livre. */
+function readPlansSourceFromLocation(): AnalyticsSource {
+  if (typeof window === "undefined") return "direct";
+  const value = new URLSearchParams(window.location.search).get("source");
+  const known: readonly AnalyticsSource[] = ["dashboard", "settings", "plan_usage", "product_limit", "client_limit", "booking_limit", "ads_pro_preparation_limit", "direct"];
+  return (known as readonly string[]).includes(value ?? "") ? (value as AnalyticsSource) : "direct";
+}
 
 /**
  * PLAN-IMPL-04A §10-§22 — a experiência comercial principal de planos: comparação Free/Pro/Premium,
@@ -53,6 +80,8 @@ function PlanCard({
   basePlanName,
   purchaseAvailable,
   hasPaidSubscription,
+  currentPlan,
+  isTrial,
 }: {
   plan: PlanType;
   cycle: BillingCycle;
@@ -60,6 +89,10 @@ function PlanCard({
   basePlanName: string;
   purchaseAvailable: boolean;
   hasPaidSubscription: boolean;
+  /** PLAN-IMPL-06 §25 — params de plan_selected: o plano BASE atual (nunca o efetivo/trial-boosted, §32
+   * já usa essa mesma distinção em outro contexto — aqui é só o que "current_plan" honestamente significa). */
+  currentPlan: PlanType;
+  isTrial: boolean;
 }) {
   const [, setLocation] = useLocation();
   const presentation = PLAN_PRESENTATION[plan];
@@ -77,9 +110,19 @@ function PlanCard({
   const [purchaseState, setPurchaseState] = useState<"idle" | "confirming" | "purchasing" | "error">("idle");
   const [purchaseError, setPurchaseError] = useState("");
 
+  // PLAN-IMPL-06 §25 — plan_selected: o usuário decidiu deliberadamente este plano/CTA (nunca a mera
+  // impressão de um card indisponível, §25 — este handler só existe no branch purchaseAvailable true).
+  function handleSelectPlan() {
+    trackAnalyticsEvent("plan_selected", { selected_plan: plan, billing_cycle: "monthly", current_plan: currentPlan, is_trial: isTrial });
+    setPurchaseState("confirming");
+  }
+
   async function handleConfirmPurchase() {
     setPurchaseState("purchasing");
     setPurchaseError("");
+    // PLAN-IMPL-06 §26 — só agora, imediatamente antes de invocar o endpoint real, nunca no clique do
+    // CTA "Assinar" (que só abre o painel de confirmação, ainda pode ser cancelado via "Voltar").
+    trackAnalyticsEvent("checkout_started", { plan, billing_cycle: "monthly", pricing_version: "v2" });
     try {
       const data = await apiRequest<{ initPoint?: string }>("/api/subscriptions/create", {
         method: "POST",
@@ -87,8 +130,13 @@ function PlanCard({
         body: { plan, billingCycle: "monthly" },
       });
       if (!data.initPoint) throw new Error("Link de checkout não retornado pela API.");
+      // PLAN-IMPL-06 §29 — marca a tentativa ANTES do redirect (sobrevive à ida-e-volta ao Mercado
+      // Pago); PlanProvider.tsx consome isto para disparar subscription_activated quando a ativação
+      // real (assíncrona, via webhook) for observada.
+      markPendingSubscriptionActivation(plan, "monthly");
       window.location.href = data.initPoint;
     } catch (err) {
+      trackAnalyticsEvent("checkout_failed", { plan, reason: toCheckoutFailureReason(err) });
       setPurchaseError(buildApiErrorDisplayMessage(err, "Não foi possível iniciar a assinatura agora. Tente novamente."));
       setPurchaseState("error");
     }
@@ -212,7 +260,7 @@ function PlanCard({
             ) : (
               <button
                 type="button"
-                onClick={() => setPurchaseState("confirming")}
+                onClick={handleSelectPlan}
                 className="w-full min-h-11 rounded-2xl bg-primary text-white font-black py-3 text-sm active:scale-95 transition-all"
                 data-testid={`button-subscribe-plan-${plan}`}
               >
@@ -235,7 +283,7 @@ function PlanCard({
 
 export default function Plans() {
   const [, setLocation] = useLocation();
-  const { basePlan, trial, loading: planLoading, error: planError, planData, refresh } = usePlan();
+  const { basePlan, activePlan, trial, loading: planLoading, error: planError, planData, refresh } = usePlan();
   const { availability, loading: availabilityLoading } = usePlanPurchaseAvailability();
   const [cycle, setCycle] = useState<BillingCycle>("monthly");
 
@@ -246,6 +294,17 @@ export default function Plans() {
   const loading = planLoading || availabilityLoading;
 
   const basePlanName = useMemo(() => PLAN_CONFIG[basePlan].name, [basePlan]);
+
+  // PLAN-IMPL-06 §24 — dispara quando /plans passa a ser mostrado com sucesso (nunca durante
+  // loading/erro) — deps `[loading, planError]` de propósito, nunca os valores do plano em si: uma
+  // troca de ciclo (mensal/anual) ou uma atualização de basePlan/activePlan/trialActive em segundo
+  // plano não é uma nova "visualização" da página, só a transição loading/erro -> sucesso é.
+  useEffect(() => {
+    if (loading || planError) return;
+    trackAnalyticsEvent("plans_viewed", {
+      current_plan: basePlan, effective_plan: activePlan, is_trial: trialActive, source: readPlansSourceFromLocation(),
+    });
+  }, [loading, planError]);
 
   if (loading) {
     return (
@@ -313,6 +372,8 @@ export default function Plans() {
               basePlanName={basePlanName}
               purchaseAvailable={plan === PLANS.PRO ? (availability?.pro.available ?? false) : plan === PLANS.PREMIUM ? (availability?.premium.available ?? false) : true}
               hasPaidSubscription={hasPaidSubscription}
+              currentPlan={basePlan}
+              isTrial={trialActive}
             />
           ))}
         </div>
