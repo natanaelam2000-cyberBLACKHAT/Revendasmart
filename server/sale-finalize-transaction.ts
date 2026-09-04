@@ -149,6 +149,13 @@ export async function finalizeSaleTransaction(db: Firestore, input: SaleFinalize
       });
     }
 
+    // PLAN-IMPL-07A — mesmo padrão de Product.lastSoldDate acima, aplicado ao Client: a MESMA
+    // transação que já lê e valida clientRef (linha ~67/73) também grava a recência da última compra
+    // real, nunca uma segunda gravação/caminho separado. Habilita a detecção de "cliente inativo" via
+    // uma query indexada e limitada por intervalo (where lastPurchaseAt < limiar), sem nunca carregar
+    // todas as Sales/Clients do tenant em runtime.
+    transaction.update(clientRef, { lastPurchaseAt: date });
+
     const installmentIds: string[] = [];
     if (remainingCents > 0) {
       const baseAmountCents = Math.floor(remainingCents / installmentCount);

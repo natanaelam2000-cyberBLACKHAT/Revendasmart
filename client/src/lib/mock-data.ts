@@ -149,6 +149,14 @@ export interface Client {
   phone: string;
   email?: string;
   notes?: string;
+  /** PLAN-IMPL-07A — data ISO da venda mais recente, escrita transacionalmente dentro de
+   * finalizeSaleTransaction (mesmo padrão de Product.lastSoldDate) toda vez que uma venda REAL
+   * envolvendo este cliente é finalizada. Ausente para clientes sem nenhuma venda registrada DEPOIS
+   * deste campo existir — nunca preenchido por um backfill automático nesta ticket (§7 do pedido) —,
+   * o que é intencionalmente distinto de "inativo": ausência é "sem histórico conhecido", nunca tratado
+   * como inatividade automática (a query de oportunidade usa um filtro de intervalo que já exclui
+   * documentos sem o campo, nunca precisa de um branch especial para isso). */
+  lastPurchaseAt?: string;
 }
 
 export interface Installment {

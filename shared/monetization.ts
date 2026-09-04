@@ -193,9 +193,12 @@ export const PLAN_PRICING: Record<PlanType, { readonly monthly: number; readonly
  *
  * `sellableHighlights` é uma lista NOVA e deliberadamente mais conservadora que `PLAN_CONFIG[plan].features`
  * (que continua existindo, inalterada, para quem já a consome) — `features` inclui promessas §7 proíbe
- * vender agora (preparações de Anúncios Pro, inteligência Premium — ver o comentário de `proAds` acima,
- * "inatingível na prática até PLAN-IMPL-03/04 existirem"). `sellableHighlights` só lista o que o runtime
- * atual realmente entrega. Pro e Premium hoje têm os MESMOS flags booleanos (categories/charges/
+ * vender agora. `sellableHighlights` só lista o que o runtime atual realmente entrega — a inteligência
+ * Premium (`'Inteligência comercial e ação (Premium)'` em `PLAN_CONFIG.premium.features` acima) só entrou
+ * nesta lista depois de PLAN-IMPL-07A existir de verdade (client/src/pages/opportunities.tsx +
+ * server/opportunity-engine.ts, regras 100% determinísticas, nunca IA generativa/probabilidade
+ * fabricada — ver §36 do ticket: "só depois do runtime real existir"). Pro e Premium hoje têm os MESMOS
+ * flags booleanos (categories/charges/
  * productHighlight/professionalCatalog/noAds — ver o comentário acima de `PLAN_CONFIG.pro`: o que
  * diferencia os dois ainda é só a camada de inteligência, que não existe em runtime) — por isso Premium
  * não re-anuncia esses booleanos como se fossem exclusivos dela (seria falso); ela vende capacidade maior
@@ -262,6 +265,11 @@ export const PLAN_PRESENTATION: Record<PlanType, PlanPresentation> = {
       // resto da lista) porque a cota é diferente (100 vs. 3).
       '100 novos produtos preparados profissionalmente por mês',
       'A maior capacidade atual da plataforma',
+      // PLAN-IMPL-07A §36 — só entrou aqui depois do runtime real existir (client/src/pages/
+      // opportunities.tsx + server/opportunity-engine.ts). Nunca promete IA/previsão/receita garantida —
+      // só o que a engine determinística de fato entrega hoje (repurchase_candidate está deliberadamente
+      // fora, DEFERRED_SCHEMA_PREREQUISITE, nunca anunciado).
+      'Oportunidades comerciais: clientes inativos, produtos parados e agenda ociosa',
     ],
   },
 };

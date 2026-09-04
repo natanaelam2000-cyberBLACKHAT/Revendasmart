@@ -299,13 +299,19 @@ function runSourceTextTests(): void {
   assert.doesNotMatch(planUsageSource, /useEffect\([^)]*isNearPlanLimit/s, "N6: near-limit nunca deve disparar side-effect de modal");
   console.log("PASS N6 near-limit warnings never trigger a modal/popup as a side effect — inline text only, safe to re-render repeatedly");
 
-  // §66 — inteligência Premium e relatórios estratégicos continuam recursos futuros, fora do escopo de
-  // PLAN-IMPL-05 (§63: "Do not implement... Premium intelligence, report tiering") — nunca anunciados.
-  // A cota de preparações do Ads Pro SAIU desta lista em PLAN-IMPL-05: agora tem runtime real
-  // (server/ads-pro-preparation-quota.ts), então §37 exige justamente o oposto de antes — anunciá-la.
+  // §66 — relatórios estratégicos ("report tiering") continuam fora do escopo até PLAN-IMPL-07B (§57 da
+  // ticket PLAN-IMPL-07A: "Full: Free vs Pro vs Premium reporting differentiation belongs to:
+  // PLAN-IMPL-07B") — nunca anunciados. A cota de preparações do Ads Pro SAIU desta lista em
+  // PLAN-IMPL-05: agora tem runtime real (server/ads-pro-preparation-quota.ts), §37 exige anunciá-la.
+  // "Inteligência Premium" (no sentido genérico, tipo IA/previsão) SAIU desta lista em PLAN-IMPL-07A pelo
+  // mesmo motivo: client/src/pages/opportunities.tsx + server/opportunity-engine.ts agora têm runtime
+  // real, determinístico — mas a cópia continua PROIBIDA de usar o jargão "inteligência avançada/premium"
+  // (§35 do ticket: linguagem simples de negócio, "Oportunidades", nunca "AI Insights"/"Predictive
+  // intelligence") — o regex abaixo continua correto porque nunca deveria bater com a cópia real, que usa
+  // "Oportunidades comerciais", nunca essas frases.
   const forbiddenPromises = /intelig[eê]ncia (avançada|premium)|relat[oó]rios estrat[eé]gicos/i;
-  assert.doesNotMatch(plansSource, forbiddenPromises, "§66: Plans page não pode anunciar recursos futuros ainda não implementados");
-  console.log("PASS §66 Plans page never advertises advanced intelligence or strategic reports (still not real)");
+  assert.doesNotMatch(plansSource, forbiddenPromises, "§66: Plans page não pode anunciar com jargão de IA/relatórios estratégicos ainda não implementados");
+  console.log("PASS §66 Plans page never uses AI-hype phrasing ('inteligência avançada/premium') and never advertises strategic reports (still deferred to PLAN-IMPL-07B) — the real PLAN-IMPL-07A opportunities feature is advertised in plain business language instead (§35), never that jargon");
 
   // PLAN-IMPL-05 §37 — agora que o runtime é real, /plans PRECISA anunciar a cota, com a fraseologia
   // certa (a unidade vendida é o PRODUTO preparado, nunca o anúncio, §32). plans.tsx só consome
@@ -316,6 +322,16 @@ function runSourceTextTests(): void {
   assert.match(monetizationSource, /'3 novos produtos preparados profissionalmente por mês'/, "§37: Pro deve anunciar a cota real (3/mês) em PLAN_PRESENTATION.pro.sellableHighlights");
   assert.match(monetizationSource, /'100 novos produtos preparados profissionalmente por mês'/, "§37: Premium deve anunciar a cota real (100/mês) em PLAN_PRESENTATION.premium.sellableHighlights");
   console.log("PASS §37 /plans now advertises the real preparation quota (3 Pro / 100 Premium), correctly worded as products prepared, never as ads");
+
+  // PLAN-IMPL-07A §36 — mesmo raciocínio do §37 acima: só depois do runtime real de opportunities
+  // existir, Premium pode anunciar a capacidade. Frase em linguagem simples de negócio (§35), nunca
+  // "IA"/"previsão"/"inteligência avançada" — e nunca menciona repurchase_candidate (deferido).
+  assert.match(monetizationSource, /'Oportunidades comerciais: clientes inativos, produtos parados e agenda ociosa'/, "§36: Premium deve anunciar a capacidade real de opportunities em PLAN_PRESENTATION.premium.sellableHighlights, só depois do runtime existir");
+  // [^'\n]* (nunca [^']*) — precisa ficar dentro de UMA linha/UM literal, senão casa através de
+  // comentários inteiros entre duas aspas não relacionadas (armadilha de regex já cometida e corrigida
+  // aqui: [^']* sem excluir \n também casa quebra de linha, "vazando" para comentários mais abaixo).
+  assert.doesNotMatch(monetizationSource, /'[^'\n]*recompra[^'\n]*'|'[^'\n]*repurchase[^'\n]*'/i, "§36/§11: nenhuma sellableHighlight pode prometer recompra — repurchase_candidate está deferido, nunca anunciado");
+  console.log("PASS §36 Premium now advertises the real deterministic opportunities capability (inactive clients, stalled products, idle schedule) in plain business language — never mentions repurchase, which remains deferred and unadvertised");
 }
 
 // ===================================================================================================

@@ -590,7 +590,13 @@ service cloud.firestore {
         && request.resource.data.get('totalSpent', 0) is number
         && request.resource.data.get('totalSpent', 0) >= 0
         && request.resource.data.get('purchaseCount', 0) is number
-        && request.resource.data.get('purchaseCount', 0) >= 0;
+        && request.resource.data.get('purchaseCount', 0) >= 0
+        // PLAN-IMPL-07A — lastPurchaseAt já estava no allowlist (clientAllowedFields) sem nenhuma
+        // validação de tipo/tamanho, igual totalSpent/purchaseCount ao lado; fechado agora que o campo
+        // passa a ser escrito de verdade (server-side, dentro da mesma transação de finalizeSaleTransaction
+        // que já escreve Product.lastSoldDate) — mesmo formato/limite de tamanho já usado lá.
+        && request.resource.data.get('lastPurchaseAt', '') is string
+        && request.resource.data.get('lastPurchaseAt', '').size() <= 80;
     }
 
     function isValidClientUpdate(clientId) {
@@ -603,7 +609,8 @@ service cloud.firestore {
         && (!changed.hasAny(['email']) || (request.resource.data.email is string && request.resource.data.email.size() <= 180))
         && (!changed.hasAny(['notes']) || (request.resource.data.notes is string && request.resource.data.notes.size() <= 2000))
         && (!changed.hasAny(['totalSpent']) || (request.resource.data.totalSpent is number && request.resource.data.totalSpent >= 0))
-        && (!changed.hasAny(['purchaseCount']) || (request.resource.data.purchaseCount is number && request.resource.data.purchaseCount >= 0));
+        && (!changed.hasAny(['purchaseCount']) || (request.resource.data.purchaseCount is number && request.resource.data.purchaseCount >= 0))
+        && (!changed.hasAny(['lastPurchaseAt']) || (request.resource.data.lastPurchaseAt is string && request.resource.data.lastPurchaseAt.size() <= 80));
     }
 
     // Encomendas/Pedidos: rascunho de pedido do cliente, sem baixa de estoque, sem venda e sem

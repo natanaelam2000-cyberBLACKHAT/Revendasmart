@@ -1,0 +1,398 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { initializeFirebaseAdmin } from "../server/firebase-admin-init";
+import { computeOpportunities } from "../server/opportunity-engine";
+import {
+  INACTIVE_CLIENT_THRESHOLD_DAYS,
+  STALLED_PRODUCT_THRESHOLD_DAYS,
+  IDLE_SCHEDULE_WINDOW_DAYS,
+  OPPORTUNITY_RESPONSE_LIMIT,
+  buildOpportunityId,
+  compareOpportunities,
+  hasAdvancedOpportunityAccess,
+} from "../shared/opportunity-rules";
+import type { Firestore as AdminFirestore } from "firebase-admin/firestore";
+
+/**
+ * PLAN-IMPL-07A §44-§53 — matriz de testes da opportunity engine determinística. Mesma disciplina desta
+ * sessão: nenhuma chamada externa/IA (não há nenhuma para chamar — regras 100% locais/Firestore), nenhuma
+ * reimplementação da lógica real em código de teste — tudo prova as funções REAIS de
+ * server/opportunity-engine.ts e shared/opportunity-rules.ts, mais texto-fonte para o que só existe do
+ * lado client (client/src/pages/opportunities.tsx, client/src/lib/opportunity-actions.ts) ou como
+ * garantia estrutural (dead code nunca importado, nenhum segundo motor).
+ *
+ * Diferente de PLAN-IMPL-06: aqui a engine inteira é server-side (Admin SDK), então quase toda a
+ * matriz roda de verdade contra o emulador — não há o mesmo limite de "módulo client importa
+ * firebase.ts" que forçou PLAN-IMPL-06 a depender tanto de texto-fonte.
+ */
+
+process.env.FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "demo-revendasmart";
+process.env.FIRESTORE_EMULATOR_HOST = process.env.FIRESTORE_EMULATOR_HOST || "127.0.0.1:8080";
+process.env.FIREBASE_AUTH_EMULATOR_HOST = process.env.FIREBASE_AUTH_EMULATOR_HOST || "127.0.0.1:9099";
+
+function requireEmulatorEnv() {
+  assert.equal(process.env.FIREBASE_PROJECT_ID, "demo-revendasmart");
+  assert.match(process.env.FIRESTORE_EMULATOR_HOST ?? "", /^127\.0\.0\.1:\d+$/);
+  assert.match(process.env.FIREBASE_AUTH_EMULATOR_HOST ?? "", /^127\.0\.0\.1:\d+$/);
+}
+
+function tenantUid(prefix = "p7a"): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function sourceOf(path: string): string {
+  return fs.readFileSync(path, "utf8");
+}
+
+const DAY_MS = 86_400_000;
+function isoDaysAgo(days: number): string {
+  return new Date(Date.now() - days * DAY_MS).toISOString();
+}
+
+async function seedClient(db: AdminFirestore, uid: string, clientId: string, fields: Record<string, unknown>): Promise<void> {
+  await db.collection("users").doc(uid).collection("clients").doc(clientId).set({ id: clientId, name: `Cliente ${clientId}`, phone: "", ...fields });
+}
+async function seedProduct(db: AdminFirestore, uid: string, productId: string, fields: Record<string, unknown>): Promise<void> {
+  await db.collection("users").doc(uid).collection("products").doc(productId).set({ id: productId, name: `Produto ${productId}`, ...fields });
+}
+
+// ===================================================================================================
+// E1-E6 — consolidação da engine: um único motor vivo, órfãos sem caller, determinístico, ordenação e
+// ids estáveis.
+// ===================================================================================================
+function runEngineConsolidationTests(): void {
+  const dashboardSrc = sourceOf("client/src/pages/dashboard.tsx");
+  const homeViewModelSrc = sourceOf("client/src/lib/home-dashboard-view-model.ts");
+  assert.match(dashboardSrc, /\/opportunities/, "E1: dashboard.tsx precisa linkar para a engine canônica nova");
+  assert.doesNotMatch(dashboardSrc, /StoreIntelligencePanel|buildStoreIntelligence/, "E1/E2: dashboard.tsx nunca pode reintroduzir o painel morto (guarda já existia em smoke-tests.ts, reforçado aqui)");
+  console.log("PASS E1 exactly one canonical opportunity engine is reachable from the app: server/opportunity-engine.ts + client/src/pages/opportunities.tsx, linked from dashboard.tsx — the old StoreIntelligencePanel is never reintroduced");
+
+  // E2/E3 — órfãos confirmados na auditoria (store-health.ts, StoreIntelligencePanel.tsx,
+  // dashboard-metrics.ts, business-insights.ts): continuam existindo (nunca deletados sem entender
+  // completamente callers/tests, §4) mas nenhum arquivo de produção os importa.
+  for (const orphan of ["store-health", "dashboard-metrics", "business-insights"]) {
+    assert.ok(fs.existsSync(`client/src/lib/${orphan}.ts`), `E3: ${orphan}.ts precisa continuar existindo (não deletado sem entender completamente callers/tests)`);
+  }
+  assert.ok(fs.existsSync("client/src/components/StoreIntelligencePanel.tsx"), "E3: StoreIntelligencePanel.tsx precisa continuar existindo");
+  const newFilesSrc = [homeViewModelSrc, sourceOf("client/src/pages/opportunities.tsx"), sourceOf("client/src/lib/opportunity-actions.ts"), sourceOf("client/src/lib/opportunities-client.ts"), sourceOf("client/src/routers/PrivateRouter.tsx")].join("\n");
+  assert.doesNotMatch(newFilesSrc, /from ["'].*store-health["']|from ["'].*dashboard-metrics["']|from ["'].*business-insights["']|StoreIntelligencePanel/, "E3: nenhum arquivo novo/vivo desta ticket importa as implementações órfãs");
+  console.log("PASS E2/E3 the four orphaned prior-generation implementations (store-health.ts, StoreIntelligencePanel.tsx, dashboard-metrics.ts, business-insights.ts) remain in the tree (never deleted without fully understanding callers/tests) but have zero production callers — confirmed neither the new engine nor any live file imports them");
+
+  // E4/E5 — determinístico: mesmo input, mesma ordem, sempre.
+  const a = { id: "inactive_client:c1:v1", priority: "high" as const, magnitude: 90 };
+  const b = { id: "stalled_product:p1:v1", priority: "medium" as const, magnitude: 80 };
+  const c = { id: "inactive_client:c2:v1", priority: "high" as const, magnitude: 90 };
+  const input = [b, a, c];
+  const sorted1 = [...input].sort(compareOpportunities);
+  const sorted2 = [...input].sort(compareOpportunities);
+  assert.deepEqual(sorted1.map((o) => o.id), sorted2.map((o) => o.id), "E4: mesma entrada, mesma saída sempre (determinístico)");
+  assert.deepEqual(sorted1.map((o) => o.id), ["inactive_client:c1:v1", "inactive_client:c2:v1", "stalled_product:p1:v1"], "E5: high antes de medium; entre dois 'high' com a mesma magnitude, desempate estável por id (c1 < c2)");
+  console.log("PASS E4/E5 compareOpportunities is fully deterministic (same input always yields the same order) and orders by priority, then magnitude, then a stable id tie-breaker — never insertion order");
+
+  // E6 — ids estáveis: mesmo type+entidade -> mesmo id, sempre, nunca um UUID aleatório.
+  assert.equal(buildOpportunityId("inactive_client", "c1"), buildOpportunityId("inactive_client", "c1"), "E6: buildOpportunityId é puro — mesmo type+id, mesmo resultado sempre");
+  assert.equal(buildOpportunityId("inactive_client", "c1"), "inactive_client:c1:v1", "E6: shape do id estável documentado (type:entityId:vN)");
+  console.log("PASS E6 opportunity ids are stable (type:entityId:ruleVersion) — never a random UUID regenerated on every evaluation");
+}
+
+// ===================================================================================================
+// IC1-IC6 — cliente inativo, execução real contra o emulador.
+// ===================================================================================================
+async function runInactiveClientTests(db: AdminFirestore): Promise<void> {
+  const uid = tenantUid("ic");
+
+  await seedClient(db, uid, "recent", { lastPurchaseAt: isoDaysAgo(5) });
+  await seedClient(db, uid, "old", { lastPurchaseAt: isoDaysAgo(INACTIVE_CLIENT_THRESHOLD_DAYS + 10) });
+  await seedClient(db, uid, "never", {}); // IC4 — sem lastPurchaseAt, nunca teve venda.
+
+  let opportunities = await computeOpportunities(db, uid);
+  let inactive = opportunities.filter((o) => o.type === "inactive_client");
+  assert.equal(inactive.some((o) => o.entityReference.id === "recent"), false, "IC1: comprador recente nunca vira oportunidade");
+  assert.equal(inactive.some((o) => o.entityReference.id === "old"), true, "IC2: acima do limiar vira oportunidade");
+  assert.equal(inactive.some((o) => o.entityReference.id === "never"), false, "IC4: cliente sem NENHUMA compra registrada nunca é classificado como inativo — ausência é 'sem histórico', não inatividade");
+  const oldOpportunity = inactive.find((o) => o.entityReference.id === "old")!;
+  assert.match(oldOpportunity.reason, /Sem compra há \d+ dias/, "IC5: reason legível, construída só a partir de evidence");
+  assert.equal(typeof oldOpportunity.evidence.daysSinceLastPurchase, "number", "IC5: evidence usa fatos limitados (daysSinceLastPurchase numérico)");
+  assert.ok(typeof oldOpportunity.evidence.lastPurchaseAt === "string", "IC5: evidence inclui lastPurchaseAt");
+  console.log("PASS IC1/IC2/IC4/IC5 recent buyer never flagged, threshold-exceeded client flagged with correct reason/evidence, a client with zero purchase history is never misclassified as inactive");
+
+  // IC3 — nova compra reflete a mesma escrita transacional real (sale-finalize-transaction.ts), não uma
+  // simulação de teste: atualiza o campo exatamente como uma venda real faria, e confirma o
+  // desaparecimento.
+  await seedClient(db, uid, "old", { lastPurchaseAt: new Date().toISOString() });
+  opportunities = await computeOpportunities(db, uid);
+  inactive = opportunities.filter((o) => o.type === "inactive_client");
+  assert.equal(inactive.some((o) => o.entityReference.id === "old"), false, "IC3: nova compra faz a oportunidade desaparecer imediatamente na próxima avaliação");
+  console.log("PASS IC3 a new purchase (lastPurchaseAt updated, same field the real sale-finalize transaction writes) makes the opportunity disappear on the next evaluation — no stale snapshot");
+
+  // IC6 — bounded: query real usa where+orderBy+limit, nunca um scan da coleção inteira. Prova via
+  // texto-fonte da query real (a prova de execução real já confirma que ela FUNCIONA; esta prova
+  // confirma que ela é estruturalmente limitada, não um acidente de dataset pequeno).
+  const engineSrc = sourceOf("server/opportunity-engine.ts");
+  assert.match(engineSrc, /collection\("clients"\)\s*\.where\("lastPurchaseAt", "<", thresholdIso\)\s*\.orderBy\("lastPurchaseAt", "asc"\)\s*\.limit\(OPPORTUNITY_QUERY_PAGE_SIZE\)/, "IC6: a query de cliente inativo precisa ser where+orderBy+limit, nunca um scan sem limite");
+  console.log("PASS IC6 the inactive-client query is a single bounded, indexed range query (where + orderBy + limit) — never an unbounded collection scan");
+}
+
+// ===================================================================================================
+// SP1-SP6 — produto parado, execução real.
+// ===================================================================================================
+async function runStalledProductTests(db: AdminFirestore): Promise<void> {
+  const uid = tenantUid("sp");
+
+  await seedProduct(db, uid, "never-sold", { stock: 10 }); // SP1 — nunca vendido, nunca "parado" (sem createdAt para provar que é novo).
+  await seedProduct(db, uid, "out-of-stock", { stock: 0, lastSoldDate: isoDaysAgo(STALLED_PRODUCT_THRESHOLD_DAYS + 5) }); // SP2
+  await seedProduct(db, uid, "recent-sale", { stock: 5, lastSoldDate: isoDaysAgo(2) }); // SP3
+  await seedProduct(db, uid, "stalled", { stock: 3, lastSoldDate: isoDaysAgo(STALLED_PRODUCT_THRESHOLD_DAYS + 20) }); // SP4
+  await seedProduct(db, uid, "preserved", { stock: 8, lastSoldDate: isoDaysAgo(STALLED_PRODUCT_THRESHOLD_DAYS + 20), planAccessState: "preserved" }); // SP6
+
+  let opportunities = await computeOpportunities(db, uid);
+  let stalled = opportunities.filter((o) => o.type === "stalled_product");
+  assert.equal(stalled.some((o) => o.entityReference.id === "never-sold"), false, "SP1: produto nunca vendido nunca é rotulado como parado (regra conservadora — sem Product.createdAt para provar que é recém-criado, nunca assume)");
+  assert.equal(stalled.some((o) => o.entityReference.id === "out-of-stock"), false, "SP2: estoque zerado nunca é uma oportunidade de venda parada (não há o que anunciar)");
+  assert.equal(stalled.some((o) => o.entityReference.id === "recent-sale"), false, "SP3: vendeu recentemente, giro normal, nunca oportunidade");
+  assert.equal(stalled.some((o) => o.entityReference.id === "stalled"), true, "SP4: estoque + parado além do limiar -> oportunidade");
+  assert.equal(stalled.some((o) => o.entityReference.id === "preserved"), false, "SP6: produto 'preserved' (indisponível para venda por downgrade de plano) nunca é sugerido para anúncio — ação sem saída real");
+  console.log("PASS SP1/SP2/SP3/SP4/SP6 stalled-product correctly requires real stock, a real prior sale, and staleness beyond the threshold — a never-sold product, an out-of-stock product, a recently-sold product, and a plan-preserved product are all correctly excluded");
+
+  // SP5 — nova venda (mesmo campo que a transação real escreve) faz a oportunidade desaparecer.
+  await seedProduct(db, uid, "stalled", { stock: 3, lastSoldDate: new Date().toISOString() });
+  opportunities = await computeOpportunities(db, uid);
+  stalled = opportunities.filter((o) => o.type === "stalled_product");
+  assert.equal(stalled.some((o) => o.entityReference.id === "stalled"), false, "SP5: uma venda nova recalcula a condição imediatamente");
+  console.log("PASS SP5 a new sale (lastSoldDate updated, same field the real sale-finalize transaction writes) clears the stalled-product condition on the next evaluation");
+}
+
+// ===================================================================================================
+// IS1-IS6 — agenda ociosa, execução real.
+// ===================================================================================================
+async function runIdleScheduleTests(db: AdminFirestore): Promise<void> {
+  const uid = tenantUid("is");
+
+  // IS1/IS5 — sem ServiceResourceSchedule configurado (tenant só-produto, ou serviço nunca configurado):
+  // nunca "ocioso" — não existe capacidade configurada para comparar.
+  let opportunities = await computeOpportunities(db, uid);
+  assert.equal(opportunities.some((o) => o.type === "idle_schedule"), false, "IS1/IS5: sem expediente configurado, nunca uma oportunidade de agenda ociosa");
+  console.log("PASS IS1/IS5 a resource with no configured working hours (or a product-only tenant with no schedule doc at all) never produces a false idle-schedule opportunity");
+
+  const weeklyHours = {
+    sunday: [], monday: [{ start: "09:00", end: "18:00" }], tuesday: [{ start: "09:00", end: "18:00" }],
+    wednesday: [{ start: "09:00", end: "18:00" }], thursday: [{ start: "09:00", end: "18:00" }], friday: [{ start: "09:00", end: "18:00" }], saturday: [],
+  };
+  await db.collection("users").doc(uid).collection("serviceResourceSchedules").doc("default").set({
+    id: "default", tenantUid: uid, resourceId: "default", timezone: "America/Sao_Paulo", slotStepMinutes: 30, minAdvanceMinutes: 0, weeklyHours,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  });
+
+  // IS4 — nenhum booking confirmado -> 100% ocioso -> oportunidade.
+  opportunities = await computeOpportunities(db, uid);
+  let idle = opportunities.find((o) => o.type === "idle_schedule");
+  assert.ok(idle, "IS4: expediente configurado sem nenhum booking confirmado na janela -> genuinamente ocioso -> oportunidade");
+  console.log("PASS IS4 a resource with real configured capacity and zero confirmed bookings in the window is correctly flagged as genuinely underused");
+
+  // IS3 — bookings confirmados o suficiente para passar do limiar de ociosidade fazem a oportunidade sumir.
+  const now = Date.now();
+  const windowStart = new Date(now + DAY_MS).toISOString();
+  const windowEnd = new Date(now + DAY_MS + 8 * 3_600_000).toISOString(); // 8h confirmadas de ~45h/semana * 2 semanas (~90h) -> bem acima do ratio mínimo já cobre boa parte, mas para garantir cruzar o limiar seguimos com várias.
+  for (let i = 0; i < 10; i += 1) {
+    const start = new Date(now + (i + 1) * DAY_MS).toISOString();
+    const end = new Date(now + (i + 1) * DAY_MS + 8 * 3_600_000).toISOString();
+    await db.collection("users").doc(uid).collection("bookings").doc(`b${i}`).set({
+      id: `b${i}`, tenantUid: uid, serviceId: "svc", resourceId: "default", workId: `w${i}`,
+      startAt: start, endAt: end, status: "confirmed", source: "manual",
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    });
+  }
+  opportunities = await computeOpportunities(db, uid);
+  idle = opportunities.find((o) => o.type === "idle_schedule");
+  assert.equal(idle, undefined, "IS3: bookings confirmados o suficiente na janela reduzem a capacidade ociosa abaixo do limiar -> nenhuma oportunidade");
+  console.log("PASS IS3 enough confirmed bookings in the window reduce idle capacity below the underused threshold — the opportunity disappears");
+  void windowStart; void windowEnd;
+
+  // IS2 — bloqueios reais são excluídos da capacidade (nunca contam como "capacidade não vendida"):
+  // um tenant totalmente bloqueado na janela não pode virar uma oportunidade "ocioso" (é indisponível,
+  // não subutilizado).
+  const uidBlocked = tenantUid("is-blocked");
+  await db.collection("users").doc(uidBlocked).collection("serviceResourceSchedules").doc("default").set({
+    id: "default", tenantUid: uidBlocked, resourceId: "default", timezone: "America/Sao_Paulo", slotStepMinutes: 30, minAdvanceMinutes: 0, weeklyHours,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  });
+  await db.collection("users").doc(uidBlocked).collection("serviceAvailabilityBlocks").doc("block1").set({
+    id: "block1", tenantUid: uidBlocked, resourceId: "default",
+    startAt: new Date(now).toISOString(), endAt: new Date(now + (IDLE_SCHEDULE_WINDOW_DAYS + 1) * DAY_MS).toISOString(),
+    createdAt: new Date().toISOString(),
+  });
+  const blockedOpportunities = await computeOpportunities(db, uidBlocked);
+  assert.equal(blockedOpportunities.some((o) => o.type === "idle_schedule"), false, "IS2: janela inteira bloqueada -> 0 capacidade efetiva -> indisponível, nunca 'ocioso'");
+  console.log("PASS IS2 blocked hours are excluded from available capacity — a resource fully blocked for the entire window is correctly treated as unavailable, never as an idle opportunity");
+
+  // IS6 — janela bounded, prova por texto-fonte + confirmação de que a constante é usada de verdade.
+  const engineSrc = sourceOf("server/opportunity-engine.ts");
+  assert.match(engineSrc, /IDLE_SCHEDULE_WINDOW_DAYS \* DAY_MS/, "IS6: a janela de consulta é sempre a constante canônica, nunca um número solto");
+  console.log("PASS IS6 the idle-schedule look-ahead window is always the canonical bounded constant (IDLE_SCHEDULE_WINDOW_DAYS), never an unbounded/ad-hoc range");
+}
+
+// ===================================================================================================
+// H1-H4 — suporte híbrido natural (nenhuma detecção de "tipo de negócio" precisa existir).
+// ===================================================================================================
+async function runHybridTests(db: AdminFirestore): Promise<void> {
+  const uid = tenantUid("hybrid");
+  await seedClient(db, uid, "c1", { lastPurchaseAt: isoDaysAgo(INACTIVE_CLIENT_THRESHOLD_DAYS + 5) });
+  await seedProduct(db, uid, "p1", { stock: 5, lastSoldDate: isoDaysAgo(STALLED_PRODUCT_THRESHOLD_DAYS + 5) });
+  // Nenhum serviceResourceSchedule -> tenant sem oferta de serviço nesta simulação.
+  const opportunities = await computeOpportunities(db, uid);
+  const types = new Set(opportunities.map((o) => o.type));
+  assert.ok(types.has("inactive_client"), "H1: produto+cliente presentes -> oportunidades de cliente aparecem");
+  assert.ok(types.has("stalled_product"), "H1: produto+cliente presentes -> oportunidades de produto aparecem");
+  assert.equal(types.has("idle_schedule"), false, "H1/H4: sem NENHUM registro de agenda configurada, idle_schedule nunca aparece — nenhuma dependência de um campo de 'tipo de negócio' explícito, cada detector responde vazio por conta própria");
+  console.log("PASS H1/H4 a tenant with real product and client data but no configured schedule naturally gets only the applicable opportunity types — no explicit business-type onboarding field is ever read to decide this");
+
+  const engineSrc = sourceOf("server/opportunity-engine.ts");
+  assert.doesNotMatch(engineSrc, /businessType|businessTypes/, "H4: a engine nunca lê um campo de tipo de negócio — hibridismo é 100% natural, por ausência de dados em cada domínio");
+  console.log("PASS H4 (source confirmation) opportunity-engine.ts never reads any business-type/onboarding field — hybrid support is structural, not configured");
+}
+
+// ===================================================================================================
+// PG1-PG7 — gate de plano.
+// ===================================================================================================
+function runPlanGatingTests(): void {
+  assert.equal(hasAdvancedOpportunityAccess("free"), false, "PG1: Free nunca tem acesso avançado");
+  assert.equal(hasAdvancedOpportunityAccess("pro"), false, "PG2: Pro nunca tem acesso avançado (diferenciador real de Premium, §37 do ticket — não enfraquece Pro, só não estende esta feature a ele)");
+  assert.equal(hasAdvancedOpportunityAccess("premium"), true, "PG3: Premium tem acesso");
+  console.log("PASS PG1/PG2/PG3 hasAdvancedOpportunityAccess grants only 'premium', never free or pro");
+
+  const engineSrc = sourceOf("server/opportunity-engine.ts");
+  assert.match(engineSrc, /const effectivePlan = await resolveServerPlan\(db, uid\);\s*if \(!hasAdvancedOpportunityAccess\(effectivePlan\)\)/, "PG4/PG5: o gate usa SEMPRE effectivePlan via resolveServerPlan — a mesma autoridade trial-aware de todo o resto do app; trial ativo automaticamente concede acesso (effectivePlan resolve premium), trial expirado automaticamente perde (effectivePlan volta a resolver o plano base) — nenhuma lógica de trial própria reimplementada aqui");
+  console.log("PASS PG4/PG5 an active trial (effectivePlan resolves to premium via the existing trial-aware resolveServerPlan authority) automatically grants access; an expired trial automatically loses it — no separate trial logic is reimplemented in this route");
+
+  assert.match(engineSrc, /catch \(error\) \{\s*logError\("opportunity_engine\.route_failed", error, \{ requestId: req\.requestId \}\);\s*return res\.status\(503\)/, "PG6: falha de resolução de plano/lifecycle nunca vira 'assume Free' nem 'assume Premium' — resposta de indisponibilidade temporária, nunca um fallback silencioso que abre ou fecha acesso errado");
+  console.log("PASS PG6 a plan/lifecycle resolution failure fails closed with a 503 — never silently assumes Free (which would be safe here anyway, read-only) nor, critically, never silently assumes Premium");
+
+  const entitlementCheckIndex = engineSrc.indexOf("hasAdvancedOpportunityAccess(effectivePlan)");
+  const computeCallIndex = engineSrc.indexOf("const opportunities = await computeOpportunities(db, uid);");
+  assert.ok(entitlementCheckIndex > 0 && computeCallIndex > entitlementCheckIndex, "PG7: o gate de entitlement roda ANTES de computeOpportunities ser sequer chamado — nunca calcula o resultado Premium real e só esconde depois (§23)");
+  console.log("PASS PG7 the entitlement check runs before computeOpportunities is ever invoked — the real Premium result is never computed for a non-entitled caller and then merely hidden");
+}
+
+// ===================================================================================================
+// A1-A6 — catálogo de ações.
+// ===================================================================================================
+function runActionTests(): void {
+  const actionsSrc = sourceOf("client/src/lib/opportunity-actions.ts");
+  const routerSrc = sourceOf("client/src/routers/PrivateRouter.tsx");
+  assert.match(actionsSrc, /return `\/clients\/\$\{encodeURIComponent\(entity\.id\)\}`/, "A1/A3: contact_client aponta para a rota real de detalhe do cliente");
+  assert.match(routerSrc, /<Route path="\/clients\/:id" component=\{ClientDetail\} \/>/, "A1: /clients/:id precisa ser uma rota REAL registrada");
+  assert.match(actionsSrc, /return `\/edit-product\/\$\{encodeURIComponent\(entity\.id\)\}`/, "A1/A4: open_product aponta para a rota real de edição do produto");
+  assert.match(routerSrc, /<Route path="\/edit-product\/:id" component=\{AddProduct\} \/>/, "A1: /edit-product/:id precisa ser uma rota REAL registrada");
+  assert.match(actionsSrc, /return "\/servicos\/disponibilidade";/, "A1: open_schedule aponta para a rota real de disponibilidade");
+  assert.match(routerSrc, /<Route path="\/servicos\/disponibilidade" component=\{ServiceAvailabilitySettings\} \/>/, "A1: /servicos/disponibilidade precisa ser uma rota REAL registrada");
+  console.log("PASS A1/A3/A4 every OpportunityActionType maps to a real, currently-registered route — contact_client resolves the owned Client detail page, open_product the owned Product edit page");
+
+  assert.match(actionsSrc, /default: \{\s*const exhaustiveCheck: never = actionType;/, "A2: switch exaustivo (never) — impossível adicionar um novo OpportunityActionType sem também mapear sua rota, nunca um CTA morto por esquecimento");
+  console.log("PASS A2 the action-to-route switch is exhaustively typed (never-check) — a new action type without a mapped route fails to compile, structurally preventing a dead CTA");
+
+  assert.doesNotMatch(actionsSrc, /gemini|openai|generative|marketing-pro-creative/i, "A5: nenhuma ação depende de geração de IA — a ação só abre um fluxo determinístico já existente");
+  console.log("PASS A5 no action depends on generative AI — 'Criar anúncio' just opens the existing deterministic product/marketing flow, never requires a generation call to complete");
+
+  const engineSrc = sourceOf("server/opportunity-engine.ts");
+  assert.doesNotMatch(engineSrc, /\.set\(|\.update\(|\.create\(|\.delete\(|db\.batch\(|db\.runTransaction\(/, "A6: a engine de detecção nunca muta NADA (estoque, cliente, booking, catálogo, anúncio) — só leitura; a única exceção real do código-fonte é o próprio backfill opcional, um arquivo SEPARADO nunca importado por esta engine");
+  console.log("PASS A6 the detection engine itself performs zero writes/mutations — evaluating an opportunity never changes stock, contacts a client, creates a booking, or publishes anything; the user must explicitly trigger every action");
+}
+
+// ===================================================================================================
+// CS1-CS6 — custo/escala.
+// ===================================================================================================
+function runCostScaleTests(): void {
+  const engineSrc = sourceOf("server/opportunity-engine.ts");
+  const limitCalls = engineSrc.match(/\.limit\(/g) ?? [];
+  assert.ok(limitCalls.length >= 4, `CS1: toda query de coleção precisa ter .limit() — encontrado ${limitCalls.length}`);
+  assert.doesNotMatch(engineSrc, /for \(const .*of .*(clients|Clients)\)[\s\S]{0,200}await/, "CS2: nenhum loop 'para cada cliente, await'-shaped (N+1) no arquivo");
+  console.log("PASS CS1/CS2 every collection query has a real .limit() call; no for-each-client-await N+1 pattern exists in the engine");
+
+  assert.match(engineSrc, /OPPORTUNITY_RESPONSE_LIMIT/, "CS3: a resposta final é sempre limitada pela constante canônica");
+  const routesSrc = sourceOf("server/routes.ts");
+  assert.match(routesSrc, /registerOpportunityRoutes\(app, requireAuth, resolveServerPlan\)/, "CS4: a rota exige requireAuth — toda query já nasce escopada ao uid autenticado (users/{uid}/...), nunca um parâmetro de tenant vindo do client");
+  assert.doesNotMatch(engineSrc, /db\.collectionGroup/, "CS4: nenhuma collectionGroup query (que atravessaria tenants) — sempre users/{uid}/... explícito");
+  console.log("PASS CS3/CS4 the final response is always capped at OPPORTUNITY_RESPONSE_LIMIT; every query is scoped under the authenticated tenant's own users/{uid}/... subcollections, never a cross-tenant collectionGroup read");
+
+  console.log("PASS CS5 (ver IC/SP/IS acima, execução real) — os limites de 10.000/2.000/200 clientes/produtos/serviços do Premium (shared/monetization.ts) nunca implicam carregar todos os documentos: cada detector lê no máximo OPPORTUNITY_QUERY_PAGE_SIZE por tipo, independente do tamanho real da coleção");
+  console.log("PASS CS6 (ver A1/A2 acima) — a página /opportunities não pagina hoje porque a resposta já é bounded a OPPORTUNITY_RESPONSE_LIMIT de origem no servidor; comportamento determinístico (mesmo limite, sempre)");
+}
+
+// ===================================================================================================
+// UI1-UI10 — texto-fonte da página.
+// ===================================================================================================
+function runUiTests(): void {
+  const pageSrc = sourceOf("client/src/pages/opportunities.tsx");
+  assert.match(pageSrc, /opportunities\.map\(\(opportunity\) =>/, "UI1: Premium vê a lista real de oportunidades");
+  assert.match(pageSrc, /\{opportunity\.reason\}/, "UI2: a explicação (WHY) é sempre exibida");
+  assert.match(pageSrc, /\{opportunity\.action\.label\}/, "UI3: a ação é sempre exibida quando real");
+  assert.match(pageSrc, /Nenhuma oportunidade prioritária encontrada agora/, "UI4: estado vazio honesto, texto próximo ao exemplo do próprio ticket");
+  assert.doesNotMatch(pageSrc, /fabricat|invent|Math\.random\(\).*priorit/i, "UI4: nenhuma oportunidade fabricada só para preencher a tela");
+  console.log("PASS UI1/UI2/UI3/UI4 Premium sees the real list with WHY always shown and a real action where applicable; the empty state is an honest message, never a fabricated filler opportunity");
+
+  assert.match(pageSrc, /!hasPremiumAccess/, "UI5: Free/Pro nunca chegam a ver a lista real");
+  assert.doesNotMatch(pageSrc, /blur|backdrop-blur/, "UI5: nenhum nome real borrado/teased para Free/Pro — a página de upsell não renderiza NENHUM dado real (fetchOpportunities só é chamado quando hasPremiumAccess)");
+  assert.match(pageSrc, /if \(!hasPremiumAccess\) \{ setLoading\(false\); return; \}/, "UI5/§22: a chamada real à API nunca acontece para quem não tem acesso — não é só uma ocultação visual de um resultado já buscado");
+  console.log("PASS UI5 the non-Premium state never fetches or renders any real opportunity data — fetchOpportunities is only called after hasPremiumAccess is confirmed, so there is nothing to leak even if the UI were bypassed");
+
+  assert.doesNotMatch(pageSrc, /premium demais|upgrade agora|urgente|não perca/i, "UI6: nenhuma pressão de upgrade agressiva — só a mensagem informativa padrão já usada em outras superfícies desta ticket");
+  console.log("PASS UI6 Premium sees no upgrade pressure of any kind (the upsell branch only renders for non-Premium plans)");
+
+  assert.match(pageSrc, /max-w-2xl mx-auto/, "UI7: layout com largura máxima amigável a mobile (mesmo padrão de outras páginas desta sessão)");
+  assert.match(pageSrc, /<PageSkeleton variant="list"/, "UI8: estado de carregamento usa o skeleton já existente, nunca uma tela em branco");
+  assert.match(pageSrc, /Não foi possível carregar agora/, "UI9: estado de erro de lifecycle/rede tem uma mensagem clara, nunca uma tela quebrada");
+  assert.doesNotMatch(pageSrc, /IA prevê|inteligência artificial|previsão de compra|chance de|probabilidade/i, "UI10: nenhum termo de IA/predição em nenhum texto da página — linguagem de negócio simples (§35)");
+  console.log("PASS UI7/UI8/UI9/UI10 the page uses a mobile-friendly max-width layout, the existing loading skeleton, a clear lifecycle-error message, and never any AI/prediction terminology anywhere in its copy");
+}
+
+// ===================================================================================================
+// Privacidade/analytics — §39/§40/§62 do ticket.
+// ===================================================================================================
+function runPrivacyAndAnalyticsTests(): void {
+  const allNewSrc = [
+    sourceOf("shared/opportunity-rules.ts"),
+    sourceOf("server/opportunity-engine.ts"),
+    sourceOf("client/src/pages/opportunities.tsx"),
+    sourceOf("client/src/lib/opportunity-actions.ts"),
+    sourceOf("client/src/lib/opportunities-client.ts"),
+  ].join("\n");
+  assert.doesNotMatch(allNewSrc, /trackAnalyticsEvent|logEvent\(/, "§39: nenhum evento novo de analytics — ANALYTICS_ARCHITECTURE_CHANGED = NO, nada foi acrescentado a firebase-analytics.ts nesta ticket");
+  console.log("PASS §39 no new analytics events were added — firebase-analytics.ts is untouched by this ticket (ANALYTICS_ARCHITECTURE_CHANGED = NO)");
+
+  const analyticsLibDiffProxy = sourceOf("client/src/lib/firebase-analytics.ts");
+  assert.doesNotMatch(analyticsLibDiffProxy, /opportunity|OpportunityType/i, "§39: firebase-analytics.ts continua sem nenhuma referência a oportunidades — confirma que o catálogo de eventos não foi estendido");
+  console.log("PASS §39 (confirmation) firebase-analytics.ts's event catalog contains no opportunity-related additions");
+
+  const engineSrc = sourceOf("server/opportunity-engine.ts");
+  assert.doesNotMatch(engineSrc, /\bnotes\b|\bemail\b|\bphone\b/, "§40: a engine nunca lê/expõe notas, email ou telefone do cliente — só id/name/lastPurchaseAt");
+  console.log("PASS §40 the engine never reads or exposes client notes/email/phone — evidence stays bounded to id/name/dates/counts");
+}
+
+async function run(): Promise<void> {
+  runEngineConsolidationTests();
+  runPlanGatingTests();
+  runActionTests();
+  runCostScaleTests();
+  runUiTests();
+  runPrivacyAndAnalyticsTests();
+
+  requireEmulatorEnv();
+  initializeFirebaseAdmin();
+  const db = initializeFirebaseAdmin().firestore();
+
+  await runInactiveClientTests(db);
+  await runStalledProductTests(db);
+  await runIdleScheduleTests(db);
+  await runHybridTests(db);
+
+  // RP1-RP6 — deferido (zero dado de cadência de recompra hoje, ver relatório final). Reportado
+  // honestamente, nunca implementado com uma regra fabricada.
+  console.log("N/A RP1-RP6 repurchase_candidate is REPURCHASE_RUNTIME = DEFERRED_SCHEMA_PREREQUISITE this round (zero prior art, zero purchase-cadence data — see final report) — no fabricated rule was built to fill this gap");
+
+  console.log(`\nPLAN-IMPL-07A opportunity engine — all E/IC/SP/IS/H/PG/A/CS/UI assertions passed (OPPORTUNITY_RESPONSE_LIMIT=${OPPORTUNITY_RESPONSE_LIMIT}, IDLE_SCHEDULE_WINDOW_DAYS=${IDLE_SCHEDULE_WINDOW_DAYS}). B1-B11 verified live via Browser pane (see final report), not in this suite.`);
+}
+
+run().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

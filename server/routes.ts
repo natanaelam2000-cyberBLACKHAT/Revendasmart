@@ -15,6 +15,7 @@ import { registerCreativeProfileRoutes } from "./marketing-pro-creative-profile"
 import { registerProductUnderstandingRoutes } from "./marketing-pro-product-understanding";
 import { registerProductCutoutPhotoroomRoutes } from "./product-cutout-photoroom";
 import { registerAdsProPreparationQuotaRoutes } from "./ads-pro-preparation-quota";
+import { registerOpportunityRoutes } from "./opportunity-engine";
 import { registerProductPhotoEnhancementRoutes } from "./product-photo-enhancement-routes";
 import { registerCatalogSearchRoutes } from "./catalog-search";
 import { registerServiceQuoteRoutes } from "./service-quote-commands";
@@ -535,6 +536,9 @@ export async function registerRoutes(
   registerProductCutoutPhotoroomRoutes(app, requireAuth);
   // PLAN-IMPL-05 §31 — leitura de uso mensal para a UI (Plano e uso), mesmo padrão de registerBookingQuotaRoutes.
   registerAdsProPreparationQuotaRoutes(app, requireAuth, resolveServerPlan);
+  // PLAN-IMPL-07A §22 — opportunity engine determinística (cliente inativo/produto parado/agenda ociosa);
+  // entitlement Premium/trial revalidado na rota, nunca só ocultação no client.
+  registerOpportunityRoutes(app, requireAuth, resolveServerPlan);
 
   // REVENDASMART-OWNER-ACCESS-02 — concessões internas (Tester/Premium+), sempre atrás de requireAdmin.
   registerAdminGrantRoutes(app, requireAuth);

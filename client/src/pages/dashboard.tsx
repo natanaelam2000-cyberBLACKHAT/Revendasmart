@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
-import { ArrowRight, CheckCircle2, Edit3, LineChart, Target, X } from "lucide-react";
+import { ArrowRight, CheckCircle2, Edit3, LineChart, Sparkles, Target, X } from "lucide-react";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Layout } from "@/components/layout";
 import { useClientsLiteData } from "@/hooks/useClientsLiteData";
@@ -256,6 +256,30 @@ export default function Dashboard() {
               </EmptyState>
             )}
           </SectionCard>
+
+          {/* PLAN-IMPL-07A §33 — teaser leve e ESTÁTICO (nenhuma consulta/computação de oportunidade
+              acontece aqui, nunca deixa esta tela mais pesada): só um link de descoberta para a engine
+              determinística nova (/opportunities), deliberadamente separada do card "Prioridades" acima,
+              que é um conjunto DIFERENTE de sinais (nunca reintroduzido o "Ver tudo" removido em
+              RELEASE-26 por apontar pra um lugar que não cumpria o prometido — este aqui aponta pra uma
+              página real e distinta, não uma promessa de "ver todas as prioridades"). Visível em
+              qualquer plano — Free/Pro veem o upsell dentro da própria página (§23), Premium vê a lista
+              real. */}
+          <button
+            type="button"
+            onClick={() => setLocation("/opportunities")}
+            className="flex w-full items-center gap-3 rounded-2xl border border-primary/20 bg-primary/[0.04] px-4 py-3.5 text-left active:scale-95 transition-all"
+            data-testid="button-dashboard-opportunities"
+          >
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <Sparkles className="h-4.5 w-4.5" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-black text-foreground">Oportunidades comerciais</span>
+              <span className="block text-xs text-muted-foreground">Clientes inativos, produtos parados e agenda ociosa</span>
+            </span>
+            <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+          </button>
 
           <SectionCard title="Meta mensal" eyebrow="Objetivo" action={<Target className="h-5 w-5 text-primary" aria-hidden="true" />}>
             {home.goal.hasExplicitGoal ? (
