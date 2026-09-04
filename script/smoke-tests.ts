@@ -169,6 +169,7 @@ const clientMetrics = read("client/src/lib/client-metrics.ts");
 const dashboardMetrics = read("client/src/lib/dashboard-metrics.ts");
 const reportMetrics = read("client/src/lib/report-metrics.ts");
 const reports = read("client/src/pages/reports.tsx");
+const reportsOperational = read("client/src/pages/reports-operational.tsx");
 const reportExport = read("client/src/lib/report-export.ts");
 const sell = read("client/src/pages/sell.tsx");
 const clientPickerSheet = read("client/src/components/sell/ClientPickerSheet.tsx");
@@ -1466,8 +1467,10 @@ assert.doesNotMatch(reports, /<h1[^>]*>Relatórios Premium<\/h1>/);
 // RELEASE-26: copy renomeada de "Resumo executivo" para "Visão do negócio" (só o texto de UI).
 assert.match(reports, /Visão do negócio/);
 assert.doesNotMatch(reports, /Resumo executivo/);
-assert.match(reports, /Produtos mais vendidos/);
-assert.match(reports, /Exportação profissional preparada/);
+// PLAN-IMPL-07B-VERIFY-FINAL §31 — bloco operacional extraído para chunk lazy-loaded (budget do profit-
+// safety fix); estas duas strings agora vivem em reports-operational.tsx, não em reports.tsx.
+assert.match(reportsOperational, /Produtos mais vendidos/);
+assert.match(reportsOperational, /Exportação profissional preparada/);
 assert.doesNotMatch(reports, /getStored|STORAGE_KEYS|initialProducts|initialClients/);
 assert.match(reportExport, /exportReportToPdf/);
 assert.match(reportExport, /exportReportToExcel/);

@@ -18,9 +18,12 @@ import {
 import type { Client, Product, Sale } from "@/lib/mock-data";
 import { STALLED_PRODUCT_THRESHOLD_DAYS } from "@shared/opportunity-rules";
 
+export const PROFIT_UNAVAILABLE = "Indisponível";
+
 export interface PeriodFinancialMetric {
   revenue: number;
-  profit: number;
+  /** null = custo insuficientemente confiável no período (nunca 0 fabricado — ver isTrustedCost). */
+  profit: number | null;
   salesCount: number;
   productsSold: number;
   activeClients: number;
@@ -40,7 +43,7 @@ export interface RankingItem {
   id: string;
   label: string;
   revenue: number;
-  profit: number;
+  profit: number | null;
   quantity: number;
   salesCount: number;
 }
@@ -63,7 +66,7 @@ export interface ReportComparisons {
 export interface MonthlyChartItem {
   label: string;
   revenue: number;
-  profit: number;
+  profit: number | null;
 }
 
 export interface SimpleChartItem {
@@ -82,7 +85,7 @@ export interface ReportCharts {
 }
 
 export interface ReportIndicators {
-  averageMargin: number;
+  averageMargin: number | null;
   averageQuantityPerSale: number;
   averageInventoryValue: number;
   productsWithoutTurnover: Product[];
@@ -117,10 +120,20 @@ function createClientMap(clients: Client[]): Map<string, Client> {
   return new Map(clients.map(client => [client.id, client]));
 }
 
-function addRankingValue(map: Map<string, RankingItem>, id: string, label: string, revenue: number, profit: number, quantity: number) {
+/**
+ * Um custo positivo só chega ao Firestore por digitação real do lojista (add-product.tsx exige > 0
+ * para passar da validação de UI; a limpeza server-side e as Firestore Rules só garantem >= 0, nunca
+ * inventam um valor > 0). Logo 0/ausente é a única faixa ambígua (grátis de verdade x nunca preenchido)
+ * — > 0 é sempre confiável. Ver PLAN-IMPL-07B-VERIFY-FINAL §2/§5.
+ */
+function isTrustedCost(product: Product | undefined): product is Product {
+  return !!product && Number(product.costPrice) > 0;
+}
+
+function addRankingValue(map: Map<string, RankingItem>, id: string, label: string, revenue: number, profit: number | null, quantity: number) {
   const current = map.get(id) || { id, label, revenue: 0, profit: 0, quantity: 0, salesCount: 0 };
   current.revenue += revenue;
-  current.profit += profit;
+  current.profit = current.profit !== null && profit !== null ? current.profit + profit : null;
   current.quantity += quantity;
   current.salesCount += 1;
   map.set(id, current);
@@ -139,13 +152,13 @@ function addRankingValue(map: Map<string, RankingItem>, id: string, label: strin
  * desta correção; documentado, não corrigido aqui.
  */
 function getSaleItemMetrics(sale: Sale, productById: Map<string, Product>) {
-  let cost = 0;
+  let cost: number | null = 0;
   let quantity = 0;
 
   for (const item of sale.products || []) {
     const itemQuantity = Number(item.quantity || 0);
     const product = productById.get(item.productId);
-    if (product) cost += itemQuantity * Number(product.costPrice || 0);
+    if (cost !== null) cost = isTrustedCost(product) ? cost + itemQuantity * product.costPrice : null;
     quantity += itemQuantity;
   }
 
@@ -160,7 +173,7 @@ function calculatePeriod(
 ): PeriodFinancialMetric {
   const activeClients = new Set<string>();
   let revenue = 0;
-  let profit = 0;
+  let profit: number | null = 0;
   let productsSold = 0;
   let salesCount = 0;
 
@@ -171,19 +184,13 @@ function calculatePeriod(
     const itemMetrics = getSaleItemMetrics(sale, productById);
     const saleRevenue = saleTotal(sale);
     revenue += saleRevenue;
-    profit += saleRevenue - itemMetrics.cost;
+    profit = profit !== null && itemMetrics.cost !== null ? profit + saleRevenue - itemMetrics.cost : null;
     productsSold += itemMetrics.quantity;
     salesCount += 1;
     if (sale.clientId) activeClients.add(sale.clientId);
   }
 
-  return {
-    revenue,
-    profit,
-    salesCount,
-    productsSold,
-    activeClients: activeClients.size,
-  };
+  return { revenue, profit, salesCount, productsSold, activeClients: activeClients.size };
 }
 
 function changePercent(current: number, previous: number): number {
@@ -244,13 +251,14 @@ export function calculateRanking(
     const saleRevenue = saleTotal(sale);
     const saleMetrics = getSaleItemMetrics(sale, productById);
     const clientName = clientById.get(sale.clientId)?.name || sale.clientName || "Cliente não identificado";
-    addRankingValue(clientMap, sale.clientId || "unknown", clientName, saleRevenue, saleRevenue - saleMetrics.cost, saleMetrics.quantity);
+    const clientProfit = saleMetrics.cost !== null ? saleRevenue - saleMetrics.cost : null;
+    addRankingValue(clientMap, sale.clientId || "unknown", clientName, saleRevenue, clientProfit, saleMetrics.quantity);
 
     for (const item of sale.products || []) {
       const product = productById.get(item.productId);
       const quantity = Number(item.quantity || 0);
       const revenue = quantity * Number(item.price || 0);
-      const profit = product ? quantity * (Number(item.price || 0) - Number(product.costPrice || 0)) : 0;
+      const profit = isTrustedCost(product) ? quantity * (Number(item.price || 0) - product.costPrice) : null;
       const productName = product?.name || "Produto n?o dispon?vel";
       addRankingValue(productMap, item.productId, productName, revenue, profit, quantity);
       addRankingValue(categoryMap, product?.category || "Sem categoria", product?.category || "Sem categoria", revenue, profit, quantity);
@@ -259,7 +267,7 @@ export function calculateRanking(
   }
 
   const byQuantity = (a: RankingItem, b: RankingItem) => b.quantity - a.quantity;
-  const byProfit = (a: RankingItem, b: RankingItem) => b.profit - a.profit;
+  const byProfit = (a: RankingItem, b: RankingItem) => (b.profit ?? 0) - (a.profit ?? 0);
   const byRevenue = (a: RankingItem, b: RankingItem) => b.revenue - a.revenue;
   const byPurchases = (a: RankingItem, b: RankingItem) => b.salesCount - a.salesCount;
 
@@ -323,9 +331,9 @@ export function calculateReportCharts(
   return {
     revenueByMonth,
     profitByMonth: revenueByMonth,
-    salesByCategory: rankings.mostProfitableCategories.slice(0, 8).map(item => ({ name: item.label, revenue: item.revenue, profit: item.profit, quantity: item.quantity })),
-    salesByBrand: rankings.mostProfitableBrands.slice(0, 8).map(item => ({ name: item.label, revenue: item.revenue, profit: item.profit, quantity: item.quantity })),
-    topProducts: rankings.topSellingProducts.slice(0, 10).map(item => ({ name: item.label, revenue: item.revenue, profit: item.profit, quantity: item.quantity })),
+    salesByCategory: rankings.mostProfitableCategories.slice(0, 8).map(item => ({ name: item.label, revenue: item.revenue, quantity: item.quantity })),
+    salesByBrand: rankings.mostProfitableBrands.slice(0, 8).map(item => ({ name: item.label, revenue: item.revenue, quantity: item.quantity })),
+    topProducts: rankings.topSellingProducts.slice(0, 10).map(item => ({ name: item.label, revenue: item.revenue, quantity: item.quantity })),
   };
 }
 
@@ -336,7 +344,7 @@ export function calculateIndicators(
   lowStockThreshold = 3
 ): ReportIndicators {
   const productById = createProductMap(products);
-  let totalProfit = 0;
+  let totalProfit: number | null = 0;
   let totalRevenue = 0;
   let totalQuantity = 0;
 
@@ -344,7 +352,7 @@ export function calculateIndicators(
     const saleRevenue = saleTotal(sale);
     totalRevenue += saleRevenue;
     const metrics = getSaleItemMetrics(sale, productById);
-    totalProfit += saleRevenue - metrics.cost;
+    totalProfit = totalProfit !== null && metrics.cost !== null ? totalProfit + saleRevenue - metrics.cost : null;
     totalQuantity += metrics.quantity;
   }
 
@@ -361,7 +369,7 @@ export function calculateIndicators(
   });
 
   return {
-    averageMargin: totalRevenue > 0 ? Math.round((totalProfit / totalRevenue) * 100) : 0,
+    averageMargin: totalProfit === null ? null : totalRevenue > 0 ? Math.round((totalProfit / totalRevenue) * 100) : 0,
     averageQuantityPerSale: sales.length > 0 ? totalQuantity / sales.length : 0,
     averageInventoryValue: products.length > 0 ? inventoryValue / products.length : 0,
     productsWithoutTurnover,

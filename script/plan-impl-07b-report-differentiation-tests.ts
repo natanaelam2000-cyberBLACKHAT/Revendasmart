@@ -3,6 +3,8 @@ import fs from "node:fs";
 import { initializeFirebaseAdmin } from "../server/firebase-admin-init";
 import { computeOpportunities, summarizeOpportunities } from "../server/opportunity-engine";
 import { hasAdvancedOpportunityAccess } from "../shared/opportunity-rules";
+import { calculateFinancialSummary, calculateIndicators, calculateRanking } from "../client/src/lib/report-metrics";
+import { buildExcelCsvContent, buildPrintableHtml } from "../client/src/lib/report-export";
 import type { Firestore as AdminFirestore } from "firebase-admin/firestore";
 
 /**
@@ -65,17 +67,28 @@ function runClassificationTests(): void {
   assert.doesNotMatch(basicBlock, /Lucro hoje|Margem média|Clientes ativos/, "RC1: o bloco BASIC nunca inclui lucro/margem/clientes ativos (OPERATIONAL)");
   console.log("PASS RC1/RC3 the 6 basic metrics (revenue x4, average ticket, products sold) render unconditionally — the pre-existing Free experience is never removed");
 
-  // RC1/RC4 — OPERATIONAL: lucro/margem + comparativos + gráficos + rankings + indicadores, todos atrás
-  // de hasOperationalAccess (Pro+).
+  // RC1/RC4 — OPERATIONAL: lucro/margem (cartões, ainda em reports.tsx) + comparativos/gráficos/
+  // rankings/indicadores (reports-operational.tsx, extraído nesta ticket para lazy chunk — §31 do
+  // PLAN-IMPL-07B-VERIFY-FINAL, ver PS-adjacent LAZY check abaixo), todos atrás de hasOperationalAccess.
   assert.match(reportsSrc, /\{hasOperationalAccess &&\s*\(\s*<>\s*<SummaryCard title="Lucro hoje"/, "RC1/RC4: lucro/margem/clientes ativos atrás de hasOperationalAccess");
-  assert.match(reportsSrc, /\{hasOperationalAccess && \(\s*<>\s*<section className="space-y-3">\s*<h2 className="text-lg font-black text-foreground">Comparativos<\/h2>/, "RC1/RC4: Comparativos atrás de hasOperationalAccess");
   const operationalBlockEnd = reportsSrc.indexOf('{hasPremiumAccess ? (');
   assert.ok(operationalBlockEnd > operationalBlockStart, "RC1/RC4: a seção estratégica precisa vir DEPOIS do bloco operacional no arquivo real");
   const operationalBlock = reportsSrc.slice(operationalBlockStart, operationalBlockEnd);
+  assert.match(operationalBlock, /\{hasOperationalAccess && \(\s*<Suspense fallback=\{<PageSkeleton variant="cards" \/>\}>\s*<LazyOperationalSection/, "RC1/RC4/§31: o bloco operacional restante é lazy-loaded, ainda atrás de hasOperationalAccess — nunca baixado por Free");
+  console.log("PASS RC1/RC4 every operational section (profit/margin cards gated in reports.tsx, comparisons/charts/rankings/stock/export lazy-loaded via reports-operational.tsx) is gated behind hasOperationalAccess (Pro or Premium)");
+
+  // LAZY — §31: o split existe para caber no budget de 29kB sem perder precisão por-item (hierarquia B
+  // do profit-safety fix); confirma que reports.tsx só IMPORTA reports-operational.tsx via lazy() (nunca
+  // estático, senão o split não tira peso do chunk eager) e que o arquivo lazy de fato existe e exporta
+  // o componente esperado.
+  assert.match(reportsSrc, /const LazyOperationalSection = lazy\(\(\) => import\("\.\/reports-operational"\)\);/, "LAZY: reports-operational.tsx é importado via React.lazy (dynamic import), nunca estaticamente — senão continuaria no chunk eager e o split não teria efeito no budget");
+  assert.doesNotMatch(reportsSrc, /^import .* from ["']\.\/reports-operational["'];?$/m, "LAZY: nenhum import ESTÁTICO de reports-operational.tsx em reports.tsx (só o dynamic import via lazy())");
+  const operationalSrc = sourceOf("client/src/pages/reports-operational.tsx");
+  assert.match(operationalSrc, /export default function OperationalSection\(/, "LAZY: reports-operational.tsx exporta um componente default (contrato exigido por React.lazy)");
   for (const label of ["Comparativos", "Receita e lucro por mês", "Vendas por categoria", "Produtos mais vendidos", "Top 10 produtos", "Indicadores de estoque", "Exportação profissional preparada"]) {
-    assert.match(operationalBlock, new RegExp(label), `RC1/RC4: "${label}" precisa estar dentro do bloco OPERATIONAL único`);
+    assert.match(operationalSrc, new RegExp(label), `RC1/RC4/LAZY: "${label}" precisa estar dentro do componente lazy-loaded`);
   }
-  console.log("PASS RC1/RC4 every operational section (profit/margin cards, comparisons, charts, rankings, stock indicators, export footer) is gated behind hasOperationalAccess (Pro or Premium) in one coherent block");
+  console.log("PASS LAZY reports-operational.tsx is dynamically imported (never a static import that would defeat the code-split), exports the expected default component, and contains every operational section moved out of the eager reports chunk");
 
   // RC1/RC5/RC6 — STRATEGIC: só hasPremiumAccess renderiza a seção real; senão, o teaser genérico
   // (nunca contagens reais vazadas — verificado com mais rigor em UI5 abaixo).
@@ -224,10 +237,85 @@ function runUiTests(): void {
   console.log("PASS UI10 the lifecycle/API error state is never conflated with the upgrade-teaser state — they render different components with different copy");
 
   assert.doesNotMatch(reportsSrc, /IA prevê|inteligência artificial|previsão de compra|chance de|probabilidade/i, "UI11: nenhum termo de IA/predição em nenhum texto novo da página");
-  console.log("PASS UI11 no AI/prediction terminology anywhere in the new copy");
+  assert.doesNotMatch(sourceOf("client/src/pages/reports-operational.tsx"), /IA prevê|inteligência artificial|previsão de compra|chance de|probabilidade/i, "UI11: idem para o conteúdo movido ao chunk lazy-loaded");
+  console.log("PASS UI11 no AI/prediction terminology anywhere in the new copy (reports.tsx and the lazy-loaded reports-operational.tsx)");
 
   assert.match(reportsSrc, /hasOperationalAccess && \(\s*<div className="grid grid-cols-3 gap-2">\s*<button type="button" onClick=\{handleExportExcel\}/, "UI12: export continua funcionando (Excel/PDF/Imprimir), agora corretamente restrito a quem vê os dados que ele exporta (Pro\\+)");
   console.log("PASS UI12 export (Excel/PDF/Print) still works exactly as before for Pro+ — gated so it's never inconsistent with what a Free user can see on screen");
+}
+
+// ===================================================================================================
+// PS1-PS7 — PLAN-IMPL-07B-VERIFY-FINAL: profit-safety. Execução real (não texto-fonte): report-
+// metrics.ts/report-export.ts só importam date-utils/mock-data(tipos)/opportunity-rules — nunca
+// firebase.ts — então rodam direto em Node via tsx, sem emulador, exatamente como qualquer outra
+// função pura já testada nesta suíte (buildExcelCsvContent/buildPrintableHtml já eram "puro de
+// propósito" antes desta ticket, comentário original do arquivo).
+// ===================================================================================================
+function runProfitSafetyTests(): void {
+  const untrustedProduct = { id: "p1", name: "Sem custo", brand: "", category: "", costPrice: 0, salePrice: 50, stock: 5 } as any;
+  const trustedProductA = { id: "p2", name: "Com custo A", brand: "", category: "", costPrice: 20, salePrice: 50, stock: 5 } as any;
+  const trustedProductB = { id: "p3", name: "Com custo B", brand: "", category: "", costPrice: 10, salePrice: 30, stock: 5 } as any;
+  const now = new Date();
+  const saleOf = (id: string, productId: string, price: number) => ({
+    id, clientId: "c1", date: now.toISOString(), totalPrice: price, paymentType: "pix",
+    products: [{ productId, quantity: 1, price }],
+  }) as any;
+
+  // PS1 — custo ausente/0 nunca vira custo confiável: uma única venda de um produto sem custo real.
+  const untrustedOnly = calculateFinancialSummary([saleOf("s1", "p1", 50)], [untrustedProduct]);
+  assert.equal(untrustedOnly.today.profit, null, "PS1: lucro do período com custo não confiável é null, nunca um número calculado tratando custo ausente como 0");
+  console.log("PASS PS1 missing cost does not become trusted zero");
+
+  // PS2/PS3 — período MISTO (uma venda com custo confiável + uma com custo não confiável): o total do
+  // período nunca mistura os dois — fica indisponível por inteiro, nunca um lucro parcial/errado.
+  const mixedSales = [saleOf("s2", "p1", 50), saleOf("s3", "p2", 50)];
+  const mixedProducts = [untrustedProduct, trustedProductA];
+  const mixedSummary = calculateFinancialSummary(mixedSales, mixedProducts);
+  assert.equal(mixedSummary.today.profit, null, "PS2: período com QUALQUER venda de custo não confiável nunca mostra lucro total (nem o parcial só das vendas confiáveis, nem um lucro subestimado) — indisponível é a única opção honesta");
+  console.log("PASS PS2 incomplete cost basis does not show total profit");
+  const mixedIndicators = calculateIndicators(mixedSales, mixedProducts);
+  assert.equal(mixedIndicators.averageMargin, null, "PS3: mesma mistura vale para margem — nunca uma margem calculada sobre uma base de custo incompleta");
+  console.log("PASS PS3 incomplete cost basis does not show total margin");
+
+  // PS4 — paridade tela/export: com o MESMO payload (profit null), o export (HTML/CSV, funções puras,
+  // testáveis sem DOM) precisa mostrar a mesma indisponibilidade que a tela mostraria via formatCurrency
+  // — nunca um número fabricado escrito no PDF/CSV que a tela já recusou mostrar.
+  const rankings = calculateRanking(mixedSales, mixedProducts, []);
+  const flatComparison = { label: "x", current: 0, previous: 0, changePercent: 0, direction: "flat" as const };
+  const comparisons = { today: flatComparison, week: flatComparison, month: flatComparison, year: flatComparison };
+  const exportPayload = { storeName: "Loja Teste", periodLabel: "Teste", generatedAt: now, summary: mixedSummary, rankings, comparisons, indicators: mixedIndicators };
+  const csv = buildExcelCsvContent(exportPayload);
+  const html = buildPrintableHtml(exportPayload);
+  assert.match(csv, /Lucro hoje;Indispon[íi]vel/, "PS4: CSV mostra 'Indisponível' para lucro hoje, nunca um valor calculado a partir de custo incompleto");
+  assert.match(html, /Lucro hoje<\/td><td>Indispon[íi]vel<\/td>/, "PS4: HTML (PDF/impressão) mostra a mesma indisponibilidade — paridade tela/export");
+  console.log("PASS PS4 screen/export parity — the same profit-unavailable state reaches both the CSV and the printable HTML, never a fabricated number in one and not the other");
+
+  // PS5 — quando TODO o custo do período é confiável, o lucro/margem reais (matemática correta) devem
+  // aparecer — a hierarquia B nunca é conservadora além do necessário; só fica indisponível quando a
+  // ambiguidade é real.
+  const trustedSales = [saleOf("s4", "p2", 50), saleOf("s5", "p3", 30)];
+  const trustedProducts = [trustedProductA, trustedProductB];
+  const trustedSummary = calculateFinancialSummary(trustedSales, trustedProducts);
+  assert.equal(trustedSummary.today.profit, 50, "PS5: com custo 100% confiável no período, o lucro precisa ser o valor real calculado (receita 80 - custo 30 = 50), nunca indisponível por excesso de cautela");
+  const trustedIndicators = calculateIndicators(trustedSales, trustedProducts);
+  assert.equal(trustedIndicators.averageMargin, Math.round((50 / 80) * 100), "PS5: margem real (lucro/receita) quando o custo é 100% confiável — aritmética correta, não fabricada nem indisponível");
+  console.log("PASS PS5 trusted cost arithmetic is correct when fully representable — the safety fix never hides real, well-tracked data");
+
+  // PS6 — as métricas BASIC (receita, ticket médio, produtos vendidos) nunca ficam null, mesmo quando o
+  // custo é totalmente não confiável: a ambiguidade de CUSTO nunca contamina RECEITA (dado sempre certo,
+  // vem direto de Sale.totalPrice, nunca depende de Product.costPrice).
+  assert.equal(mixedSummary.today.revenue, 100, "PS6: receita nunca é afetada pela confiabilidade do custo — sempre a soma real de Sale.totalPrice");
+  assert.equal(typeof mixedSummary.averageTicket, "number", "PS6: ticket médio continua um número real, nunca null");
+  assert.equal(mixedSummary.totalProductsSold, 2, "PS6: produtos vendidos (volume) nunca depende de custo");
+  console.log("PASS PS6 Free basic metrics (revenue, average ticket, products sold) are never affected by cost reliability — only profit/margin can become unavailable");
+
+  // PS7 — a seção estratégica (Premium) nunca depende de custo — já provado por F4 (fonte: opportunity-
+  // engine.ts nunca menciona costPrice/profit/margin); reconfirmado aqui que os dois módulos financeiros
+  // desta correção (report-metrics.ts/report-export.ts) nunca são importados por opportunity-engine.ts —
+  // nenhum acoplamento novo foi introduzido entre o profit-safety fix e a leitura estratégica.
+  const engineSrc = sourceOf("server/opportunity-engine.ts");
+  assert.doesNotMatch(engineSrc, /report-metrics|report-export/, "PS7: opportunity-engine.ts (fonte da seção estratégica) nunca importa report-metrics.ts/report-export.ts — o profit-safety fix não introduz nenhum acoplamento novo com a leitura estratégica");
+  console.log("PASS PS7 the Premium strategic summary stays fully independent of cost/profit — no new coupling introduced between the profit-safety fix and the opportunity engine");
 }
 
 // ===================================================================================================
@@ -267,13 +355,14 @@ async function run(): Promise<void> {
   runFinanceTests();
   runScaleCostTests();
   runUiTests();
+  runProfitSafetyTests();
 
   requireEmulatorEnv();
   initializeFirebaseAdmin();
   const db = initializeFirebaseAdmin().firestore();
   await runStrategicSummaryExecutionTests(db);
 
-  console.log("\nPLAN-IMPL-07B report differentiation — all RC/PG/OR/F/SC/UI assertions passed, plus real-execution proof that the report summary never drifts from the canonical opportunity engine. B1-B13 (browser) status: see final report.");
+  console.log("\nPLAN-IMPL-07B report differentiation — all RC/PG/OR/F/SC/UI/PS assertions passed, plus real-execution proof that the report summary never drifts from the canonical opportunity engine and that profit/margin are never fabricated from unreliable cost data. B1-B27 (browser) status: see final report.");
 }
 
 run().catch((error) => {
