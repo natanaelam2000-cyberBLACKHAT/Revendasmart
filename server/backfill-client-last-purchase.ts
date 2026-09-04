@@ -16,26 +16,51 @@
  * §7 do pedido do usuário permite; nunca confundir com o caminho runtime, que continua 100% bounded.
  */
 import { initializeFirebaseAdmin } from "./firebase-admin-init";
+import type { Firestore } from "firebase-admin/firestore";
 
-async function backfillClientLastPurchase(uid: string): Promise<void> {
-  const admin = initializeFirebaseAdmin();
-  const db = admin.firestore();
+export interface BackfillClientLastPurchaseSummary {
+  readonly totalSales: number;
+  readonly clientsWithSales: number;
+  readonly written: number;
+  readonly skipped: number;
+}
+
+/** PLAN-IMPL-07A-VERIFY-FINAL §5/§19 — exportada para ser testável de verdade contra o emulador (a
+ * suíte de teste chama esta função diretamente, nunca reimplementa a lógica em código de teste); `db`
+ * é opcional (default: initializeFirebaseAdmin().firestore()) só para o teste poder passar a MESMA
+ * instância já inicializada, nunca uma segunda conexão. */
+export async function backfillClientLastPurchase(uid: string, db: Firestore = initializeFirebaseAdmin().firestore()): Promise<BackfillClientLastPurchaseSummary> {
   const userRef = db.collection("users").doc(uid);
 
-  console.log(`[backfill] uid=${uid} — lendo Sales (operação única, nunca rodada em runtime)...`);
-  const salesSnap = await userRef.collection("sales").get();
-  console.log(`[backfill] ${salesSnap.size} venda(s) encontrada(s).`);
-
+  // PLAN-IMPL-07A-VERIFY-FINAL §4 — antes lia users/{uid}/sales inteiro num único .get() sem paginação;
+  // "tenant-scoped" sozinho não bastava (uma loja com histórico grande ainda carregaria tudo de uma vez
+  // na memória). Paginado por doc-id (nenhum campo de ordenação extra necessário, nenhum índice novo) —
+  // cada página é um read bounded e independente; um crash a qualquer momento só exige rodar o script de
+  // novo do zero (idempotente, nunca incorreto, só potencialmente redundante).
+  const SALES_PAGE_SIZE = 500;
+  console.log(`[backfill] uid=${uid} — lendo Sales em páginas de ${SALES_PAGE_SIZE} (nunca a coleção inteira de uma vez, nunca rodado em runtime)...`);
   const lastPurchaseByClientId = new Map<string, string>();
-  for (const doc of salesSnap.docs) {
-    const data = doc.data();
-    const clientId = typeof data.clientId === "string" ? data.clientId : null;
-    const date = typeof data.date === "string" ? data.date : null;
-    if (!clientId || !date || Number.isNaN(Date.parse(date))) continue;
-    const current = lastPurchaseByClientId.get(clientId);
-    if (!current || Date.parse(date) > Date.parse(current)) lastPurchaseByClientId.set(clientId, date);
+  let totalSales = 0;
+  let cursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
+  for (;;) {
+    let pageQuery = userRef.collection("sales").orderBy("__name__").limit(SALES_PAGE_SIZE);
+    if (cursor) pageQuery = pageQuery.startAfter(cursor);
+    const pageSnap = await pageQuery.get();
+    if (pageSnap.empty) break;
+    for (const doc of pageSnap.docs) {
+      const data = doc.data();
+      const clientId = typeof data.clientId === "string" ? data.clientId : null;
+      const date = typeof data.date === "string" ? data.date : null;
+      if (!clientId || !date || Number.isNaN(Date.parse(date))) continue;
+      const current = lastPurchaseByClientId.get(clientId);
+      if (!current || Date.parse(date) > Date.parse(current)) lastPurchaseByClientId.set(clientId, date);
+    }
+    totalSales += pageSnap.docs.length;
+    cursor = pageSnap.docs[pageSnap.docs.length - 1];
+    console.log(`[backfill] +${pageSnap.docs.length} venda(s) lida(s) (total ${totalSales} até agora)...`);
+    if (pageSnap.docs.length < SALES_PAGE_SIZE) break;
   }
-  console.log(`[backfill] ${lastPurchaseByClientId.size} cliente(s) com pelo menos uma venda válida.`);
+  console.log(`[backfill] ${totalSales} venda(s) lida(s) no total. ${lastPurchaseByClientId.size} cliente(s) com pelo menos uma venda válida.`);
 
   const clientIds = Array.from(lastPurchaseByClientId.keys());
   let written = 0;
@@ -71,13 +96,24 @@ async function backfillClientLastPurchase(uid: string): Promise<void> {
   }
 
   console.log(`[backfill] concluído. ${written} cliente(s) atualizado(s), ${skipped} pulado(s) (já em dia ou não encontrado).`);
+  return { totalSales, clientsWithSales: lastPurchaseByClientId.size, written, skipped };
 }
 
-const targetUid = process.argv[2];
-if (!targetUid) {
-  console.error("Uso: npx tsx server/backfill-client-last-purchase.ts <uid>");
-  process.exit(1);
+function runCli(): void {
+  const targetUid = process.argv[2];
+  if (!targetUid) {
+    console.error("Uso: npx tsx server/backfill-client-last-purchase.ts <uid>");
+    process.exit(1);
+  }
+  backfillClientLastPurchase(targetUid)
+    .then(() => process.exit(0))
+    .catch((error) => { console.error("[backfill] falhou:", error); process.exit(1); });
 }
-backfillClientLastPurchase(targetUid)
-  .then(() => process.exit(0))
-  .catch((error) => { console.error("[backfill] falhou:", error); process.exit(1); });
+
+// PLAN-IMPL-07A-VERIFY-FINAL §5/§19 — só roda a CLI quando este arquivo é o entrypoint direto (`npx tsx
+// server/backfill-client-last-purchase.ts <uid>`), nunca quando importado por um script de teste — a
+// mesma exportação acima precisa continuar segura de importar sem efeito colateral algum.
+const isDirectCliInvocation = Boolean(process.argv[1] && (process.argv[1].endsWith("backfill-client-last-purchase.ts") || process.argv[1].endsWith("backfill-client-last-purchase.js")));
+if (isDirectCliInvocation) {
+  runCli();
+}

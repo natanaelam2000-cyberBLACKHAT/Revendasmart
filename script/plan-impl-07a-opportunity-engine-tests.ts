@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { initializeFirebaseAdmin } from "../server/firebase-admin-init";
 import { computeOpportunities } from "../server/opportunity-engine";
+import { backfillClientLastPurchase } from "../server/backfill-client-last-purchase";
+import { finalizeSaleTransaction } from "../server/sale-finalize-transaction";
 import {
   INACTIVE_CLIENT_THRESHOLD_DAYS,
   STALLED_PRODUCT_THRESHOLD_DAYS,
@@ -54,6 +56,12 @@ async function seedClient(db: AdminFirestore, uid: string, clientId: string, fie
 }
 async function seedProduct(db: AdminFirestore, uid: string, productId: string, fields: Record<string, unknown>): Promise<void> {
   await db.collection("users").doc(uid).collection("products").doc(productId).set({ id: productId, name: `Produto ${productId}`, ...fields });
+}
+/** Doc de venda HISTÓRICA cru (só os 2 campos que o backfill lê: clientId/date) — nunca a shape completa
+ * de uma venda de verdade, de propósito: o backfill precisa funcionar sobre dados históricos reais que
+ * predatam este campo, não sobre um fixture artificialmente completo. */
+async function seedHistoricalSale(db: AdminFirestore, uid: string, saleId: string, clientId: string, date: string): Promise<void> {
+  await db.collection("users").doc(uid).collection("sales").doc(saleId).set({ id: saleId, clientId, date });
 }
 
 // ===================================================================================================
@@ -252,6 +260,95 @@ async function runHybridTests(db: AdminFirestore): Promise<void> {
 }
 
 // ===================================================================================================
+// PLAN-IMPL-07A-VERIFY-FINAL §5/§6 — prova real do backfill contra o emulador: 4 clientes (A histórico
+// antigo sem lastPurchaseAt, B histórico recente sem lastPurchaseAt, C sem venda alguma, D com
+// lastPurchaseAt já mais novo que o histórico) + replay idempotente + efeito real em computeOpportunities
+// + uma venda NOVA via a transação real (server/sale-finalize-transaction.ts, nunca uma simulação).
+// ===================================================================================================
+async function runBackfillVerificationTests(db: AdminFirestore): Promise<void> {
+  const uid = tenantUid("backfill");
+
+  // Timestamps capturados UMA vez cada (nunca recalculados depois) — isoDaysAgo(N) chama Date.now()
+  // internamente; recalcular a mesma "distância em dias" numa asserção mais tarde produziria um valor
+  // ISO alguns milissegundos diferente do gravado no seed, uma falha de teste por drift de relógio, não
+  // um bug real. Cada data usada mais de uma vez vira uma constante local.
+  const clientADate90 = isoDaysAgo(90);
+  const clientADate70 = isoDaysAgo(70); // mais recente das duas -> deve vencer.
+  const clientBDate5 = isoDaysAgo(5);
+  const clientDNewerValue = isoDaysAgo(3);
+  const clientDDate100 = isoDaysAgo(100); // histórico mais ANTIGO que o já existente.
+
+  await seedClient(db, uid, "client-a", {});
+  await seedHistoricalSale(db, uid, "sale-a1", "client-a", clientADate90);
+  await seedHistoricalSale(db, uid, "sale-a2", "client-a", clientADate70);
+
+  await seedClient(db, uid, "client-b", {});
+  await seedHistoricalSale(db, uid, "sale-b1", "client-b", clientBDate5);
+
+  await seedClient(db, uid, "client-c", {}); // nenhuma venda.
+
+  await seedClient(db, uid, "client-d", { lastPurchaseAt: clientDNewerValue });
+  await seedHistoricalSale(db, uid, "sale-d1", "client-d", clientDDate100);
+
+  // §5 — primeira rodada.
+  const firstRun = await backfillClientLastPurchase(uid, db);
+  assert.equal(firstRun.totalSales, 4, "BACKFILL_FIRST_RUN_PASS: 4 vendas históricas lidas (paginação cobrindo tudo)");
+  assert.equal(firstRun.clientsWithSales, 3, "BACKFILL_FIRST_RUN_PASS: 3 clientes distintos têm ao menos uma venda (A, B, D — C nunca entra no mapa)");
+  assert.equal(firstRun.written, 2, "BACKFILL_FIRST_RUN_PASS: só A e B precisam de escrita real (ausentes); D é pulado (já tem valor mais novo)");
+
+  const [clientA, clientB, clientC, clientD] = await db.getAll(
+    db.collection("users").doc(uid).collection("clients").doc("client-a"),
+    db.collection("users").doc(uid).collection("clients").doc("client-b"),
+    db.collection("users").doc(uid).collection("clients").doc("client-c"),
+    db.collection("users").doc(uid).collection("clients").doc("client-d"),
+  );
+  assert.equal(clientA.data()?.lastPurchaseAt, clientADate70, "A: lastPurchaseAt = a venda histórica REAL mais recente (70d), nunca a mais antiga (90d) nem uma data fabricada");
+  assert.equal(clientB.data()?.lastPurchaseAt, clientBDate5, "B: lastPurchaseAt = a única venda histórica real (5d)");
+  assert.equal(clientC.data()?.lastPurchaseAt, undefined, "C: sem venda alguma -> lastPurchaseAt continua ausente, nunca populado artificialmente só para preencher o campo");
+  assert.equal(clientD.data()?.lastPurchaseAt, clientDNewerValue, "D: valor já existente (3d), mais novo que o histórico derivado (100d), é PRESERVADO — nunca sobrescrito por um cálculo retroativo mais antigo");
+  console.log("PASS BACKFILL_FIRST_RUN_PASS the first backfill run derives lastPurchaseAt only from real historical Sale data, never fabricates a date for a client with zero sales, and never overwrites an existing newer value with an older retroactive one");
+
+  // §5 — segunda rodada: replay idempotente, zero mudança semântica.
+  const secondRun = await backfillClientLastPurchase(uid, db);
+  assert.equal(secondRun.written, 0, "BACKFILL_REPLAY_IDEMPOTENT: a segunda rodada não escreve nada — A/B já estão em dia, D continua preservado, C continua sem venda");
+  const [clientA2, clientB2, clientD2] = await db.getAll(
+    db.collection("users").doc(uid).collection("clients").doc("client-a"),
+    db.collection("users").doc(uid).collection("clients").doc("client-b"),
+    db.collection("users").doc(uid).collection("clients").doc("client-d"),
+  );
+  assert.equal(clientA2.data()?.lastPurchaseAt, clientA.data()?.lastPurchaseAt, "BACKFILL_REPLAY_IDEMPOTENT: A inalterado após replay (mesmo valor exato gravado na primeira rodada)");
+  assert.equal(clientB2.data()?.lastPurchaseAt, clientB.data()?.lastPurchaseAt, "BACKFILL_REPLAY_IDEMPOTENT: B inalterado após replay (mesmo valor exato gravado na primeira rodada)");
+  assert.equal(clientD2.data()?.lastPurchaseAt, clientDNewerValue, "BACKFILL_REPLAY_IDEMPOTENT: D continua com o valor mais novo original, nunca trocado pelo histórico");
+  console.log("PASS BACKFILL_REPLAY_IDEMPOTENT running the backfill a second time makes zero writes and produces zero semantic changes — fully idempotent");
+
+  // §6 — efeito real em computeOpportunities após o backfill.
+  let opportunities = await computeOpportunities(db, uid);
+  let inactiveIds = opportunities.filter((o) => o.type === "inactive_client").map((o) => o.entityReference.id);
+  assert.ok(inactiveIds.includes("client-a"), "HISTORICAL_CLIENT_OPPORTUNITY_AFTER_BACKFILL: A (70d, backfillado) aparece como inactive_client");
+  assert.ok(!inactiveIds.includes("client-b"), "B (5d, recente) nunca aparece");
+  assert.ok(!inactiveIds.includes("client-c"), "C (sem histórico) nunca aparece falsamente");
+  console.log("PASS HISTORICAL_CLIENT_OPPORTUNITY_AFTER_BACKFILL after the backfill, the opportunity engine correctly surfaces the historically-inactive client and correctly excludes the recent buyer and the client with no purchase history at all");
+
+  // §6 — uma venda NOVA via a transação REAL (nunca uma escrita simulada) precisa limpar a oportunidade.
+  await seedProduct(db, uid, "prod-a", { stock: 10, salePrice: 50 });
+  await finalizeSaleTransaction(db, {
+    uid, saleId: "sale-a-new", clientId: "client-a",
+    products: [{ productId: "prod-a", quantity: 1 }],
+    paymentType: "avista", discountType: "percent", discountValue: 0, downPayment: 0, installmentCount: 1,
+    paymentMethod: "cash", downPaymentMethod: null,
+  });
+  opportunities = await computeOpportunities(db, uid);
+  inactiveIds = opportunities.filter((o) => o.type === "inactive_client").map((o) => o.entityReference.id);
+  assert.ok(!inactiveIds.includes("client-a"), "NEW_SALE_CLEARS_INACTIVE_OPPORTUNITY: uma venda nova via a transação real (server/sale-finalize-transaction.ts, nunca simulada) atualiza Client.lastPurchaseAt e a oportunidade desaparece imediatamente");
+  console.log("PASS NEW_SALE_CLEARS_INACTIVE_OPPORTUNITY a genuinely new sale, created through the real finalizeSaleTransaction (not a simulated field write), updates Client.lastPurchaseAt transactionally and clears the inactive-client opportunity on the next evaluation");
+
+  // §18 — a AUTORIDADE contínua é sempre a transação de venda, nunca um novo scan de Sales pela engine.
+  const engineSrc = sourceOf("server/opportunity-engine.ts");
+  assert.doesNotMatch(engineSrc, /collection\("sales"\)/, "OPPORTUNITY_ENGINE_HISTORICAL_SALES_SCAN: a engine em runtime nunca lê a coleção sales — só Client.lastPurchaseAt, já mantido pela transação de venda");
+  console.log("PASS OPPORTUNITY_ENGINE_HISTORICAL_SALES_SCAN=NO the opportunity engine never queries the sales collection at runtime — the backfill is a one-time migration only, ongoing truth always comes from the sale-finalize transaction");
+}
+
+// ===================================================================================================
 // PG1-PG7 — gate de plano.
 // ===================================================================================================
 function runPlanGatingTests(): void {
@@ -384,12 +481,13 @@ async function run(): Promise<void> {
   await runStalledProductTests(db);
   await runIdleScheduleTests(db);
   await runHybridTests(db);
+  await runBackfillVerificationTests(db);
 
   // RP1-RP6 — deferido (zero dado de cadência de recompra hoje, ver relatório final). Reportado
   // honestamente, nunca implementado com uma regra fabricada.
   console.log("N/A RP1-RP6 repurchase_candidate is REPURCHASE_RUNTIME = DEFERRED_SCHEMA_PREREQUISITE this round (zero prior art, zero purchase-cadence data — see final report) — no fabricated rule was built to fill this gap");
 
-  console.log(`\nPLAN-IMPL-07A opportunity engine — all E/IC/SP/IS/H/PG/A/CS/UI assertions passed (OPPORTUNITY_RESPONSE_LIMIT=${OPPORTUNITY_RESPONSE_LIMIT}, IDLE_SCHEDULE_WINDOW_DAYS=${IDLE_SCHEDULE_WINDOW_DAYS}). B1-B11 verified live via Browser pane (see final report), not in this suite.`);
+  console.log(`\nPLAN-IMPL-07A opportunity engine — all E/IC/SP/IS/H/PG/A/CS/UI/BACKFILL assertions passed (OPPORTUNITY_RESPONSE_LIMIT=${OPPORTUNITY_RESPONSE_LIMIT}, IDLE_SCHEDULE_WINDOW_DAYS=${IDLE_SCHEDULE_WINDOW_DAYS}). B1-B11 (browser) status: see final report.`);
 }
 
 run().catch((error) => {
