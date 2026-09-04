@@ -307,6 +307,8 @@ export {
   type AnalyticsSource,
   type AnalyticsCheckoutFailureReason,
   type AnalyticsPreparationFailureCategory,
+  type HousePromotionId,
+  type HousePromotionPlacement,
 } from "./firebase-analytics";
 
 // Export performance monitoring utilities for use in other modules

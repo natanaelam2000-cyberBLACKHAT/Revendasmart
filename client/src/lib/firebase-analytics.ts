@@ -159,6 +159,23 @@ export interface FirebaseAnalyticsEvents {
     source: AnalyticsSource;
   };
 
+  // PLAN-IMPL-08 §34/§35 — promoção discricionária (nunca bloqueia uma ação, ao contrário do paywall_*
+  // acima) — catálogo fechado de HousePromotionId, nunca criado dinamicamente por call site. Um
+  // `useEffect` com deps vazias no componente dispara o view exatamente uma vez por montagem real
+  // (§35 — "uma janela de visibilidade = uma view"; fechar/reabrir a página conta de novo naturalmente).
+  house_promotion_viewed: {
+    promotion_id: HousePromotionId;
+    placement: HousePromotionPlacement;
+    current_plan: PlanType;
+    recommended_plan: PlanType;
+  };
+  house_promotion_clicked: {
+    promotion_id: HousePromotionId;
+    placement: HousePromotionPlacement;
+    current_plan: PlanType;
+    recommended_plan: PlanType;
+  };
+
   // PLAN-IMPL-06 §24-§28/§45 — funil de assinatura: plans_viewed -> plan_selected -> checkout_started ->
   // subscription_activated, com checkout_failed como ramo de erro. Nunca leva valor/amount do client
   // (§26 — o preço é derivado depois de plan/billing_cycle, nunca enviado como autoridade).
@@ -251,6 +268,14 @@ export type AnalyticsResourceType = "products" | "clients" | "services" | "booki
 /** PLAN-IMPL-06 §24/§47 — de onde a navegação para /plans (ou o paywall) partiu. Fechado: nunca uma URL
  * completa, nunca uma string arbitrária montada em runtime (§24 — "Do not include arbitrary URL"). */
 export type AnalyticsSource = "dashboard" | "settings" | "plan_usage" | "product_limit" | "client_limit" | "booking_limit" | "ads_pro_preparation_limit" | "direct";
+
+/** PLAN-IMPL-08 §27 — catálogo fechado das promoções internas que hoje existem; reflete os placements
+ * reais (nunca um id arbitrário livre) — crescer este catálogo é adicionar uma promoção real, não uma
+ * campanha remota (§28 — nenhum CMS de anúncio nesta ticket). */
+export type HousePromotionId = "reports_operational_upgrade" | "reports_strategic_upgrade" | "opportunities_premium_upgrade";
+
+/** PLAN-IMPL-08 §34 — onde a promoção apareceu; hoje só duas páginas têm promoção discricionária. */
+export type HousePromotionPlacement = "reports" | "opportunities";
 
 /** PLAN-IMPL-06 §27 — nunca a string de erro real da API/provider. */
 export type AnalyticsCheckoutFailureReason = "purchase_unavailable" | "provider_unavailable" | "configuration_error" | "already_subscribed" | "authorization" | "temporary_error" | "unknown";

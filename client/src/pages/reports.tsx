@@ -7,6 +7,8 @@ import { useClientsLiteData } from "@/hooks/useClientsLiteData";
 import { useProductsData } from "@/hooks/useProductsData";
 import { useSalesData } from "@/hooks/useSalesData";
 import { usePlan } from "@/providers/PlanProvider";
+import { trackAnalyticsEvent, type HousePromotionId, type HousePromotionPlacement } from "@/lib/firebase";
+import type { PlanType } from "@shared/monetization";
 import {
   BarChart3,
   DollarSign,
@@ -110,12 +112,23 @@ function StrategicSummarySection({ summary }: { summary: OpportunitySummary }) {
 }
 
 // §31 — nunca resultado real (contagens) para quem não tem acesso; só a capacidade, genérica.
-// §8/§9/§31 — um único componente parametrizado para os dois teasers (Free->Pro, Free|Pro->Premium):
-// mesma estrutura/estilo, só ícone/copy mudam. Nunca contagens/resultado real (§31/§32) — só copy fixa.
-function UpgradeTeaser({ icon, title, description, buttonLabel, testId }: {
+// §8/§9/§31 — um único componente parametrizado para os dois teasers (Free->Pro, Pro->Premium): mesma
+// estrutura/estilo, só ícone/copy mudam. Nunca contagens/resultado real (§31/§32) — só copy fixa.
+// PLAN-IMPL-08 §34/§35 — view uma vez por montagem real (deps vazias); nunca monta os dois teasers desta
+// página ao mesmo tempo para o mesmo usuário (ver os dois call sites em Reports, abaixo — mutuamente
+// exclusivos por design, não só por coincidência de dados).
+function UpgradeTeaser({ icon, title, description, buttonLabel, testId, promotionId, placement, currentPlan, recommendedPlan }: {
   icon: React.ReactNode; title: string; description: string; buttonLabel: string; testId: string;
+  promotionId: HousePromotionId; placement: HousePromotionPlacement; currentPlan: PlanType; recommendedPlan: PlanType;
 }) {
   const [, setLocation] = useLocation();
+  useEffect(() => {
+    trackAnalyticsEvent("house_promotion_viewed", { promotion_id: promotionId, placement, current_plan: currentPlan, recommended_plan: recommendedPlan });
+  }, []);
+  const handleClick = () => {
+    trackAnalyticsEvent("house_promotion_clicked", { promotion_id: promotionId, placement, current_plan: currentPlan, recommended_plan: recommendedPlan });
+    setLocation("/plans");
+  };
   return (
     <section className="rounded-[2rem] border border-primary/10 bg-white p-5 sm:p-6 shadow-sm">
       <div className="flex items-start gap-3">
@@ -125,7 +138,7 @@ function UpgradeTeaser({ icon, title, description, buttonLabel, testId }: {
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p>
           <button
             type="button"
-            onClick={() => setLocation("/plans")}
+            onClick={handleClick}
             className="mt-3 rounded-xl bg-primary px-4 py-2 text-xs font-black text-white active:scale-95 transition-all"
             data-testid={testId}
           >
@@ -297,6 +310,10 @@ export default function Reports() {
             description="Lucro, margem, comparativos, rankings e indicadores de estoque no Pro."
             buttonLabel="Conhecer os planos"
             testId="button-upgrade-pro"
+            promotionId="reports_operational_upgrade"
+            placement="reports"
+            currentPlan={activePlan}
+            recommendedPlan="pro"
           />
         )}
 
@@ -310,7 +327,11 @@ export default function Reports() {
         )}
 
         {/* PLAN-IMPL-07B §10/§29 — STRATEGIC: só Premium (efetivo, trial incluso via hasPremiumAccess).
-            §40 — nunca pisca: strategicLoading já respeitou planLoading antes de resolver. */}
+            §40 — nunca pisca: strategicLoading já respeitou planLoading antes de resolver.
+            PLAN-IMPL-08 §9/§22/§43 — o teaser Premium só aparece para quem JÁ tem acesso operacional
+            (Pro): um usuário Free já vê o teaser operacional acima — mostrar os dois ao mesmo tempo
+            seria dois banners de upgrade empilhados na mesma tela, exatamente o que a política proíbe.
+            Free descobre a leitura estratégica em /opportunities (seu próprio teaser lá), não aqui. */}
         {hasPremiumAccess ? (
           strategicLoading ? (
             <PageSkeleton variant="cards" />
@@ -319,15 +340,19 @@ export default function Reports() {
           ) : strategicSummary ? (
             <StrategicSummarySection summary={strategicSummary} />
           ) : null
-        ) : (
+        ) : hasOperationalAccess ? (
           <UpgradeTeaser
             icon={<Lock className="h-4.5 w-4.5" />}
             title="Leitura estratégica é um recurso Premium"
             description="Encontre automaticamente oportunidades comerciais no Premium."
             buttonLabel="Conhecer o Premium"
             testId="button-upgrade-premium"
+            promotionId="reports_strategic_upgrade"
+            placement="reports"
+            currentPlan={activePlan}
+            recommendedPlan="premium"
           />
-        )}
+        ) : null}
       </div>
     </Layout>
   );

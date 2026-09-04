@@ -7,6 +7,8 @@ import { EmptyState } from "@/components/EmptyState";
 import { usePlan } from "@/providers/PlanProvider";
 import { fetchOpportunities } from "@/lib/opportunities-client";
 import { resolveOpportunityActionRoute } from "@/lib/opportunity-actions";
+import { trackAnalyticsEvent } from "@/lib/firebase";
+import type { PlanType } from "@shared/monetization";
 import type { Opportunity, OpportunityType } from "@shared/opportunity-rules";
 
 /**
@@ -62,8 +64,16 @@ function OpportunityCard({ opportunity }: { opportunity: Opportunity }) {
   );
 }
 
-function PremiumUpsell() {
+// PLAN-IMPL-08 §34/§35 — mesmo padrão de reports.tsx's UpgradeTeaser: view uma vez por montagem real.
+function PremiumUpsell({ currentPlan }: { currentPlan: PlanType }) {
   const [, setLocation] = useLocation();
+  useEffect(() => {
+    trackAnalyticsEvent("house_promotion_viewed", { promotion_id: "opportunities_premium_upgrade", placement: "opportunities", current_plan: currentPlan, recommended_plan: "premium" });
+  }, []);
+  const handleClick = () => {
+    trackAnalyticsEvent("house_promotion_clicked", { promotion_id: "opportunities_premium_upgrade", placement: "opportunities", current_plan: currentPlan, recommended_plan: "premium" });
+    setLocation("/plans");
+  };
   return (
     <EmptyState
       icon={<Lock className="w-10 h-10 text-primary/60" />}
@@ -73,7 +83,7 @@ function PremiumUpsell() {
       action={
         <button
           type="button"
-          onClick={() => setLocation("/plans")}
+          onClick={handleClick}
           className="w-full rounded-xl bg-primary text-white text-xs font-black py-2.5 active:scale-95 transition-all"
           data-testid="button-opportunities-upgrade"
         >
@@ -85,7 +95,7 @@ function PremiumUpsell() {
 }
 
 export default function Opportunities() {
-  const { hasPremiumAccess, loading: planLoading } = usePlan();
+  const { activePlan, hasPremiumAccess, loading: planLoading } = usePlan();
   const [opportunities, setOpportunities] = useState<Opportunity[] | null>(null);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -109,7 +119,7 @@ export default function Opportunities() {
         {planLoading || loading ? (
           <PageSkeleton variant="list" count={4} />
         ) : !hasPremiumAccess ? (
-          <PremiumUpsell />
+          <PremiumUpsell currentPlan={activePlan} />
         ) : error ? (
           <EmptyState
             icon={<Sparkles className="w-10 h-10 text-muted-foreground/40" />}
