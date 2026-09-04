@@ -371,13 +371,14 @@ export default function Sell() {
         paymentType,
       }, uid);
 
+      // ANALYTICS-PRIVACY-CLEANUP-01 — nunca o nome do produto (texto livre do tenant); item_id já
+      // identifica o produto para qualquer análise, sem expor PII/texto livre.
       trackAnalyticsEvent("purchase", {
         transaction_id: saleResult.saleId,
         value: saleResult.total,
         currency: "BRL",
         items: cart.map(item => ({
           item_id: item.product.id,
-          item_name: item.product.name,
           quantity: item.quantity,
         })),
       });

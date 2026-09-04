@@ -258,17 +258,20 @@ function runPrivacyTests(): void {
   assert.match(analyticsLibSrc, /setFirebaseAnalyticsUserId[\s\S]{0,600}maskId\(/, "PR6 (regressão): setFirebaseAnalyticsUserId ainda precisa usar maskId(), nunca o uid cru — não deveria ter sido tocado por esta ticket");
   console.log("PASS PR6 (regression check) setFirebaseAnalyticsUserId still masks the uid via maskId() — unchanged by this ticket");
 
-  // PR7 — achado PRÉ-EXISTENTE (não desta ticket): o evento `purchase` (sell.tsx, POS) já envia
-  // item_name (nome do produto) como parâmetro — uma violação das PRÓPRIAS regras de privacidade desta
-  // ticket (§6), mas escrita antes dela existir. Fora de escopo corrigir silenciosamente (CLAUDE.md:
-  // resolver só o pedido) — este teste documenta o achado para o relatório final, não falha a suíte por
-  // um problema que já existia antes desta ticket e que esta ticket não introduziu nem piorou.
+  // PR7 — ANALYTICS-PRIVACY-CLEANUP-01: o `purchase` (sell.tsx, POS) enviava item_name (nome do
+  // produto, texto livre) como parâmetro — uma violação das regras de privacidade §6 desta própria
+  // ticket, escrita antes dela existir (achado, não introduzido por PLAN-IMPL-06). Removido: item_id já
+  // identifica o produto para qualquer análise, sem expor texto livre do tenant — mesmo shape já usado
+  // por view_cart (item_id + quantity, nunca o nome).
   {
     const sellSrc = sourceOf("client/src/pages/sell.tsx");
-    const hasPreexistingIssue = /item_name/.test(sellSrc);
-    console.log(hasPreexistingIssue
-      ? "INFO PR7 (known pre-existing gap, NOT introduced by this ticket): sell.tsx's `purchase` event still sends `item_name` (product name) as an event param — violates this ticket's own §6 no-PII rule, but predates it. Reported honestly in the final report, not silently patched nor silently ignored."
-      : "PASS PR7 the pre-existing purchase event's item_name issue is no longer present (was fixed by something outside this ticket's tracked changes)");
+    const purchaseCallBlock = sellSrc.slice(sellSrc.indexOf('trackAnalyticsEvent("purchase"'), sellSrc.indexOf('trackAnalyticsEvent("purchase"') + 400);
+    assert.doesNotMatch(purchaseCallBlock, /item_name|product_name/, "PR7: o call site real de trackAnalyticsEvent(\"purchase\", ...) nunca pode incluir item_name/product_name (nome do produto)");
+    assert.match(purchaseCallBlock, /item_id: item\.product\.id,\s*quantity: item\.quantity,/, "PR7: os itens continuam identificados por item_id/quantity (nunca removendo o sinal seguro, só o texto livre)");
+
+    const purchaseTypeBlock = analyticsLibSrc.slice(analyticsLibSrc.indexOf("purchase: {"), analyticsLibSrc.indexOf("purchase: {") + 300);
+    assert.doesNotMatch(purchaseTypeBlock, /item_name|product_name/, "PR7: o TIPO do evento purchase (FirebaseAnalyticsEvents) nunca pode declarar item_name/product_name — impede reintrodução silenciosa por um caller futuro");
+    console.log("PASS PR7 the pre-existing purchase event's item_name (product name) has been removed from both the call site and the event's type definition — item_id/quantity preserved, no free-text product name ever sent");
   }
 }
 

@@ -71,13 +71,15 @@ export interface FirebaseAnalyticsEvents {
       quantity: number;
     }>;
   };
+  // ANALYTICS-PRIVACY-CLEANUP-01 — item_name (nome do produto, texto livre) removido: mesmo shape já
+  // usado por view_cart abaixo (item_id + quantity, nunca o nome) — item_id já é suficiente para
+  // qualquer análise de catálogo, sem expor texto livre do tenant.
   purchase: {
     transaction_id: string;
     value: number;
     currency: string;
     items: Array<{
       item_id: string;
-      item_name: string;
       quantity: number;
     }>;
   };
