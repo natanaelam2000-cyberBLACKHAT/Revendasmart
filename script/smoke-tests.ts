@@ -1458,7 +1458,11 @@ assert.match(reportMetrics, /calculateIndicators/);
 assert.match(reports, /useSalesData/);
 assert.match(reports, /useProductsData/);
 assert.match(reports, /useClientsLiteData/);
-assert.match(reports, /Relatórios Premium/);
+// PLAN-IMPL-07B — título "Relatórios Premium" era cosmético (nenhum gate real existia); agora que a
+// página tem diferenciação Free/Pro/Premium de verdade, o H1 fixo "Premium" ficaria enganoso para
+// quem está no Free/Pro. Renomeado para "Relatórios" simples, com subtítulo condicional por plano.
+assert.match(reports, /<h1[^>]*>Relatórios<\/h1>/);
+assert.doesNotMatch(reports, /<h1[^>]*>Relatórios Premium<\/h1>/);
 // RELEASE-26: copy renomeada de "Resumo executivo" para "Visão do negócio" (só o texto de UI).
 assert.match(reports, /Visão do negócio/);
 assert.doesNotMatch(reports, /Resumo executivo/);

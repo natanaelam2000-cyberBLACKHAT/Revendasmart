@@ -248,6 +248,10 @@ export const PLAN_PRESENTATION: Record<PlanType, PlanPresentation> = {
       // vendida é o produto preparado, reutilizável em quantos anúncios o dono quiser depois.
       '3 novos produtos preparados profissionalmente por mês',
       'Sem anúncios',
+      // PLAN-IMPL-07B §42 — só entrou aqui depois do runtime real existir (client/src/pages/reports.tsx
+      // agora gateia lucro/margem/comparativos/rankings/gráficos/indicadores por hasOperationalAccess).
+      // Free continua com o básico (receita, ticket médio, volume) — nunca removido, só nunca estendido.
+      'Relatórios operacionais completos',
     ],
   },
   premium: {
@@ -270,6 +274,11 @@ export const PLAN_PRESENTATION: Record<PlanType, PlanPresentation> = {
       // só o que a engine determinística de fato entrega hoje (repurchase_candidate está deliberadamente
       // fora, DEFERRED_SCHEMA_PREREQUISITE, nunca anunciado).
       'Oportunidades comerciais: clientes inativos, produtos parados e agenda ociosa',
+      // PLAN-IMPL-07B §42 — complementa a linha de oportunidades acima (mesma fonte de dados,
+      // server/opportunity-engine.ts, nunca uma segunda engine), mas anuncia a SUPERFÍCIE nova e
+      // distinta: a seção estratégica dentro de /reports (Relatórios), não a página /opportunities em
+      // si — só entrou aqui depois do runtime real existir e ser verificado.
+      'Relatórios estratégicos',
     ],
   },
 };

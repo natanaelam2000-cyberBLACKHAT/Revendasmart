@@ -102,6 +102,17 @@ export function buildOpportunityId(type: OpportunityType, entityId: string): str
   return `${type}:${entityId}:v${OPPORTUNITY_RULE_VERSION}`;
 }
 
+/** PLAN-IMPL-07B §11/§29/§30 — shape do resumo consumido pela seção estratégica de Relatórios
+ * (Premium). Vive aqui (shared, não em server/opportunity-engine.ts) porque tanto o server
+ * (report-strategic-summary.ts, que constrói o valor) quanto o client (reports-strategic-summary-
+ * client.ts, que só tipa a resposta HTTP) precisam do mesmo tipo — o client nunca importa nada de
+ * server/, mesma fronteira já respeitada por `Opportunity` acima. */
+export interface OpportunitySummary {
+  readonly totalCount: number;
+  readonly countsByType: Readonly<Record<OpportunityType, number>>;
+  readonly strongest: Opportunity | null;
+}
+
 // ===================================================================================================
 // Ordenação — §25/§26: comparador explícito e documentado, nunca um score aleatório/oculto.
 // ===================================================================================================

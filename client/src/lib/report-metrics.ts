@@ -16,6 +16,7 @@ import {
   subYears,
 } from "@/lib/date-utils";
 import type { Client, Product, Sale } from "@/lib/mock-data";
+import { STALLED_PRODUCT_THRESHOLD_DAYS } from "@shared/opportunity-rules";
 
 export interface PeriodFinancialMetric {
   revenue: number;
@@ -348,10 +349,15 @@ export function calculateIndicators(
   }
 
   const inventoryValue = products.reduce((sum, product) => sum + Number(product.costPrice || 0) * Number(product.stock || 0), 0);
+  // PLAN-IMPL-07B §12 — antes usava um limiar de 90 dias próprio, redeclarado aqui e conceitualmente
+  // idêntico ao "produto parado" já canonizado em shared/opportunity-rules.ts (PLAN-IMPL-07A) — mesma
+  // regra (stock > 0 + sem vender há N dias), duas fontes divergentes. Consolidado para o limiar único
+  // (60 dias): o número exibido em "Sem giro" muda (mostra mais produtos que antes, já que 60 é um teto
+  // mais baixo que 90), mudança intencional desta ticket, nunca um efeito colateral escondido.
   const productsWithoutTurnover = products.filter(product => {
     const lastSold = safeParseDate(product.lastSoldDate);
     if (!lastSold) return Number(product.stock || 0) > 0;
-    return Number(product.stock || 0) > 0 && isWithinInterval(lastSold, { start: new Date(0), end: subDays(referenceDate, 90) });
+    return Number(product.stock || 0) > 0 && isWithinInterval(lastSold, { start: new Date(0), end: subDays(referenceDate, STALLED_PRODUCT_THRESHOLD_DAYS) });
   });
 
   return {

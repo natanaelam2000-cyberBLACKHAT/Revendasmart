@@ -16,6 +16,7 @@ import { registerProductUnderstandingRoutes } from "./marketing-pro-product-unde
 import { registerProductCutoutPhotoroomRoutes } from "./product-cutout-photoroom";
 import { registerAdsProPreparationQuotaRoutes } from "./ads-pro-preparation-quota";
 import { registerOpportunityRoutes } from "./opportunity-engine";
+import { registerReportStrategicSummaryRoutes } from "./report-strategic-summary";
 import { registerProductPhotoEnhancementRoutes } from "./product-photo-enhancement-routes";
 import { registerCatalogSearchRoutes } from "./catalog-search";
 import { registerServiceQuoteRoutes } from "./service-quote-commands";
@@ -539,6 +540,9 @@ export async function registerRoutes(
   // PLAN-IMPL-07A §22 — opportunity engine determinística (cliente inativo/produto parado/agenda ociosa);
   // entitlement Premium/trial revalidado na rota, nunca só ocultação no client.
   registerOpportunityRoutes(app, requireAuth, resolveServerPlan);
+  // PLAN-IMPL-07B §11/§22 — resumo estratégico de Relatórios (Premium), reaproveita computeOpportunities
+  // acima sem duplicar nenhuma regra de detecção; mesmo gate de entitlement.
+  registerReportStrategicSummaryRoutes(app, requireAuth, resolveServerPlan);
 
   // REVENDASMART-OWNER-ACCESS-02 — concessões internas (Tester/Premium+), sempre atrás de requireAdmin.
   registerAdminGrantRoutes(app, requireAuth);

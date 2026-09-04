@@ -25,6 +25,8 @@ import type { Firestore } from "firebase-admin/firestore";
 import {
   type Opportunity,
   type OpportunityPriority,
+  type OpportunityType,
+  type OpportunitySummary,
   buildOpportunityId,
   compareOpportunities,
   hasAdvancedOpportunityAccess,
@@ -269,6 +271,27 @@ export async function computeOpportunities(db: Firestore, uid: string, nowMs: nu
     action: opportunity.action,
     entityReference: opportunity.entityReference,
   }));
+}
+
+/**
+ * PLAN-IMPL-07B §11/§29/§30 — resumo consumido pela seção estratégica de Relatórios (Premium). Nunca
+ * uma segunda detecção: recebe a lista JÁ produzida por computeOpportunities (mesma autoridade de
+ * /opportunities) e só agrupa/conta — nenhuma regra de negócio nova aqui. `strongest` é sempre o
+ * primeiro elemento da lista já ordenada por compareOpportunities (mesmo comparador determinístico de
+ * 07A, §30 — "não crie uma nova lógica de ranking própria do relatório"), nunca uma ordenação nova.
+ * Shape (`OpportunitySummary`) vive em shared/opportunity-rules.ts, não aqui — o client também precisa
+ * dele para tipar a resposta HTTP, e client/ nunca importa de server/.
+ */
+export function summarizeOpportunities(opportunities: readonly Opportunity[]): OpportunitySummary {
+  const countsByType: Record<OpportunityType, number> = { inactive_client: 0, stalled_product: 0, idle_schedule: 0 };
+  for (const opportunity of opportunities) {
+    countsByType[opportunity.type] += 1;
+  }
+  return {
+    totalCount: opportunities.length,
+    countsByType,
+    strongest: opportunities[0] ?? null,
+  };
 }
 
 /**

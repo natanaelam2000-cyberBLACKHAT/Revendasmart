@@ -1,9 +1,12 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useLocation } from "wouter";
 import { Layout } from "@/components/layout";
 import { PageSkeleton } from "@/components/PageSkeleton";
+import { EmptyState } from "@/components/EmptyState";
 import { useClientsLiteData } from "@/hooks/useClientsLiteData";
 import { useProductsData } from "@/hooks/useProductsData";
 import { useSalesData } from "@/hooks/useSalesData";
+import { usePlan } from "@/providers/PlanProvider";
 import {
   Area,
   AreaChart,
@@ -28,10 +31,12 @@ import {
   Crown,
   DollarSign,
   FileSpreadsheet,
+  Lock,
   Package,
   PieChart as PieChartIcon,
   Printer,
   ReceiptText,
+  Sparkles,
   TrendingUp,
   Users,
 } from "lucide-react";
@@ -46,6 +51,8 @@ import {
 } from "@/lib/report-metrics";
 import { exportReportToExcel, exportReportToPdf, printReport } from "@/lib/report-export";
 import { notifyError, notifySuccess } from "@/lib/notify";
+import { fetchStrategicSummary, type OpportunitySummary } from "@/lib/reports-strategic-summary-client";
+import type { OpportunityType } from "@shared/opportunity-rules";
 
 const COLORS = ["#ec4899", "#f43f5e", "#fb7185", "#fda4af", "#be5363", "#9f4150"];
 
@@ -135,12 +142,113 @@ function RankingList({ title, icon: Icon, items, valueType }: { title: string; i
   );
 }
 
+// PLAN-IMPL-07B §29/§30 — a seção estratégica é um RESUMO do que já existe em /opportunities (PLAN-
+// IMPL-07A), nunca uma segunda leitura/ordenação: contagens + o "strongest" já vêm prontos do servidor
+// (server/opportunity-engine.ts's summarizeOpportunities), esta seção só formata.
+const OPPORTUNITY_TYPES: [OpportunityType, string][] = [
+  ["inactive_client", "Clientes inativos"],
+  ["stalled_product", "Produtos parados"],
+  ["idle_schedule", "Agenda ociosa"],
+];
+
+function StrategicSummarySection({ summary }: { summary: OpportunitySummary }) {
+  const [, setLocation] = useLocation();
+  return (
+    <section className="rounded-[2rem] border border-primary/10 bg-white p-5 sm:p-6 shadow-sm">
+      <div className="mb-4 flex items-center gap-2">
+        <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-primary/10 text-primary"><Sparkles className="h-4 w-4" /></span>
+        <h2 className="text-sm font-black text-foreground">Leitura estratégica</h2>
+      </div>
+      {summary.totalCount === 0 ? (
+        <EmptyState
+          className="!p-6"
+          icon={<Sparkles className="h-8 w-8 text-emerald-500/60" />}
+          title="Nenhuma oportunidade prioritária encontrada agora"
+          description="Assim que uma condição real do seu negócio pedir atenção, ela aparece aqui."
+        />
+      ) : (
+        <>
+          <div className="grid grid-cols-3 gap-3">
+            {OPPORTUNITY_TYPES.map(([type, label]) => (
+              <div key={type} className="rounded-2xl bg-secondary/30 px-3 py-3 text-center">
+                <p className="text-xl font-black text-foreground">{summary.countsByType[type]}</p>
+                <p className="mt-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">{label}</p>
+              </div>
+            ))}
+          </div>
+          {summary.strongest && (
+            <p className="mt-4 rounded-2xl bg-secondary/30 px-4 py-3 text-sm font-bold text-foreground">{summary.strongest.reason}</p>
+          )}
+          <button
+            type="button"
+            onClick={() => setLocation("/opportunities")}
+            className="mt-4 w-full rounded-xl bg-primary/10 text-primary text-xs font-black py-2.5 active:scale-95 transition-all"
+            data-testid="button-view-opportunities"
+          >
+            Ver oportunidades
+          </button>
+        </>
+      )}
+    </section>
+  );
+}
+
+// §31 — nunca resultado real (contagens) para quem não tem acesso; só a capacidade, genérica.
+// §8/§9/§31 — um único componente parametrizado para os dois teasers (Free->Pro, Free|Pro->Premium):
+// mesma estrutura/estilo, só ícone/copy mudam. Nunca contagens/resultado real (§31/§32) — só copy fixa.
+function UpgradeTeaser({ icon, title, description, buttonLabel, testId }: {
+  icon: React.ReactNode; title: string; description: string; buttonLabel: string; testId: string;
+}) {
+  const [, setLocation] = useLocation();
+  return (
+    <section className="rounded-[2rem] border border-primary/10 bg-white p-5 sm:p-6 shadow-sm">
+      <div className="flex items-start gap-3">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">{icon}</span>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-sm font-black text-foreground">{title}</h2>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p>
+          <button
+            type="button"
+            onClick={() => setLocation("/plans")}
+            className="mt-3 rounded-xl bg-primary px-4 py-2 text-xs font-black text-white active:scale-95 transition-all"
+            data-testid={testId}
+          >
+            {buttonLabel}
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function Reports() {
   const { products, loading: productsLoading, error: productsError } = useProductsData();
   const { sales, loading: salesLoading, error: salesError } = useSalesData();
   const { clients, loading: clientsLoading, error: clientsError } = useClientsLiteData();
+  const { activePlan, hasPremiumAccess, loading: planLoading } = usePlan();
   const loading = productsLoading || salesLoading || clientsLoading;
   const dataError = productsError || salesError || clientsError;
+  // §8/§9 — Pro E Premium têm a camada operacional completa; só Premium ganha a seção estratégica nova.
+  const hasOperationalAccess = activePlan === "pro" || activePlan === "premium";
+
+  const [strategicSummary, setStrategicSummary] = useState<OpportunitySummary | null>(null);
+  const [strategicLoading, setStrategicLoading] = useState(true);
+  const [strategicError, setStrategicError] = useState(false);
+
+  // §22/§32 — mesmo padrão de opportunities.tsx: só chama a rota real quando já se sabe (via usePlan())
+  // que o tenant tem acesso — nunca busca o resultado real para esconder depois.
+  useEffect(() => {
+    if (planLoading) return;
+    if (!hasPremiumAccess) { setStrategicLoading(false); return; }
+    let cancelled = false;
+    setStrategicLoading(true);
+    setStrategicError(false);
+    fetchStrategicSummary()
+      .then((result) => { if (!cancelled) setStrategicSummary(result); })
+      .catch(() => { if (!cancelled) setStrategicError(true); })
+      .finally(() => { if (!cancelled) setStrategicLoading(false); });
+    return () => { cancelled = true; };
+  }, [planLoading, hasPremiumAccess]);
 
   const summary = useMemo(() => calculateFinancialSummary(sales, products), [sales, products]);
   const rankings = useMemo(() => calculateRanking(sales, products, clients), [sales, products, clients]);
@@ -176,7 +284,9 @@ export default function Reports() {
 
   const hasReportData = products.length > 0 || clients.length > 0 || sales.length > 0;
 
-  if (loading) {
+  // §40 — espera o plano resolver ANTES de renderizar qualquer seção com gate, para nunca piscar
+  // conteúdo Free e depois trocar para Pro/Premium (ou vice-versa) assim que usePlan() responde.
+  if (loading || planLoading) {
     return (
       <Layout title="Relatórios">
         <PageSkeleton variant="cards" />
@@ -207,16 +317,24 @@ export default function Reports() {
               <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-primary shadow-sm">
                 <BarChart3 className="h-3.5 w-3.5" /> Painel executivo
               </span>
-              <h1 className="mt-4 text-3xl sm:text-4xl font-black tracking-tight text-foreground">Relatórios Premium</h1>
+              <h1 className="mt-4 text-3xl sm:text-4xl font-black tracking-tight text-foreground">Relatórios</h1>
               <p className="mt-2 max-w-2xl text-sm font-medium leading-relaxed text-muted-foreground">
-                Acompanhe faturamento, lucro, rankings, estoque e comparativos usando os dados já registrados no Revenda Smart.
+                {/* PLAN-IMPL-07B §UI4 — copy honesta por plano: nunca promete lucro/rankings/comparativos
+                    a quem não vai vê-los nesta carga (o gate já resolveu antes de chegar aqui, §40). */}
+                {hasOperationalAccess
+                  ? "Acompanhe faturamento, lucro, rankings, estoque e comparativos usando os dados já registrados no Revenda Smart."
+                  : "Acompanhe seu faturamento e volume de vendas no Revenda Smart."}
               </p>
             </div>
-            <div className="grid grid-cols-3 gap-2">
-              <button type="button" onClick={handleExportExcel} className="min-h-12 rounded-2xl bg-white px-3 text-[11px] font-black text-primary shadow-sm transition-all active:scale-95" title="Exportar planilha CSV compatível com Excel"><FileSpreadsheet className="mx-auto mb-1 h-4 w-4" /> Excel</button>
-              <button type="button" onClick={handleExportPdf} className="min-h-12 rounded-2xl bg-white px-3 text-[11px] font-black text-primary shadow-sm transition-all active:scale-95" title="Gerar visual de PDF para impressão"><ReceiptText className="mx-auto mb-1 h-4 w-4" /> PDF</button>
-              <button type="button" onClick={handlePrintReport} className="min-h-12 rounded-2xl bg-white px-3 text-[11px] font-black text-primary shadow-sm transition-all active:scale-95" title="Imprimir relatório"><Printer className="mx-auto mb-1 h-4 w-4" /> Imprimir</button>
-            </div>
+            {/* §9/§28 — exportação é uma capacidade operacional (Pro+); Free não vê os botões, nunca um
+                export parcial/inconsistente com o que a tela mostra. */}
+            {hasOperationalAccess && (
+              <div className="grid grid-cols-3 gap-2">
+                <button type="button" onClick={handleExportExcel} className="min-h-12 rounded-2xl bg-white px-3 text-[11px] font-black text-primary shadow-sm transition-all active:scale-95" title="Exportar planilha CSV compatível com Excel"><FileSpreadsheet className="mx-auto mb-1 h-4 w-4" /> Excel</button>
+                <button type="button" onClick={handleExportPdf} className="min-h-12 rounded-2xl bg-white px-3 text-[11px] font-black text-primary shadow-sm transition-all active:scale-95" title="Gerar visual de PDF para impressão"><ReceiptText className="mx-auto mb-1 h-4 w-4" /> PDF</button>
+                <button type="button" onClick={handlePrintReport} className="min-h-12 rounded-2xl bg-white px-3 text-[11px] font-black text-primary shadow-sm transition-all active:scale-95" title="Imprimir relatório"><Printer className="mx-auto mb-1 h-4 w-4" /> Imprimir</button>
+              </div>
+            )}
           </div>
         </section>
 
@@ -232,22 +350,43 @@ export default function Reports() {
 
         <section className="space-y-3">
           <h2 className="text-lg font-black text-foreground">Visão do negócio</h2>
+          {/* §8 — BASIC: sempre visível, em qualquer plano. Receita e volume, nunca lucro/margem (julgamento
+              profissional, §9) — o que o Free já tinha antes desta ticket nunca foi removido. */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-6">
             <SummaryCard title="Receita hoje" value={formatCurrency(summary.today.revenue)} />
             <SummaryCard title="Receita semana" value={formatCurrency(summary.week.revenue)} />
             <SummaryCard title="Receita mês" value={formatCurrency(summary.month.revenue)} />
             <SummaryCard title="Receita ano" value={formatCurrency(summary.year.revenue)} />
-            <SummaryCard title="Lucro hoje" value={formatCurrency(summary.today.profit)} tone="green" />
-            <SummaryCard title="Lucro semana" value={formatCurrency(summary.week.profit)} tone="green" />
-            <SummaryCard title="Lucro mês" value={formatCurrency(summary.month.profit)} tone="green" />
-            <SummaryCard title="Lucro ano" value={formatCurrency(summary.year.profit)} tone="green" />
             <SummaryCard title="Ticket médio" value={formatCurrency(summary.averageTicket)} subtitle="Por venda" />
-            <SummaryCard title="Clientes ativos" value={String(summary.activeClients)} subtitle="Com compras" />
             <SummaryCard title="Produtos vendidos" value={formatDecimal(summary.totalProductsSold, 0)} subtitle="Unidades" />
-            <SummaryCard title="Margem média" value={`${indicators.averageMargin}%`} tone={indicators.averageMargin >= 30 ? "green" : "rose"} />
+            {/* §9 — OPERATIONAL: lucro/margem/clientes ativos, Pro+, mesma grade do BASIC acima. */}
+            {hasOperationalAccess && (
+              <>
+                <SummaryCard title="Lucro hoje" value={formatCurrency(summary.today.profit)} tone="green" />
+                <SummaryCard title="Lucro semana" value={formatCurrency(summary.week.profit)} tone="green" />
+                <SummaryCard title="Lucro mês" value={formatCurrency(summary.month.profit)} tone="green" />
+                <SummaryCard title="Lucro ano" value={formatCurrency(summary.year.profit)} tone="green" />
+                <SummaryCard title="Clientes ativos" value={String(summary.activeClients)} subtitle="Com compras" />
+                <SummaryCard title="Margem média" value={`${indicators.averageMargin}%`} tone={indicators.averageMargin >= 30 ? "green" : "rose"} />
+              </>
+            )}
           </div>
         </section>
 
+        {!hasOperationalAccess && (
+          <UpgradeTeaser
+            icon={<TrendingUp className="h-5 w-5" />}
+            title="Relatórios operacionais completos no Pro"
+            description="Lucro, margem, comparativos, rankings e indicadores de estoque no Pro."
+            buttonLabel="Conhecer os planos"
+            testId="button-upgrade-pro"
+          />
+        )}
+
+        {/* §9 — OPERATIONAL: comparativos, gráficos, rankings e indicadores de estoque, Pro+. Todo este
+            bloco já existia sem gate nenhum antes desta ticket; agora exige Pro ou Premium. */}
+        {hasOperationalAccess && (
+        <>
         <section className="space-y-3">
           <h2 className="text-lg font-black text-foreground">Comparativos</h2>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -370,6 +509,28 @@ export default function Reports() {
             </div>
           </div>
         </section>
+        </>
+        )}
+
+        {/* PLAN-IMPL-07B §10/§29 — STRATEGIC: só Premium (efetivo, trial incluso via hasPremiumAccess).
+            §40 — nunca pisca: strategicLoading já respeitou planLoading antes de resolver. */}
+        {hasPremiumAccess ? (
+          strategicLoading ? (
+            <PageSkeleton variant="cards" />
+          ) : strategicError ? (
+            <p className="rounded-[2rem] border border-border/50 bg-white px-6 py-8 text-center text-sm font-bold text-destructive">Não foi possível carregar este relatório.</p>
+          ) : strategicSummary ? (
+            <StrategicSummarySection summary={strategicSummary} />
+          ) : null
+        ) : (
+          <UpgradeTeaser
+            icon={<Lock className="h-4.5 w-4.5" />}
+            title="Leitura estratégica é um recurso Premium"
+            description="Encontre automaticamente oportunidades comerciais no Premium."
+            buttonLabel="Conhecer o Premium"
+            testId="button-upgrade-premium"
+          />
+        )}
       </div>
     </Layout>
   );
