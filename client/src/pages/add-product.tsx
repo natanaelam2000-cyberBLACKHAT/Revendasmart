@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspens
 import { Layout } from "@/components/layout";
 import { PlanLimitPrompt } from "@/components/PlanLimitPrompt";
 import { Camera, CheckCircle2, ChevronDown, ScanLine, Sparkles, ChevronLeft, ImagePlus } from "lucide-react";
-import { useLocation, useParams } from "wouter";
+import { useLocation, useParams, useSearch } from "wouter";
 
 const BarcodeScanner = lazy(
   () => import("@/components/barcode-scanner")
@@ -18,6 +18,7 @@ const ProductPhotoEnhancementTool = lazy(
 import { Product, defaultSettings } from "@/lib/mock-data";
 import type { PlanType } from "@shared/monetization";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent } from "@/lib/firebase";
+import { getApiUrl } from "@/lib/api-config";
 import { useAdminAccess } from "@/hooks/useAdminAccess";
 import {
   getFirestore,
@@ -224,6 +225,10 @@ export default function AddProduct() {
 
 const [, setLocation] = useLocation();
   const { id } = useParams();
+  // PLAN-IMPL-09-FINAL §17 — marcador fechado e limitado (nunca uma URL de retorno arbitrária): só diz
+  // "este cadastro veio do onboarding", nunca carrega um destino. Ignorado silenciosamente por qualquer
+  // outro caller (add-product.tsx continua funcionando exatamente igual sem o parâmetro).
+  const isFromOnboarding = new URLSearchParams(useSearch()).get("from") === "onboarding";
   const [success, setSuccess] = useState(false);
   const [scanning, setScanning] = useState(false);
   // RELEASE V1 §4.3/§6/§7: mesma checagem de admin/dev reaproveitada em 3 lugares nesta tela — scanner
@@ -684,6 +689,19 @@ const [, setLocation] = useLocation();
       if (!id) rememberRecentProductId(productId);
       setSuccess(true);
       notifySuccess(id ? "Produto atualizado." : "Produto salvo.");
+
+      // PLAN-IMPL-09-FINAL §16/§17 — o produto real já está persistido (o que importa de verdade);
+      // marcar onboarding_completed é um passo best-effort separado — uma falha aqui nunca pode esconder
+      // o sucesso real do cadastro nem trocar o destino de volta para uma tela morta.
+      if (!id && isFromOnboarding) {
+        fetch(getApiUrl(`/api/user/settings/${uid}`), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${await currentUser.getIdToken().catch(() => "")}` },
+          body: JSON.stringify({ onboarding_completed: true }),
+        }).catch(() => logTelemetryEvent("add_product_onboarding_completion_failed" as any, { stage: "onboarding_complete" }).catch(() => {}));
+        setTimeout(() => setLocation("/"), 1500);
+        return;
+      }
 
       setTimeout(() => setLocation("/products"), 1500);
     } catch (err) {

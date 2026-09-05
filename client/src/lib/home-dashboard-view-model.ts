@@ -66,6 +66,10 @@ interface HomeDashboardInput {
   clients: Client[];
   sales: Sale[];
   settings: Partial<AppSettings> & Record<string, unknown>;
+  /** PLAN-IMPL-09-FINAL §31/§32 — só a contagem (nunca a lista): a prioridade "sem serviço" só precisa
+   * saber se é zero. Ausência de fetch (modo products) chega aqui como 0, o que é seguro porque essa
+   * prioridade já é condicionada a businessMode "services"/"both" abaixo, nunca só à contagem. */
+  servicesCount?: number;
   referenceDate?: Date;
 }
 
@@ -211,7 +215,7 @@ function buildMainInsight(args: {
   return null;
 }
 
-export function buildHomeDashboardViewModel({ products, clients, sales, settings, referenceDate = new Date() }: HomeDashboardInput): HomeDashboardViewModel {
+export function buildHomeDashboardViewModel({ products, clients, sales, settings, servicesCount = 0, referenceDate = new Date() }: HomeDashboardInput): HomeDashboardViewModel {
   const productsById = new Map(products.map((product) => [product.id, product]));
   const previousMonth = previousMonthOf(referenceDate);
   const lowStockThreshold = safeNumber(settings.lowStockThreshold) > 0 ? safeNumber(settings.lowStockThreshold) : 3;
@@ -261,11 +265,24 @@ export function buildHomeDashboardViewModel({ products, clients, sales, settings
     if (condition) allPriorities.push(item);
   };
 
-  addPriority(products.length === 0, {
+  // PLAN-IMPL-09-FINAL §31/§32 — "sem produto" nunca é prioridade para quem opera só serviços (zero
+  // produto é o estado ESPERADO desse perfil, não um problema); undefined preserva o comportamento
+  // anterior ao ticket (sempre produto), já que só usuários que passaram pelo onboarding adaptativo ou
+  // mudaram em Configurações têm businessMode "services" explícito.
+  const businessMode = settings.businessMode as AppSettings["businessMode"];
+  addPriority(businessMode !== "services" && products.length === 0, {
     id: "no-products",
     label: "Nenhum produto cadastrado",
     detail: "Cadastre produtos para começar a vender.",
     path: "/add-product",
+    severity: 0,
+    tone: "danger",
+  });
+  addPriority((businessMode === "services" || businessMode === "both") && servicesCount === 0, {
+    id: "no-services",
+    label: "Nenhum serviço cadastrado",
+    detail: "Cadastre serviços para começar a receber agendamentos.",
+    path: "/servicos/novo",
     severity: 0,
     tone: "danger",
   });

@@ -6,27 +6,20 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
-  BarChart3,
-  BookOpen,
   Box,
   Check,
   CheckCircle2,
   Clock,
   Cookie,
-  CreditCard,
   GripVertical,
   Image as ImageIcon,
-  LayoutDashboard,
-  Lightbulb,
   Package,
   Palette,
   Plus,
   Shirt,
-  ShoppingCart,
   Sparkles,
   Store,
   Trash2,
-  Users,
   Watch,
 } from "lucide-react";
 import { getApiUrl } from "@/lib/api-config";
@@ -43,8 +36,7 @@ import {
   type AppThemeCustomization,
   type AppThemeId,
 } from "@/lib/app-themes";
-import { getFirebaseAuth, logError } from "@/lib/firebase";
-import { useFeatureEnabled } from "@/lib/remote-config-context";
+import { getFirebaseAuth, logError, trackAnalyticsEvent } from "@/lib/firebase";
 import { NICHO_CONFIG, NICHO_IDS, ONBOARDING_NICHO_IDS, getProductCategoriesForNicho, type NichoId } from "@/lib/nicho-config";
 import { patchUserSettingsOptimistic, invalidateUserSettings } from "@/hooks/useUserSettings";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
@@ -57,7 +49,15 @@ const NICHO_ICONS: Record<string, ComponentType<{ className?: string }>> = {
   Box,
 };
 
-type OnboardingStepId = "welcome" | "business" | "appearance" | "store" | "categories" | "product" | "dashboardTour" | "productsTour" | "clientsTour" | "salesTour" | "catalogTour" | "finish";
+// PLAN-IMPL-09-FINAL — orientação produtos/serviços/ambos, distinta de businessType/businessTypes
+// (nicho de produto). "niche" é o antigo passo "business" renomeado só internamente (nunca persistido
+// como string — onboarding_current_step continua um índice numérico) para nunca confundir os dois
+// conceitos no código. dashboardTour/productsTour/clientsTour/salesTour/catalogTour foram removidos: são
+// TOUR_ONLY (§13/§33/§34 do ticket) — nenhum first-value real depende deles, e a filosofia desta ticket
+// é priorizar a criação real sobre passeios guiados.
+type OnboardingStepId = "welcome" | "businessMode" | "firstStartDomain" | "niche" | "appearance" | "store" | "categories" | "firstValue" | "finish";
+type BusinessMode = "products" | "services" | "both";
+type FirstStartDomain = "products" | "services";
 
 type OnboardingStep = {
   id: OnboardingStepId;
@@ -68,13 +68,35 @@ type OnboardingStep = {
   color: string;
 };
 
-const MODULE_TOUR: Partial<Record<OnboardingStepId, { label: string; path: string; icon: ComponentType<{ className?: string }>; bullets: string[] }>> = {
-  dashboardTour: { label: "Dashboard", path: "/", icon: LayoutDashboard, bullets: ["Resumo do mês, lucro e metas.", "Alertas de estoque, cobranças e ações do dia.", "Checklist acompanha sua configuração automaticamente."] },
-  productsTour: { label: "Produtos", path: "/products", icon: Package, bullets: ["Categorias respeitam o nicho escolhido.", "Foto, preço, estoque e destaque alimentam catálogo e relatórios.", "Produtos antigos continuam compatíveis."] },
-  clientsTour: { label: "Clientes", path: "/clients", icon: Users, bullets: ["Cadastre contatos e histórico de compras.", "CRM identifica cliente VIP, frequente ou inativo.", "Use WhatsApp sem perder organização."] },
-  salesTour: { label: "Vendas", path: "/sale", icon: ShoppingCart, bullets: ["Registre venda à vista ou a prazo.", "Descontos e baixa de estoque ficam centralizados.", "As vendas alimentam Dashboard, CRM e Relatórios."] },
-  catalogTour: { label: "Catálogo", path: "/catalog", icon: BookOpen, bullets: ["Compartilhe sua vitrine pública.", "Produtos, banner e carrinho usam dados já carregados.", "Pedidos chegam com experiência mais profissional."] },
-};
+const BUSINESS_MODE_OPTIONS: { id: BusinessMode; label: string; desc: string; icon: ComponentType<{ className?: string }> }[] = [
+  { id: "products", label: "Vendo produtos", desc: "Cadastre seus produtos, organize o estoque e divulgue sua loja.", icon: Package },
+  { id: "services", label: "Presto serviços", desc: "Organize seus serviços, horários e receba agendamentos.", icon: Clock },
+  { id: "both", label: "Faço os dois", desc: "Gerencie produtos e serviços no mesmo lugar.", icon: Store },
+];
+
+const FIRST_START_DOMAIN_OPTIONS: { id: FirstStartDomain; label: string; desc: string; icon: ComponentType<{ className?: string }> }[] = [
+  { id: "products", label: "Produtos", desc: "Cadastrar meu primeiro produto agora.", icon: Package },
+  { id: "services", label: "Serviços", desc: "Cadastrar meu primeiro serviço agora.", icon: Clock },
+];
+
+/** §12 — autoridade única de composição de passos: nunca `if (businessMode)` espalhado pela renderização.
+ * Devolve uma lista PARCIAL enquanto uma escolha obrigatória (businessMode, e firstStartDomain quando
+ * "both") ainda não foi feita — nextStep()/isLastStep tratam isso via isGatingStepUnresolved, nunca
+ * avançando cegamente. */
+function resolveOnboardingSteps(businessMode: BusinessMode | null, firstStartDomain: FirstStartDomain | null): OnboardingStepId[] {
+  const steps: OnboardingStepId[] = ["welcome", "businessMode"];
+  if (businessMode === null) return steps;
+  if (businessMode === "both") {
+    steps.push("firstStartDomain");
+    if (firstStartDomain === null) return steps;
+  }
+  const isProducts = businessMode === "products" || firstStartDomain === "products";
+  if (isProducts) steps.push("niche");
+  steps.push("appearance", "store");
+  if (isProducts) steps.push("categories");
+  steps.push("firstValue", "finish");
+  return steps;
+}
 
 function normalizeNichoId(type?: string): NichoId | null {
   if (!type) return null;
@@ -116,10 +138,14 @@ function createCategoryDrafts(settings: ReturnType<typeof useUserSettings>["sett
 export default function Onboarding() {
   const [, setLocation] = useLocation();
   const { settings, loading: settingsLoading } = useUserSettings();
-  const enableOnboardingV2 = useFeatureEnabled("onboarding_v2_enabled");
 
   const [uid, setUid] = useState<string | null>(null);
   const [step, setStep] = useState(0);
+  // PLAN-IMPL-09-FINAL §4/§7 — nunca inferido de businessType/businessTypes (nicho de produto, conceito
+  // distinto). null = ainda não escolhido; nunca um default silencioso, nem aqui nem numa falha de leitura
+  // de settings (859c644 continua intocado — error != new user, ver useUserSettings/PlanProvider).
+  const [businessMode, setBusinessMode] = useState<BusinessMode | null>(null);
+  const [firstStartDomain, setFirstStartDomain] = useState<FirstStartDomain | null>(null);
   const [selectedTypes, setSelectedTypes] = useState<NichoId[]>(["Geral"]);
   const [selectedTheme, setSelectedTheme] = useState<AppThemeId>(resolveAppThemeId(settings.appTheme));
   const [themeCustomization, setThemeCustomization] = useState<Required<AppThemeCustomization>>(() => buildAppThemeCustomization(settings.appTheme, settings.appThemeCustomization as AppThemeCustomization | undefined));
@@ -132,27 +158,37 @@ export default function Onboarding() {
   const [error, setError] = useState("");
   const [hydratedFromSettings, setHydratedFromSettings] = useState(false);
 
-  const steps = useMemo<OnboardingStep[]>(() => {
-    const baseSteps: OnboardingStep[] = [
-      { id: "welcome", eyebrow: "Comece do jeito certo", title: "Sua loja pronta para vender mais", text: "Em poucos passos você define nicho, visual, loja, categorias e aprende os fluxos principais sem travar o uso do app.", icon: Sparkles, color: "bg-primary/10 text-primary" },
-      { id: "business", eyebrow: "Personalização real", title: "Escolha o nicho da sua revenda", text: "Essa escolha muda categorias, sugestões, campos e a sensação do app. Nada de lista genérica para todo mundo.", icon: Store, color: "bg-blue-100 text-blue-700" },
-      { id: "appearance", eyebrow: "Sua marca no app", title: "Defina a aparência do Revenda Smart", text: "Escolha tema, cor principal, estilo dos cards, sombras, bordas e animações sem pesar a navegação.", icon: Palette, color: "bg-violet-100 text-violet-700" },
-      { id: "store", eyebrow: "Identidade da loja", title: "Configure nome e logo da sua loja", text: "O app já mostra um preview em tempo real para você sentir que a experiência ficou com a sua cara.", icon: ImageIcon, color: "bg-cyan-100 text-cyan-700" },
-      { id: "categories", eyebrow: "Categorias inteligentes", title: "Organize categorias por nicho", text: "Mantenha o padrão, remova o que não usa, renomeie, reordene ou crie categorias próprias.", icon: GripVertical, color: "bg-emerald-100 text-emerald-700" },
-      { id: "product", eyebrow: "Primeiro cadastro", title: "Cadastre seu primeiro produto com segurança", text: "O cadastro já abre com categorias e campos coerentes com o nicho escolhido.", icon: Package, color: "bg-orange-100 text-orange-700" },
-      { id: "dashboardTour", eyebrow: "Conhecendo o app", title: "Dashboard: sua visão do negócio", text: "Entenda onde acompanhar vendas, lucro, metas, alertas e próximos passos.", icon: LayoutDashboard, color: "bg-indigo-100 text-indigo-700" },
-      { id: "productsTour", eyebrow: "Conhecendo o app", title: "Produtos: estoque organizado", text: "Veja como o cadastro conversa com catálogo, vendas e relatórios.", icon: Package, color: "bg-orange-100 text-orange-700" },
-      { id: "clientsTour", eyebrow: "Conhecendo o app", title: "Clientes: relacionamento e CRM", text: "Use dados de compra para entender frequência, preferências e clientes em risco.", icon: Users, color: "bg-pink-100 text-pink-700" },
-      { id: "salesTour", eyebrow: "Conhecendo o app", title: "Vendas: do pedido ao histórico", text: "Registre venda, desconto, pagamento e atualização de estoque com consistência.", icon: ShoppingCart, color: "bg-green-100 text-green-700" },
-      { id: "catalogTour", eyebrow: "Conhecendo o app", title: "Catálogo: sua vitrine pública", text: "Compartilhe produtos, receba pedidos e mantenha uma experiência premium para o cliente.", icon: BookOpen, color: "bg-sky-100 text-sky-700" },
-      { id: "finish", eyebrow: "Tudo pronto", title: "Seu painel está configurado", text: "Você pode continuar ajustando depois pelo checklist do Dashboard. Agora é hora de usar o app.", icon: CheckCircle2, color: "bg-green-100 text-green-700" },
-    ];
+  const isProductDomain = businessMode === "products" || (businessMode === "both" && firstStartDomain === "products");
+  const isServiceDomain = businessMode === "services" || (businessMode === "both" && firstStartDomain === "services");
 
-    if (!enableOnboardingV2) return baseSteps;
-    return baseSteps;
-  }, [enableOnboardingV2]);
+  // §40 — copy do finish adapta por modo; §12 — metadados de TODOS os passos possíveis vivem aqui, mas
+  // resolveOnboardingSteps() decide quais de fato aparecem (nunca um `if (businessMode)` espalhado pela
+  // renderização abaixo).
+  const stepIds = useMemo(() => resolveOnboardingSteps(businessMode, firstStartDomain), [businessMode, firstStartDomain]);
+  const steps = useMemo<OnboardingStep[]>(() => {
+    const finishText = isServiceDomain && !isProductDomain
+      ? "Seu serviço está pronto para os próximos passos: configure horários e comece a receber agendamentos."
+      : "Você pode continuar ajustando depois pelo checklist do Dashboard. Agora é hora de usar o app.";
+    const allSteps: Record<OnboardingStepId, OnboardingStep> = {
+      welcome: { id: "welcome", eyebrow: "Comece do jeito certo", title: "Sua loja pronta para vender mais", text: "Poucos passos, direto ao que importa: como você trabalha e seu primeiro cadastro real.", icon: Sparkles, color: "bg-primary/10 text-primary" },
+      businessMode: { id: "businessMode", eyebrow: "Personalização real", title: "Como você trabalha hoje?", text: "Isso decide os próximos passos — nada de telas que não fazem sentido para o seu negócio.", icon: Store, color: "bg-blue-100 text-blue-700" },
+      firstStartDomain: { id: "firstStartDomain", eyebrow: "Faço os dois", title: "Por onde você quer começar?", text: "Você configura o outro depois, com calma — sem precisar fazer os dois agora.", icon: Store, color: "bg-blue-100 text-blue-700" },
+      niche: { id: "niche", eyebrow: "Personalização real", title: "Escolha o nicho da sua revenda", text: "Essa escolha muda categorias, sugestões, campos e a sensação do app. Nada de lista genérica para todo mundo.", icon: Store, color: "bg-blue-100 text-blue-700" },
+      appearance: { id: "appearance", eyebrow: "Sua marca no app", title: "Defina a aparência do Revenda Smart", text: "Escolha tema, cor principal, estilo dos cards, sombras, bordas e animações sem pesar a navegação.", icon: Palette, color: "bg-violet-100 text-violet-700" },
+      store: { id: "store", eyebrow: "Identidade da loja", title: "Configure nome e logo da sua loja", text: "O app já mostra um preview em tempo real para você sentir que a experiência ficou com a sua cara.", icon: ImageIcon, color: "bg-cyan-100 text-cyan-700" },
+      categories: { id: "categories", eyebrow: "Categorias inteligentes", title: "Organize categorias por nicho", text: "Mantenha o padrão, remova o que não usa, renomeie, reordene ou crie categorias próprias.", icon: GripVertical, color: "bg-emerald-100 text-emerald-700" },
+      firstValue: isServiceDomain
+        ? { id: "firstValue", eyebrow: "Primeiro cadastro", title: "Cadastre seu primeiro serviço com segurança", text: "Defina preço, duração e deixe pronto para configurar horários em seguida.", icon: Clock, color: "bg-orange-100 text-orange-700" }
+        : { id: "firstValue", eyebrow: "Primeiro cadastro", title: "Cadastre seu primeiro produto com segurança", text: "O cadastro já abre com categorias e campos coerentes com o nicho escolhido.", icon: Package, color: "bg-orange-100 text-orange-700" },
+      finish: { id: "finish", eyebrow: "Tudo pronto", title: "Seu painel está configurado", text: finishText, icon: CheckCircle2, color: "bg-green-100 text-green-700" },
+    };
+    return stepIds.map((id) => allSteps[id]);
+  }, [stepIds, isProductDomain, isServiceDomain]);
   const current = steps[step] || steps[0];
-  const isLastStep = step >= steps.length - 1;
+  // §12 — enquanto uma escolha obrigatória (businessMode, e firstStartDomain quando "both") não foi
+  // feita, resolveOnboardingSteps() devolve uma lista PARCIAL — nunca trata isso como "último passo".
+  const isGatingStepUnresolved = (current.id === "businessMode" && !businessMode) || (current.id === "firstStartDomain" && !firstStartDomain);
+  const isLastStep = !isGatingStepUnresolved && step >= steps.length - 1;
   const currentProgress = Math.round(((step + 1) / steps.length) * 100);
 
   useEffect(() => {
@@ -177,11 +213,19 @@ export default function Onboarding() {
     setCategoryDrafts(createCategoryDrafts(settings));
     setStoreNameDraft(settings.storeName || "");
     setStoreLogoDraft(settings.storeLogo || "");
+    // §45 — refresh nunca pode mostrar um passo inválido: businessMode sobrevive (persistido), mas
+    // firstStartDomain deliberadamente não (§24 — escolha transitória de UX, não dado permanente) — um
+    // "both" retomando um refresh volta a perguntar por onde começar, nunca perde os dados reais já
+    // criados. Usa resolveOnboardingSteps com os valores FRESCOS lidos agora (nunca o `steps` do
+    // component, que ainda reflete o estado antigo neste mesmo ciclo de render).
+    const hydratedBusinessMode: BusinessMode | null = settings.businessMode === "products" || settings.businessMode === "services" || settings.businessMode === "both" ? settings.businessMode : null;
+    setBusinessMode(hydratedBusinessMode);
     if (typeof settings.onboarding_current_step === "number" && settings.onboarding_completed !== true) {
-      setStep(Math.min(Math.max(settings.onboarding_current_step, 0), steps.length - 1));
+      const hydratedStepIds = resolveOnboardingSteps(hydratedBusinessMode, null);
+      setStep(Math.min(Math.max(settings.onboarding_current_step, 0), hydratedStepIds.length - 1));
     }
     setHydratedFromSettings(true);
-  }, [hydratedFromSettings, settings, settingsLoading, steps.length]);
+  }, [hydratedFromSettings, settings, settingsLoading]);
 
   useEffect(() => {
     applyAppTheme({ appTheme: selectedTheme, appThemeCustomization: themeCustomization });
@@ -320,6 +364,9 @@ export default function Onboarding() {
       storeLogo: cleanStoreLogo,
       businessType: types[0],
       businessTypes: types,
+      // §6/§7 — só grava quando de fato escolhido; nunca sobrescreve com um default silencioso, e nunca
+      // é o sinal de conclusão (onboarding_completed continua a única autoridade disso).
+      ...(businessMode ? { businessMode } : {}),
       ...(nextCompleted ? {
         completedAt: now,
         onboarding_completed_at: now,
@@ -392,13 +439,23 @@ export default function Onboarding() {
 
   const persistStepProgress = (nextStepIndex: number) => {
     if (!uid || settingsLoading) return;
-    void saveProgress({ completed: false, stepOverride: nextStepIndex }).catch((err) => {
+    // §55 — business_mode_selected só depois de PERSISTIR com sucesso (nunca no clique/render do card,
+    // §40 do 08); "leavingBusinessModeStep" é decidido ANTES do await (current.id ainda é o passo real de
+    // onde se está saindo, nunca o destino) — falha de analytics nunca bloqueia o autosave em si (catch
+    // próprio, best-effort).
+    const leavingBusinessModeStep = current.id === "businessMode" && businessMode !== null;
+    void saveProgress({ completed: false, stepOverride: nextStepIndex }).then(() => {
+      if (leavingBusinessModeStep) {
+        trackAnalyticsEvent("business_mode_selected", { business_mode: businessMode as BusinessMode, source: "onboarding" });
+      }
+    }).catch((err) => {
       const msg = err instanceof Error ? err.message : "Erro desconhecido";
       logError("onboarding_step_autosave_failed", msg, { userId: uid });
     });
   };
 
   const nextStep = () => {
+    if (isGatingStepUnresolved) return;
     if (step >= steps.length - 1) return;
     const nextStepIndex = step + 1;
     setStep(nextStepIndex);
@@ -412,7 +469,83 @@ export default function Onboarding() {
     persistStepProgress(nextStepIndex);
   };
 
-  const renderBusinessStep = () => (
+  // PLAN-IMPL-09-FINAL §10/§11/§86 — single-select (nunca multi-select como o nicho abaixo): escolher só
+  // seta o estado, o avanço continua pelo botão "Próximo" já existente (mesmo modelo mental do resto do
+  // wizard, nunca um auto-advance especial só para este passo — evita qualquer race entre setState e o
+  // saveProgress dispatchado por nextStep/persistStepProgress, que já lê o estado FRESCO na hora do
+  // clique separado em "Próximo"). Cada opção já é um <button> com texto+descrição (§86 — nunca só
+  // ícone/cor), operável por teclado/foco por padrão.
+  const renderBusinessModeStep = () => (
+    <div className="w-full space-y-3">
+      {BUSINESS_MODE_OPTIONS.map((option) => {
+        const Icon = option.icon;
+        const isSelected = businessMode === option.id;
+        return (
+          <button
+            key={option.id}
+            type="button"
+            data-testid={`business-mode-option-${option.id}`}
+            onClick={() => setBusinessMode(option.id)}
+            className={`w-full flex items-center gap-4 p-4 rounded-[2rem] border-2 transition-all text-left rs-pressable ${
+              isSelected ? "border-primary bg-primary/5 shadow-md" : "border-border bg-white hover:border-primary/30"
+            }`}
+          >
+            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-colors flex-shrink-0 ${
+              isSelected ? "bg-primary text-white" : "bg-secondary text-muted-foreground"
+            }`}>
+              <Icon className="w-6 h-6" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-black tracking-tight truncate">{option.label}</p>
+              <p className="text-[10px] text-muted-foreground font-medium truncate">{option.desc}</p>
+            </div>
+            <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center flex-shrink-0 transition-all ${
+              isSelected ? "border-primary bg-primary text-white" : "border-border"
+            }`}>
+              {isSelected && <Check className="w-4 h-4" />}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  const renderFirstStartDomainStep = () => (
+    <div className="w-full space-y-3">
+      {FIRST_START_DOMAIN_OPTIONS.map((option) => {
+        const Icon = option.icon;
+        const isSelected = firstStartDomain === option.id;
+        return (
+          <button
+            key={option.id}
+            type="button"
+            data-testid={`first-start-domain-option-${option.id}`}
+            onClick={() => setFirstStartDomain(option.id)}
+            className={`w-full flex items-center gap-4 p-4 rounded-[2rem] border-2 transition-all text-left rs-pressable ${
+              isSelected ? "border-primary bg-primary/5 shadow-md" : "border-border bg-white hover:border-primary/30"
+            }`}
+          >
+            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-colors flex-shrink-0 ${
+              isSelected ? "bg-primary text-white" : "bg-secondary text-muted-foreground"
+            }`}>
+              <Icon className="w-6 h-6" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-black tracking-tight truncate">{option.label}</p>
+              <p className="text-[10px] text-muted-foreground font-medium truncate">{option.desc}</p>
+            </div>
+            <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center flex-shrink-0 transition-all ${
+              isSelected ? "border-primary bg-primary text-white" : "border-border"
+            }`}>
+              {isSelected && <Check className="w-4 h-4" />}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  const renderNicheStep = () => (
     <div className="w-full space-y-3">
       {ONBOARDING_NICHO_IDS.map((nichoId) => {
         const nicho = NICHO_CONFIG[nichoId];
@@ -623,6 +756,10 @@ export default function Onboarding() {
     );
   };
 
+  // §15/§17 — nunca duplica o formulário real: só um card informativo + um link para add-product.tsx
+  // (a mesma tela que qualquer outro caminho de criação de produto usa). `?from=onboarding` é um marcador
+  // fechado (enum de uma opção), nunca uma URL de retorno arbitrária — add-product.tsx decide o que fazer
+  // com ele, este componente nunca lê o resultado de volta (§20 — não há "volta para o wizard").
   const renderProductStep = () => (
     <div className="w-full space-y-3">
       <div className="rounded-[2rem] border border-primary/10 bg-white p-5 text-left shadow-sm">
@@ -641,72 +778,76 @@ export default function Onboarding() {
           ))}
         </div>
       </div>
-      <button type="button" onClick={() => void handleContinueLater("/add-product")} className="w-full rounded-[2rem] bg-primary px-5 py-4 text-sm font-black text-white shadow-lg shadow-primary/20 rs-pressable">
+      <button type="button" onClick={() => void handleContinueLater("/add-product?from=onboarding")} className="w-full rounded-[2rem] bg-primary px-5 py-4 text-sm font-black text-white shadow-lg shadow-primary/20 rs-pressable">
         Cadastrar primeiro produto
       </button>
     </div>
   );
 
-  const renderModuleTourStep = () => {
-    const module = MODULE_TOUR[current.id];
-    if (!module) return null;
-    const Icon = module.icon;
-    return (
-      <div className="w-full space-y-4">
-        <div className="rounded-[2rem] border border-primary/10 bg-white p-5 text-left shadow-sm">
-          <div className="mb-4 flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary"><Icon className="h-6 w-6" /></div>
-            <div><p className="text-[10px] font-black uppercase tracking-wide text-primary">Módulo</p><p className="text-sm font-black text-foreground">{module.label}</p></div>
-          </div>
-          <div className="space-y-3">
-            {module.bullets.map((item, index) => (
-              <div key={item} className="flex gap-3 rounded-2xl bg-secondary/40 p-3">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-[10px] font-black text-white">{index + 1}</span>
-                <p className="text-xs font-semibold leading-relaxed text-foreground">{item}</p>
-              </div>
-            ))}
-          </div>
+  // §18/§19 — reusa /servicos/novo (9c6003f) — nenhum formulário de Serviço próprio. Mesmo card
+  // informativo do produto acima, só copy/destino diferentes.
+  const renderServiceStep = () => (
+    <div className="w-full space-y-3">
+      <div className="rounded-[2rem] border border-primary/10 bg-white p-5 text-left shadow-sm">
+        <p className="text-[10px] font-black uppercase tracking-wide text-primary">Como cadastrar</p>
+        <div className="mt-4 grid gap-3">
+          {[
+            "Nome do serviço e como você cobra (fixo, a partir de ou sob consulta).",
+            "Duração em minutos, se fizer sentido para o seu serviço.",
+            "Já fica pronto para configurar horários e receber agendamentos.",
+          ].map((item, index) => (
+            <div key={item} className="flex gap-3 rounded-2xl bg-secondary/40 p-3">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-[10px] font-black text-white">{index + 1}</span>
+              <p className="text-xs font-semibold leading-relaxed text-foreground">{item}</p>
+            </div>
+          ))}
         </div>
-        <button type="button" onClick={() => void handleContinueLater(module.path)} className="w-full rounded-[2rem] bg-white px-5 py-4 text-xs font-black text-primary shadow-sm ring-1 ring-primary/15 rs-pressable">Abrir {module.label} agora</button>
+      </div>
+      <button type="button" onClick={() => void handleContinueLater("/servicos/novo?from=onboarding")} className="w-full rounded-[2rem] bg-primary px-5 py-4 text-sm font-black text-white shadow-lg shadow-primary/20 rs-pressable">
+        Cadastrar primeiro serviço
+      </button>
+    </div>
+  );
+
+  // §40 — checklist adapta por domínio: nicho/categorias só aparecem quando de fato foram passos reais
+  // (isProductDomain); "Tour concluído" foi removido (as tours em si saíram do wizard, §13/§33/§34); o
+  // item de primeiro produto/serviço continua deliberadamente "done:false, opcional" — mesma filosofia já
+  // existente antes desta ticket (concluir o onboarding nunca foi condicionado a já ter criado algo,
+  // §14 — nunca um bloqueio rígido).
+  const renderFinishStep = () => {
+    const items: { label: string; done: boolean; hint?: string }[] = [
+      ...(isProductDomain ? [{ label: "Nicho escolhido", done: selectedTypes.length > 0 }] : []),
+      { label: "Tema configurado", done: true },
+      { label: "Loja identificada", done: Boolean(storeNameDraft.trim()) },
+      ...(isProductDomain ? [{ label: "Categorias configuradas", done: selectedTypes.every((type) => sanitizeCategories(categoryDrafts[type] || []).length > 0) }] : []),
+      { label: isServiceDomain && !isProductDomain ? "Primeiro serviço" : "Primeiro produto", done: false, hint: "Você pode cadastrar agora ou depois." },
+    ];
+    return (
+      <div className="w-full space-y-3">
+        {items.map((item) => (
+          <div key={item.label} className="flex items-center gap-3 rounded-2xl bg-white p-4 text-left shadow-sm">
+            <div className={`flex h-9 w-9 items-center justify-center rounded-2xl ${item.done ? "bg-emerald-50 text-emerald-600" : "bg-secondary text-muted-foreground"}`}>
+              {item.done ? <Check className="h-5 w-5" /> : <Clock className="h-5 w-5" />}
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-black text-foreground">{item.label}</p>
+              {item.hint && <p className="text-[10px] font-medium text-muted-foreground">{item.hint}</p>}
+            </div>
+          </div>
+        ))}
       </div>
     );
   };
 
-  const renderFinishStep = () => (
-    <div className="w-full space-y-3">
-      {[
-        { label: "Nicho escolhido", done: selectedTypes.length > 0 },
-        { label: "Tema configurado", done: true },
-        { label: "Loja identificada", done: Boolean(storeNameDraft.trim()) },
-        { label: "Categorias configuradas", done: selectedTypes.every((type) => sanitizeCategories(categoryDrafts[type] || []).length > 0) },
-        { label: "Tour concluído", done: step >= steps.length - 1 },
-        { label: "Primeiro produto", done: false, hint: "Você pode cadastrar agora ou depois." },
-      ].map((item) => (
-        <div key={item.label} className="flex items-center gap-3 rounded-2xl bg-white p-4 text-left shadow-sm">
-          <div className={`flex h-9 w-9 items-center justify-center rounded-2xl ${item.done ? "bg-emerald-50 text-emerald-600" : "bg-secondary text-muted-foreground"}`}>
-            {item.done ? <Check className="h-5 w-5" /> : <Clock className="h-5 w-5" />}
-          </div>
-          <div className="min-w-0">
-            <p className="text-sm font-black text-foreground">{item.label}</p>
-            {item.hint && <p className="text-[10px] font-medium text-muted-foreground">{item.hint}</p>}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-
   const renderStepContent = () => {
     switch (current.id) {
-      case "business": return renderBusinessStep();
+      case "businessMode": return renderBusinessModeStep();
+      case "firstStartDomain": return renderFirstStartDomainStep();
+      case "niche": return renderNicheStep();
       case "appearance": return renderAppearanceStep();
       case "store": return renderStoreStep();
       case "categories": return renderCategoriesStep();
-      case "product": return renderProductStep();
-      case "dashboardTour":
-      case "productsTour":
-      case "clientsTour":
-      case "salesTour":
-      case "catalogTour": return renderModuleTourStep();
+      case "firstValue": return isServiceDomain && !isProductDomain ? renderServiceStep() : renderProductStep();
       case "finish": return renderFinishStep();
       default:
         return (
@@ -768,7 +909,7 @@ export default function Onboarding() {
           data-testid="button-concluir-onboarding"
           type="button"
           onClick={() => isLastStep ? void handleComplete("/") : nextStep()}
-          disabled={isSaving}
+          disabled={isSaving || isGatingStepUnresolved}
           className="w-full bg-primary text-white font-black py-5 rounded-[2.5rem] shadow-xl shadow-primary/20 flex items-center justify-center gap-2 uppercase tracking-[0.2em] text-xs active:scale-95 transition-all disabled:opacity-50 disabled:grayscale disabled:scale-100"
         >
           {isSaving ? (

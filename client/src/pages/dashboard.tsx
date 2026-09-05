@@ -8,6 +8,7 @@ import { useProductsData } from "@/hooks/useProductsData";
 import { useSalesData } from "@/hooks/useSalesData";
 import { getApiUrl } from "@/lib/api-config";
 import { getFirebaseAuth } from "@/lib/firebase";
+import { listServices } from "@/lib/services-persistence";
 import { buildHomeDashboardViewModel, formatHomeCurrency } from "@/lib/home-dashboard-view-model";
 import { notifyError, notifySuccess } from "@/lib/notify";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
@@ -98,9 +99,29 @@ export default function Dashboard() {
   const [monthlyGoalInput, setMonthlyGoalInput] = useState("");
   const [isSavingGoal, setIsSavingGoal] = useState(false);
   const [isOnboardingStripDismissed, setIsOnboardingStripDismissed] = useState(readOnboardingStripDismissed);
-  const dataLoading = productsLoading || salesLoading || clientsLoading;
+
+  // PLAN-IMPL-09-FINAL §31/§32 — só busca serviços quando o modo do negócio realmente usa esse dado
+  // (evita uma leitura Firestore extra, sempre vazia, para a maioria dos donos que vende só produto).
+  const needsServicesCount = settings.businessMode === "services" || settings.businessMode === "both";
+  const [servicesCount, setServicesCount] = useState(0);
+  const [servicesLoading, setServicesLoading] = useState(needsServicesCount);
+  useEffect(() => {
+    if (!needsServicesCount) return;
+    let cancelled = false;
+    setServicesLoading(true);
+    listServices()
+      .then((list) => { if (!cancelled) setServicesCount(list.length); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setServicesLoading(false); });
+    return () => { cancelled = true; };
+  }, [needsServicesCount]);
+
+  const dataLoading = productsLoading || salesLoading || clientsLoading || servicesLoading;
   const dataError = productsError || salesError || clientsError;
-  const home = useMemo(() => buildHomeDashboardViewModel({ products, clients, sales, settings: settings as any }), [clients, products, sales, settings]);
+  const home = useMemo(
+    () => buildHomeDashboardViewModel({ products, clients, sales, settings: settings as any, servicesCount }),
+    [clients, products, sales, settings, servicesCount],
+  );
 
 
   useEffect(() => {

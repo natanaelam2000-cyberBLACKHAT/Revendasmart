@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { CheckCircle2, ChevronLeft } from "lucide-react";
 import { Layout } from "@/components/layout";
 import { PlanLimitPrompt } from "@/components/PlanLimitPrompt";
 import { usePlan } from "@/providers/PlanProvider";
 import { createService, ServiceLimitError } from "@/lib/services-persistence";
-import { trackAnalyticsEvent } from "@/lib/firebase";
+import { getFirebaseAuth, trackAnalyticsEvent } from "@/lib/firebase";
+import { getApiUrl } from "@/lib/api-config";
 import type { ServicePricing } from "@shared/services";
 
 /**
@@ -30,6 +31,10 @@ const PRICING_MODE_LABEL: Record<PricingMode, string> = {
 export default function ServicesNew() {
   const [, setLocation] = useLocation();
   const { activePlan } = usePlan();
+  // PLAN-IMPL-09-FINAL §20 — marcador fechado (nunca URL arbitrária); ao contrário de add-product.tsx, o
+  // destino de sucesso NUNCA muda (§20 do ticket já pede o mesmo destino real de sempre — configurar
+  // disponibilidade — nunca um retorno ao wizard), só marca onboarding_completed como efeito colateral.
+  const isFromOnboarding = new URLSearchParams(useSearch()).get("from") === "onboarding";
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -82,6 +87,21 @@ export default function ServicesNew() {
       // servidor confirma isFirstService (0 -> 1 dentro da MESMA transação de criação), nunca inferido.
       if (created.isFirstService) trackAnalyticsEvent("first_service_created");
       setSuccess(true);
+      // PLAN-IMPL-09-FINAL §19/§20 — o serviço real já está persistido e o sucesso já foi mostrado acima;
+      // marcar onboarding_completed é um passo best-effort separado (mesma disciplina de add-product.tsx,
+      // e na mesma ordem — depois de setSuccess, nunca antes) — uma falha OU demora aqui nunca esconde nem
+      // atrasa o sucesso real da criação, e nunca muda o destino, que continua sendo a configuração de
+      // disponibilidade.
+      if (isFromOnboarding) {
+        const user = getFirebaseAuth()?.currentUser;
+        if (user) {
+          fetch(getApiUrl(`/api/user/settings/${user.uid}`), {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${await user.getIdToken().catch(() => "")}` },
+            body: JSON.stringify({ onboarding_completed: true }),
+          }).catch(() => {});
+        }
+      }
       setTimeout(() => setLocation("/servicos/disponibilidade"), 1500);
     } catch (err) {
       if (err instanceof ServiceLimitError) {

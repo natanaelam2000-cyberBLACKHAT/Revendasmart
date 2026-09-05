@@ -1314,6 +1314,14 @@ export async function registerRoutes(
       // save; no client value can influence catalog ownership.
       body = sanitizePublicSettingsPayload(rawBody);
 
+      // PLAN-IMPL-09-FINAL §6/§58 — businessMode é um enum fechado (orientação, nunca entitlement); o
+      // blocklist acima não valida FORMATO, só remove campos perigosos. Um valor malformado nunca pode
+      // virar canônico só porque o TypeScript do client não o enviaria — descartado (nunca rejeita a
+      // request inteira), igual ao resto deste payload tolerante a campos desconhecidos/antigos.
+      if (typeof body.businessMode !== "undefined" && !["products", "services", "both"].includes(body.businessMode)) {
+        delete body.businessMode;
+      }
+
       const admin = getFirebaseAdmin();
       const db = admin.firestore();
       

@@ -143,6 +143,13 @@ export interface FirebaseAnalyticsEvents {
   // devolve isFirstService=true, computado dentro da MESMA transação server-side que grava o serviço (0
   // -> 1), nunca inferido de uma lista local. Nenhum nome/preço/descrição do serviço no payload.
   first_service_created: Record<string, never>;
+  // PLAN-IMPL-09-FINAL §54-§57 — orientação produtos/serviços/ambos, nunca disparado no clique/render do
+  // card (§55, mesma regra de paywall_viewed): só depois que a escolha foi de fato persistida com sucesso
+  // em user_settings. Enum fechado, nunca nome de loja/produto/serviço/cliente.
+  business_mode_selected: {
+    business_mode: "products" | "services" | "both";
+    source: "onboarding" | "settings";
+  };
 
   // PLAN-IMPL-06 §21-§23 — funil de paywall. `reason`/`resource_type`/`source` são enums fechados
   // (AnalyticsPaywallReason/AnalyticsResourceType/AnalyticsSource abaixo), nunca uma string livre.

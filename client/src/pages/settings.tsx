@@ -189,6 +189,14 @@ export default function Settings() {
     });
   };
 
+  // PLAN-IMPL-09-FINAL §28/§29/§30 — mesmo caminho genérico de save já usado pelo resto desta página
+  // (formSettings -> handleSave -> POST /api/user/settings/:uid); nunca apaga Produtos/Serviços/Vendas/
+  // Agendamentos/Clientes (nenhum deles vive em formSettings), nunca reabre o onboarding (só
+  // onboarding_completed decide isso, intocado aqui).
+  const updateBusinessMode = (mode: "products" | "services" | "both") => {
+    setFormSettings((prev) => ({ ...prev, businessMode: mode }));
+  };
+
   const toggleBusinessType = (nicho: NichoId) => {
     setFormSettings((prev) => {
       const current = Array.isArray(prev?.businessTypes) ? prev.businessTypes.filter((item): item is NichoId => item in NICHO_CONFIG) : [];
@@ -782,6 +790,32 @@ export default function Settings() {
                         })}
                       </div>
                     </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rs-store-card rs-store-premium-panel">
+                <div className="rs-store-panel-head">
+                  <div>
+                    <h3>Meu negócio</h3>
+                    <p>Isso prioriza o que você vê primeiro no app — nunca esconde produtos, serviços, vendas, agendamentos ou clientes já existentes.</p>
+                  </div>
+                </div>
+                <div className="rs-store-nicho-grid" aria-label="Como você trabalha">
+                  {([
+                    { id: "products" as const, label: "Produtos" },
+                    { id: "services" as const, label: "Serviços" },
+                    { id: "both" as const, label: "Produtos e serviços" },
+                  ]).map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      data-testid={`button-business-mode-${option.id}`}
+                      onClick={() => updateBusinessMode(option.id)}
+                      className={formSettings?.businessMode === option.id ? "is-selected" : ""}
+                    >
+                      {option.label}
+                    </button>
                   ))}
                 </div>
               </div>

@@ -286,6 +286,11 @@ export interface AppSettings {
   businessType: string;
   /** Novo: array de tipos de negócio (suporta múltiplos nichos) */
   businessTypes?: string[];
+  /** PLAN-IMPL-09-FINAL — orientação de produtos vs. serviços (nunca entitlement/plano/permissão),
+   * inteiramente distinta de businessType/businessTypes acima (aquilo é nicho/categoria de produto —
+   * Cosméticos, Roupas etc. — este é "o que você vende": produtos, serviços, ou os dois). Ausente =
+   * ainda não escolhido (nunca um default silencioso — nem no onboarding nem numa falha de leitura). */
+  businessMode?: "products" | "services" | "both";
   /** Futuro-proof: nomes de loja específicos por nicho (ex: { "Roupas": "Boutique Bella", "Cosméticos & Perfumes": "Beleza da Adri" }) */
   storeNamesByNicho?: Record<string, string>;
   catalogSlug: string;
