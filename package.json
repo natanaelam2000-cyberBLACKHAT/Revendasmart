@@ -76,6 +76,8 @@
     "test:plan-impl-08": "tsx script/plan-impl-08-promotion-policy-tests.ts",
     "test:services-create-ui-01:run": "tsx script/services-create-ui-01-tests.ts",
     "test:services-create-ui-01": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:services-create-ui-01:run\"",
+    "test:onboarding-routing-safety-01:run": "tsx script/onboarding-routing-safety-01-tests.ts",
+    "test:onboarding-routing-safety-01": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:onboarding-routing-safety-01:run\"",
     "skills:validate": "node scripts/security/validate-agent-skills.mjs",
     "security:preflight": "npm run skills:validate && npm run check && npm run lint && npm run test",
     "performance:bundle-check": "node scripts/performance/check-bundle-budgets.mjs",

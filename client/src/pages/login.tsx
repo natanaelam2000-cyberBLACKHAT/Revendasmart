@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useLocation, Link } from "wouter";
 import { sendPasswordResetEmail, signInWithEmailAndPassword } from "firebase/auth";
 import { getFirebaseAuth, getFirebaseError, logTelemetryEvent, setTelemetryUserId, trackAnalyticsEvent, setFirebaseAnalyticsUserId } from "@/lib/firebase";
@@ -40,6 +40,62 @@ export default function Login() {
   const [success, setSuccess] = useState("");
   const [resetLoading, setResetLoading] = useState(false);
   const [loading, setLoading] = useState(false);
+  // ONBOARDING-ROUTING-SAFETY-01 — distingue "não sabemos ainda" de "onboarding incompleto": só existe
+  // porque uma falha real (rede/servidor) na busca de settings NUNCA pode virar um redirecionamento para
+  // /onboarding (isso trataria um usuário existente como conta nova). O servidor já devolve 200 com
+  // onboarding_completed:false para uma conta genuinamente nova (settings ausente) — um response.ok===
+  // false aqui é sempre uma falha real (401/403/500), nunca "conta nova"; só este flag habilita o CTA
+  // "Tentar novamente", que só refaz a MESMA busca (o login com Firebase Auth já foi concluído).
+  const [settingsError, setSettingsError] = useState(false);
+  const [retryingSettings, setRetryingSettings] = useState(false);
+
+  // Busca o status de onboarding do usuário JÁ autenticado e decide o destino — usada tanto no fluxo de
+  // login quanto no retry manual (nunca re-autentica: getFirebaseAuth()?.currentUser já é o suficiente).
+  const resolveOnboardingRoute = useCallback(async () => {
+    const auth = getFirebaseAuth();
+    const user = auth?.currentUser;
+    if (!user) {
+      setSettingsError(true);
+      return;
+    }
+    try {
+      const token = await user.getIdToken();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      const settingsUrl = getApiUrl(`/api/user/settings/${user.uid}`);
+      const response = await fetch(settingsUrl, { headers });
+
+      if (response.ok) {
+        const data = await response.json();
+        setSettingsError(false);
+        if (data.settings?.onboarding_completed === true) {
+          setLocation("/");
+        } else {
+          setLocation("/onboarding");
+        }
+        return;
+      }
+      // Não-OK aqui é SEMPRE uma falha real (401/403/500) — o servidor já responde 200 com
+      // onboarding_completed:false para uma conta nova sem settings ainda, então isto nunca significa
+      // "conta nova". Nunca redireciona para /onboarding a partir daqui.
+      console.warn("[login] Settings request returned non-OK status:", response.status);
+      setSettingsError(true);
+    } catch (settingsErr) {
+      console.warn("[login] Failed to fetch settings:", settingsErr);
+      setSettingsError(true);
+    }
+  }, [setLocation]);
+
+  const handleRetrySettings = async () => {
+    if (retryingSettings) return;
+    setRetryingSettings(true);
+    try {
+      await resolveOnboardingRoute();
+    } finally {
+      setRetryingSettings(false);
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,30 +128,9 @@ export default function Login() {
       setFirebaseAnalyticsUserId(uid);
       trackAnalyticsEvent("login", { method: "email" });
 
-      // Get ID token and fetch settings from Firestore
-      try {
-        const token = await user.getIdToken();
-        const headers: Record<string, string> = { "Content-Type": "application/json" };
-        if (token) headers["Authorization"] = `Bearer ${token}`;
-
-        const settingsUrl = getApiUrl(`/api/user/settings/${uid}`);
-        const response = await fetch(settingsUrl, { headers });
-        
-        if (response.ok) {
-          const data = await response.json();
-          if (data.settings?.onboarding_completed === true) {
-            setLocation("/");
-          } else {
-            setLocation("/onboarding");
-          }
-        } else {
-          // Settings not found, go to onboarding
-          setLocation("/onboarding");
-        }
-      } catch (settingsErr) {
-        console.warn("[login] Failed to fetch settings, redirecting to onboarding:", settingsErr);
-        setLocation("/onboarding");
-      }
+      // Decide o destino (onboarding vs app) só depois de autenticado — nunca redireciona para
+      // /onboarding a partir de uma falha real na busca de status (ver resolveOnboardingRoute acima).
+      await resolveOnboardingRoute();
     } catch (err: any) {
       // Diagnóstico: log detalhado do erro do Firebase
       console.error("[login] Firebase auth error:", err);
@@ -190,6 +225,23 @@ export default function Login() {
             <div className="rs-login-message-area" aria-live="polite">
               {error && <p className="rs-login-alert rs-login-alert-error" data-testid="text-login-error">{error}</p>}
               {success && <p className="rs-login-alert rs-login-alert-success" data-testid="text-login-success">{success}</p>}
+            </div>
+          )}
+
+          {settingsError && (
+            <div className="rs-login-message-area" aria-live="polite">
+              <p className="rs-login-alert rs-login-alert-error" data-testid="text-settings-error">
+                Não foi possível carregar sua conta. Tente novamente.
+              </p>
+              <button
+                type="button"
+                onClick={handleRetrySettings}
+                disabled={retryingSettings}
+                className="rs-login-link-button"
+                data-testid="button-retry-settings"
+              >
+                {retryingSettings ? "Tentando novamente..." : "Tentar novamente"}
+              </button>
             </div>
           )}
 
