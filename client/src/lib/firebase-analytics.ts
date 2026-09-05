@@ -139,6 +139,10 @@ export interface FirebaseAnalyticsEvents {
   catalog_published: Record<string, never>;
   first_booking_created: Record<string, never>;
   first_marketing_created: Record<string, never>;
+  // SERVICES-CREATE-UI-01 — mesma disciplina de first_product_created: só dispara quando createService()
+  // devolve isFirstService=true, computado dentro da MESMA transação server-side que grava o serviço (0
+  // -> 1), nunca inferido de uma lista local. Nenhum nome/preço/descrição do serviço no payload.
+  first_service_created: Record<string, never>;
 
   // PLAN-IMPL-06 §21-§23 — funil de paywall. `reason`/`resource_type`/`source` são enums fechados
   // (AnalyticsPaywallReason/AnalyticsResourceType/AnalyticsSource abaixo), nunca uma string livre.

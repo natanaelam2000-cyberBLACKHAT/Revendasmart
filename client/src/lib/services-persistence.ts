@@ -111,7 +111,7 @@ function asRecord(value: unknown, entity: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-export async function createService(input: CreateServiceInput): Promise<Service> {
+export async function createService(input: CreateServiceInput): Promise<Service & { isFirstService?: boolean }> {
   const uid = requireCurrentUid();
   // PLAN-IMPL-02A §7/§8 — mirrors add-product.tsx's pattern exactly: a fresh server-side count
   // (getCountFromServer), never a possibly-partial in-memory list, checked before writing.
@@ -137,7 +137,7 @@ export async function createService(input: CreateServiceInput): Promise<Service>
     createdAt: timestamp,
     updatedAt: timestamp,
   });
-  const result = await apiRequest<{ service: Service; serviceId: string; idempotentReplay: boolean }>("/api/services", {
+  const result = await apiRequest<{ service: Service; serviceId: string; idempotentReplay: boolean; isFirstService?: boolean }>("/api/services", {
     method: "POST",
     auth: true,
     body: {
@@ -146,7 +146,11 @@ export async function createService(input: CreateServiceInput): Promise<Service>
       idempotencyKey: `service-create-${serviceId}`,
     },
   });
-  return parseService(result.service);
+  // SERVICES-CREATE-UI-01 — isFirstService vai como propriedade adicional no MESMO objeto Service: a
+  // assinatura widened (Service & { isFirstService?: boolean }) é sempre atribuível a Service puro, então
+  // nenhum caller existente (inclusive os scripts de teste, que só leem os campos de Service) precisa
+  // mudar; services-new.tsx (único caller que precisa do campo novo) só lê `created.isFirstService`.
+  return Object.assign(parseService(result.service), { isFirstService: result.isFirstService === true });
 }
 
 export async function getService(serviceId: string): Promise<Service | null> {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Ban, CalendarClock, ChevronLeft, ChevronRight, Copy, Settings } from "lucide-react";
+import { Ban, CalendarClock, ChevronLeft, ChevronRight, Copy, Plus, Settings } from "lucide-react";
 import { Layout } from "@/components/layout";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { EmptyState } from "@/components/EmptyState";
@@ -320,6 +320,11 @@ export default function ServiceAgenda() {
         </div>
 
         <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" size="sm" asChild className="rounded-full">
+            <a href="/servicos/novo" data-testid="link-agenda-new-service">
+              <Plus className="mr-1.5 h-4 w-4" /> Novo serviço
+            </a>
+          </Button>
           <Button type="button" variant="outline" size="sm" onClick={openCreateBlock} data-testid="button-agenda-create-block" className="rounded-full">
             <Ban className="mr-1.5 h-4 w-4" /> Bloquear horário
           </Button>

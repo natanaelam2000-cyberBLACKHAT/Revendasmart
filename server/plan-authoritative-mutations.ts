@@ -368,7 +368,9 @@ export async function createServiceCommand(db: Firestore, uid: string, input: un
     tx.set(docRef, service);
     tx.set(usageRef(db, uid), { servicesCount: usage.servicesCount + 1, updatedAt: now }, { merge: true });
     tx.set(idem, { key: idempotencyKey, tenantUid: uid, action: SERVICE_CREATE_ACTION, serviceId, createdAt: now });
-    return { serviceId, service, idempotentReplay: false };
+    // SERVICES-CREATE-UI-01 — mesmo padrão de isFirstProduct acima: derivado do MESMO usage já lido
+    // nesta transação (0 -> 1), zero leitura extra. Idempotent replay (ramo acima) nunca chega aqui.
+    return { serviceId, service, idempotentReplay: false, isFirstService: usage.servicesCount === 0 };
   });
 }
 
