@@ -95,7 +95,7 @@ function PremiumUpsell({ currentPlan }: { currentPlan: PlanType }) {
 }
 
 export default function Opportunities() {
-  const { activePlan, hasPremiumAccess, loading: planLoading } = usePlan();
+  const { activePlan, hasPremiumAccess, loading: planLoading, planResolved } = usePlan();
   const [opportunities, setOpportunities] = useState<Opportunity[] | null>(null);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -117,6 +117,14 @@ export default function Opportunities() {
     <Layout title="Oportunidades">
       <div className="px-4 py-4 space-y-4 max-w-2xl mx-auto" data-testid="page-opportunities">
         {planLoading || loading ? (
+          <PageSkeleton variant="list" count={4} />
+        ) : !planResolved ? (
+          // PLAN-IMPL-08-VERIFY-FINAL §3/§6 — erro real de usePlan() (loading já terminou, mas o plano
+          // não pôde ser confirmado): nunca mostra PremiumUpsell (anunciaria upgrade para um pagante real
+          // durante uma falha transitória) nem cai no ramo "nenhuma oportunidade encontrada" abaixo (que
+          // mentiria — o motivo é falha de rede, não ausência real de oportunidades). Mesmo placeholder
+          // neutro do estado de loading — do ponto de vista do usuário, "ainda não sabemos" é a mesma
+          // coisa nos dois casos.
           <PageSkeleton variant="list" count={4} />
         ) : !hasPremiumAccess ? (
           <PremiumUpsell currentPlan={activePlan} />

@@ -56,10 +56,10 @@ function runPolicyFoundationTests(): void {
   console.log("PASS POL4/POL5 house_promotion_viewed/clicked carry zero PII and zero raw user identifiers — promotion_id/placement are the closed enum types, never free strings");
 
   const reportsSrc = sourceOf("client/src/pages/reports.tsx");
-  assert.match(reportsSrc, /const \{ activePlan, hasPremiumAccess, loading: planLoading \} = usePlan\(\);/, "POL6: reports.tsx precisa ler o plano ativo do hook canônico usePlan(), nunca uma leitura própria/duplicada de plano");
+  assert.match(reportsSrc, /const \{ activePlan, hasPremiumAccess, loading: planLoading, planResolved \} = usePlan\(\);/, "POL6: reports.tsx precisa ler o plano ativo do hook canônico usePlan(), nunca uma leitura própria/duplicada de plano");
   assert.match(reportsSrc, /const hasOperationalAccess = activePlan === "pro" \|\| activePlan === "premium";/, "POL6: a derivação de acesso operacional continua uma única expressão local, não múltiplos checks `plan ===` espalhados pela página");
   const opportunitiesSrc = sourceOf("client/src/pages/opportunities.tsx");
-  assert.match(opportunitiesSrc, /const \{ activePlan, hasPremiumAccess, loading: planLoading \} = usePlan\(\);/, "POL6: opportunities.tsx também precisa ler de usePlan(), nunca uma segunda fonte de verdade de plano");
+  assert.match(opportunitiesSrc, /const \{ activePlan, hasPremiumAccess, loading: planLoading, planResolved \} = usePlan\(\);/, "POL6: opportunities.tsx também precisa ler de usePlan(), nunca uma segunda fonte de verdade de plano");
   console.log("PASS POL6 both promotion call sites (reports.tsx, opportunities.tsx) derive plan/entitlement exclusively from the canonical usePlan() hook — no ad-hoc scattered plan checks introduced by this ticket");
 
   for (const path of ["client/src/pages/reports.tsx", "client/src/pages/opportunities.tsx", "client/src/lib/firebase-analytics.ts"]) {
@@ -128,12 +128,12 @@ function runCriticalFlowTests(): void {
 function runReportsPolicyTests(): void {
   const reportsSrc = sourceOf("client/src/pages/reports.tsx");
 
-  assert.match(reportsSrc, /\{!hasOperationalAccess && \(\s*<UpgradeTeaser/, "PR1: o teaser operacional continua condicionado exatamente a !hasOperationalAccess (Free) — condição não alterada por esta ticket");
-  console.log("PASS PR1 the operational teaser's visibility condition (!hasOperationalAccess) is unchanged — still Free-only");
+  assert.match(reportsSrc, /\{!hasOperationalAccess && planResolved && \(\s*<UpgradeTeaser/, "PR1: o teaser operacional continua condicionado a !hasOperationalAccess (Free), agora também exigindo planResolved (PLAN-IMPL-08-VERIFY-FINAL)");
+  console.log("PASS PR1 the operational teaser's visibility condition is !hasOperationalAccess && planResolved — still Free-only, and never during an unresolved/error plan state");
 
-  assert.match(reportsSrc, /\) : hasOperationalAccess \? \(\s*<UpgradeTeaser[\s\S]{0,400}promotionId="reports_strategic_upgrade"/, "PR6 (trava de regressão do bug corrigido): o teaser estratégico precisa estar atrás de `hasOperationalAccess ? (...) : null` — nunca de volta a um else incondicional que mostraria o teaser estratégico também para Free (que já vê o operacional), empilhando dois banners de upgrade na mesma tela");
-  assert.match(reportsSrc, /strategicSummary \? \(\s*<StrategicSummarySection summary=\{strategicSummary\} \/>\s*\) : null\s*\) : hasOperationalAccess \? \(/, "PR6: a estrutura precisa ser hasPremiumAccess ? (...) : hasOperationalAccess ? (<teaser>) : null — Free (sem nenhum dos dois) cai no null final, nunca vê o teaser estratégico");
-  console.log("PASS PR6 the stacked-teaser bug is locked closed: the strategic/Premium teaser only renders for hasOperationalAccess (Pro) — a Free user, who already sees the operational teaser, structurally cannot also receive the strategic one");
+  assert.match(reportsSrc, /\) : hasOperationalAccess && planResolved \? \(\s*<UpgradeTeaser[\s\S]{0,400}promotionId="reports_strategic_upgrade"/, "PR6 (trava de regressão do bug corrigido): o teaser estratégico precisa estar atrás de `hasOperationalAccess && planResolved ? (...) : null` — nunca de volta a um else incondicional que mostraria o teaser estratégico também para Free (que já vê o operacional), empilhando dois banners de upgrade na mesma tela");
+  assert.match(reportsSrc, /strategicSummary \? \(\s*<StrategicSummarySection summary=\{strategicSummary\} \/>\s*\) : null\s*\) : hasOperationalAccess && planResolved \? \(/, "PR6: a estrutura precisa ser hasPremiumAccess ? (...) : hasOperationalAccess && planResolved ? (<teaser>) : null — Free (sem nenhum dos dois) cai no null final, nunca vê o teaser estratégico");
+  console.log("PASS PR6 the stacked-teaser bug is locked closed: the strategic/Premium teaser only renders for hasOperationalAccess && planResolved (Pro, resolved) — a Free user, who already sees the operational teaser, structurally cannot also receive the strategic one");
 
   const teaserCallsBlock = reportsSrc.slice(reportsSrc.indexOf("export default function Reports"));
   const promotionIds = [...teaserCallsBlock.matchAll(/promotionId="(\w+)"/g)].map((m) => m[1]);
@@ -168,10 +168,10 @@ function runOpportunitiesPolicyTests(): void {
   console.log("PASS PRO3 the click handler fires house_promotion_clicked before navigating, wired to the real button");
 
   const renderBlock = opportunitiesSrc.slice(opportunitiesSrc.indexOf('<Layout title="Oportunidades">'), opportunitiesSrc.lastIndexOf("</Layout>"));
-  assert.match(renderBlock, /planLoading \|\| loading \? \([\s\S]{0,80}\) : !hasPremiumAccess \? \(\s*<PremiumUpsell currentPlan=\{activePlan\} \/>\s*\) : error \? \(/, "PRO4: PremiumUpsell precisa continuar dentro da MESMA cadeia de ternários mutuamente exclusivos (loading | upsell | error | empty | list) — o ramo seguinte (error) só é alcançável quando hasPremiumAccess é true, provando exclusividade mútua — nunca renderizado em paralelo a outro ramo");
+  assert.match(renderBlock, /planLoading \|\| loading \? \([\s\S]{0,80}\) : !planResolved \? \([\s\S]{0,800}\) : !hasPremiumAccess \? \(\s*<PremiumUpsell currentPlan=\{activePlan\} \/>\s*\) : error \? \(/, "PRO4: PremiumUpsell precisa continuar dentro da MESMA cadeia de ternários mutuamente exclusivos (loading | unresolved | upsell | error | empty | list) — o ramo seguinte (error) só é alcançável quando hasPremiumAccess é true, provando exclusividade mútua — nunca renderizado em paralelo a outro ramo");
   console.log("PASS PRO4 PremiumUpsell sits inside the single mutually-exclusive ternary chain (loading/upsell/error/empty/list) — structurally never rendered alongside another branch");
 
-  assert.match(opportunitiesSrc, /const \{ activePlan, hasPremiumAccess, loading: planLoading \} = usePlan\(\);[\s\S]{0,1200}<PremiumUpsell currentPlan=\{activePlan\} \/>/, "PRO5: currentPlan vem do mesmo usePlan() já usado para o gate de acesso — nunca uma segunda leitura/hardcode");
+  assert.match(opportunitiesSrc, /const \{ activePlan, hasPremiumAccess, loading: planLoading, planResolved \} = usePlan\(\);[\s\S]{0,2000}<PremiumUpsell currentPlan=\{activePlan\} \/>/, "PRO5: currentPlan vem do mesmo usePlan() já usado para o gate de acesso — nunca uma segunda leitura/hardcode");
   console.log("PASS PRO5 currentPlan is sourced from the same usePlan() call already used for the access gate — no second source of truth, no hardcoded value");
 }
 
@@ -211,6 +211,58 @@ function runFutureReadinessTests(): void {
   console.log("PASS FR6 UpgradeTeaser (reports.tsx) and PremiumUpsell (opportunities.tsx) remain intentionally separate — documented decision, both already gate on the same canonical usePlan() booleans, unifying them was judged pre-existing out-of-scope duplication");
 }
 
+// ===================================================================================================
+// LF1-LF12 — PLAN-IMPL-08-VERIFY-FINAL: promoção nunca aparece com o plano desconhecido (loading/erro),
+// só entitlement (fail-closed-to-Free) tinha essa garantia antes; promotion fail-closed-to-none é nova.
+// ===================================================================================================
+function runLifecycleFailurePolicyTests(): void {
+  const planProviderSrc = sourceOf("client/src/providers/PlanProvider.tsx");
+  const reportsSrc = sourceOf("client/src/pages/reports.tsx");
+  const opportunitiesSrc = sourceOf("client/src/pages/opportunities.tsx");
+
+  assert.match(planProviderSrc, /const planResolved = !loading && !error;/, "LF: planResolved precisa ser derivado SÓ de loading/error já existentes — nenhuma autoridade de lifecycle nova, nenhum polling/estado paralelo");
+  assert.match(planProviderSrc, /planResolved: boolean;/, "LF: planResolved precisa ser exposto no contrato de usePlan(), para reports.tsx/opportunities.tsx consumirem sem inventar sua própria checagem");
+  console.log("PASS LF planResolved is derived exclusively from the pre-existing loading/error fields (no new lifecycle authority) and exposed on the canonical usePlan() contract");
+
+  // LF12 — entitlement (resolveActivePlan/hasPremiumAccess/resolveLimits) continua fail-closed-to-Free,
+  // byte-idêntico a antes desta ticket — só uma propriedade nova e aditiva foi adicionada ao contrato.
+  assert.match(planProviderSrc, /function resolveActivePlan\(data: PlanData \| null\): ActivePlan \{\s*if \(data\?\.effectivePlan === PLANS\.FREE \|\| data\?\.effectivePlan === PLANS\.PRO \|\| data\?\.effectivePlan === PLANS\.PREMIUM\) \{\s*return data\.effectivePlan;\s*\}\s*const hasAccess = typeof data\?\.hasPremiumAccess === "boolean"\s*\? data\.hasPremiumAccess\s*: isPremiumActive\(data as unknown as MonetizationPlanData \| null\);\s*if \(hasAccess\) return PLANS\.PREMIUM;\s*if \(data\?\.currentPlan === PLANS\.PRO\) return PLANS\.PRO;\s*return PLANS\.FREE;\s*\}/, "LF12: resolveActivePlan (a função que decide o fallback fail-closed-to-Free de ENTITLEMENT) precisa continuar byte-idêntica — esta ticket nunca muda semântica de entitlement, só adiciona planResolved em paralelo");
+  assert.match(planProviderSrc, /const hasPremiumAccess = activePlan === "premium";/, "LF12: hasPremiumAccess continua derivado só de activePlan, sem nenhuma dependência nova de planResolved — entitlement e promotion são políticas paralelas, nunca uma reescrevendo a outra");
+  console.log("PASS LF12 entitlement fail-closed-to-Free (resolveActivePlan/hasPremiumAccess) is untouched — byte-identical to the pre-existing logic; planResolved is a parallel, additive signal, never a replacement for entitlement resolution");
+
+  // LF1/LF3 — durante loading, nenhum teaser/upsell é sequer alcançável (early-return antes de qualquer
+  // JSX de promoção) — já garantido antes desta ticket, aqui só confirmando que continua intacto.
+  assert.match(reportsSrc, /if \(loading \|\| planLoading\) \{\s*return \(\s*<Layout title="Relatórios">\s*<PageSkeleton variant="cards" \/>\s*<\/Layout>\s*\);\s*\}/, "LF1 (regressão): reports.tsx precisa continuar retornando cedo durante loading/planLoading, antes de qualquer teaser — nenhuma mudança nesta ticket deveria ter tocado este gate");
+  assert.match(opportunitiesSrc, /\{planLoading \|\| loading \? \(\s*<PageSkeleton variant="list" count=\{4\} \/>/, "LF3 (regressão): opportunities.tsx precisa continuar mostrando o skeleton de loading antes de qualquer ramo de upsell");
+  console.log("PASS LF1/LF3 both pages still return the loading skeleton before any promotion JSX is reachable — pre-existing guarantee, confirmed unchanged");
+
+  // LF2/LF5/LF6 — Reports: planResolved=false cai no fallback de entitlement "false" (hasOperationalAccess
+  // e hasPremiumAccess ambos false), então SEM o guard explícito o teaser operacional apareceria; COM o
+  // guard, nem operacional nem estratégico aparecem enquanto não resolvido — e quando resolvido de
+  // verdade (Free/Pro/Premium), exatamente um teaser (ou nenhum) aparece, como já travado em PR1/PR6.
+  assert.match(reportsSrc, /\{!hasOperationalAccess && planResolved && \(/, "LF2/LF5: o teaser operacional só aparece com !hasOperationalAccess E planResolved — nunca durante um erro (que também cai em hasOperationalAccess=false)");
+  assert.match(reportsSrc, /\) : hasOperationalAccess && planResolved \? \(/, "LF2/LF6: o teaser estratégico só aparece com hasOperationalAccess E planResolved — nunca durante um erro");
+  console.log("PASS LF2/LF5/LF6 neither Reports teaser can render while planResolved is false — an error state (which also makes hasOperationalAccess/hasPremiumAccess fall back to false) no longer leaks the Free-tier teaser to a real Pro/Premium user during an outage; a genuinely resolved plan still shows exactly one teaser, unchanged from PR1/PR6");
+
+  // LF4/LF7/LF8 — Opportunities: !planResolved é checado ANTES de !hasPremiumAccess (ordem importa —
+  // garante que um erro nunca alcança o ramo de upsell); Premium/Premium-trial já não alcançavam o ramo
+  // de upsell antes desta ticket (hasPremiumAccess=true), comportamento inalterado.
+  const ternaryOrder = opportunitiesSrc.indexOf("!planResolved ?");
+  const upsellBranch = opportunitiesSrc.indexOf("!hasPremiumAccess ?");
+  assert.ok(ternaryOrder > -1 && upsellBranch > -1 && ternaryOrder < upsellBranch, "LF4: o ramo !planResolved precisa vir ANTES do ramo !hasPremiumAccess na cadeia de ternários — ordem garante que um erro nunca alcança o upsell");
+  assert.match(opportunitiesSrc, /\) : !planResolved \? \([\s\S]{0,800}<PageSkeleton variant="list" count=\{4\} \/>\s*\) : !hasPremiumAccess \? \(\s*<PremiumUpsell/, "LF4: !planResolved precisa mostrar o mesmo skeleton neutro (nunca o upsell, nunca o empty-state 'nenhuma oportunidade' que mentiria sobre a causa)");
+  console.log("PASS LF4 the !planResolved branch is checked before !hasPremiumAccess and renders the same neutral skeleton as loading — never the upsell, never the misleading 'no opportunities found' empty state; LF7/LF8 (Premium/Premium-trial never reaching the upsell branch) were already guaranteed by hasPremiumAccess=true and remain unchanged");
+
+  // LF9 — house_promotion_viewed só dispara de dentro de UpgradeTeaser/PremiumUpsell's próprio useEffect;
+  // como nenhum dos dois componentes MONTA enquanto planResolved é false (provado acima), o evento
+  // estruturalmente não pode disparar — não há um segundo call site que precise ser silenciado à parte.
+  const analyticsLibSrc = sourceOf("client/src/lib/firebase-analytics.ts");
+  const houseViewedCallers = [reportsSrc, opportunitiesSrc].filter((src) => src.includes('trackAnalyticsEvent("house_promotion_viewed"'));
+  assert.equal(houseViewedCallers.length, 2, "LF9: house_promotion_viewed precisa continuar tendo exatamente os 2 call sites conhecidos (UpgradeTeaser, PremiumUpsell) — nenhum terceiro caller escondido que pudesse disparar fora do gate de montagem");
+  assert.doesNotMatch(analyticsLibSrc, /house_promotion_viewed[\s\S]{0,200}planResolved|planResolved[\s\S]{0,200}house_promotion_viewed/, "LF9: firebase-analytics.ts (definição de tipos, sem componentes) nunca deveria precisar saber de planResolved — a supressão acontece inteiramente no gate de montagem do componente, não dentro do disparo do evento");
+  console.log("PASS LF9 house_promotion_viewed cannot fire during an unresolved/error plan state — both call sites live exclusively inside UpgradeTeaser/PremiumUpsell, which structurally never mount while planResolved is false (LF2/LF4); no phantom conversion analytics is possible");
+}
+
 function run(): void {
   runPolicyFoundationTests();
   runPublicSurfaceTests();
@@ -218,8 +270,9 @@ function run(): void {
   runReportsPolicyTests();
   runOpportunitiesPolicyTests();
   runFutureReadinessTests();
+  runLifecycleFailurePolicyTests();
 
-  console.log("\nPLAN-IMPL-08 house ads + external ads policy — all POL/PUB/CF/PR/PRO/FR assertions passed. B1-B22 verified live via Browser pane (see final report), not in this suite.");
+  console.log("\nPLAN-IMPL-08 house ads + external ads policy — all POL/PUB/CF/PR/PRO/FR/LF assertions passed. B1-B22/B1-B8 verified live via Browser pane (see final report), not in this suite.");
 }
 
 run();

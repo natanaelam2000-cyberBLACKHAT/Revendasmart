@@ -63,6 +63,12 @@ interface PlanProviderValue {
   error: string | null;
   basePlan: ActivePlan;
   trial: TrialInfo | null;
+  // PLAN-IMPL-08-VERIFY-FINAL §3/§4 — entitlement fail-closed-to-Free (resolveActivePlan acima) e
+  // promotion fail-closed-to-none são políticas DIFERENTES: negar acesso pago quando o estado é
+  // desconhecido é seguro, mas anunciar upgrade para um estado desconhecido não é (poderia mostrar a
+  // promoção Free para um pagante real durante uma falha transitória). `false` cobre exatamente loading
+  // e erro; nunca reflete o plano resolvido em si (um Free genuíno também tem planResolved=true).
+  planResolved: boolean;
 }
 
 const PlanContext = createContext<PlanProviderValue | null>(null);
@@ -178,6 +184,12 @@ export function PlanProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(() => loadPlan(), [loadPlan]);
 
+  // PLAN-IMPL-08-VERIFY-FINAL §2/§4 — reaproveita loading/error já existentes, nenhuma autoridade de
+  // lifecycle nova: `false` durante loading OU erro (mesmo em retry, quando error volta a null enquanto
+  // loading fica true — a checagem de loading já cobre essa janela), `true` assim que uma resposta real
+  // (sucesso) chegou, mesmo que o plano resolvido seja genuinamente Free.
+  const planResolved = !loading && !error;
+
   const value = useMemo<PlanProviderValue>(() => ({
     plan: planData,
     planData,
@@ -197,7 +209,8 @@ export function PlanProvider({ children }: { children: ReactNode }) {
     error,
     basePlan,
     trial,
-  }), [activePlan, basePlan, error, hasPremiumAccess, limits, loading, planData, refresh, shareLink, trial]);
+    planResolved,
+  }), [activePlan, basePlan, error, hasPremiumAccess, limits, loading, planData, planResolved, refresh, shareLink, trial]);
 
   return <PlanContext.Provider value={value}>{children}</PlanContext.Provider>;
 }

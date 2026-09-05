@@ -446,19 +446,33 @@ function runUiTests(): void {
 // Privacidade/analytics — §39/§40/§62 do ticket.
 // ===================================================================================================
 function runPrivacyAndAnalyticsTests(): void {
-  const allNewSrc = [
+  // §39 original: "nenhum evento novo de analytics nesta ticket (07A)" — continua verdadeiro para a
+  // camada de engine/dados (shared/server/lib), nunca tocada por PLAN-IMPL-08. PLAN-IMPL-08 (ticket
+  // POSTERIOR, já auditada/commitada — ver PLAN-IMPL-08_REPORT) legitimamente instrumentou SÓ o
+  // componente PremiumUpsell de opportunities.tsx com os eventos house_promotion_viewed/clicked
+  // (promoção, não dado de oportunidade) — por isso opportunities.tsx saiu do grupo "zero analytics" e
+  // ganhou sua própria checagem, mais restrita, abaixo.
+  const engineDataLayerSrc = [
     sourceOf("shared/opportunity-rules.ts"),
     sourceOf("server/opportunity-engine.ts"),
-    sourceOf("client/src/pages/opportunities.tsx"),
     sourceOf("client/src/lib/opportunity-actions.ts"),
     sourceOf("client/src/lib/opportunities-client.ts"),
   ].join("\n");
-  assert.doesNotMatch(allNewSrc, /trackAnalyticsEvent|logEvent\(/, "§39: nenhum evento novo de analytics — ANALYTICS_ARCHITECTURE_CHANGED = NO, nada foi acrescentado a firebase-analytics.ts nesta ticket");
-  console.log("PASS §39 no new analytics events were added — firebase-analytics.ts is untouched by this ticket (ANALYTICS_ARCHITECTURE_CHANGED = NO)");
+  assert.doesNotMatch(engineDataLayerSrc, /trackAnalyticsEvent|logEvent\(/, "§39: a camada de engine/dados (shared/opportunity-rules, server/opportunity-engine, opportunity-actions, opportunities-client) continua com zero analytics — nenhuma delas foi tocada por PLAN-IMPL-08");
+  console.log("PASS §39 the opportunity engine/data layer (shared+server+lib, as opposed to the UI page) still carries zero analytics calls — untouched by PLAN-IMPL-08's later, unrelated promotion instrumentation");
+
+  const opportunitiesPageSrc = sourceOf("client/src/pages/opportunities.tsx");
+  const pageAnalyticsCalls = [...opportunitiesPageSrc.matchAll(/trackAnalyticsEvent\("([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(new Set(pageAnalyticsCalls), new Set(["house_promotion_viewed", "house_promotion_clicked"]), "§39 (atualizado por PLAN-IMPL-08-VERIFY-FINAL): opportunities.tsx só pode chamar trackAnalyticsEvent para os dois eventos de promoção fechados — nunca um evento novo carregando dado real de oportunidade (entityReference/reason/type)");
+  const premiumUpsellBlock = opportunitiesPageSrc.slice(opportunitiesPageSrc.indexOf("function PremiumUpsell"), opportunitiesPageSrc.indexOf("export default function Opportunities"));
+  const opportunityCardBlock = opportunitiesPageSrc.slice(opportunitiesPageSrc.indexOf("function OpportunityCard"), opportunitiesPageSrc.indexOf("function PremiumUpsell"));
+  assert.doesNotMatch(opportunityCardBlock, /trackAnalyticsEvent/, "§39: OpportunityCard (que renderiza dado REAL de oportunidade — nome do cliente/produto, motivo) nunca pode chamar analytics — só o PremiumUpsell (promoção genérica, sem dado real) tem instrumentação");
+  assert.match(premiumUpsellBlock, /trackAnalyticsEvent/, "§39: a instrumentação de promoção precisa estar de fato dentro de PremiumUpsell, confirmando o isolamento acima");
+  console.log("PASS §39 (updated) opportunities.tsx's only analytics calls are the two closed house_promotion_* events, confined entirely to PremiumUpsell (generic promotion copy) — OpportunityCard, which renders real client/product/reason data, has zero analytics, preserving the original privacy guarantee for actual opportunity data");
 
   const analyticsLibDiffProxy = sourceOf("client/src/lib/firebase-analytics.ts");
-  assert.doesNotMatch(analyticsLibDiffProxy, /opportunity|OpportunityType/i, "§39: firebase-analytics.ts continua sem nenhuma referência a oportunidades — confirma que o catálogo de eventos não foi estendido");
-  console.log("PASS §39 (confirmation) firebase-analytics.ts's event catalog contains no opportunity-related additions");
+  assert.doesNotMatch(analyticsLibDiffProxy, /opportunity|OpportunityType/i, "§39: firebase-analytics.ts continua sem nenhuma referência a oportunidades — confirma que o catálogo de eventos (inclusive os 2 novos de PLAN-IMPL-08) nunca referencia o tipo/dado de oportunidade em si, só metadado de promoção genérico");
+  console.log("PASS §39 (confirmation) firebase-analytics.ts's event catalog — including PLAN-IMPL-08's later house_promotion_* additions — contains no opportunity-type or opportunity-data reference");
 
   const engineSrc = sourceOf("server/opportunity-engine.ts");
   assert.doesNotMatch(engineSrc, /\bnotes\b|\bemail\b|\bphone\b/, "§40: a engine nunca lê/expõe notas, email ou telefone do cliente — só id/name/lastPurchaseAt");

@@ -154,7 +154,7 @@ export default function Reports() {
   const { products, loading: productsLoading, error: productsError } = useProductsData();
   const { sales, loading: salesLoading, error: salesError } = useSalesData();
   const { clients, loading: clientsLoading, error: clientsError } = useClientsLiteData();
-  const { activePlan, hasPremiumAccess, loading: planLoading } = usePlan();
+  const { activePlan, hasPremiumAccess, loading: planLoading, planResolved } = usePlan();
   const loading = productsLoading || salesLoading || clientsLoading;
   const dataError = productsError || salesError || clientsError;
   // §8/§9 — Pro E Premium têm a camada operacional completa; só Premium ganha a seção estratégica nova.
@@ -303,7 +303,13 @@ export default function Reports() {
           </div>
         </section>
 
-        {!hasOperationalAccess && (
+        {/* PLAN-IMPL-08-VERIFY-FINAL §3/§5 — promotion fail-closed-to-none: planResolved só é false durante
+            loading (já coberto pelo early-return acima) OU erro real de usePlan() — nesse caso
+            hasOperationalAccess também cai no fallback "false" (§Critical Separation, entitlement
+            continua fail-closed-to-Free), então SEM o `planResolved` este teaser apareceria para um
+            Pro/Premium real durante uma falha transitória de rede, dizendo a um pagante para comprar o
+            que ele já tem. */}
+        {!hasOperationalAccess && planResolved && (
           <UpgradeTeaser
             icon={<TrendingUp className="h-5 w-5" />}
             title="Relatórios operacionais completos no Pro"
@@ -331,7 +337,11 @@ export default function Reports() {
             PLAN-IMPL-08 §9/§22/§43 — o teaser Premium só aparece para quem JÁ tem acesso operacional
             (Pro): um usuário Free já vê o teaser operacional acima — mostrar os dois ao mesmo tempo
             seria dois banners de upgrade empilhados na mesma tela, exatamente o que a política proíbe.
-            Free descobre a leitura estratégica em /opportunities (seu próprio teaser lá), não aqui. */}
+            Free descobre a leitura estratégica em /opportunities (seu próprio teaser lá), não aqui.
+            PLAN-IMPL-08-VERIFY-FINAL §3/§5 — mesma razão do teaser operacional acima: planResolved=false
+            (erro de usePlan()) já cai no ramo hasOperationalAccess=false por baixo, então este `&&
+            planResolved` é defensivo/explícito, não incidental — nunca depende de uma transitividade não
+            documentada entre dois fallbacks diferentes. */}
         {hasPremiumAccess ? (
           strategicLoading ? (
             <PageSkeleton variant="cards" />
@@ -340,7 +350,7 @@ export default function Reports() {
           ) : strategicSummary ? (
             <StrategicSummarySection summary={strategicSummary} />
           ) : null
-        ) : hasOperationalAccess ? (
+        ) : hasOperationalAccess && planResolved ? (
           <UpgradeTeaser
             icon={<Lock className="h-4.5 w-4.5" />}
             title="Leitura estratégica é um recurso Premium"

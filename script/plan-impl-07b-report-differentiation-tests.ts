@@ -206,7 +206,7 @@ function runScaleCostTests(): void {
 function runUiTests(): void {
   const reportsSrc = sourceOf("client/src/pages/reports.tsx");
 
-  assert.match(reportsSrc, /const \{ activePlan, hasPremiumAccess, loading: planLoading \} = usePlan\(\);/, "UI1/UI2/UI3: a página lê o plano real via usePlan() para decidir o que renderizar");
+  assert.match(reportsSrc, /const \{ activePlan, hasPremiumAccess, loading: planLoading, planResolved \} = usePlan\(\);/, "UI1/UI2/UI3: a página lê o plano real via usePlan() para decidir o que renderizar (PLAN-IMPL-08-VERIFY-FINAL adicionou planResolved ao mesmo destructure, aditivo)");
   console.log("PASS UI1/UI2/UI3 Free/Pro/Premium all render from the same page, gated by the real usePlan() state");
 
   assert.doesNotMatch(reportsSrc, /Relatórios Premium/, "UI4: o H1 não promete mais 'Premium' incondicionalmente — copy honesta por plano");
