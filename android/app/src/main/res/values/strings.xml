@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Revenda Smart</string>
-    <string name="title_activity_main">Revenda Smart</string>
+    <string name="app_name">RevendaSmart</string>
+    <string name="title_activity_main">RevendaSmart</string>
     <string name="package_name">com.revendasmart.app</string>
     <string name="custom_url_scheme">com.revendasmart.app</string>
 </resources>

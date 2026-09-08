@@ -3953,7 +3953,7 @@ assert.equal(existsSync("api/[...path].ts"), false);
 
 // Android Capacitor foundation guardrails.
 assert.match(capacitorConfig, /appId:\s*"com\.revendasmart\.app"/);
-assert.match(capacitorConfig, /appName:\s*"Revenda Smart"/);
+assert.match(capacitorConfig, /appName:\s*"RevendaSmart"/);
 assert.match(capacitorConfig, /webDir:\s*"dist\/public"/);
 assert.equal(packageJson.dependencies?.["@capacitor/core"]?.replace(/[\^~]/g, ""), "8.4.2");
 assert.equal(packageJson.dependencies?.["@capacitor/android"]?.replace(/[\^~]/g, ""), "8.4.2");
@@ -3972,8 +3972,8 @@ assert.match(androidManifest, /android:theme="@style\/AppTheme\.NoActionBarLaunc
 assert.match(androidManifest, /android:exported="true"/);
 assert.match(androidManifest, /android:icon="@mipmap\/ic_launcher"/);
 assert.match(androidManifest, /android:roundIcon="@mipmap\/ic_launcher_round"/);
-assert.match(androidStrings, /<string name="app_name">Revenda Smart<\/string>/);
-assert.match(androidStrings, /<string name="title_activity_main">Revenda Smart<\/string>/);
+assert.match(androidStrings, /<string name="app_name">RevendaSmart<\/string>/);
+assert.match(androidStrings, /<string name="title_activity_main">RevendaSmart<\/string>/);
 assert.match(androidStrings, /<string name="package_name">com\.revendasmart\.app<\/string>/);
 assert.match(androidStrings, /<string name="custom_url_scheme">com\.revendasmart\.app<\/string>/);
 assert.match(androidStyles, /Theme\.SplashScreen/);
