@@ -54,6 +54,13 @@ function formatBRL(value: number): string {
 
 /** §45 — economia anual derivada só da tabela canônica, nunca um número guardado à parte. */
 
+async function fetchCurrentPurchaseOffer(plan: PlanType, cycle: BillingCycle): Promise<PlanPurchaseAvailabilityEntry | null> {
+  const availability = await apiRequest<import("@shared/monetization").PlanPurchaseAvailability>("/api/plans/purchase-availability?channel=web", {
+    auth: true,
+  });
+  return availability.offers?.[plan === PLANS.PRO ? PLANS.PRO : PLANS.PREMIUM]?.[cycle] ?? null;
+}
+
 type CardState =
   | { kind: "current" }
   | { kind: "trial_active"; daysRemainingLabel: string | null }
@@ -102,11 +109,8 @@ function PlanCard({
   const isFree = plan === PLANS.FREE;
   const priceValue = offer ? offer.subscribedPriceCents / 100 : price[cycle];
 
-  // PLAN-IMPL-04B §14/§34 — confirmação mínima (plano/cadência/preço) antes de chamar o endpoint real,
-  // nunca um checkout disparado direto no primeiro clique. `billingCycle` sempre "monthly" no corpo da
-  // requisição: anual nunca tem disponibilidade real (§29), então nunca chega a esta função com cycle
-  // "annual" e purchaseAvailable true ao mesmo tempo — mas o servidor também recusa por conta própria
-  // (§10), então esta tela nunca é a única linha de defesa.
+  // Confirmação mínima antes de chamar o provider. O servidor continua sendo a autoridade de preço; a
+  // UI só envia a oferta esperada como condição de consistência para evitar checkout com tela desatualizada.
   const [purchaseState, setPurchaseState] = useState<"idle" | "confirming" | "purchasing" | "error">("idle");
   const [purchaseError, setPurchaseError] = useState("");
 
@@ -124,16 +128,29 @@ function PlanCard({
     // CTA "Assinar" (que só abre o painel de confirmação, ainda pode ser cancelado via "Voltar").
     trackAnalyticsEvent("checkout_started", { plan, billing_cycle: cycle, pricing_version: "v2" });
     try {
-      const data = await apiRequest<{ initPoint?: string; priceCents: number; billingCycle: BillingCycle }>("/api/subscriptions/create", {
-        method: "POST",
-        auth: true,
-        body: { plan, billingCycle: cycle },
-      });
-      if (!data.initPoint) throw new Error("Link de checkout não retornado pela API.");
-      if (data.priceCents !== Math.round(priceValue * 100) && !window.confirm(`Preço atualizado: R$ ${formatBRL(data.priceCents / 100)}/${data.billingCycle === "annual" ? "ano" : "mês"}. Continuar?`)) {
+      const currentOffer = await fetchCurrentPurchaseOffer(plan, cycle);
+      if (!currentOffer?.available || !currentOffer.offer) {
+        throw new ApiError({ status: 409, code: "PLAN_PURCHASE_UNAVAILABLE", message: "Este plano não está disponível para assinatura agora." });
+      }
+      const expectedPriceCents = Math.round(priceValue * 100);
+      const displayedOfferId = offer?.offerId ?? "standard";
+      const offerChanged = currentOffer.offer.offerId !== displayedOfferId
+        || currentOffer.offer.subscribedPriceCents !== expectedPriceCents;
+      if (offerChanged && !window.confirm(`Preço atualizado: R$ ${formatBRL(currentOffer.offer.subscribedPriceCents / 100)}/${cycle === "annual" ? "ano" : "mês"}. Continuar?`)) {
         setPurchaseState("idle");
         return;
       }
+      const data = await apiRequest<{ initPoint?: string; priceCents: number; billingCycle: BillingCycle }>("/api/subscriptions/create", {
+        method: "POST",
+        auth: true,
+        body: {
+          plan,
+          billingCycle: cycle,
+          expectedPricingVersion: currentOffer.offer.pricingVersion,
+          expectedOfferId: currentOffer.offer.offerId,
+        },
+      });
+      if (!data.initPoint) throw new Error("Link de checkout não retornado pela API.");
       // PLAN-IMPL-06 §29 — marca a tentativa ANTES do redirect (sobrevive à ida-e-volta ao Mercado
       // Pago); PlanProvider.tsx consome isto para disparar subscription_activated quando a ativação
       // real (assíncrona, via webhook) for observada.

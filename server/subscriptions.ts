@@ -866,6 +866,8 @@ export async function createSubscriptionCommand(
   userEmail: string,
   requestedPlan: unknown,
   requestedBillingCycle: unknown,
+  expectedPricingVersion: unknown,
+  expectedOfferId: unknown,
   createAtProvider: (params: { reason: string; externalReference: string; payerEmail: string; transactionAmountBRL: number; frequency: number }) => Promise<ProviderSubscriptionCreationResult>,
 ): Promise<
   | { existing: true; response: ReturnType<typeof buildExistingSubscriptionResponse> }
@@ -874,10 +876,14 @@ export async function createSubscriptionCommand(
   if (requestedPlan !== PLANS.PRO && requestedPlan !== PLANS.PREMIUM) {
     throw new SubscriptionCreateError("INVALID_PLAN", "Plano inválido.", 400);
   }
-  // §29 — cadência anual não tem suporte real no provider (auto_recurring só documenta days/months) —
-  // recusada aqui, nunca "fingida" com frequency:12 sem prova de que o provider real aceita.
   if (requestedBillingCycle !== "monthly" && requestedBillingCycle !== "annual") {
     throw new SubscriptionCreateError("UNSUPPORTED_BILLING_CYCLE", "Cadência de cobrança não suportada.", 400);
+  }
+  if (expectedPricingVersion !== undefined && expectedPricingVersion !== "v2") {
+    throw new SubscriptionCreateError("PRICE_CHANGED", "A oferta mudou. Revise o preço atual antes de continuar.", 409);
+  }
+  if (expectedOfferId !== undefined && expectedOfferId !== "standard" && expectedOfferId !== "launch") {
+    throw new SubscriptionCreateError("PRICE_CHANGED", "A oferta mudou. Revise o preço atual antes de continuar.", 409);
   }
   const plan: "pro" | "premium" = requestedPlan;
   const billingCycle: BillingCycle = requestedBillingCycle;
@@ -905,6 +911,10 @@ export async function createSubscriptionCommand(
   // §10/§31 — preço SEMPRE do servidor, sempre a partir dos centavos canônicos (nunca um float
   // recalculado, nunca nada vindo do chamador).
   const offer = tierAvailability.offer!;
+  if ((expectedPricingVersion !== undefined && expectedPricingVersion !== offer.pricingVersion)
+    || (expectedOfferId !== undefined && expectedOfferId !== offer.offerId)) {
+    throw new SubscriptionCreateError("PRICE_CHANGED", "A oferta mudou. Revise o preço atual antes de continuar.", 409);
+  }
   const priceCents = offer.subscribedPriceCents;
   const transactionAmountBRL = priceCents / 100;
   const planLabel = plan === PLANS.PRO ? "RevendaSmart Pro" : "RevendaSmart Premium";
@@ -1084,6 +1094,7 @@ export function registerSubscriptionRoutes(
 
       const result = await createSubscriptionCommand(
         db, uid, userEmail, (req.body as any)?.plan, (req.body as any)?.billingCycle,
+        (req.body as any)?.expectedPricingVersion, (req.body as any)?.expectedOfferId,
         async ({ reason, externalReference, payerEmail, transactionAmountBRL, frequency }) => {
           const preApproval = new PreApproval(mpClient);
           const response = await preApproval.create({

@@ -65,7 +65,7 @@ for (const plan of ["pro", "premium"] as const) for (const cycle of ["monthly", 
     await page.getByTestId(`button-confirm-purchase-${plan}`).click();
     await expect.poll(() => getCreateResponse()?.status).toBe(200);
     const captured = getCreateResponse();
-    expect(captured?.request).toEqual({ plan, billingCycle: cycle });
+    expect(captured?.request).toMatchObject({ plan, billingCycle: cycle, expectedPricingVersion: "v2", expectedOfferId: "launch" });
     const result = JSON.parse(captured!.body);
     expect(result).toMatchObject({ plan, billingCycle: cycle, priceCents: expectedCents, offerId: "launch" });
     const contract = (await admin.firestore().doc(`users/${user.uid}/subscriptionContracts/${result.subscriptionId}`).get()).data();

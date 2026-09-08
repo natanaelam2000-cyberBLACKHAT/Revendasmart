@@ -126,7 +126,7 @@ async function runPriceAuthorityTests(db: AdminFirestore): Promise<void> {
     {
       const uid = tenantUid("pa1-pro");
       const calls: any[] = [];
-      const result: any = await createSubscriptionCommand(db, uid, "pa1@example.com", "pro", "monthly", fakeProvider(calls));
+      const result: any = await createSubscriptionCommand(db, uid, "pa1@example.com", "pro", "monthly", undefined, undefined, fakeProvider(calls));
       assert.equal(result.priceCents, 4990);
       assert.equal(calls.length, 1);
       assert.equal(calls[0].transactionAmountBRL, 49.90, "PA1: o servidor deve mandar exatamente 49.90 ao provider, nunca um valor recalculado");
@@ -138,7 +138,7 @@ async function runPriceAuthorityTests(db: AdminFirestore): Promise<void> {
     {
       const uid = tenantUid("pa2-premium");
       const calls: any[] = [];
-      const result: any = await createSubscriptionCommand(db, uid, "pa2@example.com", "premium", "monthly", fakeProvider(calls));
+      const result: any = await createSubscriptionCommand(db, uid, "pa2@example.com", "premium", "monthly", undefined, undefined, fakeProvider(calls));
       assert.equal(result.priceCents, 7990);
       assert.equal(calls[0].transactionAmountBRL, 79.90);
       console.log("PASS PA2 client asks Premium monthly -> server resolves 7990 cents (79.90 BRL)");
@@ -149,7 +149,7 @@ async function runPriceAuthorityTests(db: AdminFirestore): Promise<void> {
       const uid = tenantUid("pa5");
       const calls: any[] = [];
       await assert.rejects(
-        () => createSubscriptionCommand(db, uid, "pa5@example.com", "platinum", "monthly", fakeProvider(calls)),
+        () => createSubscriptionCommand(db, uid, "pa5@example.com", "platinum", "monthly", undefined, undefined, fakeProvider(calls)),
         (error: unknown) => { assert.ok(error instanceof SubscriptionCreateError); assert.equal(error.code, "INVALID_PLAN"); return true; },
       );
       assert.equal(calls.length, 0, "PA5: nenhuma chamada ao provider deve acontecer para um plano inválido");
@@ -161,7 +161,7 @@ async function runPriceAuthorityTests(db: AdminFirestore): Promise<void> {
       const uid = tenantUid("pa6");
       const calls: any[] = [];
       await assert.rejects(
-        () => createSubscriptionCommand(db, uid, "pa6@example.com", "pro", "annual", fakeProvider(calls)),
+        () => createSubscriptionCommand(db, uid, "pa6@example.com", "pro", "annual", undefined, undefined, fakeProvider(calls)),
         (error: unknown) => { assert.ok(error instanceof SubscriptionCreateError); assert.equal(error.code, "PLAN_PURCHASE_UNAVAILABLE"); return true; },
       );
       assert.equal(calls.length, 0);
@@ -297,9 +297,9 @@ async function run(): Promise<void> {
     const uid = tenantUid("id1");
     const calls: any[] = [];
     const fakeProvider = async (params: any) => { calls.push(params); return { id: `fake-sub-${calls.length}` }; };
-    const first: any = await createSubscriptionCommand(db, uid, "id1@example.com", "pro", "monthly", fakeProvider);
+    const first: any = await createSubscriptionCommand(db, uid, "id1@example.com", "pro", "monthly", undefined, undefined, fakeProvider);
     assert.ok(!("existing" in first));
-    const second: any = await createSubscriptionCommand(db, uid, "id1@example.com", "pro", "monthly", fakeProvider);
+    const second: any = await createSubscriptionCommand(db, uid, "id1@example.com", "pro", "monthly", undefined, undefined, fakeProvider);
     assert.ok("existing" in second, "ID1/ID2: uma segunda chamada imediata (double-click/retry) deve ser bloqueada, nunca criar uma segunda assinatura");
     assert.equal(calls.length, 1, "ID1/ID2: o provider real só deve ter sido chamado UMA vez");
     console.log("PASS ID1/ID2 a double-click/retry immediately after a successful create is blocked by the existing recent-pending guard — exactly one provider subscription is ever created");
@@ -315,7 +315,7 @@ async function run(): Promise<void> {
     });
     const calls: any[] = [];
     const fakeProvider = async (params: any) => { calls.push(params); return { id: "should-not-be-created" }; };
-    const result: any = await createSubscriptionCommand(db, uid, "id3@example.com", "premium", "monthly", fakeProvider);
+    const result: any = await createSubscriptionCommand(db, uid, "id3@example.com", "premium", "monthly", undefined, undefined, fakeProvider);
     assert.ok("existing" in result, "ID3: usuário com Pro ativo tentando comprar Premium deve ser bloqueado, nunca criar uma segunda assinatura paga");
     assert.equal(calls.length, 0);
     console.log("PASS ID3 a user with an active paid plan cannot create a second/conflicting paid subscription of a different tier — no mid-flight paid-plan switching in this version");

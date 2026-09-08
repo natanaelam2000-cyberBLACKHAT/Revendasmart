@@ -42,7 +42,7 @@ async function run() {
       const ref = db.doc(`users/${uid}/planData/main`);
       await ref.set({ currentPlan: "free", premiumActive: false });
       let calls = 0;
-      const result = await createSubscriptionCommand(db, uid, "synthetic@example.test", plan, cycle, async (payload) => {
+      const result = await createSubscriptionCommand(db, uid, "synthetic@example.test", plan, cycle, undefined, undefined, async (payload) => {
         calls++;
         assert.equal(payload.frequency, cycle === "annual" ? 12 : 1);
         assert.equal(payload.transactionAmountBRL, (launch ? LAUNCH_PRICE_CENTS : STANDARD_PRICE_CENTS)[plan][cycle] / 100);
@@ -65,7 +65,7 @@ async function run() {
       assert.equal((await ref.get()).data()?.subscribedPriceCents, result.priceCents);
       await assert.rejects(syncSubscriptionFromProviderCommand(uid, subId, async () => { throw Error("synthetic provider outage"); }));
       assert.equal(resolveBaseCommercialPlan((await ref.get()).data() as PlanData), plan);
-      const again = await createSubscriptionCommand(db, uid, "synthetic@example.test", plan, cycle, async () => { throw Error("duplicate provider call"); });
+      const again = await createSubscriptionCommand(db, uid, "synthetic@example.test", plan, cycle, undefined, undefined, async () => { throw Error("duplicate provider call"); });
       assert.ok("existing" in again);
       await sync("cancelled");
       assert.equal((await ref.get()).data()?.subscribedPriceCents, result.priceCents);
@@ -73,7 +73,7 @@ async function run() {
       await ref.update({ paidThrough: new Date(Date.now() - 1000), nextBillingAt: new Date(Date.now() - 1000), paymentStatus: null });
       await sync("expired");
       assert.equal(resolveBaseCommercialPlan((await ref.get()).data() as PlanData), "free");
-      const replacement = await createSubscriptionCommand(db, uid, "synthetic@example.test", plan, cycle, async (payload) => {
+      const replacement = await createSubscriptionCommand(db, uid, "synthetic@example.test", plan, cycle, undefined, undefined, async (payload) => {
         assert.equal(payload.transactionAmountBRL, STANDARD_PRICE_CENTS[plan][cycle] / 100);
         return { id: `replacement-${randomUUID()}` };
       });
@@ -94,14 +94,33 @@ async function run() {
   process.env.PRO_PRICE_BRL_CENTS = "4990forged";
   assert.equal(getPurchaseOffer("pro", "monthly").available, false);
   process.env.PRO_PRICE_BRL_CENTS = "4990";
+  process.env.LAUNCH_OFFER_END = after;
+  let staleOfferProviderCalls = 0;
+  await assert.rejects(
+    createSubscriptionCommand(db, `stale-${randomUUID()}`, "test@example.test", "pro", "monthly", "v2", "standard", async () => {
+      staleOfferProviderCalls++;
+      throw Error("stale offer must not reach provider");
+    }),
+    /A oferta mudou/,
+  );
+  assert.equal(staleOfferProviderCalls, 0);
+  const forgedMoneyUid = `forged-money-${randomUUID()}`;
+  await db.doc(`users/${forgedMoneyUid}/planData/main`).set({ currentPlan: "free", premiumActive: false });
+  const forgedMoney = await createSubscriptionCommand(db, forgedMoneyUid, "test@example.test", "premium", "annual", "v2", "launch", async (payload) => {
+    assert.equal(payload.transactionAmountBRL, 499);
+    assert.equal(payload.frequency, 12);
+    return { id: `forged-money-${randomUUID()}` };
+  });
+  assert.ok(!("existing" in forgedMoney));
+  assert.equal(forgedMoney.priceCents, 49900);
   for (const cycle of [null, undefined, "yearly", "12months", "year"]) {
-    await assert.rejects(createSubscriptionCommand(db, "synthetic", "test@example.test", "pro", cycle, async () => { throw Error("must not call"); }), /Cadência/);
+    await assert.rejects(createSubscriptionCommand(db, "synthetic", "test@example.test", "pro", cycle, undefined, undefined, async () => { throw Error("must not call"); }), /Cadência/);
   }
   const legacyUid = `legacy-${randomUUID()}`;
   const legacyRef = db.doc(`users/${legacyUid}/planData/main`);
   await legacyRef.set({ currentPlan: "premium", premiumActive: true, premiumSource: "subscription", subscriptionStatus: "authorized", subscriptionId: "legacy-sub", subscribedPriceCents: 1990 });
   const legacyBefore = (await legacyRef.get()).data();
-  const blocked = await createSubscriptionCommand(db, legacyUid, "test@example.test", "premium", "annual", async () => { throw Error("must not reprice legacy"); });
+  const blocked = await createSubscriptionCommand(db, legacyUid, "test@example.test", "premium", "annual", undefined, undefined, async () => { throw Error("must not reprice legacy"); });
   assert.ok("existing" in blocked);
   assert.deepEqual((await legacyRef.get()).data(), legacyBefore);
   assert.equal(resolveBaseCommercialPlan(legacyBefore as PlanData), "premium");
