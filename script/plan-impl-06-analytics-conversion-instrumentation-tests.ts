@@ -72,7 +72,7 @@ function runActivationTests(): void {
   const publicBookingSrc = sourceOf("client/src/lib/service-public-booking-commands.ts");
   assert.doesNotMatch(publicBookingSrc, /trackAnalyticsEvent|first_booking_created/, "A4: a sessão anônima do cliente (sem tenant logado, sem setFirebaseAnalyticsUserId) nunca pode ser a origem de first_booking_created — seria inatribuível ao tenant certo");
   const agendaSrc = sourceOf("client/src/pages/service-agenda.tsx");
-  assert.match(agendaSrc, /fireServerCountedFirstOccurrence\(\s*uid,\s*"first_booking_created",\s*"first_booking_created",\s*async \(\) => \(await getCountFromServer\(collection\(getFirestore\(\), "users", uid, "bookings"\)\)\)\.data\(\)\.count,?\s*\)/, "A4: first_booking_created precisa vir de uma contagem lifetime real de bookings, na sessão do DONO");
+  assert.match(agendaSrc, /fireServerCountedFirstOccurrence\(\s*uid,\s*"first_booking_created",\s*"first_booking_created",\s*countServiceBookings,?\s*\)/, "A4: first_booking_created precisa vir de uma contagem lifetime real de bookings, na sessão do DONO, através do boundary de Services");
   assert.match(agendaSrc, /useEffect\(\(\) => \{[\s\S]{0,50}const uid = getFirebaseAuth\(\)\?\.currentUser\?\.uid;[\s\S]{0,400}\}, \[\]\)/, "A4: o efeito de first_booking_created roda uma vez ao montar a agenda do dono, não depende da data selecionada");
   console.log("PASS A4 first_booking_created fires from the OWNER's own session (service-agenda.tsx mount, lifetime bookings count) — never from the anonymous public confirm flow, which has no tenant attribution");
 
@@ -151,8 +151,11 @@ function runPlansFunnelTests(): void {
   assert.match(plansSrc, /onClick=\{handleSelectPlan\}/, "PF2: o botão 'Assinar' precisa estar de fato ligado a handleSelectPlan");
   console.log("PASS PF2 plan_selected fires on the deliberate 'Assinar' click, wired to the real button — never for an unavailable/disabled plan card");
 
-  assert.match(plansSrc, /trackAnalyticsEvent\("checkout_started", \{ plan, billing_cycle: cycle, pricing_version: "v2" \}\);\s*try \{\s*const data = await apiRequest/, "PF3: checkout_started precisa disparar IMEDIATAMENTE antes do apiRequest real, nunca no clique de 'Assinar' (que só abre a confirmação, ainda cancelável)");
-  console.log("PASS PF3 checkout_started fires immediately before the real POST /api/subscriptions/create call, not at the earlier 'Assinar' click which can still be backed out of");
+  const checkoutStartedAt = plansSrc.indexOf('trackAnalyticsEvent("checkout_started", { plan, billing_cycle: cycle, pricing_version: "v2" });');
+  const pricingPreflightAt = plansSrc.indexOf("const currentOffer = await fetchCurrentPurchaseOffer(plan, cycle);", checkoutStartedAt);
+  const createPostAt = plansSrc.indexOf('await apiRequest<{ initPoint?: string; priceCents: number; billingCycle: BillingCycle }>("/api/subscriptions/create"', pricingPreflightAt);
+  assert.ok(checkoutStartedAt >= 0 && pricingPreflightAt > checkoutStartedAt && createPostAt > pricingPreflightAt, "PF3: checkout_started, pricing preflight e create POST devem permanecer nessa ordem no checkout confirmado");
+  console.log("PASS PF3 checkout_started starts the confirmed checkout path, canonical pricing preflight follows it, and the real create POST remains downstream of that preflight");
 
   assert.match(plansSrc, /catch \(err\) \{\s*trackAnalyticsEvent\("checkout_failed", \{ plan, reason: toCheckoutFailureReason\(err\) \}\);/, "PF4: checkout_failed precisa usar o mapeamento fechado, nunca o erro bruto");
   assert.doesNotMatch(plansSrc, /reason: err\.message|reason: String\(err\)|checkout_failed.*err\.message/, "PF4: nunca a string de erro bruta da API/provider como reason");
