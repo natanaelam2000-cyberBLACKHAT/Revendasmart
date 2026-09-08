@@ -156,13 +156,13 @@ async function runPriceAuthorityTests(db: AdminFirestore): Promise<void> {
       console.log("PASS PA5 unsupported plan is rejected before ever reaching the provider");
     }
 
-    // PA6 — cadência não suportada (anual) é rejeitada, nunca "fingida" com frequency:12 sem prova.
+    // RC-P0-PRICING-01: annual is supported but remains unavailable without explicit annual config.
     {
       const uid = tenantUid("pa6");
       const calls: any[] = [];
       await assert.rejects(
         () => createSubscriptionCommand(db, uid, "pa6@example.com", "pro", "annual", fakeProvider(calls)),
-        (error: unknown) => { assert.ok(error instanceof SubscriptionCreateError); assert.equal(error.code, "UNSUPPORTED_BILLING_CYCLE"); return true; },
+        (error: unknown) => { assert.ok(error instanceof SubscriptionCreateError); assert.equal(error.code, "PLAN_PURCHASE_UNAVAILABLE"); return true; },
       );
       assert.equal(calls.length, 0);
       console.log("PASS PA6 unsupported billing cycle (annual) is rejected before ever reaching the provider");

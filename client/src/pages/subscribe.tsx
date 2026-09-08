@@ -18,26 +18,23 @@ import {
   CheckCircle,
   ChevronLeft,
 } from "lucide-react";
-import { ApiError, apiRequest, buildApiErrorDisplayMessage } from "@/lib/api-client";
+import { apiRequest, buildApiErrorDisplayMessage } from "@/lib/api-client";
 import { usePlanData } from "@/hooks/usePlanData";
 import { isPremiumFromGlobalAccess, resolveLegacyBillingProvider, PLANS, type GlobalConfig, type PlanData as MonetizationPlanData } from "@shared/monetization";
 import { getFirebaseAuth, trackAnalyticsEvent } from "@/lib/firebase";
 import {
   isAndroidNativeApp,
-  getAndroidPremiumOffers,
-  purchasePremiumViaGooglePlay,
   recoverPendingGooglePlayPurchases,
   restoreAndroidPurchases,
   openAndroidSubscriptionManagement,
   type PlayBillingProductOffer,
-  type PlayPurchaseFlowResult,
 } from "@/lib/play-billing";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 type PageStatus = "idle" | "loading" | "redirecting" | "success" | "error" | "cancelling" | "cancelled";
-type CreateSubscriptionResponse = { initPoint?: string };
+
 type AndroidBillingStatus = "idle" | "loading" | "pending" | "restoring" | "error";
 
 // ---------------------------------------------------------------------------
@@ -95,7 +92,8 @@ export default function Subscribe() {
 
   // RELEASE-07B: Android nativo usa Google Play Billing; Web/PWA continua no Mercado Pago (abaixo).
   const [isAndroid, setIsAndroid] = useState(false);
-  const [androidOffers, setAndroidOffers] = useState<PlayBillingProductOffer[]>([]);
+  // New Play offers await the canonical product mapping; restore/management stay available.
+  const androidOffers: PlayBillingProductOffer[] = [];
   const [androidStatus, setAndroidStatus] = useState<AndroidBillingStatus>("idle");
   const [androidErrorMsg, setAndroidErrorMsg] = useState("");
 
@@ -178,8 +176,6 @@ export default function Subscribe() {
       setIsAndroid(android);
       if (!android) return;
 
-      const offers = await getAndroidPremiumOffers();
-      if (!cancelled) setAndroidOffers(offers);
 
       const auth = getFirebaseAuth();
       const user = auth?.currentUser;
@@ -197,29 +193,8 @@ export default function Subscribe() {
   // ---------------------------------------------------------------------------
   // Actions
   // ---------------------------------------------------------------------------
-  async function handleSubscribe() {
-    setStatus("loading");
-    setErrorMsg("");
-    try {
-      const data = await apiRequest<CreateSubscriptionResponse>("/api/app-subscription/create", {
-        method: "POST",
-        auth: true,
-      });
-
-      if (!data.initPoint) throw new Error("Link de checkout não retornado pela API.");
-
-      setStatus("redirecting");
-      // Redirect to Mercado Pago checkout
-      window.location.href = data.initPoint;
-    } catch (err) {
-      if (err instanceof ApiError && err.code === "ALREADY_SUBSCRIBED") {
-        setStatus("success");
-        refresh?.();
-        return;
-      }
-      setErrorMsg(buildApiErrorDisplayMessage(err, "Erro inesperado. Tente novamente."));
-      setStatus("error");
-    }
+  function handleSubscribe() {
+    setLocation("/plans");
   }
 
   async function handleCancel() {
@@ -246,34 +221,8 @@ export default function Subscribe() {
   // ---------------------------------------------------------------------------
   // Actions — Android (Google Play Billing)
   // ---------------------------------------------------------------------------
-  async function handleSubscribeAndroid(interval: "monthly" | "yearly") {
-    setAndroidStatus("loading");
-    setAndroidErrorMsg("");
-    const auth = getFirebaseAuth();
-    const user = auth?.currentUser;
-    if (!user) {
-      setAndroidStatus("error");
-      setAndroidErrorMsg("Faça login novamente.");
-      return;
-    }
-    const idToken = await user.getIdToken();
-    const result: PlayPurchaseFlowResult = await purchasePremiumViaGooglePlay({ interval, token: idToken, firebaseUid: user.uid });
-    if (result.kind === "activated") {
-      setAndroidStatus("idle");
-      setStatus("success");
-      await refresh?.();
-    } else if (result.kind === "pending") {
-      setAndroidStatus("pending");
-    } else if (result.kind === "cancelled") {
-      // Cancelamento do usuário no fluxo nativo não é um erro — só volta ao estado normal.
-      setAndroidStatus("idle");
-    } else if (result.kind === "product_unavailable") {
-      setAndroidStatus("error");
-      setAndroidErrorMsg("Este produto ainda não está disponível na Play Store.");
-    } else {
-      setAndroidStatus("error");
-      setAndroidErrorMsg(result.message);
-    }
+  function handleSubscribeAndroid() {
+    setLocation("/plans");
   }
 
   async function handleRestoreAndroid() {
@@ -443,7 +392,7 @@ export default function Subscribe() {
   <div className="bg-green-50 border border-green-200 rounded-2xl p-5 text-center space-y-3 mb-6">
 
     <p className="text-lg font-black text-green-700">
-      Apenas R$ {import.meta.env.VITE_PREMIUM_PRICE_BRL || "19,90"} / mês
+      Consulte os planos e valores disponíveis
     </p>
 
     <button
@@ -480,7 +429,7 @@ export default function Subscribe() {
     </p>
 
     <button
-      onClick={() => handleSubscribeAndroid("monthly")}
+      onClick={() => handleSubscribeAndroid()}
       disabled={androidStatus === "loading"}
       className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-4 rounded-xl shadow-md transition-all active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2"
       data-testid="button-subscribe-google-play"
@@ -656,7 +605,7 @@ export default function Subscribe() {
             ) : (
               <>
                 <Sparkles className="w-5 h-5" />
-                Assinar Premium — R$ 19,90/mês
+                Ver planos e preços
               </>
             )}
           </button>
@@ -665,7 +614,7 @@ export default function Subscribe() {
         {/* CTA Button — Android nativo (Google Play Billing), preço vem da Play, nunca hardcoded */}
         {isAndroid && showBuyButton && !isGlobalPremiumActive && !hasPremiumAccess && (
           <button
-            onClick={() => handleSubscribeAndroid("monthly")}
+            onClick={() => handleSubscribeAndroid()}
             disabled={androidStatus === "loading"}
             className="w-full bg-amber-500 hover:bg-amber-600 text-white font-black py-4 rounded-2xl text-base active:scale-95 transition-all shadow-md disabled:opacity-60 flex items-center justify-center gap-2"
             data-testid="button-subscribe-premium-android"
@@ -720,7 +669,7 @@ export default function Subscribe() {
           </div>
         )}
 
-        {hasPremiumAccess && hasPaidSubscription && !managesSubscriptionViaGooglePlay && !isCancelledWithinPaidPeriod && (
+        {(hasPremiumAccess || isActiveSubscriber) && hasPaidSubscription && !managesSubscriptionViaGooglePlay && !isCancelledWithinPaidPeriod && !isCancelledSubscriber && (
           <div className="mt-4">
             {!showCancelConfirm ? (
               <button

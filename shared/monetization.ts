@@ -2,6 +2,9 @@
  * RevendaSmart — Monetization Structures
  * Plans, Referral, and Limits
  */
+import { STANDARD_PRICE_CENTS, type CommercialOffer } from "./subscription-pricing";
+import type { BillingCycle } from "./subscription-pricing";
+export type { BillingCycle } from "./subscription-pricing";
 export const UNLIMITED = -1;
 export const PLANS = {
   FREE: 'free',
@@ -181,8 +184,8 @@ export const PLAN_CONFIG: Record<PlanType, PlanInfo> = {
  */
 export const PLAN_PRICING: Record<PlanType, { readonly monthly: number; readonly annual: number }> = {
   free: { monthly: 0, annual: 0 },
-  pro: { monthly: 49.90, annual: 499 },
-  premium: { monthly: 79.90, annual: 799 },
+  pro: { monthly: STANDARD_PRICE_CENTS.pro.monthly / 100, annual: STANDARD_PRICE_CENTS.pro.annual / 100 },
+  premium: { monthly: STANDARD_PRICE_CENTS.premium.monthly / 100, annual: STANDARD_PRICE_CENTS.premium.annual / 100 },
 };
 
 /**
@@ -290,13 +293,7 @@ export const PLAN_PRESENTATION: Record<PlanType, PlanPresentation> = {
  * tocada por este ticket); `PLAN_PRICE_CENTS` é a fonte para COBRANÇA. Um teste garante que os dois
  * nunca divergem (cents/100 === PLAN_PRICING), então nunca há duas verdades sobre o mesmo preço.
  */
-export const PLAN_PRICE_CENTS: Record<PlanType, { readonly monthly: number; readonly annual: number }> = {
-  free: { monthly: 0, annual: 0 },
-  pro: { monthly: 4990, annual: 49900 },
-  premium: { monthly: 7990, annual: 79900 },
-};
-
-export type BillingCycle = 'monthly' | 'annual';
+export const PLAN_PRICE_CENTS = STANDARD_PRICE_CENTS;
 
 /**
  * PLAN-IMPL-04A §26/§29/§57 — único lugar que define "perto do limite" (80%): nenhum componente deve
@@ -342,12 +339,14 @@ export type PurchaseUnavailableReason =
 export interface PlanPurchaseAvailabilityEntry {
   readonly available: boolean;
   readonly reason: PurchaseUnavailableReason | null;
+  readonly offer?: CommercialOffer;
 }
 
 export interface PlanPurchaseAvailability {
   readonly pro: PlanPurchaseAvailabilityEntry;
   readonly premium: PlanPurchaseAvailabilityEntry;
   readonly annual: PlanPurchaseAvailabilityEntry;
+  readonly offers?: Record<"pro" | "premium", Record<BillingCycle, PlanPurchaseAvailabilityEntry>>;
 }
 
 // Subscription status from Mercado Pago PreApproval
@@ -439,6 +438,8 @@ export interface PlanData {
   paidThrough?: Date | null;
   pricingVersion?: 'v2' | null;
   billingCycle?: BillingCycle | null;
+  offerId?: "standard" | "launch" | "legacy_1990" | null;
+  subscribedPriceCents?: number | null;
 }
 
 // Firestore document: system/config

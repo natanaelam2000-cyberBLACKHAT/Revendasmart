@@ -2152,8 +2152,9 @@ assert.match(subscriptions, /sendSubscriptionCredentialError\(res, "sync-now", u
 assert.match(subscriptions, /sendSubscriptionCredentialError\(res, "webhook", null\)/);
 assert.match(subscriptions, /app\.post\("\/api\/app-subscription\/sync-now", requireAuth/);
 assert.match(subscriptions, /SUBSCRIPTION_OWNERSHIP_MISMATCH/);
-assert.match(subscriptions, /external_reference:\s*uid/);
-assert.match(subscriptions, /transaction_amount:\s*PREMIUM_PRICE_BRL/);
+assert.match(subscriptions, /LEGACY_OFFER_RETIRED/);
+assert.doesNotMatch(subscriptions, /transaction_amount:\s*PREMIUM_PRICE_BRL/);
+assert.match(subscriptions, /external_reference:\s*externalReference/);
 assert.doesNotMatch(subscriptions, /req\.body\.(price|plan|premiumActive|currentPlan|transaction_amount)/);
 assert.match(subscriptions, /lastSubscriptionEventId/);
 assert.match(subscriptions, /lastSubscriptionEventAt/);

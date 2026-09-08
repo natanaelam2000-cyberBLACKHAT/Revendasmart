@@ -411,8 +411,8 @@ async function run(): Promise<void> {
     {
       const serverSource = await import("node:fs").then((fs) => fs.readFileSync("server/subscriptions.ts", "utf8"));
       const createBlock = serverSource.slice(
-        serverSource.indexOf('"/api/app-subscription/create"'),
-        serverSource.indexOf('"/api/app-subscription/cancel"'),
+        serverSource.indexOf('export async function createSubscriptionCommand'),
+        serverSource.indexOf('export async function syncSubscriptionFromProviderCommand'),
       );
       assert.match(createBlock, /billingProvider:\s*"mercado_pago"/,
         "estrutural: toda nova assinatura MP grava billingProvider desde a criação");

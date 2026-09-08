@@ -4,6 +4,8 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
+    "test:rc-p0-pricing:run": "tsx script/rc-p0-pricing-tests.ts",
+    "test:rc-p0-pricing": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:rc-p0-pricing:run\"",
     "dev:client": "vite dev --port 5000",
     "dev": "tsx script/dev.ts",
     "build": "tsx script/build.ts",

@@ -7,7 +7,8 @@ import { usePlan } from "@/providers/PlanProvider";
 import { usePlanPurchaseAvailability } from "@/hooks/usePlanPurchaseAvailability";
 import { formatTrialDaysRemaining } from "@/lib/plan-helpers";
 import { apiRequest, buildApiErrorDisplayMessage, ApiError } from "@/lib/api-client";
-import { PLANS, PLAN_CONFIG, PLAN_PRESENTATION, PLAN_PRICING, type PlanType } from "@shared/monetization";
+import { PLANS, PLAN_CONFIG, PLAN_PRESENTATION, PLAN_PRICING, type PlanType, type BillingCycle, type PlanPurchaseAvailabilityEntry } from "@shared/monetization";
+import { annualSavings } from "@shared/subscription-pricing";
 import { trackAnalyticsEvent, type AnalyticsCheckoutFailureReason, type AnalyticsSource } from "@/lib/firebase";
 import { markPendingSubscriptionActivation } from "@/lib/subscription-activation-marker";
 
@@ -45,20 +46,13 @@ function readPlansSourceFromLocation(): AnalyticsSource {
  */
 
 const BILLING_CYCLES = ["monthly", "annual"] as const;
-type BillingCycle = typeof BILLING_CYCLES[number];
+
 
 function formatBRL(value: number): string {
   return value.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 /** §45 — economia anual derivada só da tabela canônica, nunca um número guardado à parte. */
-function annualSavingsPercent(plan: PlanType): number | null {
-  const { monthly, annual } = PLAN_PRICING[plan];
-  if (monthly <= 0 || annual <= 0) return null;
-  const fullYear = monthly * 12;
-  if (annual >= fullYear) return null;
-  return Math.round((1 - annual / fullYear) * 100);
-}
 
 type CardState =
   | { kind: "current" }
@@ -82,6 +76,8 @@ function PlanCard({
   hasPaidSubscription,
   currentPlan,
   isTrial,
+  purchaseOffer,
+  monthlyOffer,
 }: {
   plan: PlanType;
   cycle: BillingCycle;
@@ -93,14 +89,18 @@ function PlanCard({
    * já usa essa mesma distinção em outro contexto — aqui é só o que "current_plan" honestamente significa). */
   currentPlan: PlanType;
   isTrial: boolean;
+  purchaseOffer?: PlanPurchaseAvailabilityEntry;
+  monthlyOffer?: PlanPurchaseAvailabilityEntry;
 }) {
   const [, setLocation] = useLocation();
   const presentation = PLAN_PRESENTATION[plan];
   const price = PLAN_PRICING[plan];
-  const savings = cycle === "annual" ? annualSavingsPercent(plan) : null;
+  const offer = purchaseOffer?.offer;
+  const savings = cycle === "annual" && monthlyOffer?.offer && offer
+    ? Math.round(annualSavings(monthlyOffer.offer.subscribedPriceCents, offer.subscribedPriceCents).percent) : null;
 
   const isFree = plan === PLANS.FREE;
-  const priceValue = cycle === "annual" ? price.annual : price.monthly;
+  const priceValue = offer ? offer.subscribedPriceCents / 100 : price[cycle];
 
   // PLAN-IMPL-04B §14/§34 — confirmação mínima (plano/cadência/preço) antes de chamar o endpoint real,
   // nunca um checkout disparado direto no primeiro clique. `billingCycle` sempre "monthly" no corpo da
@@ -113,7 +113,7 @@ function PlanCard({
   // PLAN-IMPL-06 §25 — plan_selected: o usuário decidiu deliberadamente este plano/CTA (nunca a mera
   // impressão de um card indisponível, §25 — este handler só existe no branch purchaseAvailable true).
   function handleSelectPlan() {
-    trackAnalyticsEvent("plan_selected", { selected_plan: plan, billing_cycle: "monthly", current_plan: currentPlan, is_trial: isTrial });
+    trackAnalyticsEvent("plan_selected", { selected_plan: plan, billing_cycle: cycle, current_plan: currentPlan, is_trial: isTrial });
     setPurchaseState("confirming");
   }
 
@@ -122,18 +122,22 @@ function PlanCard({
     setPurchaseError("");
     // PLAN-IMPL-06 §26 — só agora, imediatamente antes de invocar o endpoint real, nunca no clique do
     // CTA "Assinar" (que só abre o painel de confirmação, ainda pode ser cancelado via "Voltar").
-    trackAnalyticsEvent("checkout_started", { plan, billing_cycle: "monthly", pricing_version: "v2" });
+    trackAnalyticsEvent("checkout_started", { plan, billing_cycle: cycle, pricing_version: "v2" });
     try {
-      const data = await apiRequest<{ initPoint?: string }>("/api/subscriptions/create", {
+      const data = await apiRequest<{ initPoint?: string; priceCents: number; billingCycle: BillingCycle }>("/api/subscriptions/create", {
         method: "POST",
         auth: true,
-        body: { plan, billingCycle: "monthly" },
+        body: { plan, billingCycle: cycle },
       });
       if (!data.initPoint) throw new Error("Link de checkout não retornado pela API.");
+      if (data.priceCents !== Math.round(priceValue * 100) && !window.confirm(`Preço atualizado: R$ ${formatBRL(data.priceCents / 100)}/${data.billingCycle === "annual" ? "ano" : "mês"}. Continuar?`)) {
+        setPurchaseState("idle");
+        return;
+      }
       // PLAN-IMPL-06 §29 — marca a tentativa ANTES do redirect (sobrevive à ida-e-volta ao Mercado
       // Pago); PlanProvider.tsx consome isto para disparar subscription_activated quando a ativação
       // real (assíncrona, via webhook) for observada.
-      markPendingSubscriptionActivation(plan, "monthly");
+      markPendingSubscriptionActivation(plan, cycle);
       window.location.href = data.initPoint;
     } catch (err) {
       trackAnalyticsEvent("checkout_failed", { plan, reason: toCheckoutFailureReason(err) });
@@ -166,6 +170,9 @@ function PlanCard({
           <p className="text-3xl font-black text-foreground">R$ 0</p>
         ) : (
           <>
+            {offer?.offerId === "launch" && (
+              <p className="text-xs text-muted-foreground"><s>De R$ {formatBRL(offer.referencePriceCents / 100)}</s> · Preço de lançamento</p>
+            )}
             <p className="text-3xl font-black text-foreground">
               R$ {formatBRL(priceValue)}
               <span className="text-sm font-bold text-muted-foreground">{cycle === "annual" ? "/ano" : "/mês"}</span>
@@ -190,6 +197,7 @@ function PlanCard({
         {cardState.kind === "current" && (
           <div className="rounded-2xl bg-primary/10 text-primary text-center py-3 text-xs font-black uppercase tracking-widest" data-testid={`badge-current-plan-${plan}`}>
             Seu plano atual
+            {hasPaidSubscription && <p className="text-xs font-normal normal-case">Preços acima são para novas assinaturas. Seu contrato atual permanece preservado.</p>}
           </div>
         )}
 
@@ -230,7 +238,7 @@ function PlanCard({
             purchaseState === "confirming" || purchaseState === "purchasing" || purchaseState === "error" ? (
               <div className="rounded-2xl border border-primary/30 bg-primary/5 p-3 space-y-2" data-testid={`panel-confirm-purchase-${plan}`}>
                 <p className="text-xs font-bold text-foreground text-center">
-                  Confirmar {presentation.title} · R$ {formatBRL(price.monthly)}/mês
+                  Confirmar {presentation.title} · R$ {formatBRL(priceValue)}{cycle === "annual" ? "/ano" : "/mês"}
                 </p>
                 {purchaseError && (
                   <p className="text-[11px] text-red-600 text-center" data-testid={`text-purchase-error-${plan}`}>{purchaseError}</p>
@@ -289,7 +297,7 @@ export default function Plans() {
 
   const trialActive = trial?.status === "active";
   const trialJustExpired = trial?.status === "expired";
-  const hasPaidSubscription = Boolean(planData?.subscriptionId || planData?.billingProvider);
+  const hasPaidSubscription = Boolean((basePlan !== PLANS.FREE || planData?.subscriptionStatus === "pending") && (planData?.subscriptionId || planData?.billingProvider));
 
   const loading = planLoading || availabilityLoading;
 
@@ -365,12 +373,14 @@ export default function Plans() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
           {([PLANS.FREE, PLANS.PRO, PLANS.PREMIUM] as const).map((plan) => (
             <PlanCard
-              key={plan}
+              key={`${plan}-${cycle}`}
               plan={plan}
               cycle={cycle}
               cardState={resolveCardState(plan, basePlan, trialActive, trial?.endsAt ?? null)}
               basePlanName={basePlanName}
-              purchaseAvailable={plan === PLANS.PRO ? (availability?.pro.available ?? false) : plan === PLANS.PREMIUM ? (availability?.premium.available ?? false) : true}
+              purchaseAvailable={plan !== PLANS.FREE && !hasPaidSubscription && (availability?.offers?.[plan]?.[cycle]?.available ?? false)}
+              purchaseOffer={plan === PLANS.FREE ? undefined : availability?.offers?.[plan]?.[cycle]}
+              monthlyOffer={plan === PLANS.FREE ? undefined : availability?.offers?.[plan]?.monthly}
               hasPaidSubscription={hasPaidSubscription}
               currentPlan={basePlan}
               isTrial={trialActive}
@@ -378,7 +388,7 @@ export default function Plans() {
           ))}
         </div>
 
-        {hasPaidSubscription && basePlan === PLANS.PREMIUM && (
+        {hasPaidSubscription && (
           <p className="text-center text-xs text-muted-foreground">
             <button type="button" onClick={() => setLocation("/subscribe")} className="underline font-semibold" data-testid="link-manage-subscription-footer">
               Gerenciar ou cancelar assinatura

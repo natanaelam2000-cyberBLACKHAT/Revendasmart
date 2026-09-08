@@ -16,7 +16,9 @@ export function usePlanPurchaseAvailability() {
     let cancelled = false;
     (async () => {
       try {
-        const data = await apiRequest<PlanPurchaseAvailability>("/api/plans/purchase-availability");
+        const { Capacitor } = await import("@capacitor/core");
+        const channel = Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android" ? "android" : "web";
+        const data = await apiRequest<PlanPurchaseAvailability>(`/api/plans/purchase-availability?channel=${channel}`);
         if (!cancelled) setAvailability(data);
       } catch {
         if (!cancelled) setError("Não foi possível verificar a disponibilidade de assinatura agora.");

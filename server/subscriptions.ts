@@ -31,8 +31,8 @@ import * as crypto from "crypto";
 import { MercadoPagoConfig, PreApproval } from "mercadopago";
 import { getFirebaseAdmin } from "./firebase-admin-init";
 import type { SubscriptionStatus, GlobalConfig, BillingCycle, PlanType } from "../shared/monetization";
-import { DEFAULT_GLOBAL_CONFIG, PLAN_PRICE_CENTS, PLANS, resolveGenericPaidPlan } from "../shared/monetization";
-import { getPlanPurchaseAvailability } from "./plan-purchase-availability";
+import { DEFAULT_GLOBAL_CONFIG, PLANS, resolveGenericPaidPlan } from "../shared/monetization";
+import { getPurchaseOffer } from "./plan-purchase-availability";
 import { logError, logInfo, logWarn } from "./logger";
 import {
   maskMercadoPagoExternalId,
@@ -54,16 +54,11 @@ const MP_CREDENTIAL_VALIDATION = validateMercadoPagoAccessTokenForEnvironment(
   MERCADO_PAGO_ENV,
 );
 
-// Premium subscription price in BRL (monthly)
-const PREMIUM_PRICE_BRL = parseFloat(process.env.PREMIUM_PRICE_BRL ?? "19.90");
-const PREMIUM_PLAN_NAME = "RevendaSmart Premium";
-
 logInfo("subscriptions.initialized", {
   credentialConfigured: Boolean(CENTRAL_ACCESS_TOKEN),
   credentialValid: MP_CREDENTIAL_VALIDATION.ok,
   credentialMode: MP_CREDENTIAL_VALIDATION.ok ? MP_CREDENTIAL_VALIDATION.mode : MP_CREDENTIAL_VALIDATION.code,
   mercadoPagoEnvironment: MERCADO_PAGO_ENV,
-  premiumPriceConfigured: Number.isFinite(PREMIUM_PRICE_BRL),
 });
 
 const mpClient = new MercadoPagoConfig({
@@ -871,26 +866,25 @@ export async function createSubscriptionCommand(
   userEmail: string,
   requestedPlan: unknown,
   requestedBillingCycle: unknown,
-  createAtProvider: (params: { reason: string; externalReference: string; payerEmail: string; transactionAmountBRL: number }) => Promise<ProviderSubscriptionCreationResult>,
+  createAtProvider: (params: { reason: string; externalReference: string; payerEmail: string; transactionAmountBRL: number; frequency: number }) => Promise<ProviderSubscriptionCreationResult>,
 ): Promise<
   | { existing: true; response: ReturnType<typeof buildExistingSubscriptionResponse> }
-  | { subscriptionId: string; initPoint?: string; status: "pending"; plan: "pro" | "premium"; billingCycle: BillingCycle; priceCents: number }
+  | { subscriptionId: string; initPoint?: string; status: "pending"; plan: "pro" | "premium"; billingCycle: BillingCycle; priceCents: number; offerId: "standard" | "launch" }
 > {
   if (requestedPlan !== PLANS.PRO && requestedPlan !== PLANS.PREMIUM) {
     throw new SubscriptionCreateError("INVALID_PLAN", "Plano inválido.", 400);
   }
   // §29 — cadência anual não tem suporte real no provider (auto_recurring só documenta days/months) —
   // recusada aqui, nunca "fingida" com frequency:12 sem prova de que o provider real aceita.
-  if ((requestedBillingCycle ?? "monthly") !== "monthly") {
+  if (requestedBillingCycle !== "monthly" && requestedBillingCycle !== "annual") {
     throw new SubscriptionCreateError("UNSUPPORTED_BILLING_CYCLE", "Cadência de cobrança não suportada.", 400);
   }
   const plan: "pro" | "premium" = requestedPlan;
-  const billingCycle: BillingCycle = "monthly";
+  const billingCycle: BillingCycle = requestedBillingCycle;
 
   // §13 — price match gate: só chega ao provider se a disponibilidade (que já valida credencial + flag
   // de ativação + preço configurado == PLAN_PRICE_CENTS) disser que sim.
-  const availability = getPlanPurchaseAvailability();
-  const tierAvailability = plan === PLANS.PRO ? availability.pro : availability.premium;
+  const tierAvailability = getPurchaseOffer(plan, billingCycle);
   if (!tierAvailability.available) {
     throw new SubscriptionCreateError("PLAN_PURCHASE_UNAVAILABLE", "Este plano não está disponível para assinatura agora.", 409, tierAvailability.reason ?? undefined);
   }
@@ -910,7 +904,8 @@ export async function createSubscriptionCommand(
 
   // §10/§31 — preço SEMPRE do servidor, sempre a partir dos centavos canônicos (nunca um float
   // recalculado, nunca nada vindo do chamador).
-  const priceCents = PLAN_PRICE_CENTS[plan].monthly;
+  const offer = tierAvailability.offer!;
+  const priceCents = offer.subscribedPriceCents;
   const transactionAmountBRL = priceCents / 100;
   const planLabel = plan === PLANS.PRO ? "RevendaSmart Pro" : "RevendaSmart Premium";
 
@@ -920,18 +915,28 @@ export async function createSubscriptionCommand(
     externalReference: buildSubscriptionExternalReference(uid, plan, billingCycle),
     payerEmail: userEmail,
     transactionAmountBRL,
+    frequency: billingCycle === "annual" ? 12 : 1,
   });
 
-  await planRef.set({
+  // Append-only commercial history; renewals never resolve the current public catalog.
+  const batch = db.batch();
+  batch.create(db.collection("users").doc(uid).collection("subscriptionContracts").doc(created.id), {
+    ...offer, billingProvider: "mercado_pago", subscriptionId: created.id,
+    createdAt: getFirebaseAdmin().firestore.FieldValue.serverTimestamp(),
+  });
+  batch.set(planRef, {
     billingProvider: "mercado_pago",
     subscriptionId: created.id,
     subscriptionStatus: "pending",
     pricingVersion: "v2",
     billingCycle,
+    offerId: offer.offerId,
+    subscribedPriceCents: priceCents,
     updatedAt: getFirebaseAdmin().firestore.FieldValue.serverTimestamp(),
   }, { merge: true });
+  await batch.commit();
 
-  return { subscriptionId: created.id, initPoint: created.init_point, status: "pending", plan, billingCycle, priceCents };
+  return { subscriptionId: created.id, initPoint: created.init_point, status: "pending", plan, billingCycle, priceCents, offerId: offer.offerId };
 }
 
 /**
@@ -1046,76 +1051,18 @@ export function registerSubscriptionRoutes(
   });
 
 
-  // ✅ CREATE SUBSCRIPTION
+  // Historical creation URL is retired; management, sync and cancellation remain available.
   app.post("/api/app-subscription/create", requireAuth, subscriptionCreateRateLimit, async (req: Request, res: Response) => {
-    const uid = (req as any).firebaseUid as string;
-
-subInfo("[subscriptions/create] Request received");
-
-    if (sendSubscriptionCredentialError(res, "create", uid)) return;
-
     try {
-      const admin = getFirebaseAdmin();
-      const db = admin.firestore();
-      const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
-      const planSnap = await planRef.get();
-      const existingData = planSnap.data();
-
-      const block = shouldBlockNewSubscription(existingData);
-
-      if (block.blocked) {
-        return res.status(200).json(buildExistingSubscriptionResponse(existingData, block.reason));
-      }
-
-      const userRecord = await admin.auth().getUser(uid);
-      const userEmail = userRecord.email ?? "";
-
-      const preApproval = new PreApproval(mpClient);
-    const response = await preApproval.create({
-  body: {
-    reason: PREMIUM_PLAN_NAME,
-
-    external_reference: uid,
-
-    payer_email: userEmail,
-
-    auto_recurring: {
-      frequency: 1,
-      frequency_type: "months",
-      transaction_amount: PREMIUM_PRICE_BRL,
-      currency_id: "BRL",
-    },
-
-    back_url: `${FRONTEND_URL}/subscribe`,
-    status: "pending",
-  }
-});
-
-      await planRef.set({
-  billingProvider: "mercado_pago",
-  subscriptionId: response.id,
-  subscriptionStatus: "pending",
-  updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-}, { merge: true });
-
-     return res.json({
-  subscriptionId: response.id,
-  initPoint: response.init_point,
-  status: "pending",
-});
-
-    } catch (error) {
-  const msg = error instanceof Error ? error.message : String(error);
-  logSubError("create_subscription", uid, msg, {
-    errorName: error instanceof Error ? error.name : "UnknownError",
+      const uid = (req as any).firebaseUid as string;
+      const existing = (await getFirebaseAdmin().firestore().doc(`users/${uid}/planData/main`).get()).data();
+      const block = shouldBlockNewSubscription(existing);
+      if (block.blocked) return res.status(200).json(buildExistingSubscriptionResponse(existing, block.reason));
+      return res.status(410).json({ error: "LEGACY_OFFER_RETIRED", plansPath: "/plans" });
+    } catch {
+      return res.status(503).json({ error: "SUBSCRIPTION_STATUS_UNAVAILABLE" });
+    }
   });
-
-  return res.status(500).json({
-    error: "SUBSCRIPTION_CREATE_ERROR",
-    message: "Não foi possível iniciar a assinatura agora. Tente novamente em instantes.",
-  });
-}
-});
 
   // ---------------------------------------------------------------------------
   // PLAN-IMPL-04B — endpoint canônico NOVO para Pro/Premium v2 (§14/§68). Handler fino: toda a lógica
@@ -1137,7 +1084,7 @@ subInfo("[subscriptions/create] Request received");
 
       const result = await createSubscriptionCommand(
         db, uid, userEmail, (req.body as any)?.plan, (req.body as any)?.billingCycle,
-        async ({ reason, externalReference, payerEmail, transactionAmountBRL }) => {
+        async ({ reason, externalReference, payerEmail, transactionAmountBRL, frequency }) => {
           const preApproval = new PreApproval(mpClient);
           const response = await preApproval.create({
             body: {
@@ -1145,7 +1092,7 @@ subInfo("[subscriptions/create] Request received");
               external_reference: externalReference,
               payer_email: payerEmail,
               auto_recurring: {
-                frequency: 1,
+                frequency,
                 frequency_type: "months",
                 transaction_amount: transactionAmountBRL,
                 currency_id: "BRL",

@@ -147,11 +147,11 @@ function runPlansFunnelTests(): void {
   assert.match(plansSrc, /\}, \[loading, planError\]\);/, "PF1: deps [loading, planError] — a transição para sucesso dispara uma vez; um refresh de dados do MESMO plano (basePlan/activePlan mudando) não é uma nova 'visualização'");
   console.log("PASS PF1 plans_viewed fires once per successful page show — deps are [loading, planError], not the plan values themselves, so a background plan-data refresh never re-fires it");
 
-  assert.match(plansSrc, /function handleSelectPlan\(\) \{\s*trackAnalyticsEvent\("plan_selected", \{ selected_plan: plan, billing_cycle: "monthly", current_plan: currentPlan, is_trial: isTrial \}\);\s*setPurchaseState\("confirming"\);/, "PF2: plan_selected no clique de 'Assinar', antes de abrir o painel de confirmação (decisão deliberada, não uma impressão de card indisponível)");
+  assert.match(plansSrc, /function handleSelectPlan\(\) \{\s*trackAnalyticsEvent\("plan_selected", \{ selected_plan: plan, billing_cycle: cycle, current_plan: currentPlan, is_trial: isTrial \}\);\s*setPurchaseState\("confirming"\);/, "PF2: plan_selected no clique de 'Assinar', antes de abrir o painel de confirmação (decisão deliberada, não uma impressão de card indisponível)");
   assert.match(plansSrc, /onClick=\{handleSelectPlan\}/, "PF2: o botão 'Assinar' precisa estar de fato ligado a handleSelectPlan");
   console.log("PASS PF2 plan_selected fires on the deliberate 'Assinar' click, wired to the real button — never for an unavailable/disabled plan card");
 
-  assert.match(plansSrc, /trackAnalyticsEvent\("checkout_started", \{ plan, billing_cycle: "monthly", pricing_version: "v2" \}\);\s*try \{\s*const data = await apiRequest/, "PF3: checkout_started precisa disparar IMEDIATAMENTE antes do apiRequest real, nunca no clique de 'Assinar' (que só abre a confirmação, ainda cancelável)");
+  assert.match(plansSrc, /trackAnalyticsEvent\("checkout_started", \{ plan, billing_cycle: cycle, pricing_version: "v2" \}\);\s*try \{\s*const data = await apiRequest/, "PF3: checkout_started precisa disparar IMEDIATAMENTE antes do apiRequest real, nunca no clique de 'Assinar' (que só abre a confirmação, ainda cancelável)");
   console.log("PASS PF3 checkout_started fires immediately before the real POST /api/subscriptions/create call, not at the earlier 'Assinar' click which can still be backed out of");
 
   assert.match(plansSrc, /catch \(err\) \{\s*trackAnalyticsEvent\("checkout_failed", \{ plan, reason: toCheckoutFailureReason\(err\) \}\);/, "PF4: checkout_failed precisa usar o mapeamento fechado, nunca o erro bruto");
@@ -161,7 +161,7 @@ function runPlansFunnelTests(): void {
   }
   console.log("PASS PF4 checkout_failed always maps real ApiError codes (matching server/subscriptions.ts's SubscriptionCreateError codes) to the bounded AnalyticsCheckoutFailureReason enum — never the raw error message");
 
-  assert.match(plansSrc, /markPendingSubscriptionActivation\(plan, "monthly"\);\s*window\.location\.href = data\.initPoint;/, "PF5: o marcador precisa ser gravado ANTES do redirect para o Mercado Pago, senão não sobrevive à ida-e-volta");
+  assert.match(plansSrc, /markPendingSubscriptionActivation\(plan, cycle\);\s*window\.location\.href = data\.initPoint;/, "PF5: o marcador precisa ser gravado ANTES do redirect para o Mercado Pago, senão não sobrevive à ida-e-volta");
   const providerSrc = sourceOf("client/src/providers/PlanProvider.tsx");
   assert.match(providerSrc, /firePlanLifecycleAnalytics\(uid, previousSnapshotRef\.current, current\)/, "PF5: PlanProvider precisa consumir o marcador via firePlanLifecycleAnalytics a cada planData observado");
   const lifecycleSrc = sourceOf("client/src/lib/plan-lifecycle-analytics.ts");

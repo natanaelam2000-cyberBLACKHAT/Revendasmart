@@ -1756,8 +1756,9 @@ export async function registerRoutes(
   // GET /api/plans/purchase-availability — PLAN-IMPL-04A §49: sem parâmetro de usuário, mesma resposta
   // para qualquer chamador (nenhum dado pessoal/secret) — nunca requer autenticação, para a página de
   // planos poder decidir CTA antes mesmo do plano do usuário terminar de carregar.
-  app.get("/api/plans/purchase-availability", (_req, res) => {
-    return res.status(200).json(getPlanPurchaseAvailability());
+  app.get("/api/plans/purchase-availability", (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(200).json(getPlanPurchaseAvailability(req.query.channel === "android" ? "android" : "web"));
   });
 
   // GET /api/plan/data/:userId - Get user plan data

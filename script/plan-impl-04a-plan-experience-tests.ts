@@ -244,7 +244,7 @@ function runSourceTextTests(): void {
   assert.equal(apiRequestCalls.length, 1, "PS5a: plans.tsx deve ter exatamente 1 call site de apiRequest (o fluxo de compra novo)");
   assert.match(plansSource, /apiRequest<\{[^}]*\}>\("\/api\/subscriptions\/create"/, "PS5b: a única chamada mira o endpoint v2 novo, nunca o legado");
   assert.doesNotMatch(plansSource, /\/api\/app-subscription\/create/, "PS5c: plans.tsx nunca fala com o endpoint legado de criação");
-  assert.match(plansSource, /body:\s*\{\s*plan,\s*billingCycle:\s*"monthly"\s*\}/, "PS5d: o corpo enviado só contém plan/billingCycle — nunca amount/price/transactionAmount escolhido pelo client");
+  assert.match(plansSource, /body:\s*\{\s*plan,\s*billingCycle:\s*cycle\s*\}/, "PS5d: o corpo enviado só contém plan/billingCycle — nunca amount/price/transactionAmount escolhido pelo client");
   console.log("PASS PS5 Plans page's purchase flow (added in PLAN-IMPL-04B) calls only the new price-authoritative v2 endpoint, sends only plan/billingCycle (never an amount the client could choose), and never touches the legacy create endpoint");
 
   // PS3 — atualizado em PLAN-IMPL-04B: subscribe.tsx (a TELA de gestão) continuava com diff zero — a
@@ -268,7 +268,7 @@ function runSourceTextTests(): void {
   assert.match(subscribeSource, /setStatus\("cancelled"\);\s*setShowCancelConfirm\(false\);/, "PS3a: a transição de estado do cancelamento (status/painel) continua idêntica");
   const subscriptionsSource = sourceOf("server/subscriptions.ts");
   assert.match(subscriptionsSource, /app\.post\("\/api\/app-subscription\/create"/, "PS3b: o endpoint legado de criação continua existindo, nunca removido/renomeado");
-  assert.match(subscriptionsSource, /const PREMIUM_PRICE_BRL = parseFloat\(process\.env\.PREMIUM_PRICE_BRL/, "PS3c: a env var de preço legada continua sendo a autoridade do endpoint antigo, nunca substituída por PLAN_PRICE_CENTS");
+  assert.match(subscriptionsSource, /LEGACY_OFFER_RETIRED/, "RC-P0-PRICING-01: retired creation URL must never create a new legacy purchase");
   assert.match(subscriptionsSource, /cancelUpdate\.premiumActive = true;\s*\n\s*cancelUpdate\.currentPlan = "premium";/, "PS3d: o ramo de cancelamento legado (dentro do período pago) continua escrevendo premiumActive/currentPlan exatamente como antes, byte a byte");
   console.log("PASS PS3 subscribe.tsx's legacy cancel call/state-transition remain byte-identical (its diff since PLAN-IMPL-06 is limited to cancellation analytics, no longer zero — legitimately, see that ticket's S5/S6); subscriptions.ts's legacy anchors (create endpoint, PREMIUM_PRICE_BRL authority, cancel branch) remain textually intact, verified alongside the real subscription-cancel regression suite passing unchanged");
 
