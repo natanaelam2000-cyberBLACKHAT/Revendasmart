@@ -16,11 +16,10 @@ import { getServiceResourceSchedule, listServiceAvailabilityBlocksForResource } 
 import { createServiceAvailabilityBlock, deleteServiceAvailabilityBlock, getServiceAvailability, type ServiceAvailabilityResponse } from "@/lib/service-availability-commands";
 import { listServiceBookingsForResourceAndRange } from "@/lib/service-bookings-persistence";
 import { cancelServiceBooking, rescheduleServiceBooking } from "@/lib/service-booking-commands";
-import { listServices, getServiceWork } from "@/lib/services-persistence";
+import { listServices, getServiceWork, countServiceBookings } from "@/lib/services-persistence";
 import { notifyError, notifySuccess } from "@/lib/notify";
 import { getFirebaseAuth } from "@/lib/firebase";
 import { fireServerCountedFirstOccurrence } from "@/lib/analytics-milestones";
-import { collection, getCountFromServer, getFirestore } from "firebase/firestore";
 import { format as formatLocalDate, ptBR } from "@/lib/date-utils";
 import {
   addDaysToDateKey,
@@ -111,7 +110,7 @@ export default function ServiceAgenda() {
       uid,
       "first_booking_created",
       "first_booking_created",
-      async () => (await getCountFromServer(collection(getFirestore(), "users", uid, "bookings"))).data().count,
+      countServiceBookings,
     );
   }, []);
 

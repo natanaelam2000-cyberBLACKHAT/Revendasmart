@@ -165,6 +165,12 @@ export async function listServices(): Promise<Service[]> {
   return snapshot.docs.map((item) => parseService(item.data()));
 }
 
+/** Returns the tenant-scoped lifetime booking count for activation analytics. */
+export async function countServiceBookings(): Promise<number> {
+  const uid = requireCurrentUid();
+  return (await getCountFromServer(collection(getFirestore(), "users", uid, "bookings"))).data().count;
+}
+
 export async function updateService(serviceId: string, updates: UpdateServiceInput): Promise<Service> {
   const current = await getService(serviceId);
   if (!current) throw new Error("SERVICE_NOT_FOUND");
