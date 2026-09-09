@@ -110,11 +110,15 @@ export async function restoreGooglePlayPurchases(input: {
 /** Produtos + preço localizado direto da Play — nunca um valor fixo do backend. Lista vazia quando
  * billing está indisponível OU quando a Play ainda não tem produtos reais cadastrados (PLAY_CONSOLE_PENDING). */
 export async function getAndroidPremiumOffers(): Promise<PlayBillingProductOffer[]> {
+  return (await getAndroidPlayOffers()).filter((offer) => offer.plan === "premium");
+}
+
+export async function getAndroidPlayOffers(): Promise<PlayBillingProductOffer[]> {
   const client = createGooglePlayBillingClient();
   const available = await client.isAvailable().catch(() => false);
   if (!available) return [];
   try {
-    return (await client.getProducts()).filter((offer) => offer.plan === "premium");
+    return await client.getProducts();
   } catch {
     return [];
   }
@@ -137,12 +141,21 @@ export async function purchasePremiumViaGooglePlay(input: {
   readonly token: string;
   readonly firebaseUid: string;
 }): Promise<PlayPurchaseFlowResult> {
+  return purchasePlanViaGooglePlay({ ...input, plan: "premium" });
+}
+
+export async function purchasePlanViaGooglePlay(input: {
+  readonly plan: PlayBillingPlan;
+  readonly interval: "monthly" | "yearly";
+  readonly token: string;
+  readonly firebaseUid: string;
+}): Promise<PlayPurchaseFlowResult> {
   const client = createGooglePlayBillingClient();
   const available = await client.isAvailable().catch(() => false);
   if (!available) return { kind: "error", message: "Google Play Billing indisponível neste dispositivo." };
 
   const cycle: PlayBillingCycle = input.interval === "yearly" ? "annual" : "monthly";
-  const catalogEntry = getPlayBillingProduct("premium", cycle);
+  const catalogEntry = getPlayBillingProduct(input.plan, cycle);
   const appAccountToken = await buildGooglePlayAccountToken(input.firebaseUid);
   let purchase: PlayBillingPurchase;
   try {

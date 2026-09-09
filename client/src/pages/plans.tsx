@@ -11,6 +11,8 @@ import { PLANS, PLAN_CONFIG, PLAN_PRESENTATION, PLAN_PRICING, type PlanType, typ
 import { annualSavings } from "@shared/subscription-pricing";
 import { trackAnalyticsEvent, type AnalyticsCheckoutFailureReason, type AnalyticsSource } from "@/lib/firebase";
 import { markPendingSubscriptionActivation } from "@/lib/subscription-activation-marker";
+import { getAndroidPlayOffers, isAndroidNativeApp, openAndroidSubscriptionManagement, purchasePlanViaGooglePlay, restoreAndroidPurchases, type PlayBillingProductOffer } from "@/lib/play-billing";
+import { getFirebaseAuth } from "@/lib/firebase";
 
 /** PLAN-IMPL-06 §27 — mapeia os códigos REAIS de erro (server/subscriptions.ts's createSubscriptionCommand,
  * PLAN-IMPL-04B) para o enum fechado — nunca a string de erro bruta da API. */
@@ -85,6 +87,10 @@ function PlanCard({
   isTrial,
   purchaseOffer,
   monthlyOffer,
+  nativeOffer,
+  nativeMode,
+  nativeState,
+  onNativePurchase,
 }: {
   plan: PlanType;
   cycle: BillingCycle;
@@ -98,6 +104,10 @@ function PlanCard({
   isTrial: boolean;
   purchaseOffer?: PlanPurchaseAvailabilityEntry;
   monthlyOffer?: PlanPurchaseAvailabilityEntry;
+  nativeOffer?: PlayBillingProductOffer;
+  nativeMode: boolean;
+  nativeState: "idle" | "purchasing" | "pending" | "error";
+  onNativePurchase: () => void;
 }) {
   const [, setLocation] = useLocation();
   const presentation = PLAN_PRESENTATION[plan];
@@ -108,6 +118,7 @@ function PlanCard({
 
   const isFree = plan === PLANS.FREE;
   const priceValue = offer ? offer.subscribedPriceCents / 100 : price[cycle];
+  const displayPrice = nativeOffer?.formattedPrice ?? `R$ ${formatBRL(priceValue)}`;
 
   // Confirmação mínima antes de chamar o provider. O servidor continua sendo a autoridade de preço; a
   // UI só envia a oferta esperada como condição de consistência para evitar checkout com tela desatualizada.
@@ -191,7 +202,7 @@ function PlanCard({
               <p className="text-xs text-muted-foreground"><s>De R$ {formatBRL(offer.referencePriceCents / 100)}</s> · Preço de lançamento</p>
             )}
             <p className="text-3xl font-black text-foreground">
-              R$ {formatBRL(priceValue)}
+              {displayPrice}
               <span className="text-sm font-bold text-muted-foreground">{cycle === "annual" ? "/ano" : "/mês"}</span>
             </p>
             {savings !== null && (
@@ -251,7 +262,15 @@ function PlanCard({
         )}
 
         {cardState.kind === "not_current" && !isFree && !(plan === PLANS.PREMIUM && hasPaidSubscription) && (
-          purchaseAvailable ? (
+          nativeMode ? (
+            nativeOffer ? (
+              <button type="button" onClick={onNativePurchase} disabled={nativeState === "purchasing"} className="w-full min-h-11 rounded-2xl bg-primary text-white font-black py-3 text-sm disabled:opacity-60" data-testid={`button-play-purchase-${plan}`}>
+                {nativeState === "purchasing" ? "Abrindo Google Play…" : nativeState === "pending" ? "Pagamento pendente" : `Assinar ${presentation.title}`}
+              </button>
+            ) : (
+              <div className="w-full min-h-11 rounded-2xl border border-border/60 text-center py-3 text-xs font-bold text-muted-foreground" data-testid={`text-play-unavailable-${plan}`}>Google Play indisponível</div>
+            )
+          ) : purchaseAvailable ? (
             purchaseState === "confirming" || purchaseState === "purchasing" || purchaseState === "error" ? (
               <div className="rounded-2xl border border-primary/30 bg-primary/5 p-3 space-y-2" data-testid={`panel-confirm-purchase-${plan}`}>
                 <p className="text-xs font-bold text-foreground text-center">
@@ -311,6 +330,48 @@ export default function Plans() {
   const { basePlan, activePlan, trial, loading: planLoading, error: planError, planData, refresh } = usePlan();
   const { availability, loading: availabilityLoading } = usePlanPurchaseAvailability();
   const [cycle, setCycle] = useState<BillingCycle>("monthly");
+  const [android, setAndroid] = useState(false);
+  const [playOffers, setPlayOffers] = useState<PlayBillingProductOffer[]>([]);
+  const [playState, setPlayState] = useState<"idle" | "purchasing" | "pending" | "error">("idle");
+  const [restoreState, setRestoreState] = useState<"idle" | "restoring" | "done" | "error">("idle");
+
+  useEffect(() => {
+    let cancelled = false;
+    void isAndroidNativeApp().then((native) => {
+      if (cancelled) return;
+      setAndroid(native);
+      if (native) void getAndroidPlayOffers().then((offers) => { if (!cancelled) setPlayOffers(offers); });
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const nativePurchase = async (plan: PlanType) => {
+    const user = getFirebaseAuth()?.currentUser;
+    if (!user || (plan !== PLANS.PRO && plan !== PLANS.PREMIUM)) return;
+    setPlayState("purchasing");
+    try {
+      const result = await purchasePlanViaGooglePlay({ plan, interval: cycle === "annual" ? "yearly" : "monthly", token: await user.getIdToken(), firebaseUid: user.uid });
+      if (result.kind === "pending") setPlayState("pending");
+      else if (result.kind === "activated") { setPlayState("idle"); await refresh(); }
+      else if (result.kind === "cancelled") setPlayState("idle");
+      else setPlayState("error");
+    } catch { setPlayState("error"); }
+  };
+
+  const restorePlay = async () => {
+    const user = getFirebaseAuth()?.currentUser;
+    if (!user) return;
+    setRestoreState("restoring");
+    try {
+      const result = await restoreAndroidPurchases(await user.getIdToken(), user.uid);
+      await refresh();
+      setRestoreState(result.some((entry) => entry.premiumActive) ? "done" : "idle");
+    } catch { setRestoreState("error"); }
+  };
+
+  const managePlay = async () => {
+    try { await openAndroidSubscriptionManagement(); } catch { setPlayState("error"); }
+  };
 
   const trialActive = trial?.status === "active";
   const trialJustExpired = trial?.status === "expired";
@@ -396,8 +457,12 @@ export default function Plans() {
               cardState={resolveCardState(plan, basePlan, trialActive, trial?.endsAt ?? null)}
               basePlanName={basePlanName}
               purchaseAvailable={plan !== PLANS.FREE && !hasPaidSubscription && (availability?.offers?.[plan]?.[cycle]?.available ?? false)}
-              purchaseOffer={plan === PLANS.FREE ? undefined : availability?.offers?.[plan]?.[cycle]}
+              purchaseOffer={android ? undefined : (plan === PLANS.FREE ? undefined : availability?.offers?.[plan]?.[cycle])}
               monthlyOffer={plan === PLANS.FREE ? undefined : availability?.offers?.[plan]?.monthly}
+              nativeMode={android}
+              nativeOffer={playOffers.find((entry) => entry.plan === plan && entry.billingCycle === cycle)}
+              nativeState={playState}
+              onNativePurchase={() => void nativePurchase(plan)}
               hasPaidSubscription={hasPaidSubscription}
               currentPlan={basePlan}
               isTrial={trialActive}
@@ -405,7 +470,18 @@ export default function Plans() {
           ))}
         </div>
 
-        {hasPaidSubscription && (
+        {android && (
+          <div className="flex flex-col sm:flex-row justify-center gap-2 text-center">
+            <button type="button" onClick={() => void restorePlay()} disabled={restoreState === "restoring"} className="underline font-semibold text-xs text-muted-foreground disabled:opacity-60" data-testid="button-restore-play">
+              {restoreState === "restoring" ? "Restaurando…" : restoreState === "done" ? "Assinatura restaurada" : "Restaurar compras Google Play"}
+            </button>
+            {planData?.billingProvider === "google_play" && (
+              <button type="button" onClick={() => void managePlay()} className="underline font-semibold text-xs text-muted-foreground" data-testid="button-manage-play">Gerenciar no Google Play</button>
+            )}
+          </div>
+        )}
+
+        {!android && hasPaidSubscription && (
           <p className="text-center text-xs text-muted-foreground">
             <button type="button" onClick={() => setLocation("/subscribe")} className="underline font-semibold" data-testid="link-manage-subscription-footer">
               Gerenciar ou cancelar assinatura
