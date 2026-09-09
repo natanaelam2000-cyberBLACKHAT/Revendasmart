@@ -859,7 +859,7 @@ service cloud.firestore {
         // enforced atomically in /api/clients.
         allow create: if false;
         allow update: if userOwnsResource(uid) && isValidClientUpdate(clientId);
-        allow delete: if userOwnsResource(uid);
+        allow delete: if false;
       }
 
       match /services/{serviceId} {

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
-  deleteDoc,
   doc,
   getCountFromServer,
   getDocs,
@@ -158,7 +157,6 @@ export function usePaginatedClientsData(): PaginatedClientsData {
 
   const addClient = useCallback(async (clientData: Omit<Client, "id">) => {
     if (!uidRef.current) return null;
-    const firestore = getFirestore();
     const clientId = Math.random().toString(36).slice(2, 11);
     try {
       await apiRequest("/api/clients", { method: "POST", auth: true, body: { clientId, idempotencyKey: `client-create-${clientId}`, client: { ...clientData, id: clientId } } });
@@ -187,7 +185,7 @@ export function usePaginatedClientsData(): PaginatedClientsData {
   const deleteClient = useCallback(async (id: string) => {
     if (!uidRef.current) return false;
     try {
-      await deleteDoc(doc(getFirestore(), "users", uidRef.current, "clients", id));
+      await apiRequest(`/api/clients/${encodeURIComponent(id)}`, { method: "DELETE", auth: true });
       setClients((current) => current.filter((client) => client.id !== id));
       setTotalCount((current) => current === null ? current : Math.max(0, current - 1));
       return true;

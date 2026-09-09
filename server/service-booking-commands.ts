@@ -39,7 +39,8 @@ import {
   ServiceAvailabilityCommandError,
   assertIntervalAllowedByScheduleCommand,
 } from "./service-availability-commands";
-import { canAddClient, resolveCommercialPlan, type PlanData, type PlanType } from "../shared/monetization";
+import { resolveCommercialPlan, type PlanData, type PlanType } from "../shared/monetization";
+import { createClientInTransaction, PlanMutationError } from "./plan-authoritative-mutations";
 import {
   isWithinBookingsMonthlyLimit,
   persistBookingQuotaTimezone,
@@ -210,9 +211,6 @@ function scheduleLockRef(db: Firestore, uid: string, resourceId: string, segment
 }
 function bookingIdempotencyRef(db: Firestore, uid: string, key: string) {
   return db.collection("users").doc(uid).collection("serviceBookingCommandIdempotency").doc(key);
-}
-function clientsCollection(db: Firestore, uid: string) {
-  return db.collection("users").doc(uid).collection("clients");
 }
 function planDataRef(db: Firestore, uid: string) {
   return db.collection("users").doc(uid).collection("planData").doc("main");
@@ -533,18 +531,18 @@ export async function confirmServiceBookingHoldCommand(
     const clientDocRef = options.publicCustomerContact
       ? db.collection("users").doc(uid).collection("clients").doc(options.publicCustomerContact.clientId)
       : undefined;
-    // PLAN-IMPL-02A §6 — client-count is only read when a NEW client might actually be created
-    // (publicCustomerContact present); an existing/resolved client never pays this extra read.
     // PLAN-IMPL-02C — planSnap is now read UNCONDITIONALLY (every confirmation, public or owner, needs
     // the resolved plan for the booking-quota check below, not just the public-client-creation path).
-    // Reading via tx.get() (a real read/AggregateQuery, not a plain client-side count) means both
-    // participate in the same optimistic-concurrency guarantee as every other read in this transaction.
-    const [lockSnaps, serviceSnap, clientSnap, planSnap, clientCountSnap] = await Promise.all([
+    // RC-P0-CLIENT-LIMIT-01 §8/§9 — o próprio contador canônico (planUsage/summary.clientsCount) é lido
+    // dentro de createClientInTransaction mais abaixo, na MESMA transaction, antes de qualquer escrita —
+    // a antiga leitura de agregação independente da coleção clients foi removida: booking e criação
+    // normal de cliente agora compartilham a única autoridade de quota, com a mesma garantia de
+    // concorrência otimista do Firestore.
+    const [lockSnaps, serviceSnap, clientSnap, planSnap] = await Promise.all([
       lockRefs.length ? tx.getAll(...lockRefs) : Promise.resolve([]),
       tx.get(serviceSnapRef),
       clientDocRef ? tx.get(clientDocRef) : Promise.resolve(undefined),
       tx.get(planDataRef(db, uid)),
-      clientDocRef ? tx.get(clientsCollection(db, uid).count()) : Promise.resolve(undefined),
     ]);
 
     for (const lockSnap of lockSnaps) {
@@ -570,16 +568,10 @@ export async function confirmServiceBookingHoldCommand(
     // divergentes dentro da mesma transação.
     const plan: PlanType = resolveCommercialPlan(planSnap.exists ? (planSnap.data() as PlanData) : null);
 
-    // PLAN-IMPL-02A §6 — "se cliente já existe/resolvido: booking proceeds" (clientSnap.exists, no check
-    // at all, matches the pre-existing dedupe-by-clientId guard below); "se exige criar NOVO Client e
-    // tenant atingiu limite: do not silently bypass plan" — reject atomically, before any write in this
-    // transaction happens, so the booking/hold/locks are left exactly as they were (never a partial
-    // Client-without-Booking or Booking-without-contact state).
-    if (clientDocRef && clientSnap && !clientSnap.exists && clientCountSnap) {
-      if (!canAddClient(plan, clientCountSnap.data().count)) {
-        throw new ServiceBookingCommandError("CLIENT_LIMIT_REACHED", COMMAND_ERROR_MESSAGES.CLIENT_LIMIT_REACHED);
-      }
-    }
+    // RC-P0-CLIENT-LIMIT-01 §8 — decisão de produto: um agendamento público válido NUNCA falha só porque
+    // a cota de Clientes (CRM) do tenant está cheia. Se houver vaga, o Client de contato é criado (mais
+    // abaixo, via createClientInTransaction, mesma autoridade canônica de POST /api/clients); se não
+    // houver, o agendamento segue em frente sem criar um novo Client — nunca mais um throw aqui.
 
     // PLAN-IMPL-02C §20/§24 — cota mensal de agendamentos: aplicada a QUALQUER confirmação (pública ou do
     // dono, §24 — nenhum caminho de UI é bypass) que efetivamente materializa um Booking real. A timezone
@@ -646,12 +638,22 @@ export async function confirmServiceBookingHoldCommand(
     // nunca um Client órfão sem Booking, nunca um Booking sem o contato do cliente). Só cria se ainda não
     // existir (clientSnap lido acima, antes de qualquer escrita) — protege contra um clientId reaproveitado
     // de uma tentativa anterior que falhou depois deste ponto.
+    // RC-P0-CLIENT-LIMIT-01 §8/§9 — createClientInTransaction é a MESMA autoridade canônica usada por
+    // POST /api/clients (lê/inicializa planUsage/summary.clientsCount de forma resource-specific e
+    // concurrency-safe, e incrementa atomicamente). Se a cota estiver cheia, ela lança PlanMutationError
+    // "PLAN_LIMIT_REACHED" — aqui isso é capturado e tratado como "não cria o Client desta vez", nunca
+    // como falha do agendamento: o Booking/Work seguem normalmente com o snapshot de contato já presente
+    // em customerId (linha acima), mesmo sem um documento Client correspondente.
     if (options.publicCustomerContact && clientDocRef && clientSnap && !clientSnap.exists) {
-      tx.create(clientDocRef, {
-        id: options.publicCustomerContact.clientId,
-        name: options.publicCustomerContact.name,
-        phone: options.publicCustomerContact.phone,
-      });
+      try {
+        await createClientInTransaction(tx, db, uid, options.publicCustomerContact.clientId, {
+          id: options.publicCustomerContact.clientId,
+          name: options.publicCustomerContact.name,
+          phone: options.publicCustomerContact.phone,
+        }, plan);
+      } catch (error) {
+        if (!(error instanceof PlanMutationError) || error.code !== "PLAN_LIMIT_REACHED") throw error;
+      }
     }
     tx.create(serviceWorkRef(db, uid, workId), omitUndefined(work as unknown as Record<string, unknown>));
     tx.create(bookingRef(db, uid, bookingId), omitUndefined(booking as unknown as Record<string, unknown>));

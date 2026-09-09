@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getFirebaseAuth } from "@/lib/firebase";
-import { getFirestore, collection, onSnapshot, doc, updateDoc, deleteDoc } from "firebase/firestore";
+import { getFirestore, collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
 import { apiRequest } from "@/lib/api-client";
 import { onAuthStateChanged } from "firebase/auth";
 import { Client } from "@/lib/mock-data";
@@ -100,7 +100,7 @@ export function useClientsData(): ClientsData {
         catch (err) { console.error("[useClientsData] Error updating client:", err); return false; }
       };
       const deleteClient = async (id: string) => {
-        try { await deleteDoc(doc(firestore, "users", uid, "clients", id)); return true; }
+        try { await apiRequest(`/api/clients/${encodeURIComponent(id)}`, { method: "DELETE", auth: true }); return true; }
         catch (err) { console.error("[useClientsData] Error deleting client:", err); return false; }
       };
 

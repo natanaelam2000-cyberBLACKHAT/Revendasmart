@@ -250,34 +250,58 @@ export async function resolveServerPlan(db: Firestore, uid: string): Promise<Pla
   return resolveCommercialPlan(planData as PlanData | null);
 }
 
-async function readOrInitializeUsage(tx: Transaction, db: Firestore, uid: string): Promise<UsageSummary> {
+function usageCountField(resource: DomainKind): "productsCount" | "servicesCount" | "clientsCount" {
+  return resource === "product" ? "productsCount" : resource === "service" ? "servicesCount" : "clientsCount";
+}
+
+function usageResourceCollectionName(resource: DomainKind): "products" | "services" | "clients" {
+  return resource === "product" ? "products" : resource === "service" ? "services" : "clients";
+}
+
+// RC-P0-CLIENT-LIMIT-01 §11/§13 — cada contador (products/services/clients) é lido e inicializado de
+// forma estritamente resource-specific: uma mutação de um recurso NUNCA agrega/inicializa o contador de
+// outro recurso não relacionado (§12 — zero agregação cruzada). Isto também corrige um defeito real: a
+// versão anterior sempre gravava os DOIS campos não relacionados como `0` explícito na primeira
+// inicialização do doc (mesmo via merge:true, `0` explícito ainda é um valor "presente" no Firestore) —
+// isso tornava esses campos permanentemente "presentes" e pulava para sempre a agregação real deles mais
+// tarde, subcontando qualquer documento pré-existente desse outro recurso (ex.: 60 Clients legados,
+// criados antes deste sistema de cota, ficariam contados como 0 caso o primeiro Product do tenant fosse
+// criado antes do primeiro Client). Agora só o campo do recurso realmente mutado é escrito — os outros
+// dois permanecem ausentes até sua PRÓPRIA primeira mutação os inicializar com uma agregação real.
+async function readOrInitializeUsage(tx: Transaction, db: Firestore, uid: string, resource: DomainKind): Promise<UsageSummary> {
   const ref = usageRef(db, uid);
   const snap = await tx.get(ref);
+  const field = usageCountField(resource);
+
   if (snap.exists) {
     const data = snap.data() as Partial<UsageSummary>;
+    const storedValue = data[field];
+    const resourceCount = Number.isFinite(storedValue)
+      ? Math.max(0, Number(storedValue))
+      : (await tx.get(db.collection("users").doc(uid).collection(usageResourceCollectionName(resource)).count())).data().count;
+    if (!Number.isFinite(storedValue)) {
+      tx.set(ref, { [field]: resourceCount, updatedAt: getFirebaseAdmin().firestore.FieldValue.serverTimestamp() }, { merge: true });
+    }
     return {
-      productsCount: Number.isFinite(data.productsCount) ? Math.max(0, Number(data.productsCount)) : 0,
-      servicesCount: Number.isFinite(data.servicesCount) ? Math.max(0, Number(data.servicesCount)) : 0,
-      clientsCount: Number.isFinite(data.clientsCount) ? Math.max(0, Number(data.clientsCount)) : (await tx.get(db.collection("users").doc(uid).collection("clients").count())).data().count,
+      productsCount: resource === "product" ? resourceCount : (Number.isFinite(data.productsCount) ? Math.max(0, Number(data.productsCount)) : 0),
+      servicesCount: resource === "service" ? resourceCount : (Number.isFinite(data.servicesCount) ? Math.max(0, Number(data.servicesCount)) : 0),
+      clientsCount: resource === "client" ? resourceCount : (Number.isFinite(data.clientsCount) ? Math.max(0, Number(data.clientsCount)) : 0),
       initializedAt: data.initializedAt,
       updatedAt: data.updatedAt,
     };
   }
 
-  const [productsCountSnap, servicesCountSnap, clientsCountSnap] = await Promise.all([
-    tx.get(db.collection("users").doc(uid).collection("products").count()),
-    tx.get(db.collection("users").doc(uid).collection("services").count()),
-    tx.get(db.collection("users").doc(uid).collection("clients").count()),
-  ]);
-  const usage = {
-    productsCount: productsCountSnap.data().count,
-    servicesCount: servicesCountSnap.data().count,
-    clientsCount: clientsCountSnap.data().count,
-    initializedAt: getFirebaseAdmin().firestore.FieldValue.serverTimestamp(),
-    updatedAt: getFirebaseAdmin().firestore.FieldValue.serverTimestamp(),
+  const countSnap = await tx.get(db.collection("users").doc(uid).collection(usageResourceCollectionName(resource)).count());
+  const resourceCount = countSnap.data().count;
+  const now = getFirebaseAdmin().firestore.FieldValue.serverTimestamp();
+  tx.set(ref, { [field]: resourceCount, initializedAt: now, updatedAt: now }, { merge: true });
+  return {
+    productsCount: resource === "product" ? resourceCount : 0,
+    servicesCount: resource === "service" ? resourceCount : 0,
+    clientsCount: resource === "client" ? resourceCount : 0,
+    initializedAt: now,
+    updatedAt: now,
   };
-  tx.set(ref, usage, { merge: true });
-  return usage;
 }
 
 function assertWithinLimit(kind: DomainKind, plan: PlanType, currentCount: number): void {
@@ -329,7 +353,7 @@ export async function createProductCommand(db: Firestore, uid: string, input: un
       throw new PlanMutationError("IDEMPOTENCY_CONFLICT", "Produto já existe para outra operação.", 409);
     }
 
-    const usage = await readOrInitializeUsage(tx, db, uid);
+    const usage = await readOrInitializeUsage(tx, db, uid, "product");
     assertWithinLimit("product", plan, usage.productsCount);
     const now = getFirebaseAdmin().firestore.FieldValue.serverTimestamp();
     tx.set(productDoc, payload);
@@ -348,7 +372,7 @@ export async function deleteProductCommand(db: Firestore, uid: string, productId
     const ref = productRef(db, uid, productId);
     const snap = await tx.get(ref);
     if (!snap.exists) throw new PlanMutationError("PRODUCT_NOT_FOUND", "Produto não encontrado.", 404);
-    const usage = await readOrInitializeUsage(tx, db, uid);
+    const usage = await readOrInitializeUsage(tx, db, uid, "product");
     tx.delete(ref);
     tx.set(usageRef(db, uid), {
       productsCount: Math.max(0, usage.productsCount - 1),
@@ -387,7 +411,7 @@ export async function createServiceCommand(db: Firestore, uid: string, input: un
       throw new PlanMutationError("IDEMPOTENCY_CONFLICT", "Serviço já existe para outra operação.", 409);
     }
 
-    const usage = await readOrInitializeUsage(tx, db, uid);
+    const usage = await readOrInitializeUsage(tx, db, uid, "service");
     assertWithinLimit("service", plan, usage.servicesCount);
     const now = getFirebaseAdmin().firestore.FieldValue.serverTimestamp();
     tx.set(docRef, service);
@@ -397,6 +421,13 @@ export async function createServiceCommand(db: Firestore, uid: string, input: un
     // nesta transação (0 -> 1), zero leitura extra. Idempotent replay (ramo acima) nunca chega aqui.
     return { serviceId, service, idempotentReplay: false, isFirstService: usage.servicesCount === 0 };
   });
+}
+
+export async function createClientInTransaction(tx: Transaction, db: Firestore, uid: string, clientId: string, payload: Record<string, unknown>, plan: PlanType): Promise<void> {
+  const usage = await readOrInitializeUsage(tx, db, uid, "client");
+  assertWithinLimit("client", plan, usage.clientsCount);
+  tx.create(clientRef(db, uid, clientId), payload);
+  tx.set(usageRef(db, uid), { clientsCount: usage.clientsCount + 1, updatedAt: getFirebaseAdmin().firestore.FieldValue.serverTimestamp() }, { merge: true });
 }
 
 export async function createClientCommand(db: Firestore, uid: string, input: unknown) {
@@ -418,13 +449,23 @@ export async function createClientCommand(db: Firestore, uid: string, input: unk
     }
     const ref = clientRef(db, uid, clientId);
     if ((await tx.get(ref)).exists) throw new PlanMutationError("IDEMPOTENCY_CONFLICT", "Cliente já existe para outra operação.", 409);
-    const usage = await readOrInitializeUsage(tx, db, uid);
-    assertWithinLimit("client", plan, usage.clientsCount);
     const now = getFirebaseAdmin().firestore.FieldValue.serverTimestamp();
-    tx.set(ref, payload);
-    tx.set(usageRef(db, uid), { clientsCount: usage.clientsCount + 1, updatedAt: now }, { merge: true });
+    await createClientInTransaction(tx, db, uid, clientId, payload, plan);
     tx.set(idem, { key: idempotencyKey, tenantUid: uid, action: CLIENT_CREATE_ACTION, clientId, createdAt: now });
     return { clientId, client: payload, idempotentReplay: false };
+  });
+}
+
+export async function deleteClientCommand(db: Firestore, uid: string, clientIdInput: unknown) {
+  const clientId = assertEntityId(clientIdInput, "clientId");
+  return db.runTransaction(async (tx) => {
+    const ref = clientRef(db, uid, clientId);
+    const snap = await tx.get(ref);
+    if (!snap.exists) return { clientId, deleted: false };
+    const usage = await readOrInitializeUsage(tx, db, uid, "client");
+    tx.delete(ref);
+    tx.set(usageRef(db, uid), { clientsCount: Math.max(0, usage.clientsCount - 1), updatedAt: getFirebaseAdmin().firestore.FieldValue.serverTimestamp() }, { merge: true });
+    return { clientId, deleted: true };
   });
 }
 
@@ -481,5 +522,11 @@ export function registerPlanAuthoritativeMutationRoutes(
       const result = await createClientCommand(getFirebaseAdmin().firestore(), uid, req.body);
       return res.status(result.idempotentReplay ? 200 : 201).json(result);
     } catch (error) { return sendMutationError(res, error); }
+  });
+  app.delete("/api/clients/:clientId", requireAuth, async (req: Request, res: Response) => {
+    const uid = (req as Request & { firebaseUid?: string }).firebaseUid;
+    if (!uid) return res.status(401).json({ code: "UNAUTHORIZED", message: "Sessão inválida. Faça login novamente." });
+    try { return res.status(200).json(await deleteClientCommand(getFirebaseAdmin().firestore(), uid, req.params.clientId)); }
+    catch (error) { return sendMutationError(res, error); }
   });
 }
