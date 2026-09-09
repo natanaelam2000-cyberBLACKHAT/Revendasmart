@@ -143,6 +143,8 @@
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:install": "playwright install chromium",
     "security:gitleaks": "node scripts/security/run-gitleaks.mjs",
+    "security:verify-firebase": "tsx script/security-verify-firebase-admin.ts",
+    "security:verify-mp": "tsx script/security-verify-mercadopago.ts",
     "quality:knip": "knip --config knip.json --reporter compact --no-exit-code"
   },
   "dependencies": {
