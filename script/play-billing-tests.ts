@@ -166,6 +166,44 @@ async function run(): Promise<void> {
 
   const getPlan = async (uid: string) => (await db.collection("users").doc(uid).collection("planData").doc("main").get()).data();
 
+  async function assertCanonicalRuntimeCase(input: {
+    readonly label: string;
+    readonly productId: string;
+    readonly basePlanId: string;
+    readonly expectedPlan: "pro" | "premium";
+    readonly expectedBillingCycle: "monthly" | "annual";
+  }): Promise<void> {
+    const user = await createTestUser(`matrix-${input.label}`);
+    createdApps.push(user.app);
+    const token = randomToken(`matrix-${input.label}`);
+    tokenMap.set(token, purchase({
+      lineItemProductId: input.productId,
+      lineItemBasePlanId: input.basePlanId,
+    }));
+    const result = await verify(user.user, {
+      productId: input.productId,
+      basePlanId: input.basePlanId,
+      purchaseToken: token,
+      packageName: PACKAGE_NAME,
+    });
+    assert.equal(result.status, 200, `${input.label}: verificação runtime aceita`);
+    assert.equal(result.body.premiumActive, true, `${input.label}: entitlement ativo`);
+    assert.equal(result.body.currentPlan, input.expectedPlan, `${input.label}: plano vem do provider`);
+    assert.equal(result.body.billingCycle, input.expectedBillingCycle, `${input.label}: ciclo vem do provider`);
+    const plan = await getPlan(user.user.uid);
+    assert.equal(plan?.currentPlan, input.expectedPlan, `${input.label}: plano persistido`);
+    assert.equal(plan?.playProductId, input.productId, `${input.label}: productId persistido`);
+    const tokenRecord = (await db.collection("googlePlayPurchaseTokens").doc(hashPurchaseToken(token)).get()).data();
+    assert.equal(tokenRecord?.plan, input.expectedPlan, `${input.label}: plano canônico do provider persistido`);
+    assert.equal(tokenRecord?.billingCycle, input.expectedBillingCycle, `${input.label}: ciclo canônico do provider persistido`);
+  }
+
+  // ===== MATRIX: os quatro pares canônicos passam pela verificação Express + Firestore real =====
+  await assertCanonicalRuntimeCase({ label: "pro-monthly", productId: "revendasmart_pro", basePlanId: PLAY_BILLING_BASE_PLAN_IDS.proMonthly, expectedPlan: "pro", expectedBillingCycle: "monthly" });
+  await assertCanonicalRuntimeCase({ label: "pro-annual", productId: "revendasmart_pro", basePlanId: PLAY_BILLING_BASE_PLAN_IDS.proAnnual, expectedPlan: "pro", expectedBillingCycle: "annual" });
+  await assertCanonicalRuntimeCase({ label: "premium-monthly", productId: "revendasmart_premium", basePlanId: PLAY_BILLING_BASE_PLAN_IDS.premiumMonthly, expectedPlan: "premium", expectedBillingCycle: "monthly" });
+  await assertCanonicalRuntimeCase({ label: "premium-annual", productId: "revendasmart_premium", basePlanId: PLAY_BILLING_BASE_PLAN_IDS.premiumAnnual, expectedPlan: "premium", expectedBillingCycle: "annual" });
+
   // ===== A0/A1: normalizador puro do adapter real, sem rede =====
   const normalized = normalizeGooglePlaySubscriptionPurchase({
     subscriptionState: "SUBSCRIPTION_STATE_ACTIVE",
