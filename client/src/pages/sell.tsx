@@ -6,7 +6,7 @@ import { ProductImageCard } from "@/components/ProductImageCard";
 import { ClientPickerSheet } from "@/components/sell/ClientPickerSheet";
 import { ChevronDown, Search, Plus, Minus, CheckCircle2, UserPlus, X, QrCode, DollarSign, CreditCard, Wallet, type LucideIcon } from "lucide-react";
 import { useLocation } from "wouter";
-import { collection, doc, getCountFromServer, getFirestore, setDoc } from "firebase/firestore";
+import { collection, getCountFromServer, getFirestore } from "firebase/firestore";
 import { usePlan } from "@/providers/PlanProvider";
 import { checkClientLimit } from "@/lib/plan-helpers";
 import { PLAN_CONFIG } from "@shared/monetization";
@@ -17,6 +17,7 @@ import { getFirebaseAuth, logError, logTelemetryEvent, trackAnalyticsEvent, meas
 import { fireServerCountedFirstOccurrence } from "@/lib/analytics-milestones";
 import { notifyError, notifySuccess, notifyWarning } from "@/lib/notify";
 import { getApiUrl } from "@/lib/api-config";
+import { apiRequest } from "@/lib/api-client";
 import { resolveEffectiveProductPrice } from "@/lib/product-pricing";
 import { resolveProductGender } from "@/lib/product-gender";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
@@ -170,7 +171,7 @@ export default function Sell() {
       }
       const clientId = Math.random().toString(36).slice(2, 11);
       const clientData: Client = { id: clientId, name, phone };
-      await setDoc(doc(getFirestore(), "users", uid, "clients", clientId), clientData);
+      await apiRequest("/api/clients", { method: "POST", auth: true, body: { clientId, idempotencyKey: `client-create-${clientId}`, client: clientData } });
       setJustCreatedClient(clientData);
       setSelectedClient(clientId);
       setShowNewClientModal(false);

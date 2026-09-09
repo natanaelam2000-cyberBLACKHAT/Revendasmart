@@ -855,7 +855,9 @@ service cloud.firestore {
       // User can only read/write their own clients
       match /clients/{clientId} {
         allow read: if userOwnsResource(uid);
-        allow create: if userOwnsResource(uid) && isValidClientCreate(clientId);
+        // Client creation is server-authoritative so plan quota and ownership are
+        // enforced atomically in /api/clients.
+        allow create: if false;
         allow update: if userOwnsResource(uid) && isValidClientUpdate(clientId);
         allow delete: if userOwnsResource(uid);
       }

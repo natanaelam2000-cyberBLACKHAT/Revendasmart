@@ -11,7 +11,6 @@ import {
   onSnapshot,
   orderBy,
   query,
-  setDoc,
   startAfter,
   updateDoc,
   type DocumentData,
@@ -19,6 +18,7 @@ import {
 } from "firebase/firestore";
 import { getFirebaseAuth } from "@/lib/firebase";
 import type { Client } from "@/lib/mock-data";
+import { apiRequest } from "@/lib/api-client";
 
 const CLIENTS_PAGE_SIZE = 30;
 
@@ -161,10 +161,7 @@ export function usePaginatedClientsData(): PaginatedClientsData {
     const firestore = getFirestore();
     const clientId = Math.random().toString(36).slice(2, 11);
     try {
-      await setDoc(doc(firestore, "users", uidRef.current, "clients", clientId), {
-        ...clientData,
-        id: clientId,
-      });
+      await apiRequest("/api/clients", { method: "POST", auth: true, body: { clientId, idempotencyKey: `client-create-${clientId}`, client: { ...clientData, id: clientId } } });
       setTotalCount((current) => (current === null ? current : current + 1));
       refresh();
       return clientId;

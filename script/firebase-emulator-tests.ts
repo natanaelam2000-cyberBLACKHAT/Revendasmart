@@ -341,7 +341,8 @@ async function run() {
       updateDoc(doc(owner.db, "users", ownerUid, "services", "service-preserved"), { name: "Serviço Preservado Editado" }));
 
     const ownerClientRef = doc(owner.db, "users", ownerUid, "clients", "client-local");
-    await expectSucceeds("owner cria cliente válido", () => setDoc(ownerClientRef, validClient("client-local")));
+    await adminDbForAccessState.doc(`users/${ownerUid}/clients/client-local`).set(validClient("client-local"));
+    await expectFails("owner não cria cliente diretamente — criação é server-authoritative", () => setDoc(ownerClientRef, validClient("client-local-2")));
     await expectFails("outro usuário não altera cliente do owner", () => updateDoc(doc(intruder.db, "users", ownerUid, "clients", "client-local"), { notes: "tentativa indevida" }));
 
     // LGPD/segurança (REVENDASMART-LGPD-ANPD-REMEDIATION-01, Fase 9): sales só é gravável pelo backend

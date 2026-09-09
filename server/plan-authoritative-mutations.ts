@@ -16,6 +16,8 @@ import { assertValidService, type Service } from "../shared/services";
 const PLAN_USAGE_DOC = "summary";
 const PRODUCT_CREATE_ACTION = "create_product";
 const SERVICE_CREATE_ACTION = "create_service";
+const CLIENT_CREATE_ACTION = "create_client";
+const CLIENT_CREATE_ALLOWED_FIELDS = new Set(["id", "name", "phone", "whatsapp", "email", "notes", "createdAt", "updatedAt", "lastPurchaseAt", "totalSpent", "purchaseCount"]);
 const PRODUCT_CREATE_ALLOWED_FIELDS = new Set([
   "id",
   "name",
@@ -53,11 +55,12 @@ const PRODUCT_CREATE_ALLOWED_FIELDS = new Set([
   "searchSchemaVersion",
 ]);
 
-type DomainKind = "product" | "service";
+type DomainKind = "product" | "service" | "client";
 
 type UsageSummary = {
   productsCount: number;
   servicesCount: number;
+  clientsCount: number;
   initializedAt?: unknown;
   updatedAt?: unknown;
 };
@@ -93,6 +96,9 @@ function productRef(db: Firestore, uid: string, productId: string) {
 
 function serviceRef(db: Firestore, uid: string, serviceId: string) {
   return db.collection("users").doc(uid).collection("services").doc(serviceId);
+}
+function clientRef(db: Firestore, uid: string, clientId: string) {
+  return db.collection("users").doc(uid).collection("clients").doc(clientId);
 }
 
 function idempotencyRef(db: Firestore, uid: string, key: string) {
@@ -218,6 +224,24 @@ function cleanServicePayload(uid: string, serviceId: string, value: unknown): Se
   return assertValidService({ ...(value as Record<string, unknown>), id: serviceId, tenantUid: uid } as Service);
 }
 
+function cleanClientPayload(clientId: string, value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new PlanMutationError("INVALID_INPUT", "Cliente inválido.");
+  const data = value as Record<string, unknown>;
+  for (const key of Object.keys(data)) if (!CLIENT_CREATE_ALLOWED_FIELDS.has(key)) throw new PlanMutationError("INVALID_INPUT", "Campo de cliente inválido.");
+  return {
+    ...data,
+    id: clientId,
+    name: cleanText(data.name, 140, true),
+    phone: cleanText(data.phone, 40),
+    whatsapp: cleanText(data.whatsapp, 40),
+    email: cleanText(data.email, 180),
+    notes: cleanText(data.notes, 2000),
+    totalSpent: cleanNonNegativeNumber(data.totalSpent ?? 0, "totalSpent"),
+    purchaseCount: cleanNonNegativeNumber(data.purchaseCount ?? 0, "purchaseCount"),
+    lastPurchaseAt: cleanText(data.lastPurchaseAt, 80),
+  };
+}
+
 /** PLAN-IMPL-02B2 — exportada para server/plan-access-selection.ts reusar a MESMA resolução de plano
  * server-side (nunca confiar no plano que o client alega ter) em vez de duplicá-la. */
 export async function resolveServerPlan(db: Firestore, uid: string): Promise<PlanType> {
@@ -234,18 +258,21 @@ async function readOrInitializeUsage(tx: Transaction, db: Firestore, uid: string
     return {
       productsCount: Number.isFinite(data.productsCount) ? Math.max(0, Number(data.productsCount)) : 0,
       servicesCount: Number.isFinite(data.servicesCount) ? Math.max(0, Number(data.servicesCount)) : 0,
+      clientsCount: Number.isFinite(data.clientsCount) ? Math.max(0, Number(data.clientsCount)) : (await tx.get(db.collection("users").doc(uid).collection("clients").count())).data().count,
       initializedAt: data.initializedAt,
       updatedAt: data.updatedAt,
     };
   }
 
-  const [productsCountSnap, servicesCountSnap] = await Promise.all([
+  const [productsCountSnap, servicesCountSnap, clientsCountSnap] = await Promise.all([
     tx.get(db.collection("users").doc(uid).collection("products").count()),
     tx.get(db.collection("users").doc(uid).collection("services").count()),
+    tx.get(db.collection("users").doc(uid).collection("clients").count()),
   ]);
   const usage = {
     productsCount: productsCountSnap.data().count,
     servicesCount: servicesCountSnap.data().count,
+    clientsCount: clientsCountSnap.data().count,
     initializedAt: getFirebaseAdmin().firestore.FieldValue.serverTimestamp(),
     updatedAt: getFirebaseAdmin().firestore.FieldValue.serverTimestamp(),
   };
@@ -254,11 +281,9 @@ async function readOrInitializeUsage(tx: Transaction, db: Firestore, uid: string
 }
 
 function assertWithinLimit(kind: DomainKind, plan: PlanType, currentCount: number): void {
-  const limit = kind === "product" ? PLAN_CONFIG[plan].limits.products : PLAN_CONFIG[plan].limits.services;
+  const limit = kind === "product" ? PLAN_CONFIG[plan].limits.products : kind === "service" ? PLAN_CONFIG[plan].limits.services : PLAN_CONFIG[plan].limits.clients;
   if (limit !== -1 && currentCount >= limit) {
-    throw new PlanMutationError("PLAN_LIMIT_REACHED", kind === "product"
-      ? "Você atingiu o limite de produtos do seu plano."
-      : "Você atingiu o limite de serviços do seu plano.", 403);
+    throw new PlanMutationError("PLAN_LIMIT_REACHED", kind === "product" ? "Você atingiu o limite de produtos do seu plano." : kind === "service" ? "Você atingiu o limite de serviços do seu plano." : "Você atingiu o limite de clientes do seu plano.", 403);
   }
 }
 
@@ -374,6 +399,35 @@ export async function createServiceCommand(db: Firestore, uid: string, input: un
   });
 }
 
+export async function createClientCommand(db: Firestore, uid: string, input: unknown) {
+  const body = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
+  const clientId = assertEntityId(body.clientId, "clientId");
+  const idempotencyKey = assertIdempotencyKey(body.idempotencyKey);
+  const payload = cleanClientPayload(clientId, body.client);
+  await ensureLifecycleForPlanSensitiveMutation(db, uid);
+  const plan = await resolveServerPlan(db, uid);
+  return db.runTransaction(async (tx) => {
+    const idem = idempotencyRef(db, uid, idempotencyKey);
+    const idemSnap = await tx.get(idem);
+    if (idemSnap.exists) {
+      const data = idemSnap.data() ?? {};
+      if (data.action !== CLIENT_CREATE_ACTION || data.clientId !== clientId || data.tenantUid !== uid) throw new PlanMutationError("IDEMPOTENCY_CONFLICT", "idempotencyKey já usada com outros dados.", 409);
+      const snap = await tx.get(clientRef(db, uid, clientId));
+      if (!snap.exists) throw new PlanMutationError("IDEMPOTENCY_CONFLICT", "Replay aponta para cliente ausente.", 409);
+      return { clientId, client: snap.data(), idempotentReplay: true };
+    }
+    const ref = clientRef(db, uid, clientId);
+    if ((await tx.get(ref)).exists) throw new PlanMutationError("IDEMPOTENCY_CONFLICT", "Cliente já existe para outra operação.", 409);
+    const usage = await readOrInitializeUsage(tx, db, uid);
+    assertWithinLimit("client", plan, usage.clientsCount);
+    const now = getFirebaseAdmin().firestore.FieldValue.serverTimestamp();
+    tx.set(ref, payload);
+    tx.set(usageRef(db, uid), { clientsCount: usage.clientsCount + 1, updatedAt: now }, { merge: true });
+    tx.set(idem, { key: idempotencyKey, tenantUid: uid, action: CLIENT_CREATE_ACTION, clientId, createdAt: now });
+    return { clientId, client: payload, idempotentReplay: false };
+  });
+}
+
 function sendMutationError(res: Response, error: unknown): void {
   if (error instanceof PlanMutationError) {
     res.status(error.status).json({ code: error.code, message: error.message });
@@ -418,5 +472,14 @@ export function registerPlanAuthoritativeMutationRoutes(
     } catch (error) {
       return sendMutationError(res, error);
     }
+  });
+
+  app.post("/api/clients", requireAuth, async (req: Request, res: Response) => {
+    const uid = (req as Request & { firebaseUid?: string }).firebaseUid;
+    if (!uid) return res.status(401).json({ code: "UNAUTHORIZED", message: "Sessão inválida. Faça login novamente." });
+    try {
+      const result = await createClientCommand(getFirebaseAdmin().firestore(), uid, req.body);
+      return res.status(result.idempotentReplay ? 200 : 201).json(result);
+    } catch (error) { return sendMutationError(res, error); }
   });
 }

@@ -5673,9 +5673,10 @@ assert.match(useOrdersData, /\.\.\.\(input\.notes \? \{ notes: input\.notes \} :
 assert.doesNotMatch(newOrderSheet, /imageUrl: product\.imageUrl \}/, "imageUrl não pode mais ser gravado como undefined quando o produto não tem foto");
 assert.match(newOrderSheet, /if \(product\.imageUrl\) newItem\.imageUrl = product\.imageUrl;/);
 
-// Cadastro de cliente em Pedidos reaproveita a mesma lógica de criação (setDoc em users/{uid}/clients)
-// já usada em Vendas, extraída para um hook compartilhado em vez de duplicada em Pedidos.
-assert.match(useCreateClient, /await setDoc\(doc\(getFirestore\(\), "users", uid, "clients", clientId\), clientData\);/);
+// Cadastro de cliente em Pedidos usa a fronteira server-authoritative única, preservando
+// idempotência e quotas; nunca grava diretamente no Firestore.
+assert.match(useCreateClient, /apiRequest\("\/api\/clients"/);
+assert.doesNotMatch(useCreateClient, /setDoc\(/);
 assert.match(newOrderSheet, /import \{ useCreateClient \} from "@\/hooks\/useCreateClient"/);
 
 // Preço/formatação/imagem de produto reaproveitados — nada disso foi reimplementado em Pedidos.

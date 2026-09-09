@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { collection, doc, getCountFromServer, getFirestore, setDoc } from "firebase/firestore";
+import { collection, getCountFromServer, getFirestore } from "firebase/firestore";
 import { getFirebaseAuth, logTelemetryEvent } from "@/lib/firebase";
 import { notifySuccess } from "@/lib/notify";
 import type { Client } from "@/lib/mock-data";
 import { usePlan } from "@/providers/PlanProvider";
 import { checkClientLimit } from "@/lib/plan-helpers";
 import { buildLimitReachedCopy } from "@/lib/plan-paywall-copy";
+import { apiRequest } from "@/lib/api-client";
 
 interface CreateClientInput {
   name: string;
@@ -42,7 +43,7 @@ export function useCreateClient() {
       }
       const clientId = Math.random().toString(36).slice(2, 11);
       const clientData: Client = { id: clientId, name: trimmedName, phone: trimmedPhone };
-      await setDoc(doc(getFirestore(), "users", uid, "clients", clientId), clientData);
+      await apiRequest("/api/clients", { method: "POST", auth: true, body: { clientId, idempotencyKey: `client-create-${clientId}`, client: clientData } });
       notifySuccess("Cliente cadastrado.");
       logTelemetryEvent("client_created_from_order" as any, { clientId }, uid).catch(() => {});
       return clientData;
