@@ -399,7 +399,7 @@ export interface PlanData {
 
   // --- Google Play Billing (RELEASE-07) — só preenchido quando billingProvider === 'google_play' ---
   billingProvider?: BillingProvider | null;
-  /** Product ID do Google Play (revendasmart_premium_monthly/yearly) — nunca o purchaseToken. */
+  /** Product ID do Google Play (revendasmart_pro ou revendasmart_premium) — nunca o purchaseToken. */
   playProductId?: string | null;
   /** sha256(purchaseToken) — nunca o token bruto. Usado só para idempotência/auditoria. */
   playPurchaseTokenHash?: string | null;

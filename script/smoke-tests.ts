@@ -72,6 +72,8 @@ import { composeProductCutoutRgba } from "../shared/product-cutout";
 import {
   PLAY_BILLING_PACKAGE_NAME,
   PLAY_BILLING_PRODUCT_IDS,
+  PLAY_BILLING_CATALOG,
+  resolvePlayBillingPlanAndCycle,
   isKnownPlayBillingProductId,
   mapGooglePlaySubscriptionState,
   isEntitledPlayState,
@@ -80,7 +82,7 @@ import {
 import { hashPurchaseToken } from "../server/google-play-billing";
 import {
   isAndroidNativeApp,
-  getPlayBillingProductId,
+  getPlayBillingProduct,
   getAndroidPremiumOffers,
   purchasePremiumViaGooglePlay,
   recoverPendingGooglePlayPurchases,
@@ -10980,8 +10982,14 @@ runProductImagePreservationTests();
     "PLAY_BILLING_PACKAGE_NAME precisa bater com capacitor.config.ts — nunca divergir do app real",
   );
 
-  assert.equal(isKnownPlayBillingProductId(PLAY_BILLING_PRODUCT_IDS.premiumMonthly), true);
-  assert.equal(isKnownPlayBillingProductId(PLAY_BILLING_PRODUCT_IDS.premiumYearly), true);
+  assert.equal(isKnownPlayBillingProductId(PLAY_BILLING_PRODUCT_IDS.pro), true);
+  assert.equal(isKnownPlayBillingProductId(PLAY_BILLING_PRODUCT_IDS.premium), true);
+  assert.deepEqual(Object.values(PLAY_BILLING_PRODUCT_IDS).sort(), ["revendasmart_premium", "revendasmart_pro"].sort());
+  assert.deepEqual(resolvePlayBillingPlanAndCycle(PLAY_BILLING_CATALOG.pro.monthly.productId, PLAY_BILLING_CATALOG.pro.monthly.basePlanId), { plan: "pro", cycle: "monthly" });
+  assert.deepEqual(resolvePlayBillingPlanAndCycle(PLAY_BILLING_CATALOG.pro.annual.productId, PLAY_BILLING_CATALOG.pro.annual.basePlanId), { plan: "pro", cycle: "annual" });
+  assert.deepEqual(resolvePlayBillingPlanAndCycle(PLAY_BILLING_CATALOG.premium.monthly.productId, PLAY_BILLING_CATALOG.premium.monthly.basePlanId), { plan: "premium", cycle: "monthly" });
+  assert.deepEqual(resolvePlayBillingPlanAndCycle(PLAY_BILLING_CATALOG.premium.annual.productId, PLAY_BILLING_CATALOG.premium.annual.basePlanId), { plan: "premium", cycle: "annual" });
+  assert.equal(resolvePlayBillingPlanAndCycle(PLAY_BILLING_PRODUCT_IDS.premium, "premium-weekly-autorenew"), null);
   assert.equal(isKnownPlayBillingProductId("revendasmart_free_forever"), false, "um productId forjado nunca é aceito");
   assert.equal(isKnownPlayBillingProductId(undefined), false);
   assert.equal(isKnownPlayBillingProductId(123), false);
@@ -11041,6 +11049,9 @@ runProductImagePreservationTests();
   assert.match(billingSource, /playPurchaseTokenHash: tokenHash/);
   assert.doesNotMatch(billingSource, /playPurchaseToken:\s*purchaseToken/, "nunca um campo com o token cru");
   assert.doesNotMatch(billingSource, /transaction\.set\([^)]*purchaseToken[^)]*\)/s, "nenhum tx.set() grava o purchaseToken bruto");
+  const nativeBillingSource = read("client/src/lib/google-play-billing-client.ts");
+  assert.match(nativeBillingSource, /autoAcknowledgePurchases:\s*false/, "ack do client precisa permanecer desativado até a verificação server-side");
+  assert.match(nativeBillingSource, /Object\.values\(PLAY_BILLING_PRODUCT_IDS\)/, "a consulta nativa precisa usar os dois product IDs canônicos");
 
   // RELEASE-07B instalou o plugin nativo real (@capgo/native-purchases) e substituiu o boundary
   // "sempre lança" por uma orquestração de verdade — cobertura completa mais abaixo.
@@ -11069,7 +11080,8 @@ runProductImagePreservationTests();
     }
   }
 
-  const monthlyProductId = getPlayBillingProductId("monthly");
+  const monthlyOffer = getPlayBillingProduct("premium", "monthly");
+  const monthlyProductId = monthlyOffer.productId;
 
   // Fora de um shell Capacitor nativo (like this Node test, or a plain browser tab), a detecção de
   // plataforma precisa resolver para "não é Android" — nunca lançar, nunca assumir userAgent.
@@ -11086,7 +11098,7 @@ runProductImagePreservationTests();
   // D/E: preço vem do adapter (Play), nunca hardcoded pelo backend/app.
   setGooglePlayBillingClientForTests(buildMockGooglePlayBillingClient({
     available: true,
-    products: [{ productId: monthlyProductId, formattedPrice: "R$ 24,90", currencyCode: "BRL" }],
+    products: [{ ...monthlyOffer, formattedPrice: "R$ 24,90", currencyCode: "BRL" }],
   }));
   {
     const offers = await getAndroidPremiumOffers();
@@ -11097,7 +11109,7 @@ runProductImagePreservationTests();
   // F/G/H: compra "purchased" só ativa Premium se o SERVIDOR confirmar premiumActive — nunca antes.
   setGooglePlayBillingClientForTests(buildMockGooglePlayBillingClient({
     available: true,
-    purchaseResult: { productId: monthlyProductId, purchaseToken: "tok-active", purchaseState: "purchased", isAcknowledged: true },
+    purchaseResult: { ...monthlyOffer, productId: monthlyProductId, purchaseToken: "tok-active", purchaseState: "purchased", isAcknowledged: true },
   }));
   {
     const { fetch: fetchActive, calls } = mockFetchOnce(200, { premiumActive: true, currentPlan: "premium", premiumExpiresAt: "2099-01-01T00:00:00.000Z", autoRenew: true, deduplicated: false });
@@ -11147,7 +11159,7 @@ runProductImagePreservationTests();
   // L: restore consulta o adapter e reenvia ao servidor — nunca ativa Premium localmente.
   setGooglePlayBillingClientForTests(buildMockGooglePlayBillingClient({
     available: true,
-    purchases: [{ productId: monthlyProductId, purchaseToken: "tok-restore", purchaseState: "purchased", isAcknowledged: true }],
+    purchases: [{ ...monthlyOffer, productId: monthlyProductId, purchaseToken: "tok-restore", purchaseState: "purchased", isAcknowledged: true }],
   }));
   {
     const { fetch: fetchRestore, calls } = mockFetchOnce(200, { results: [{ status: 200, premiumActive: true }] });
@@ -11167,7 +11179,7 @@ runProductImagePreservationTests();
   // N: recovery de app morto — getCurrentPurchases() é revalidado contra o servidor, sem exigir nova compra.
   setGooglePlayBillingClientForTests(buildMockGooglePlayBillingClient({
     available: true,
-    purchases: [{ productId: monthlyProductId, purchaseToken: "tok-recover", purchaseState: "purchased", isAcknowledged: true }],
+    purchases: [{ ...monthlyOffer, productId: monthlyProductId, purchaseToken: "tok-recover", purchaseState: "purchased", isAcknowledged: true }],
   }));
   {
     const { fetch: fetchRecover, calls } = mockFetchOnce(200, { premiumActive: true, currentPlan: "premium", premiumExpiresAt: null, autoRenew: true, deduplicated: true });

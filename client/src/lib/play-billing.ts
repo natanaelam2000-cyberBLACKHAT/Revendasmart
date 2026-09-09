@@ -4,7 +4,7 @@
  * único do plugin nativo), e os clients de `/api/billing/google-play/{verify,restore}`.
  */
 import { getApiUrl } from "@/lib/api-config";
-import { PLAY_BILLING_PACKAGE_NAME, PLAY_BILLING_PRODUCT_IDS, type PlayBillingProductId } from "@shared/play-billing-contract";
+import { PLAY_BILLING_PACKAGE_NAME, PLAY_BILLING_PRODUCT_IDS, getPlayBillingCatalogEntry, type PlayBillingProductId, type PlayBillingPlan, type PlayBillingCycle } from "@shared/play-billing-contract";
 import {
   createGooglePlayBillingClient,
   PlayBillingClientError,
@@ -20,13 +20,14 @@ export async function isAndroidNativeApp(): Promise<boolean> {
   return Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android";
 }
 
-export function getPlayBillingProductId(interval: "monthly" | "yearly"): PlayBillingProductId {
-  return interval === "yearly" ? PLAY_BILLING_PRODUCT_IDS.premiumYearly : PLAY_BILLING_PRODUCT_IDS.premiumMonthly;
+export function getPlayBillingProduct(plan: PlayBillingPlan, cycle: PlayBillingCycle) {
+  return { ...getPlayBillingCatalogEntry(plan, cycle), plan, billingCycle: cycle } as const;
 }
 
 export interface GooglePlayVerifyResult {
   readonly premiumActive: boolean;
-  readonly currentPlan: "free" | "premium";
+  readonly currentPlan: "free" | "pro" | "premium";
+  readonly billingCycle: PlayBillingCycle | null;
   readonly premiumExpiresAt: string | null;
   readonly autoRenew: boolean;
   readonly deduplicated: boolean;
@@ -70,13 +71,14 @@ export async function buildGooglePlayAccountToken(firebaseUid: string): Promise<
  * Google Play Developer API antes de conceder Premium (`server/google-play-billing.ts`). */
 export async function verifyGooglePlayPurchase(input: {
   readonly productId: PlayBillingProductId;
+  readonly basePlanId: string;
   readonly purchaseToken: string;
   readonly token: string;
 }): Promise<GooglePlayVerifyResult> {
   const response = await fetch(getApiUrl("/api/billing/google-play/verify"), {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${input.token}` },
-    body: JSON.stringify({ productId: input.productId, purchaseToken: input.purchaseToken, packageName: PLAY_BILLING_PACKAGE_NAME }),
+    body: JSON.stringify({ productId: input.productId, basePlanId: input.basePlanId, purchaseToken: input.purchaseToken, packageName: PLAY_BILLING_PACKAGE_NAME }),
   });
   const body = await response.json().catch(() => null);
   if (!response.ok) {
@@ -88,14 +90,14 @@ export async function verifyGooglePlayPurchase(input: {
 /** Usado em reinstalação/troca de device/limpeza de dados: reenvia todas as compras que o Play Billing
  * Library reportar via `queryPurchases()` no device atual, sem depender de nenhum estado local salvo. */
 export async function restoreGooglePlayPurchases(input: {
-  readonly purchases: ReadonlyArray<{ readonly productId: PlayBillingProductId; readonly purchaseToken: string }>;
+  readonly purchases: ReadonlyArray<{ readonly productId: PlayBillingProductId; readonly basePlanId: string; readonly purchaseToken: string }>;
   readonly token: string;
 }): Promise<ReadonlyArray<{ readonly status: number } & Partial<GooglePlayVerifyResult>>> {
   const response = await fetch(getApiUrl("/api/billing/google-play/restore"), {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${input.token}` },
     body: JSON.stringify({
-      purchases: input.purchases.map((p) => ({ productId: p.productId, purchaseToken: p.purchaseToken, packageName: PLAY_BILLING_PACKAGE_NAME })),
+      purchases: input.purchases.map((p) => ({ productId: p.productId, basePlanId: p.basePlanId, purchaseToken: p.purchaseToken, packageName: PLAY_BILLING_PACKAGE_NAME })),
     }),
   });
   const body = await response.json().catch(() => null);
@@ -112,7 +114,7 @@ export async function getAndroidPremiumOffers(): Promise<PlayBillingProductOffer
   const available = await client.isAvailable().catch(() => false);
   if (!available) return [];
   try {
-    return await client.getPremiumProducts();
+    return (await client.getProducts()).filter((offer) => offer.plan === "premium");
   } catch {
     return [];
   }
@@ -139,11 +141,12 @@ export async function purchasePremiumViaGooglePlay(input: {
   const available = await client.isAvailable().catch(() => false);
   if (!available) return { kind: "error", message: "Google Play Billing indisponível neste dispositivo." };
 
-  const productId = getPlayBillingProductId(input.interval);
+  const cycle: PlayBillingCycle = input.interval === "yearly" ? "annual" : "monthly";
+  const catalogEntry = getPlayBillingProduct("premium", cycle);
   const appAccountToken = await buildGooglePlayAccountToken(input.firebaseUid);
   let purchase: PlayBillingPurchase;
   try {
-    purchase = await client.purchase(productId, appAccountToken);
+    purchase = await client.purchase(catalogEntry.productId, catalogEntry.basePlanId, appAccountToken);
   } catch (err) {
     if (err instanceof PlayBillingClientError) {
       if (err.code === "PURCHASE_CANCELLED") return { kind: "cancelled" };
@@ -154,7 +157,7 @@ export async function purchasePremiumViaGooglePlay(input: {
   }
 
   try {
-    const result = await verifyGooglePlayPurchase({ productId: purchase.productId, purchaseToken: purchase.purchaseToken, token: input.token });
+    const result = await verifyGooglePlayPurchase({ productId: purchase.productId, basePlanId: purchase.basePlanId, purchaseToken: purchase.purchaseToken, token: input.token });
     // §7: mesmo com purchaseState "purchased" no device, o servidor é quem decide — pending/expirado
     // no lado do Google (ex.: pagamento em processamento) nunca ativa Premium aqui.
     if (!result.premiumActive) return { kind: "pending" };
@@ -183,7 +186,7 @@ export async function recoverPendingGooglePlayPurchases(token: string, firebaseU
   }
   for (const purchase of purchases) {
     try {
-      await verifyGooglePlayPurchase({ productId: purchase.productId, purchaseToken: purchase.purchaseToken, token });
+      await verifyGooglePlayPurchase({ productId: purchase.productId, basePlanId: purchase.basePlanId, purchaseToken: purchase.purchaseToken, token });
     } catch {
       /* melhor esforço — a próxima abertura do app tenta de novo */
     }
@@ -201,7 +204,7 @@ export async function restoreAndroidPurchases(
   const purchases = await client.restorePurchases(appAccountToken);
   if (purchases.length === 0) return [];
   return restoreGooglePlayPurchases({
-    purchases: purchases.map((p) => ({ productId: p.productId, purchaseToken: p.purchaseToken })),
+    purchases: purchases.map((p) => ({ productId: p.productId, basePlanId: p.basePlanId, purchaseToken: p.purchaseToken })),
     token,
   });
 }

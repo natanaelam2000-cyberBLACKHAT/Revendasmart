@@ -12,12 +12,15 @@
  * equivalente (query products, purchase, getPurchases/restore, acknowledgement) e compatível com
  * Capacitor 8 + Billing Library atual.
  */
-import { PLAY_BILLING_PRODUCT_IDS, PLAY_BILLING_BASE_PLAN_IDS, isKnownPlayBillingProductId, type PlayBillingProductId } from "@shared/play-billing-contract";
+import { PLAY_BILLING_PRODUCT_IDS, isKnownPlayBillingProductId, resolvePlayBillingPlanAndCycle, type PlayBillingProductId, type PlayBillingCycle, type PlayBillingPlan } from "@shared/play-billing-contract";
 
 export type PlayBillingPurchaseState = "purchased" | "pending";
 
 export interface PlayBillingPurchase {
   readonly productId: PlayBillingProductId;
+  readonly basePlanId: string;
+  readonly plan: PlayBillingPlan;
+  readonly billingCycle: PlayBillingCycle;
   readonly purchaseToken: string;
   readonly orderId?: string;
   readonly purchaseState: PlayBillingPurchaseState;
@@ -27,6 +30,9 @@ export interface PlayBillingPurchase {
 
 export interface PlayBillingProductOffer {
   readonly productId: PlayBillingProductId;
+  readonly basePlanId: string;
+  readonly plan: PlayBillingPlan;
+  readonly billingCycle: PlayBillingCycle;
   /** Preço já localizado/formatado pela Play — nunca um valor fixo do backend. */
   readonly formattedPrice: string;
   readonly currencyCode: string;
@@ -43,8 +49,8 @@ export class PlayBillingClientError extends Error {
 
 export interface GooglePlayBillingClient {
   isAvailable(): Promise<boolean>;
-  getPremiumProducts(): Promise<PlayBillingProductOffer[]>;
-  purchase(productId: PlayBillingProductId, appAccountToken?: string): Promise<PlayBillingPurchase>;
+  getProducts(): Promise<PlayBillingProductOffer[]>;
+  purchase(productId: PlayBillingProductId, basePlanId: string, appAccountToken?: string): Promise<PlayBillingPurchase>;
   getCurrentPurchases(appAccountToken?: string): Promise<PlayBillingPurchase[]>;
   restorePurchases(appAccountToken?: string): Promise<PlayBillingPurchase[]>;
   /** Abre a tela nativa de gestão de assinatura da Play — é para lá que cancelamento é direcionado,
@@ -72,7 +78,7 @@ class NativeGooglePlayBillingClient implements GooglePlayBillingClient {
     }
   }
 
-  async getPremiumProducts(): Promise<PlayBillingProductOffer[]> {
+  async getProducts(): Promise<PlayBillingProductOffer[]> {
     const { NativePurchases, PURCHASE_TYPE } = await this.loadPlugin();
     const { products } = await NativePurchases.getProducts({
       productIdentifiers: Object.values(PLAY_BILLING_PRODUCT_IDS),
@@ -81,28 +87,36 @@ class NativeGooglePlayBillingClient implements GooglePlayBillingClient {
     // Nomenclatura do plugin para assinaturas Android é invertida do que se espera: `identifier` é o
     // BASE PLAN id, `planIdentifier` é o product id de verdade (`offerDetails.getBasePlanId()` vs
     // `productDetails.getProductId()`). Usar `identifier` aqui seria o bug clássico dessa integração.
-    return products
-      .filter((p) => isKnownPlayBillingProductId(p.planIdentifier))
-      .map((p) => ({
-        productId: p.planIdentifier as PlayBillingProductId,
+    return products.flatMap((rawProduct) => {
+      const p = rawProduct as any;
+      const productId = (p.planIdentifier ?? p.productIdentifier) as unknown;
+      const basePlanId = (p.identifier ?? p.basePlanId ?? p.offerDetails?.basePlanId) as unknown;
+      if (!isKnownPlayBillingProductId(productId) || typeof basePlanId !== "string") return [];
+      const resolved = resolvePlayBillingPlanAndCycle(productId, basePlanId);
+      if (!resolved) return [];
+      return [{
+        productId: productId as PlayBillingProductId,
+        basePlanId,
+        plan: resolved.plan,
+        billingCycle: resolved.cycle,
         formattedPrice: p.priceString,
         currencyCode: p.currencyCode,
-      }));
+      }];
+    });
   }
 
-  async purchase(productId: PlayBillingProductId, appAccountToken?: string): Promise<PlayBillingPurchase> {
+  async purchase(productId: PlayBillingProductId, basePlanId: string, appAccountToken?: string): Promise<PlayBillingPurchase> {
     const { NativePurchases, PURCHASE_TYPE } = await this.loadPlugin();
     let transaction;
     try {
       transaction = await NativePurchases.purchaseProduct({
         productIdentifier: productId,
-        planIdentifier: PLAY_BILLING_BASE_PLAN_IDS[productId],
+        planIdentifier: basePlanId,
         productType: PURCHASE_TYPE.SUBS,
         ...(appAccountToken ? { appAccountToken } : {}),
-        // Ack automático e imediato evita o reembolso de 3 dias do Google mesmo que o /verify demore
-        // ou fique temporariamente indisponível — mas o ENTITLEMENT em si nunca depende deste ack,
-        // só do /verify server-side (ver server/google-play-billing.ts).
-        autoAcknowledgePurchases: true,
+        // Acknowledgement permanece desativado no client: só o servidor confirma após verificar a
+        // compra e aplicar o entitlement (ver server/google-play-billing.ts).
+        autoAcknowledgePurchases: false,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -114,8 +128,15 @@ class NativeGooglePlayBillingClient implements GooglePlayBillingClient {
     if (!transaction.purchaseToken || !transaction.productIdentifier) {
       throw new PlayBillingClientError("PURCHASE_FAILED", "Transação sem purchaseToken/productIdentifier.");
     }
+    const purchaseProductId = transaction.productIdentifier as PlayBillingProductId;
+    const purchaseBasePlanId = ((transaction as any).planIdentifier ?? (transaction as any).identifier ?? basePlanId) as string;
+    const resolved = resolvePlayBillingPlanAndCycle(purchaseProductId, purchaseBasePlanId);
+    if (!resolved) throw new PlayBillingClientError("PURCHASE_FAILED", "Transação com base plan desconhecido.");
     return {
-      productId: transaction.productIdentifier as PlayBillingProductId,
+      productId: purchaseProductId,
+      basePlanId: purchaseBasePlanId,
+      plan: resolved.plan,
+      billingCycle: resolved.cycle,
       purchaseToken: transaction.purchaseToken,
       orderId: transaction.orderId,
       purchaseState: mapPurchaseState(transaction.purchaseState),
@@ -132,14 +153,25 @@ class NativeGooglePlayBillingClient implements GooglePlayBillingClient {
     });
     return purchases
       .filter((t) => t.purchaseToken && isKnownPlayBillingProductId(t.productIdentifier))
-      .map((t) => ({
-        productId: t.productIdentifier as PlayBillingProductId,
+      .map((rawTransaction) => {
+        const t = rawTransaction as any;
+        const productId = t.productIdentifier as PlayBillingProductId;
+        const basePlanId = (t.planIdentifier ?? t.identifier) as string;
+        const resolved = resolvePlayBillingPlanAndCycle(productId, basePlanId);
+        if (!resolved) return null;
+        return {
+        productId,
+        basePlanId,
+        plan: resolved.plan,
+        billingCycle: resolved.cycle,
         purchaseToken: t.purchaseToken as string,
         orderId: t.orderId,
         purchaseState: mapPurchaseState(t.purchaseState),
         isAcknowledged: Boolean(t.isAcknowledged),
         appAccountToken: typeof t.appAccountToken === "string" ? t.appAccountToken : null,
-      }));
+        };
+      })
+      .filter((p) => p !== null) as PlayBillingPurchase[];
   }
 
   async restorePurchases(appAccountToken?: string): Promise<PlayBillingPurchase[]> {
@@ -182,10 +214,10 @@ export function buildMockGooglePlayBillingClient(scenario: MockPlayBillingScenar
     async isAvailable() {
       return scenario.available ?? true;
     },
-    async getPremiumProducts() {
+    async getProducts() {
       return scenario.products ?? [];
     },
-    async purchase(productId) {
+    async purchase(productId, _basePlanId) {
       if (scenario.purchaseResult instanceof PlayBillingClientError) throw scenario.purchaseResult;
       if (scenario.purchaseResult) return scenario.purchaseResult;
       throw new PlayBillingClientError("PRODUCT_UNAVAILABLE", `Nenhum resultado de compra mockado para ${productId}`);
