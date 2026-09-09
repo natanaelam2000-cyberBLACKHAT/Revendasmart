@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { Check, Sparkles, Loader2 } from "lucide-react";
 import { Layout } from "@/components/layout";
@@ -91,6 +91,7 @@ function PlanCard({
   nativeMode,
   nativeState,
   onNativePurchase,
+  platformState,
 }: {
   plan: PlanType;
   cycle: BillingCycle;
@@ -108,6 +109,7 @@ function PlanCard({
   nativeMode: boolean;
   nativeState: "idle" | "purchasing" | "pending" | "error";
   onNativePurchase: () => void;
+  platformState: "unknown" | "android" | "web" | "error";
 }) {
   const [, setLocation] = useLocation();
   const presentation = PLAN_PRESENTATION[plan];
@@ -128,11 +130,16 @@ function PlanCard({
   // PLAN-IMPL-06 §25 — plan_selected: o usuário decidiu deliberadamente este plano/CTA (nunca a mera
   // impressão de um card indisponível, §25 — este handler só existe no branch purchaseAvailable true).
   function handleSelectPlan() {
+    if (platformState !== "web") return;
     trackAnalyticsEvent("plan_selected", { selected_plan: plan, billing_cycle: cycle, current_plan: currentPlan, is_trial: isTrial });
     setPurchaseState("confirming");
   }
 
   async function handleConfirmPurchase() {
+    if (platformState !== "web") {
+      setPurchaseState("idle");
+      return;
+    }
     setPurchaseState("purchasing");
     setPurchaseError("");
     // PLAN-IMPL-06 §26 — só agora, imediatamente antes de invocar o endpoint real, nunca no clique do
@@ -262,7 +269,11 @@ function PlanCard({
         )}
 
         {cardState.kind === "not_current" && !isFree && !(plan === PLANS.PREMIUM && hasPaidSubscription) && (
-          nativeMode ? (
+          platformState === "unknown" || platformState === "error" ? (
+            <div className="w-full min-h-11 rounded-2xl border border-border/60 text-center py-3 text-xs font-bold text-muted-foreground" data-testid={`text-platform-unavailable-${plan}`}>
+              Não foi possível identificar a plataforma de pagamento.
+            </div>
+          ) : nativeMode ? (
             nativeOffer ? (
               <button type="button" onClick={onNativePurchase} disabled={nativeState === "purchasing"} className="w-full min-h-11 rounded-2xl bg-primary text-white font-black py-3 text-sm disabled:opacity-60" data-testid={`button-play-purchase-${plan}`}>
                 {nativeState === "purchasing" ? "Abrindo Google Play…" : nativeState === "pending" ? "Pagamento pendente" : `Assinar ${presentation.title}`}
@@ -330,22 +341,32 @@ export default function Plans() {
   const { basePlan, activePlan, trial, loading: planLoading, error: planError, planData, refresh } = usePlan();
   const { availability, loading: availabilityLoading } = usePlanPurchaseAvailability();
   const [cycle, setCycle] = useState<BillingCycle>("monthly");
-  const [android, setAndroid] = useState(false);
+  const [platformState, setPlatformState] = useState<"unknown" | "android" | "web" | "error">("unknown");
   const [playOffers, setPlayOffers] = useState<PlayBillingProductOffer[]>([]);
   const [playState, setPlayState] = useState<"idle" | "purchasing" | "pending" | "error">("idle");
   const [restoreState, setRestoreState] = useState<"idle" | "restoring" | "done" | "error">("idle");
 
-  useEffect(() => {
-    let cancelled = false;
-    void isAndroidNativeApp().then((native) => {
-      if (cancelled) return;
-      setAndroid(native);
-      if (native) void getAndroidPlayOffers().then((offers) => { if (!cancelled) setPlayOffers(offers); });
-    });
-    return () => { cancelled = true; };
+  const resolvePlatform = useCallback(async () => {
+    setPlatformState("unknown");
+    try {
+      const native = await isAndroidNativeApp();
+      setPlatformState(native ? "android" : "web");
+      if (native) {
+        const offers = await getAndroidPlayOffers();
+        setPlayOffers(offers);
+      }
+    } catch {
+      setPlayOffers([]);
+      setPlatformState("error");
+    }
   }, []);
 
+  useEffect(() => {
+    void resolvePlatform();
+  }, [resolvePlatform]);
+
   const nativePurchase = async (plan: PlanType) => {
+    if (platformState !== "android") return;
     const user = getFirebaseAuth()?.currentUser;
     if (!user || (plan !== PLANS.PRO && plan !== PLANS.PREMIUM)) return;
     setPlayState("purchasing");
@@ -372,6 +393,8 @@ export default function Plans() {
   const managePlay = async () => {
     try { await openAndroidSubscriptionManagement(); } catch { setPlayState("error"); }
   };
+
+  const android = platformState === "android";
 
   const trialActive = trial?.status === "active";
   const trialJustExpired = trial?.status === "expired";
@@ -456,19 +479,27 @@ export default function Plans() {
               cycle={cycle}
               cardState={resolveCardState(plan, basePlan, trialActive, trial?.endsAt ?? null)}
               basePlanName={basePlanName}
-              purchaseAvailable={plan !== PLANS.FREE && !hasPaidSubscription && (availability?.offers?.[plan]?.[cycle]?.available ?? false)}
-              purchaseOffer={android ? undefined : (plan === PLANS.FREE ? undefined : availability?.offers?.[plan]?.[cycle])}
+              purchaseAvailable={platformState === "web" && plan !== PLANS.FREE && !hasPaidSubscription && (availability?.offers?.[plan]?.[cycle]?.available ?? false)}
+              purchaseOffer={platformState === "web" ? (plan === PLANS.FREE ? undefined : availability?.offers?.[plan]?.[cycle]) : undefined}
               monthlyOffer={plan === PLANS.FREE ? undefined : availability?.offers?.[plan]?.monthly}
               nativeMode={android}
               nativeOffer={playOffers.find((entry) => entry.plan === plan && entry.billingCycle === cycle)}
               nativeState={playState}
               onNativePurchase={() => void nativePurchase(plan)}
+              platformState={platformState}
               hasPaidSubscription={hasPaidSubscription}
               currentPlan={basePlan}
               isTrial={trialActive}
             />
           ))}
         </div>
+
+        {platformState === "error" && (
+          <div className="flex flex-col items-center gap-2 text-center">
+            <p className="text-xs text-muted-foreground">Não foi possível identificar a plataforma de pagamento. Tente novamente.</p>
+            <button type="button" onClick={() => void resolvePlatform()} className="underline font-semibold text-xs text-muted-foreground" data-testid="button-retry-platform-detection">Tentar novamente</button>
+          </div>
+        )}
 
         {android && (
           <div className="flex flex-col sm:flex-row justify-center gap-2 text-center">

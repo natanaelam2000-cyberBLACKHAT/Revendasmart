@@ -112,6 +112,7 @@
     "test:subscription-cancel:run": "tsx script/subscription-cancel-tests.ts",
     "test:subscription-cancel": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:subscription-cancel:run\"",
     "test:play-billing:run": "tsx script/play-billing-tests.ts",
+    "test:android-billing-02a-p0-fix": "tsx script/android-billing-02a-p0-fix-tests.ts",
     "test:play-billing": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:play-billing:run\"",
     "test:mercado-pago:sandbox": "tsx script/mercado-pago-sandbox-tests.ts",
     "marketing-pro:benchmark": "tsx script/marketing-pro-provider-benchmark.ts",
