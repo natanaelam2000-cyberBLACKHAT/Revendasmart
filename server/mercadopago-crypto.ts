@@ -8,7 +8,9 @@
  * Each: 64 hex chars = 32 bytes, or any string of 32+ chars (derived to 32 bytes via SHA-256).
  *
  * MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION selects which key NEW encryptions use ("v1" | "v2",
- * defaults to "v1"). This is deliberately non-secret config, not a secret itself.
+ * defaults to "v1" when absent/empty). This is deliberately non-secret config, not a secret itself.
+ * Any other non-empty value (a typo like "V2" or "v3") throws rather than silently falling back to
+ * "v1" — a botched attempt to activate v2 must never be mistaken for a deliberate, unchanged deploy.
  *
  * SECURITY NOTES:
  * - A key is NEVER derived from FIREBASE_PRIVATE_KEY or any reused credential.
@@ -86,11 +88,19 @@ if (!process.env.MERCADOPAGO_TOKEN_ENCRYPTION_KEY?.trim()) {
  * environment does NOT activate it by itself, on purpose, so a v2 key can be deployed and verified
  * (§ security-verify-mercadopago style checks, or the migration tool's --verify mode) well before
  * it's ever actually used to encrypt anything.
+ *
+ * Absent/empty is the only silent case (→ "v1"). Any other value must be exactly "v1" or "v2" — a
+ * typo like "V2" or "v3" throws instead of silently continuing on "v1", so a botched attempt to cut
+ * over to v2 is never mistaken for a deliberate, unchanged v1 deploy.
  */
 export function resolveActiveEncryptVersion(): MercadoPagoEncryptionKeyVersion {
   const raw = process.env.MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION?.trim();
-  if (raw && isKnownKeyVersion(raw)) return raw;
-  return "v1";
+  if (!raw) return "v1";
+  if (isKnownKeyVersion(raw)) return raw;
+  throw new MercadoPagoEncryptionKeyError(
+    "tem MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION configurada com um valor não reconhecido — " +
+      'use "v1" ou "v2" (ou remova a variável para o padrão "v1"); recusando adivinhar',
+  );
 }
 
 /**

@@ -153,12 +153,80 @@ async function run() {
   assert.equal(computeRetirementSafety({ v1OrUnversionedFields: 0, unknownVersionFields: 0, decryptFailures: 0 }), true, "T19: must pass only when all three counts are exactly zero");
   console.log("PASS T19 retirement guard passes only when v1/unversioned, unknown-version, and decrypt-failure counts are all exactly zero");
 
+  // ===== T20-T27 — RC-P0-SECURITY-02B1: MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION is a strict
+  // enum, not a "best guess". Absent/empty is the only silent case (-> v1); anything else must be
+  // exactly "v1" or "v2", or resolveActiveEncryptVersion() throws instead of quietly staying on v1. =====
+
+  // ----- T20 — unset -----
+  withEnv({ MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION: undefined }, () => {
+    assert.equal(resolveActiveEncryptVersion(), "v1", "T20: unset ACTIVE_VERSION must default to v1");
+  });
+  console.log("PASS T20 ACTIVE_VERSION unset defaults to v1");
+
+  // ----- T21 — empty string is treated the same as unset by the existing `?.trim()` contract -----
+  withEnv({ MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION: "" }, () => {
+    assert.equal(resolveActiveEncryptVersion(), "v1", "T21: empty-string ACTIVE_VERSION must default to v1, not throw");
+  });
+  withEnv({ MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION: "   " }, () => {
+    assert.equal(resolveActiveEncryptVersion(), "v1", "T21: whitespace-only ACTIVE_VERSION must default to v1, not throw");
+  });
+  console.log("PASS T21 ACTIVE_VERSION empty/whitespace-only defaults to v1");
+
+  // ----- T22/T23 — the two valid values still work -----
+  withEnv({ MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION: "v1" }, () => {
+    assert.equal(resolveActiveEncryptVersion(), "v1", "T22: explicit \"v1\" must resolve to v1");
+  });
+  console.log("PASS T22 ACTIVE_VERSION=\"v1\" resolves to v1");
+
+  withEnv({ MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION: "v2" }, () => {
+    assert.equal(resolveActiveEncryptVersion(), "v2", "T23: explicit \"v2\" must resolve to v2");
+  });
+  console.log("PASS T23 ACTIVE_VERSION=\"v2\" resolves to v2");
+
+  // ----- T24 — a case typo must be rejected, never silently coerced -----
+  withEnv({ MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION: "V2" }, () => {
+    assert.throws(() => resolveActiveEncryptVersion(), MercadoPagoEncryptionKeyError, "T24: \"V2\" (wrong case) must throw, never silently resolve to v1 or v2");
+  });
+  console.log("PASS T24 ACTIVE_VERSION case typo (\"V2\") is rejected, not silently defaulted");
+
+  // ----- T25 — an unknown-but-plausible version string must be rejected -----
+  withEnv({ MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION: "v3" }, () => {
+    assert.throws(() => resolveActiveEncryptVersion(), MercadoPagoEncryptionKeyError, "T25: \"v3\" must throw, never silently default to v1");
+  });
+  console.log("PASS T25 ACTIVE_VERSION=\"v3\" is rejected, not silently defaulted");
+
+  // ----- T26 — an arbitrary invalid string must be rejected -----
+  withEnv({ MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION: "foo" }, () => {
+    assert.throws(() => resolveActiveEncryptVersion(), MercadoPagoEncryptionKeyError, "T26: an arbitrary invalid value must throw, never silently default to v1");
+  });
+  console.log("PASS T26 ACTIVE_VERSION arbitrary invalid value is rejected, not silently defaulted");
+
+  // ----- T27 — the rejection error leaks no key/token material, and (per the "prefer not to echo
+  // the raw invalid value" guidance) does not even echo the invalid string itself -----
+  withEnv({ MERCADOPAGO_TOKEN_ENCRYPTION_KEY: FAKE_V1_KEY, MERCADOPAGO_TOKEN_ENCRYPTION_KEY_V2: FAKE_V2_KEY, MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION: "totally-bogus-value" }, () => {
+    try {
+      resolveActiveEncryptVersion();
+      assert.fail("T27: an invalid ACTIVE_VERSION must throw");
+    } catch (error) {
+      assert.ok(error instanceof MercadoPagoEncryptionKeyError, "T27: must throw the dedicated config error type");
+      const message = (error as Error).message;
+      assert.equal(message.includes(FAKE_V1_KEY), false, "T27: error message must never contain the v1 key");
+      assert.equal(message.includes(FAKE_V2_KEY), false, "T27: error message must never contain the v2 key");
+      assert.equal(message.includes("totally-bogus-value"), false, "T27: error message must not echo the raw invalid value");
+    }
+  });
+  console.log("PASS T27 invalid-ACTIVE_VERSION error leaks no key material and does not echo the raw invalid value");
+
   console.log(
     "RC-P0-SECURITY-02B crypto tests passed: T1-T9 — legacy-unversioned/explicit-v1/explicit-v2 all " +
     "decrypt correctly, v2 encryption stamps keyVersion, default and presence-of-v2 both leave v1 " +
     "active, unknown version and wrong/missing v2 key both fail closed with zero cross-key fallback, " +
     "and a mixed dataset decrypts correctly document-by-document. T18-T19 — the retirement guard's " +
-    "decision logic rejects on any nonzero count and passes only at a clean 0/0/0.",
+    "decision logic rejects on any nonzero count and passes only at a clean 0/0/0. " +
+    "RC-P0-SECURITY-02B1 (T20-T27) — ACTIVE_VERSION is a strict v1/v2 enum: unset/empty/whitespace " +
+    "still default to v1, valid v1/v2 still work, and any other non-empty value (case typo, unknown " +
+    "version, or arbitrary garbage) now throws instead of silently defaulting to v1 — with no key or " +
+    "raw-value leakage in the error.",
   );
 }
 
