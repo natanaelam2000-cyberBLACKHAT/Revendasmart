@@ -308,31 +308,79 @@ até você chegar na Seção G — não há pressa destrutiva.
 - Gere uma credencial de substituição válida (repita a Seção A ou D/E conforme o provedor) e trate
   como uma nova rodada de rotação, não como uma correção emergencial da anterior.
 
-## I. NÃO ROTACIONAR `MERCADOPAGO_TOKEN_ENCRYPTION_KEY` NESTA RODADA
+## I. Rotação de `MERCADOPAGO_TOKEN_ENCRYPTION_KEY` — agora com fundação técnica pronta (RC-P0-SECURITY-02B)
 
 ```text
-STATUS: MIGRATION_REQUIRED_BEFORE_ROTATION
+STATUS ANTES DO RC-P0-SECURITY-02B: MIGRATION_REQUIRED_BEFORE_ROTATION (bloqueado — sem suporte a versão)
+STATUS APÓS O RC-P0-SECURITY-02B:   FUNDAÇÃO PRONTA — rotação real ainda NÃO foi executada
 ```
 
-Fatos já confirmados sobre esta chave (`server/mercadopago-crypto.ts`):
+Fatos sobre esta chave (`server/mercadopago-crypto.ts`), atualizados após a fundação de versionamento:
 
-- Algoritmo: AES-256-GCM.
+- Algoritmo: AES-256-GCM, inalterado.
 - Protege os `accessToken`/`refreshToken` OAuth **dos lojistas que conectaram sua própria conta
   Mercado Pago** — não o token central da plataforma.
-- O ciphertext já persistido em `users/{uid}/mercadopago_connections/*` só pode ser decifrado com
-  a chave EXATA que o criptografou.
-- `EncryptedToken` não tem campo `keyVersion`/`keyId` — não existe suporte a múltiplas chaves
-  simultâneas hoje.
-- Não existe nenhuma migração/re-criptografia implementada.
+- `EncryptedToken` agora tem um campo `keyVersion?: "v1" | "v2"` opcional. Um documento sem esse
+  campo (todo o histórico de produção até aqui) é tratado como `"v1"` — nunca como erro, nunca
+  como um sinal para tentar múltiplas chaves.
+- A decifragem é estritamente fail-closed por versão: cada documento usa **somente** a chave da
+  sua própria `keyVersion` — nunca há fallback cruzado (um documento `v2` nunca é tentado com a
+  chave `v1`, e vice-versa). Uma `keyVersion` desconhecida recusa decifrar imediatamente.
+- `MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION` (`"v1"` | `"v2"`, não-secreto, padrão `"v1"`)
+  decide qual chave as **novas** criptografias usam. Simplesmente configurar
+  `MERCADOPAGO_TOKEN_ENCRYPTION_KEY_V2` no ambiente **não ativa** a v2 sozinho — só o
+  `ACTIVE_VERSION` explícito faz isso.
+- Uma atualização de token (refresh OAuth normal, `server/mercadopago-connections.ts` — nenhuma
+  linha desse arquivo foi alterada por esta fundação) que reescreve um documento antigo `v1` volta
+  a gravá-lo automaticamente como `v2` assim que `ACTIVE_VERSION=v2` estiver ativo — sem exigir
+  reconexão manual de ninguum lojista.
+- Ferramenta de migração/cobertura pronta: `script/migrate-mercadopago-token-encryption.ts`
+  (`--verify` para relatório de cobertura somente-leitura, `--apply` para migrar de fato; o modo
+  padrão sem nenhuma dessas duas flags é dry-run). Protegida contra sobrescrita de um refresh OAuth
+  concorrente mais recente via precondition (`lastUpdateTime`) do Firestore — testado de verdade
+  contra o emulador (`script/mercadopago-token-encryption-migration-tests.ts`, T14).
 
-**Rotacionar esta chave agora, sem migração, tornaria permanentemente ilegíveis os tokens de
-TODOS os lojistas já conectados — forçando reconexão manual de todos eles.** Isso é uma mudança de
-arquitetura separada (adicionar `keyVersion`, suportar decrypt com a chave antiga ou nova durante
-uma janela de transição, rodar uma migração em lote, só então aposentar a chave antiga) — fora do
-escopo desta rotação de contenção.
+**Nada disto ativa a v2 ou toca em qualquer dado real.** A fundação existe para tornar a rotação
+futura segura quando o momento chegar — ela mesma ainda não foi executada.
 
-Não trocar o valor no Secret Manager. Não remover a chave antiga. Não pedir para lojistas
-reconectarem. Não tentar re-criptografar documentos manualmente.
+### Fases da rotação futura (nenhuma executada ainda)
+
+1. Deploy do código com suporte a duas chaves, `ACTIVE_VERSION` ainda em `"v1"` (comportamento
+   idêntico ao de antes — este é exatamente o estado deste commit).
+2. O dono gera uma chave v2 aleatória de 32 bytes **fora do Git** (mesmo padrão da Seção B: nunca
+   colar o valor em chat/commit/PR).
+3. O dono cria o secret futuro no Secret Manager (nome já reservado, não criado por este ticket):
+   `revendasmart-mercadopago-token-encryption-key-v2` → env `MERCADOPAGO_TOKEN_ENCRYPTION_KEY_V2`.
+4. Nova revisão do Cloud Run com a v2 configurada, mas `ACTIVE_VERSION` ainda `"v1"` — backend
+   verificado com as DUAS chaves presentes e funcionando (`npm run security:verify-mp -- --provider-check`
+   continua útil aqui para a saúde geral do MP; a leitura/decifragem de tokens já-conectados
+   específica é o que `--verify` do script de migração cobre).
+5. `ACTIVE_VERSION` trocado para `"v2"` numa nova revisão do Cloud Run.
+6. A partir daqui, toda NOVA criptografia (novas conexões e todo refresh OAuth de conexões
+   existentes) já grava `v2` automaticamente — sem mudança de código, sem reconexão.
+7. `npx tsx script/migrate-mercadopago-token-encryption.ts --project revenda-smart` (dry-run) —
+   confirma quantos documentos ainda estão em `v1`/sem versão antes de tocar em qualquer dado.
+8. `npx tsx script/migrate-mercadopago-token-encryption.ts --project revenda-smart --apply` —
+   migra de fato; idempotente e resumível (pode ser interrompido e rodado de novo com segurança —
+   documentos já em `v2` nunca são regravados).
+9. `npx tsx script/migrate-mercadopago-token-encryption.ts --project revenda-smart --verify` —
+   relatório de cobertura: `V1_OR_UNVERSIONED`, `UNKNOWN_VERSION`, `DECRYPT_FAILURES` e o veredito
+   `OLD_KEY_RETIREMENT_GUARD`.
+10. **Só depois que o passo 9 reportar `V1_OR_UNVERSIONED = 0`, `UNKNOWN_VERSION = 0` e
+    `DECRYPT_FAILURES = 0`** é seguro considerar a chave v1 (`MERCADOPAGO_TOKEN_ENCRYPTION_KEY`)
+    pronta para aposentadoria — mesmo assim, remover a v1 do ambiente e o próprio suporte a
+    `keyVersion` legado no código é uma ticket **futura e separada**, não parte desta fundação.
+11. Remover o suporte à v1/legado do código (`server/mercadopago-crypto.ts` deixaria de aceitar
+    documentos sem `keyVersion`) é explicitamente adiado para essa ticket futura — não faz parte
+    do RC-P0-SECURITY-02B.
+
+`--project` é obrigatório em todo modo da ferramenta e precisa bater exatamente com
+`FIREBASE_PROJECT_ID` do ambiente atual, ou ela recusa rodar — a mesma trava de "digite o nome do
+ambiente para confirmar" já usada em outros pontos deste runbook.
+
+Nenhum comando acima foi executado por este ticket. Não trocar o valor de
+`MERCADOPAGO_TOKEN_ENCRYPTION_KEY` no Secret Manager. Não remover a chave antiga. Não pedir para
+lojistas reconectarem. Não rodar a migração em produção.
 
 ---
 
