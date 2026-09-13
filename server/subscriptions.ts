@@ -46,7 +46,6 @@ import {
 const CENTRAL_ACCESS_TOKEN = process.env.MERCADOPAGO_ACCESS_TOKEN?.trim() ?? "";
 const WEBHOOK_SECRET = process.env.MERCADOPAGO_WEBHOOK_SECRET?.trim() ?? "";
 const WEBHOOK_MAX_AGE_MS = 5 * 60 * 1000;
-const APP_BASE_URL = process.env.APP_BASE_URL ?? "https://revendasmart-backend-164193806378.us-central1.run.app";
 const FRONTEND_URL = process.env.FRONTEND_URL ?? "https://revendasmart.vercel.app";
 const MERCADO_PAGO_ENV = normalizeMercadoPagoEnvironment(process.env.MERCADO_PAGO_ENV);
 const MP_CREDENTIAL_VALIDATION = validateMercadoPagoAccessTokenForEnvironment(

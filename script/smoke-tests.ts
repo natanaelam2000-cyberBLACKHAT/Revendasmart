@@ -51,6 +51,7 @@ import { sanitizePublicSettingsPayload } from "../server/public-catalog-ownershi
 import { escapeHtmlText, escapeCsvCell, toCsvRow } from "../client/src/lib/export-security";
 import { buildPrintableHtml, buildExcelCsvContent, type ReportExportPayload } from "../client/src/lib/report-export";
 import { parseCookieHeader, hasMatchingOAuthContinuityCookie, classifyOAuthContinuityCookie, sanitizeMercadoPagoAccountMetadata } from "../server/mercadopago-connections";
+import { resolvePaymentWebhookBaseUrl } from "../server/payments";
 import { encryptToken, decryptToken, assertEncryptionKeyConfigured, MercadoPagoEncryptionKeyError } from "../server/mercadopago-crypto";
 import { MP_OAUTH_CONTINUITY_COOKIE } from "../shared/connections";
 import {
@@ -10809,7 +10810,85 @@ runProductImagePreservationTests();
   assert.match(cloudbuildSource, /MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION=v2/, "ACTIVE_VERSION=v2 precisa continuar declarado explicitamente no deploy canônico");
   assert.match(cloudbuildSource, /MERCADOPAGO_TOKEN_ENCRYPTION_KEY=revendasmart-mercadopago-token-encryption-key:latest/, "o binding do secret V1 precisa continuar declarado no deploy canônico");
   assert.match(cloudbuildSource, /MERCADOPAGO_TOKEN_ENCRYPTION_KEY_V2=revendasmart-mercadopago-token-encryption-key-v2:latest/, "o binding do secret V2 precisa continuar declarado no deploy canônico");
+
+  // RC-P0-SECURITY-02R: APP_BASE_URL (host que recebe os webhooks assíncronos de pagamento do
+  // Mercado Pago, em server/payments.ts) precisa continuar declarado no deploy canônico com o host
+  // atual confirmado pelo operador via Cloud Run status.url — nunca o host obsoleto 164193806378, e
+  // nunca ausente (o que faria o deploy silenciosamente preservar/depender de um valor não versionado).
+  assert.match(cloudbuildSource, /APP_BASE_URL=https:\/\/revendasmart-backend-cc2743rkmq-uc\.a\.run\.app/, "APP_BASE_URL precisa continuar declarado explicitamente no deploy canônico, com o host de produção confirmado");
+  assert.doesNotMatch(cloudbuildSource, /164193806378/, "o host obsoleto do Cloud Run não pode voltar a aparecer no deploy canônico");
+
+  // RC-P0-SECURITY-02R: mesmo fallback obsoleto removido de server/mercadopago-connections.ts
+  // (RC-P0-SECURITY-02N) não pode reaparecer em payments.ts/subscriptions.ts — nenhum dos dois pode
+  // voltar a substituir silenciosamente um APP_BASE_URL ausente por um host antigo do Cloud Run.
+  const paymentsSource = read("server/payments.ts");
+  assert.doesNotMatch(paymentsSource, /164193806378/, "payments.ts não pode reintroduzir o fallback obsoleto para um host antigo do Cloud Run");
+  assert.match(paymentsSource, /resolvePaymentWebhookBaseUrl\(APP_BASE_URL_RAW, process\.env\.NODE_ENV\)/g, "os dois pontos que criam preferências de pagamento precisam validar APP_BASE_URL antes de chamar o Mercado Pago");
+
+  const subscriptionsSource = read("server/subscriptions.ts");
+  assert.doesNotMatch(subscriptionsSource, /164193806378/, "subscriptions.ts não pode reintroduzir a declaração morta com o fallback obsoleto do Cloud Run");
+  assert.doesNotMatch(subscriptionsSource, /\bAPP_BASE_URL\b/, "APP_BASE_URL era código morto em subscriptions.ts (nunca usado após ser declarado) — não deve voltar sem um uso real");
 }
+
+// --- RC-P0-SECURITY-02R: resolvePaymentWebhookBaseUrl() — validação fail-closed do host usado no
+// notification_url dos webhooks de pagamento do Mercado Pago (server/payments.ts). Pura e testável
+// sem subir servidor/emulador, no mesmo padrão de classifyOAuthContinuityCookie(). ---
+function runPaymentWebhookBaseUrlTests(): void {
+  // T1: configurado corretamente -> origem canônica normalizada, sem barra final.
+  const ok = resolvePaymentWebhookBaseUrl("https://revendasmart-backend-cc2743rkmq-uc.a.run.app", "production");
+  assert.equal(ok.ok, true, "T1: APP_BASE_URL https válido em produção precisa ser aceito");
+  if (ok.ok) {
+    assert.equal(ok.url, "https://revendasmart-backend-cc2743rkmq-uc.a.run.app", "T1: URL válida sem barra final não deve ser alterada");
+  }
+
+  // T2: ausente -> falha fechado (nunca cai para um host hardcoded).
+  const missing = resolvePaymentWebhookBaseUrl("", "production");
+  assert.equal(missing.ok, false, "T2: APP_BASE_URL vazio precisa falhar fechado, nunca substituir por um host hardcoded");
+  if (!missing.ok) assert.equal(missing.reason, "missing");
+  const missingWhitespace = resolvePaymentWebhookBaseUrl("   ", "production");
+  assert.equal(missingWhitespace.ok, false, "T2b: só espaços em branco também conta como ausente");
+
+  // T3: malformado -> falha fechado.
+  const malformed = resolvePaymentWebhookBaseUrl("not a url", "production");
+  assert.equal(malformed.ok, false, "T3: URL malformada precisa falhar fechado");
+  if (!malformed.ok) assert.equal(malformed.reason, "invalid");
+  const wrongProtocol = resolvePaymentWebhookBaseUrl("ftp://revendasmart-backend.example/", "production");
+  assert.equal(wrongProtocol.ok, false, "T3b: protocolo que não é http/https precisa falhar fechado");
+
+  // T4: não-HTTPS em produção -> falha fechado (http só é tolerado fora de produção, ex. dev local).
+  const httpInProd = resolvePaymentWebhookBaseUrl("http://revendasmart-backend-cc2743rkmq-uc.a.run.app", "production");
+  assert.equal(httpInProd.ok, false, "T4: APP_BASE_URL http (não-https) em produção precisa falhar fechado");
+  const httpInDev = resolvePaymentWebhookBaseUrl("http://localhost:5000", "development");
+  assert.equal(httpInDev.ok, true, "T4b: http continua aceito fora de produção (dev local)");
+
+  // T5: normalização de barra final -> notification_url nunca fica com `//`.
+  const trailingSlash = resolvePaymentWebhookBaseUrl("https://revendasmart-backend-cc2743rkmq-uc.a.run.app/", "production");
+  assert.equal(trailingSlash.ok, true);
+  if (trailingSlash.ok) {
+    assert.equal(trailingSlash.url, "https://revendasmart-backend-cc2743rkmq-uc.a.run.app", "T5: barra final precisa ser removida");
+    assert.doesNotMatch(`${trailingSlash.url}/api/payments/webhook`, /[^:]\/\//, "T5: notification_url final não pode conter barra dupla");
+  }
+  const doubleTrailingSlash = resolvePaymentWebhookBaseUrl("https://revendasmart-backend-cc2743rkmq-uc.a.run.app//", "production");
+  if (doubleTrailingSlash.ok) {
+    assert.doesNotMatch(`${doubleTrailingSlash.url}/api/payments/webhook`, /[^:]\/\//, "T5b: múltiplas barras finais também precisam ser normalizadas");
+  }
+
+  // T6: o contrato de binding uid/chargeId no notification_url não foi alterado por esta mudança —
+  // confirmado por asserção de código-fonte (os dois pontos de criação de preferência continuam
+  // interpolando uid/chargeId com encodeURIComponent, exatamente como antes desta mudança).
+  const paymentsSource = read("server/payments.ts");
+  assert.match(
+    paymentsSource,
+    /notification_url: `\$\{appBaseUrlCheck\.url\}\/api\/payments\/webhook\?uid=\$\{encodeURIComponent\(body\.uid\)\}&chargeId=\$\{encodeURIComponent\(chargeId\)\}`/,
+    "T6: binding uid/chargeId em /payments/create-link precisa continuar exatamente igual",
+  );
+  assert.match(
+    paymentsSource,
+    /notification_url: `\$\{appBaseUrlCheck\.url\}\/api\/payments\/webhook\?uid=\$\{encodeURIComponent\(params\.uid\)\}&chargeId=\$\{encodeURIComponent\(params\.chargeId\)\}`/,
+    "T6b: binding uid/chargeId em createOrderMercadoPagoCharge precisa continuar exatamente igual",
+  );
+}
+runPaymentWebhookBaseUrlTests();
 
 // --- RELEASE-05B: robustez do onboarding da conexão Mercado Pago (funções puras) ---
 //

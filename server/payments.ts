@@ -65,11 +65,46 @@ function logPaymentError(
 // ---------------------------------------------------------------------------
 const CENTRAL_ACCESS_TOKEN = process.env.MERCADOPAGO_ACCESS_TOKEN ?? "";
 const WEBHOOK_SECRET = process.env.MERCADOPAGO_WEBHOOK_SECRET ?? "";
-const APP_BASE_URL = process.env.APP_BASE_URL ?? "https://revendasmart-backend-164193806378.us-central1.run.app";
+// RC-P0-SECURITY-02R: no hardcoded fallback host — a previous version of this constant silently fell
+// back to a specific obsolete Cloud Run URL whenever the env var was unset, which could send Mercado
+// Pago's payment-status webhooks to a host that no longer exists without anyone noticing. Same
+// fail-closed posture as MERCADOPAGO_REDIRECT_URI in mercadopago-connections.ts: an empty/invalid
+// value here is rejected via resolvePaymentWebhookBaseUrl() before any Mercado Pago preference is
+// created, never silently substituted.
+const APP_BASE_URL_RAW = (process.env.APP_BASE_URL ?? "").trim();
 const FRONTEND_URL = process.env.FRONTEND_URL ?? "https://revendasmart.vercel.app";
 const PAYMENT_WEBHOOK_MAX_AGE_MS = 5 * 60 * 1000;
 const PAYMENT_RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const PAYMENT_RATE_LIMIT_MAX_KEYS = 10_000;
+
+export type AppBaseUrlCheck =
+  | { ok: true; url: string }
+  | { ok: false; reason: "missing" | "invalid" };
+
+/**
+ * Pure function (no Express/env dependency at call time) so it's directly unit-testable — mirrors
+ * the classifyOAuthContinuityCookie() convention in mercadopago-connections.ts. Fails closed rather
+ * than ever falling back to a hardcoded host: `notification_url` is where Mercado Pago's servers send
+ * asynchronous payment-status webhooks, so a wrong/stale value here silently breaks payment
+ * confirmation in production instead of failing loudly at request time.
+ */
+export function resolvePaymentWebhookBaseUrl(rawAppBaseUrl: string, nodeEnv: string | undefined): AppBaseUrlCheck {
+  const trimmed = rawAppBaseUrl.trim();
+  if (!trimmed) return { ok: false, reason: "missing" };
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return { ok: false, reason: "invalid" };
+  }
+
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return { ok: false, reason: "invalid" };
+  if (nodeEnv === "production" && parsed.protocol !== "https:") return { ok: false, reason: "invalid" };
+
+  // Strip trailing slash(es) so `${url}/api/payments/webhook` never contains a double slash.
+  return { ok: true, url: trimmed.replace(/\/+$/, "") };
+}
 
 type RateLimitDecision = {
   allowed: boolean;
@@ -531,13 +566,19 @@ async function handleCreateLink(req: Request, res: Response) {
     
     // Validate critical fields before building payload
     const FRONTEND_URL_VALID = FRONTEND_URL && FRONTEND_URL.startsWith("http");
-    const APP_BASE_URL_VALID = APP_BASE_URL && APP_BASE_URL.startsWith("http");
-    
-    if (!FRONTEND_URL_VALID || !APP_BASE_URL_VALID) {
+    if (!FRONTEND_URL_VALID) {
       paymentLogError("[payments/create-link] Invalid payment redirect configuration");
       return res.status(500).json({
         error: "Configuration error: invalid URLs",
-        details: "FRONTEND_URL ou APP_BASE_URL não configurados corretamente",
+        details: "FRONTEND_URL não configurado corretamente",
+      });
+    }
+
+    const appBaseUrlCheck = resolvePaymentWebhookBaseUrl(APP_BASE_URL_RAW, process.env.NODE_ENV);
+    if (!appBaseUrlCheck.ok) {
+      paymentLogError("[payments/create-link] Invalid payment webhook configuration", { reason: appBaseUrlCheck.reason });
+      return res.status(500).json({
+        error: appBaseUrlCheck.reason === "missing" ? "APP_BASE_URL is not configured" : "APP_BASE_URL is invalid",
       });
     }
 
@@ -563,7 +604,7 @@ async function handleCreateLink(req: Request, res: Response) {
         failure: `${FRONTEND_URL}/catalog?payment=failure`,
       },
       auto_return: "approved",
-      notification_url: `${APP_BASE_URL}/api/payments/webhook?uid=${encodeURIComponent(body.uid)}&chargeId=${encodeURIComponent(chargeId)}`,
+      notification_url: `${appBaseUrlCheck.url}/api/payments/webhook?uid=${encodeURIComponent(body.uid)}&chargeId=${encodeURIComponent(chargeId)}`,
       metadata: {
         ...(safeMetadata ?? {}),
         uid: body.uid,
@@ -821,6 +862,16 @@ export async function createOrderMercadoPagoCharge(
     );
   }
 
+  const appBaseUrlCheck = resolvePaymentWebhookBaseUrl(APP_BASE_URL_RAW, process.env.NODE_ENV);
+  if (!appBaseUrlCheck.ok) {
+    paymentLogError("[payments/order-charge] Invalid payment webhook configuration", { reason: appBaseUrlCheck.reason });
+    throw new MercadoPagoOrderChargeError(
+      appBaseUrlCheck.reason === "missing" ? "APP_BASE_URL_MISSING" : "APP_BASE_URL_INVALID",
+      "Pagamento indisponível no momento. Tente novamente em instantes.",
+      500,
+    );
+  }
+
   const mpClient = new MercadoPagoConfig({ accessToken, options: { timeout: 10000 } });
   const preferenceClient = new Preference(mpClient);
   const chargeEnvironment = detectEnvironment(accessToken);
@@ -843,7 +894,7 @@ export async function createOrderMercadoPagoCharge(
         external_reference: externalReference,
         back_urls: backUrls,
         auto_return: "approved",
-        notification_url: `${APP_BASE_URL}/api/payments/webhook?uid=${encodeURIComponent(params.uid)}&chargeId=${encodeURIComponent(params.chargeId)}`,
+        notification_url: `${appBaseUrlCheck.url}/api/payments/webhook?uid=${encodeURIComponent(params.uid)}&chargeId=${encodeURIComponent(params.chargeId)}`,
         metadata: {
           uid: params.uid,
           chargeId: params.chargeId,

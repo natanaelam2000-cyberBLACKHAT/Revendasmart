@@ -69,11 +69,13 @@ steps:
       # listado aqui (ambos eram setados manualmente fora deste arquivo, e o próximo deploy os
       # descartava sem aviso — causa raiz de oauth_callback_rejected/continuity_mismatch em produção).
       # Ambos agora são declarados explicitamente para que o deploy canônico nunca mais os perca.
-      - '--update-env-vars=NODE_ENV=production,FRONTEND_URL=https://revendasmart.vercel.app,PREMIUM_PRICE_BRL=19.9,FIREBASE_STORAGE_BUCKET=revenda-smart.firebasestorage.app,MERCADOPAGO_REDIRECT_URI=https://revendasmart.vercel.app/api/mercadopago/callback,MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION=v2'
-      # APP_BASE_URL: valor de produção não confirmável a partir do repositório (docs divergem entre
-      # si — ver PRODUCTION_CONFIG.md, CLOUD_RUN_MIGRATION.md, DEPLOYMENT_CHECKLIST.md — e nenhum bate
-      # com o host atual do serviço). Não adicionado aqui para não fixar um valor não comprovado;
-      # continua exigindo atualização manual/confirmação do operador antes do próximo deploy real.
+      # RC-P0-SECURITY-02R: APP_BASE_URL confirmado pelo operador via Cloud Run status.url (revisão
+      # revendasmart-backend-00047-ld8, /health = 200) — é o host usado para o notification_url dos
+      # webhooks assíncronos de pagamento do Mercado Pago (server/payments.ts), propositalmente
+      # diferente de MERCADOPAGO_REDIRECT_URI (aquele é browser-facing e precisa do rewrite do Vercel
+      # para continuidade de cookie; este é comunicação servidor-a-servidor do Mercado Pago direto para
+      # o Cloud Run, sem motivo para depender do proxy do Vercel).
+      - '--update-env-vars=NODE_ENV=production,FRONTEND_URL=https://revendasmart.vercel.app,PREMIUM_PRICE_BRL=19.9,FIREBASE_STORAGE_BUCKET=revenda-smart.firebasestorage.app,MERCADOPAGO_REDIRECT_URI=https://revendasmart.vercel.app/api/mercadopago/callback,MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION=v2,APP_BASE_URL=https://revendasmart-backend-cc2743rkmq-uc.a.run.app'
     id: 'deploy-cloud-run'
     waitFor: ['push-image']
 
