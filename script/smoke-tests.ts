@@ -50,7 +50,7 @@ import { composeProductCutoutRgba } from "../shared/product-cutout";
 import { sanitizePublicSettingsPayload } from "../server/public-catalog-ownership";
 import { escapeHtmlText, escapeCsvCell, toCsvRow } from "../client/src/lib/export-security";
 import { buildPrintableHtml, buildExcelCsvContent, type ReportExportPayload } from "../client/src/lib/report-export";
-import { parseCookieHeader, hasMatchingOAuthContinuityCookie, sanitizeMercadoPagoAccountMetadata } from "../server/mercadopago-connections";
+import { parseCookieHeader, hasMatchingOAuthContinuityCookie, classifyOAuthContinuityCookie, sanitizeMercadoPagoAccountMetadata } from "../server/mercadopago-connections";
 import { encryptToken, decryptToken, assertEncryptionKeyConfigured, MercadoPagoEncryptionKeyError } from "../server/mercadopago-crypto";
 import { MP_OAUTH_CONTINUITY_COOKIE } from "../shared/connections";
 import {
@@ -10750,16 +10750,49 @@ runProductImagePreservationTests();
   assert.equal(hasMatchingOAuthContinuityCookie(`${MP_OAUTH_CONTINUITY_COOKIE}=${nonce.slice(0, 10)}`, nonce), false, "cookie mais curto -> recusado, nunca lança");
   assert.equal(hasMatchingOAuthContinuityCookie(`other=${nonce}`, nonce), false, "cookie certo mas com nome errado -> recusado");
 
+  // RC-P0-SECURITY-02N: classifyOAuthContinuityCookie() distinguishes "missing" from "mismatch" for
+  // sanitized diagnostic logging — the underlying accept/reject decision (only "match" passes) is
+  // unchanged from hasMatchingOAuthContinuityCookie's boolean contract above.
+  assert.equal(classifyOAuthContinuityCookie(`${MP_OAUTH_CONTINUITY_COOKIE}=${nonce}`, nonce), "match");
+  assert.equal(classifyOAuthContinuityCookie(undefined, nonce), "missing", "sem header Cookie nenhum -> missing, nunca mismatch");
+  assert.equal(classifyOAuthContinuityCookie("", nonce), "missing");
+  assert.equal(classifyOAuthContinuityCookie(`other=${nonce}`, nonce), "missing", "cookie certo mas com nome errado -> missing (o cookie de continuidade em si não está presente)");
+  assert.equal(classifyOAuthContinuityCookie(`${MP_OAUTH_CONTINUITY_COOKIE}=${"0".repeat(64)}`, nonce), "mismatch", "cookie presente mas com valor errado -> mismatch, nunca missing");
+  assert.equal(classifyOAuthContinuityCookie(`${MP_OAUTH_CONTINUITY_COOKIE}=${nonce.slice(0, 10)}`, nonce), "mismatch");
+
   // Estrutural: confirma que a rota de callback aplica o gate de continuidade ANTES de tocar o
   // Firestore, e que uid nunca vem de query/body em nenhum handler deste arquivo.
   const mpConnectionsSource = read("server/mercadopago-connections.ts");
-  assert.match(mpConnectionsSource, /hasMatchingOAuthContinuityCookie\(req\.headers\.cookie, nonce\)/);
+  assert.match(mpConnectionsSource, /classifyOAuthContinuityCookie\(req\.headers\.cookie, nonce\)/);
   assert.doesNotMatch(mpConnectionsSource, /req\.(query|body)\.u?id\b/i, "uid nunca pode vir de query/body em nenhuma rota deste arquivo");
-  assert.match(mpConnectionsSource, /res\.cookie\(MP_OAUTH_CONTINUITY_COOKIE, nonce, \{[\s\S]*?httpOnly: true/, "o cookie de continuidade precisa ser HttpOnly");
+  assert.match(mpConnectionsSource, /res\.cookie\(MP_OAUTH_CONTINUITY_COOKIE, nonce, \{[\s\S]*?httpOnly: true/, "o cookie de continuidade (tentativa do backend, defesa em profundidade) precisa continuar HttpOnly");
   assert.match(mpConnectionsSource, /oauth_attempt_created|oauth_callback_rejected|oauth_attempt_consumed|merchant_connection_created/);
   // Nenhum log deste arquivo pode incluir o code/token/secret em claro.
   assert.doesNotMatch(mpConnectionsSource, /mpInfo\([^)]*code\)|mpWarn\([^)]*code\)/i);
   assert.doesNotMatch(mpConnectionsSource, /CLIENT_SECRET\}`|\$\{CLIENT_SECRET\}/);
+  // As duas razões de rejeição de continuidade precisam ser distinguíveis nos logs, sem nunca expor
+  // o valor do cookie/nonce.
+  assert.match(mpConnectionsSource, /continuity_cookie_missing/);
+  assert.match(mpConnectionsSource, /continuity_cookie_mismatch/);
+  assert.doesNotMatch(mpConnectionsSource, /continuity_mismatch["'`]/, "a razão antiga (não-distinguível) não pode mais existir");
+
+  // RC-P0-SECURITY-02N: MERCADOPAGO_REDIRECT_URI nunca mais cai silenciosamente para um host antigo —
+  // falha fechado (500 sanitizado) exatamente como CLIENT_ID já faz logo acima dele.
+  assert.doesNotMatch(mpConnectionsSource, /164193806378/, "o fallback obsoleto para um host antigo do Cloud Run não pode mais existir");
+  assert.match(
+    mpConnectionsSource,
+    /if \(!REDIRECT_URI\) \{\s*return res\.status\(500\)\.json\(\{\s*error: "MERCADOPAGO_REDIRECT_URI is not configured",/,
+    "REDIRECT_URI ausente precisa falhar fechado com um erro 500 saneado, nunca um fallback silencioso",
+  );
+
+  // client/src/lib/mercadopago-connection-actions.ts: o frontend agora é quem efetivamente garante o
+  // cookie de continuidade (o Set-Cookie do backend não sobrevive de forma confiável ao rewrite
+  // externo do Vercel) — confirma que ele deriva o valor do nonce da própria resposta JSON do
+  // start-auth, nunca de um valor fixo/adivinhado, e usa o mesmo nome de cookie compartilhado.
+  const mpActionsSource = read("client/src/lib/mercadopago-connection-actions.ts");
+  assert.match(mpActionsSource, /document\.cookie\s*=/, "o frontend precisa setar o cookie de continuidade ele mesmo");
+  assert.match(mpActionsSource, /MP_OAUTH_CONTINUITY_COOKIE/, "precisa reusar a constante compartilhada do nome do cookie, nunca reescrever a string");
+  assert.match(mpActionsSource, /body\.nonce/, "o valor do cookie precisa vir do nonce devolvido por start-auth, não de um literal");
 }
 
 // --- RELEASE-05B: robustez do onboarding da conexão Mercado Pago (funções puras) ---

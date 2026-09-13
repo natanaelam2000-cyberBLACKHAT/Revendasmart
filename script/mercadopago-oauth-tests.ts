@@ -29,6 +29,7 @@ process.env.MERCADOPAGO_CLIENT_ID = "test-client-id-never-sent-anywhere";
 process.env.MERCADOPAGO_CLIENT_SECRET = "test-client-secret-never-sent-anywhere";
 process.env.MERCADOPAGO_TOKEN_ENCRYPTION_KEY = "a".repeat(64);
 process.env.FRONTEND_URL = "https://revendasmart.example.test";
+process.env.MERCADOPAGO_REDIRECT_URI = "https://revendasmart.example.test/api/mercadopago/callback";
 
 async function createTestUser(label: string): Promise<{ app: FirebaseApp; user: User; db: Firestore }> {
   const app = initializeApp({
@@ -289,13 +290,13 @@ async function run(): Promise<void> {
       // browser de A recebeu (simula B copiando/roubando a URL, nunca o cookie HttpOnly de A).
       const hijackAttempt = await callback({ code: "stolen-code", state: nonce }, null);
       assert.equal(hijackAttempt.status, "error");
-      assert.equal(hijackAttempt.reason, "continuity_mismatch", "G: sem o cookie do browser que iniciou, o callback é recusado");
+      assert.equal(hijackAttempt.reason, "continuity_cookie_missing", "G: sem o cookie do browser que iniciou, o callback é recusado (reason distingue ausência de valor errado — RC-P0-SECURITY-02N)");
 
       // O cookie errado (de outro attempt) também não serve.
       const otherAttempt = await startAuth(intruder.user);
       const wrongCookieAttempt = await callback({ code: "stolen-code", state: nonce }, otherAttempt.cookie);
       assert.equal(wrongCookieAttempt.status, "error");
-      assert.equal(wrongCookieAttempt.reason, "continuity_mismatch");
+      assert.equal(wrongCookieAttempt.reason, "continuity_cookie_mismatch");
 
       // O nonce de A continua intacto (não foi consumido pelas tentativas de B) — o dono legítimo ainda
       // consegue completar o próprio fluxo depois.
@@ -385,7 +386,36 @@ async function run(): Promise<void> {
       assert.equal(after.size, before.size, "RELEASE-21: nenhuma conexão nasce quando a criptografia do token falha — nunca persiste token em claro nem conexão marcada como ativa");
     }
 
-    console.log("Mercado Pago OAuth continuity/CSRF tests passed: state single-use, browser continuity, cross-user linking blocked, legacy preserved, encryption fail-closed.");
+    // ===== T10 (RC-P0-SECURITY-02N): production web topology regression — the continuity check
+    // must succeed even when the backend's own Set-Cookie response is completely discarded, exactly
+    // as Vercel's external rewrite to this Cloud Run backend is documented to sometimes do. This
+    // proves the fix doesn't merely work "by accident" because the test harness still sees the
+    // server's Set-Cookie (every earlier test in this file uses `started.cookie`, which DOES survive
+    // in this local harness — this test deliberately ignores it) — instead it proves the browser-set
+    // cookie (built here exactly the way client/src/lib/mercadopago-connection-actions.ts builds it:
+    // straight from the `nonce` already present in start-auth's JSON body) is sufficient on its own. =====
+    {
+      const { mockFetch, calls } = buildMockFetch(originalFetch, {});
+      (globalThis as any).fetch = mockFetch;
+      const started = await startAuth(owner.user);
+      assert.ok(started.cookie, "T10 setup: sanity check — the server did try to set a cookie in this harness");
+
+      // Simulate Vercel's external-rewrite proxy dropping the upstream Set-Cookie header entirely:
+      // build the Cookie header the callback receives purely from the nonce in the response BODY,
+      // never touching `started.cookie`.
+      const clientDerivedCookie = `mp_oauth_attempt=${started.body.nonce}`;
+      const result = await callback({ code: "proxy-dropped-set-cookie", state: started.body.nonce }, clientDerivedCookie);
+      globalThis.fetch = originalFetch;
+
+      assert.equal(result.status, "success", "T10: continuity must succeed from the client-derived cookie alone, with zero dependency on the server's own Set-Cookie surviving");
+      assert.deepEqual(calls, ["token_exchange", "user_info"]);
+    }
+
+    // ===== RC-P0-SECURITY-02N: MERCADOPAGO_REDIRECT_URI must be explicitly configured — structural
+    // proof lives in script/smoke-tests.ts (module-level constant, read once at import in this shared
+    // test process, so toggling the env var here would not exercise the real fail-closed branch). =====
+
+    console.log("Mercado Pago OAuth continuity/CSRF tests passed: state single-use, browser continuity (reason distinguishes missing vs mismatch), cross-user linking blocked, legacy preserved, encryption fail-closed, continuity survives a dropped upstream Set-Cookie (production topology regression).");
   } finally {
     globalThis.fetch = originalFetch;
     await close(server);

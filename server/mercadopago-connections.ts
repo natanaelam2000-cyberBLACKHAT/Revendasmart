@@ -68,9 +68,12 @@ function logMPConnectionError(
 // ---------------------------------------------------------------------------
 const CLIENT_ID = process.env.MERCADOPAGO_CLIENT_ID ?? "";
 const CLIENT_SECRET = process.env.MERCADOPAGO_CLIENT_SECRET ?? "";
-const REDIRECT_URI =
-  process.env.MERCADOPAGO_REDIRECT_URI ??
-  "https://revendasmart-backend-164193806378.us-central1.run.app/api/mercadopago/callback";
+// RC-P0-SECURITY-02N: no hardcoded fallback host — a previous version of this constant silently
+// fell back to a specific obsolete Cloud Run URL whenever the env var was unset, which could
+// register/authorize OAuth attempts against a stale host without anyone noticing. Same fail-closed
+// posture as CLIENT_ID/CLIENT_SECRET above: an empty value here is rejected at request time in
+// handleStartAuth, never silently substituted.
+const REDIRECT_URI = process.env.MERCADOPAGO_REDIRECT_URI ?? "";
 function normalizeFrontendUrl(value: string | undefined): string {
   try {
     const parsed = new URL(value?.trim() || "https://revendasmart.vercel.app");
@@ -109,9 +112,22 @@ function getQueryValue(value: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
-// RELEASE-05 — browser continuity: parse/compare the HttpOnly cookie set by
-// start-auth against the `state` the callback received. Pure functions (no
-// Express/cookie-parser dependency) so they're directly unit-testable.
+// RELEASE-05 / RC-P0-SECURITY-02N — browser continuity: parse/compare the cookie set for this
+// OAuth attempt against the `state` the callback received. Pure functions (no Express/cookie-parser
+// dependency) so they're directly unit-testable.
+//
+// RC-P0-SECURITY-02N: this cookie is no longer trusted to arrive via the backend's own Set-Cookie
+// response alone. When start-auth is served through Vercel's rewrite to this Cloud Run backend
+// (an "external origin" rewrite — see vercel.json), Set-Cookie from that upstream response is not
+// reliably forwarded to the browser (a documented Vercel limitation, not a bug in this module) — so
+// a cookie that only the backend ever tried to set could silently never reach the browser at all,
+// making every callback fail continuity regardless of host. The frontend (see
+// client/src/lib/mercadopago-connection-actions.ts) now sets this cookie itself, from the nonce
+// already present in start-auth's own JSON response body, which does not depend on any response
+// header surviving a proxy hop. The backend still attempts res.cookie(...) too (kept below, unchanged
+// and still HttpOnly) as harmless defense-in-depth for topologies where it does survive (e.g. local
+// dev without Vercel) — but the client-set cookie is what the callback can actually rely on in
+// production. The comparison logic itself (parse + timing-safe equality) is unchanged either way.
 // ---------------------------------------------------------------------------
 export function parseCookieHeader(header: string | undefined | null): Record<string, string> {
   const result: Record<string, string> = {};
@@ -131,15 +147,26 @@ export function parseCookieHeader(header: string | undefined | null): Record<str
   return result;
 }
 
-/** Timing-safe: the nonce is a secret, so a naive `===` would leak length/prefix via timing. */
-export function hasMatchingOAuthContinuityCookie(cookieHeader: string | undefined | null, expectedNonce: string): boolean {
+export type OAuthContinuityCheck = "missing" | "mismatch" | "match";
+
+/** Timing-safe: the nonce is a secret, so a naive `===` would leak length/prefix via timing.
+ * Distinguishes "missing" (no cookie sent at all) from "mismatch" (a cookie was sent but doesn't
+ * match) purely for sanitized diagnostic logging — the security decision itself (only "match" is
+ * ever accepted) is identical to before this distinction existed. */
+export function classifyOAuthContinuityCookie(cookieHeader: string | undefined | null, expectedNonce: string): OAuthContinuityCheck {
   const provided = parseCookieHeader(cookieHeader)[MP_OAUTH_CONTINUITY_COOKIE];
-  if (!provided || provided.length !== expectedNonce.length) return false;
+  if (!provided) return "missing";
+  if (provided.length !== expectedNonce.length) return "mismatch";
   try {
-    return crypto.timingSafeEqual(Buffer.from(provided, "utf8"), Buffer.from(expectedNonce, "utf8"));
+    return crypto.timingSafeEqual(Buffer.from(provided, "utf8"), Buffer.from(expectedNonce, "utf8")) ? "match" : "mismatch";
   } catch {
-    return false;
+    return "mismatch";
   }
+}
+
+/** Retained for callers/tests that only need the boolean fail-closed decision. */
+export function hasMatchingOAuthContinuityCookie(cookieHeader: string | undefined | null, expectedNonce: string): boolean {
+  return classifyOAuthContinuityCookie(cookieHeader, expectedNonce) === "match";
 }
 
 function mpConnectionRateLimit(
@@ -593,6 +620,15 @@ async function handleStartAuth(req: Request, res: Response) {
       });
     }
 
+    // RC-P0-SECURITY-02N: fail closed rather than ever silently falling back to an obsolete host —
+    // checked before creating any server-side state, so a missing config never leaves a dangling
+    // OAuth attempt behind.
+    if (!REDIRECT_URI) {
+      return res.status(500).json({
+        error: "MERCADOPAGO_REDIRECT_URI is not configured",
+      });
+    }
+
     // Create server-side nonce bound to this uid
     const nonce = await createOAuthState(uid, ipAddress);
 
@@ -661,9 +697,12 @@ async function handleCallback(req: Request, res: Response) {
 
   // RELEASE-05: browser continuity — checked BEFORE touching the state document at all, so a
   // leaked/copied callback URL opened in a different browser (which never received the start-auth
-  // Set-Cookie response) never even gets to learn whether the nonce exists, and never burns it.
-  if (!hasMatchingOAuthContinuityCookie(req.headers.cookie, nonce)) {
-    rejectCallback(res, "continuity_mismatch");
+  // continuity cookie) never even gets to learn whether the nonce exists, and never burns it.
+  // RC-P0-SECURITY-02N: classify() distinguishes "missing" from "mismatch" for sanitized logging
+  // only — both are rejected identically; neither the cookie value nor the nonce is ever logged.
+  const continuityCheck = classifyOAuthContinuityCookie(req.headers.cookie, nonce);
+  if (continuityCheck !== "match") {
+    rejectCallback(res, continuityCheck === "missing" ? "continuity_cookie_missing" : "continuity_cookie_mismatch");
     return;
   }
 
