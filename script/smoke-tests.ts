@@ -10793,6 +10793,22 @@ runProductImagePreservationTests();
   assert.match(mpActionsSource, /document\.cookie\s*=/, "o frontend precisa setar o cookie de continuidade ele mesmo");
   assert.match(mpActionsSource, /MP_OAUTH_CONTINUITY_COOKIE/, "precisa reusar a constante compartilhada do nome do cookie, nunca reescrever a string");
   assert.match(mpActionsSource, /body\.nonce/, "o valor do cookie precisa vir do nonce devolvido por start-auth, não de um literal");
+
+  // RC-P0-SECURITY-02P: cloudbuild.yaml usa --update-env-vars/--update-secrets (merge) para o deploy
+  // do Cloud Run, nunca --set-env-vars/--set-secrets (replace-all) — a forma replace-all apagava
+  // silenciosamente qualquer env var/secret setado fora deste arquivo a cada deploy (foi assim que
+  // MERCADOPAGO_REDIRECT_URI e o binding do secret V2 sumiam em produção). E os quatro valores que a
+  // continuidade OAuth/criptografia de token exigem continuam declarados explicitamente no arquivo,
+  // para que o deploy canônico nunca mais dependa de alguém lembrar de setá-los manualmente depois.
+  const cloudbuildSource = read("cloudbuild.yaml");
+  assert.doesNotMatch(cloudbuildSource, /--set-env-vars=/, "deploy do Cloud Run precisa usar --update-env-vars (merge), nunca --set-env-vars (replace-all, apaga env vars setadas fora deste arquivo)");
+  assert.doesNotMatch(cloudbuildSource, /--set-secrets=/, "deploy do Cloud Run precisa usar --update-secrets (merge), nunca --set-secrets (replace-all, apaga secrets setados fora deste arquivo)");
+  assert.match(cloudbuildSource, /--update-env-vars=/);
+  assert.match(cloudbuildSource, /--update-secrets=/);
+  assert.match(cloudbuildSource, /MERCADOPAGO_REDIRECT_URI=https:\/\/revendasmart\.vercel\.app\/api\/mercadopago\/callback/, "MERCADOPAGO_REDIRECT_URI precisa continuar declarado explicitamente no deploy canônico");
+  assert.match(cloudbuildSource, /MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION=v2/, "ACTIVE_VERSION=v2 precisa continuar declarado explicitamente no deploy canônico");
+  assert.match(cloudbuildSource, /MERCADOPAGO_TOKEN_ENCRYPTION_KEY=revendasmart-mercadopago-token-encryption-key:latest/, "o binding do secret V1 precisa continuar declarado no deploy canônico");
+  assert.match(cloudbuildSource, /MERCADOPAGO_TOKEN_ENCRYPTION_KEY_V2=revendasmart-mercadopago-token-encryption-key-v2:latest/, "o binding do secret V2 precisa continuar declarado no deploy canônico");
 }
 
 // --- RELEASE-05B: robustez do onboarding da conexão Mercado Pago (funções puras) ---

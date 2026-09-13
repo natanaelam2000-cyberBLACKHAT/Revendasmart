@@ -50,7 +50,12 @@ steps:
       # Secrets from Secret Manager (format: ENV_VAR=secret-name:latest). Nomes reais no Secret Manager
       # usam o prefixo `revendasmart-` em kebab-case (confirmado via `gcloud secrets list` — os nomes
       # bare uppercase antigos aqui não existiam, o deploy manual falhava com NOT_FOUND/permission denied).
-      - '--set-secrets=MERCADOPAGO_ACCESS_TOKEN=revendasmart-mercadopago-access-token:latest,MERCADOPAGO_CLIENT_ID=revendasmart-mercadopago-client-id:latest,MERCADOPAGO_CLIENT_SECRET=revendasmart-mercadopago-client-secret:latest,MERCADOPAGO_TOKEN_ENCRYPTION_KEY=revendasmart-mercadopago-token-encryption-key:latest,MERCADOPAGO_WEBHOOK_SECRET=revendasmart-mercadopago-webhook-secret:latest,FIREBASE_PROJECT_ID=revendasmart-firebase-project-id:latest,FIREBASE_CLIENT_EMAIL=revendasmart-firebase-client-email:latest,FIREBASE_PRIVATE_KEY=revendasmart-firebase-private-key:latest'
+      # RC-P0-SECURITY-02P: --update-secrets (merge) em vez de --set-secrets (replace-all) — a forma
+      # replace-all apagava silenciosamente qualquer secret adicionado manualmente fora deste arquivo
+      # (ex.: MERCADOPAGO_TOKEN_ENCRYPTION_KEY_V2, adicionado após rotação de chave). V1 continua
+      # vinculado explicitamente; V2 agora também é declarado aqui para que o deploy canônico nunca
+      # remova o binding necessário para ACTIVE_VERSION=v2.
+      - '--update-secrets=MERCADOPAGO_ACCESS_TOKEN=revendasmart-mercadopago-access-token:latest,MERCADOPAGO_CLIENT_ID=revendasmart-mercadopago-client-id:latest,MERCADOPAGO_CLIENT_SECRET=revendasmart-mercadopago-client-secret:latest,MERCADOPAGO_TOKEN_ENCRYPTION_KEY=revendasmart-mercadopago-token-encryption-key:latest,MERCADOPAGO_TOKEN_ENCRYPTION_KEY_V2=revendasmart-mercadopago-token-encryption-key-v2:latest,MERCADOPAGO_WEBHOOK_SECRET=revendasmart-mercadopago-webhook-secret:latest,FIREBASE_PROJECT_ID=revendasmart-firebase-project-id:latest,FIREBASE_CLIENT_EMAIL=revendasmart-firebase-client-email:latest,FIREBASE_PRIVATE_KEY=revendasmart-firebase-private-key:latest'
       # Non-sensitive env vars (can be plain text). PORT é reservado pelo Cloud Run (setado
       # automaticamente a partir de --port) — incluí-lo aqui faz o deploy falhar.
       # PROMOTIONAL-CAMPAIGNS-PROD-BUG-02: FIREBASE_STORAGE_BUCKET nunca foi setado aqui — sem ele,
@@ -58,9 +63,17 @@ steps:
       # falhava com 500 "Bucket name not specified or invalid" (confirmado nos logs de produção, nunca
       # pego localmente porque os wrappers de dev/emulador sempre setam essa env var manualmente).
       # Nome real confirmado via `gcloud storage buckets list --project revenda-smart`.
-      - '--set-env-vars=NODE_ENV=production,FRONTEND_URL=https://revendasmart.vercel.app,PREMIUM_PRICE_BRL=19.9,FIREBASE_STORAGE_BUCKET=revenda-smart.firebasestorage.app'
-      # APP_BASE_URL and MERCADOPAGO_REDIRECT_URI must be updated after first deploy
-      # Use a second deploy step or update manually in Cloud Run console
+      # RC-P0-SECURITY-02P: --update-env-vars (merge) em vez de --set-env-vars (replace-all) pelo
+      # mesmo motivo do bloco de secrets acima — a forma replace-all apagava MERCADOPAGO_REDIRECT_URI
+      # e MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION a cada deploy, pois nenhum dos dois nunca esteve
+      # listado aqui (ambos eram setados manualmente fora deste arquivo, e o próximo deploy os
+      # descartava sem aviso — causa raiz de oauth_callback_rejected/continuity_mismatch em produção).
+      # Ambos agora são declarados explicitamente para que o deploy canônico nunca mais os perca.
+      - '--update-env-vars=NODE_ENV=production,FRONTEND_URL=https://revendasmart.vercel.app,PREMIUM_PRICE_BRL=19.9,FIREBASE_STORAGE_BUCKET=revenda-smart.firebasestorage.app,MERCADOPAGO_REDIRECT_URI=https://revendasmart.vercel.app/api/mercadopago/callback,MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION=v2'
+      # APP_BASE_URL: valor de produção não confirmável a partir do repositório (docs divergem entre
+      # si — ver PRODUCTION_CONFIG.md, CLOUD_RUN_MIGRATION.md, DEPLOYMENT_CHECKLIST.md — e nenhum bate
+      # com o host atual do serviço). Não adicionado aqui para não fixar um valor não comprovado;
+      # continua exigindo atualização manual/confirmação do operador antes do próximo deploy real.
     id: 'deploy-cloud-run'
     waitFor: ['push-image']
 
