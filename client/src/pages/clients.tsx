@@ -348,18 +348,17 @@ export default function Clients() {
             <form onSubmit={handleAdd} className="space-y-4">
               <input required autoFocus enterKeyHint="next" autoComplete="name" placeholder="Nome completo" disabled={isCreating} className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none disabled:opacity-50" value={newClient.name} onChange={e => setNewClient({...newClient, name: e.target.value})} />
               <input
-                required
                 type="tel"
                 inputMode="tel"
                 enterKeyHint="next"
                 autoComplete="tel"
-                placeholder="WhatsApp (apenas números)"
+                placeholder="WhatsApp (opcional, apenas números)"
                 disabled={isCreating}
                 className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none disabled:opacity-50"
                 value={newClient.phone}
                 onChange={e => setNewClient({...newClient, phone: e.target.value.replace(/\D/g, '')})}
                 pattern="\d{10,15}"
-                title="WhatsApp deve ter de 10 a 15 dígitos"
+                title="Quando informado, o WhatsApp deve ter de 10 a 15 dígitos"
                 data-testid="input-client-phone"
               />
               <input

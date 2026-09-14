@@ -127,6 +127,7 @@ const publicCatalogAdapter = read("client/src/lib/public-catalog-adapter.ts");
 const publicCatalogDto = read("shared/public-catalog.ts");
 const publicCatalogServer = read("server/public-catalog.ts");
 const productsPage = read("client/src/pages/products.tsx");
+const productCard = read("client/src/components/ProductCard.tsx");
 const clientsPage = read("client/src/pages/clients.tsx");
 const paginatedClientsHook = read("client/src/hooks/usePaginatedClientsData.ts");
 const paginatedProductsHook = read("client/src/hooks/usePaginatedProductsData.ts");
@@ -1434,6 +1435,17 @@ assert.match(clientsPage, /usePaginatedClientsData/);
 assert.match(clientsPage, /Carregar mais/);
 assert.match(clientsPage, /totalCount \?\? clients\.length/);
 assert.match(clientsPage, /Exportando clientes carregados/);
+
+// PRODUCT-HARDENING-02 — regressão: o formulário compartilhado de criar/editar cliente (clients.tsx)
+// não pode mais exigir WhatsApp — o fluxo rápido de "Novo cliente" em sell.tsx já trata o telefone como
+// opcional (placeholder "Telefone (opcional)", sem `required`), então um cliente criado por lá NUNCA
+// podia ser reaberto/editado depois (o form de edição, o MESMO componente, bloqueava o submit nativo do
+// browser por falta de telefone). O padrão (`pattern="\d{10,15}"`) continua — só valida quando um valor
+// é de fato digitado, nunca exige que exista um.
+assert.doesNotMatch(clientsPage, /<input\s+required\s+type="tel"/, "o campo de WhatsApp não pode mais ser required — bloqueava editar um cliente criado sem telefone");
+assert.match(clientsPage, /placeholder="WhatsApp \(opcional, apenas números\)"/);
+assert.match(clientsPage, /pattern="\\d\{10,15\}"/, "quando um telefone É informado, o formato continua validado");
+
 assert.match(paginatedClientsHook, /const CLIENTS_PAGE_SIZE = 30/);
 assert.match(paginatedClientsHook, /orderBy\("name"\)/);
 assert.match(paginatedClientsHook, /limit\(CLIENTS_PAGE_SIZE\)/);
@@ -1940,6 +1952,37 @@ assert.match(sell, /const friendlyMessage = errorMsg === "Erro desconhecido" \? 
 assert.match(sell, /setSaveError\(friendlyMessage\)/);
 // Proteção contra duplo toque: não deve iniciar uma nova venda enquanto a anterior ainda está salvando.
 assert.match(sell, /const handleCheckout = async \(\) => \{\s*if \(isSaving\) return;/);
+
+// --- PRODUCT-HARDENING-02: nenhum valor monetário pode mais usar `.toFixed(2)` diretamente (sempre
+// ponto decimal, nunca vírgula — reproduzido ao vivo: o card de produto mostrava "R$ 59.90" ao lado do
+// cabeçalho da mesma página mostrando "R$ 299,00" com formatCurrency). sell.tsx (fluxo de Vendas) e
+// ProductCard.tsx (usado em /products) precisam sempre passar por formatCurrency (pt-BR real). ---
+assert.doesNotMatch(sell, /R\$ \{.*\.toFixed\(2\)\}/, "nenhum valor da tela de Vendas pode mais usar toFixed(2) cru");
+assert.doesNotMatch(sell, /R\$ \$\{.*\.toFixed\(2\)\}/, "nenhuma description/template literal de Vendas pode mais usar toFixed(2) cru");
+assert.match(sell, /import \{ resolveEffectiveProductPrice, formatCurrency \} from "@\/lib\/product-pricing";/);
+assert.doesNotMatch(productCard, /R\$ \{.*\.toFixed\(2\)\}/, "o card de produto não pode mais usar toFixed(2) cru — precisa bater com o mesmo formatCurrency que o cabeçalho da página já usa");
+assert.match(productCard, /import \{ formatCurrency \} from "@\/lib\/product-pricing";/);
+const productCardFormatCurrencyCalls = (productCard.match(/\{formatCurrency\((?:sale|cost|profit)\)\}/g) ?? []).length;
+assert.equal(productCardFormatCurrencyCalls, 3, "Venda/Custo/Lucro no card precisam usar formatCurrency");
+
+// --- PRODUCT-HARDENING-02: falha ao criar/tentar de novo a cobrança da venda não pode mais exibir texto
+// cru do servidor/exceção (createSaleCharge usa fetch() direto, não apiRequest — errorData.message/
+// .error podiam conter uma string técnica interna, ex. "APP_BASE_URL is not configured"; o catch de
+// retry mostrava err.message de uma exceção de rede crua). Mensagem sempre fixa/acionável em português
+// agora; o texto original de cada chamador continua indo pro logError (nunca removido, só não mais
+// mostrado na tela). ---
+assert.match(sell, /function sanitizeChargeFailureMessage\(status\?: number\): string \{/);
+assert.doesNotMatch(sell, /setChargeFailure\(\{ message: chargeResult\.message/, "falha inicial de cobrança não pode mais usar chargeResult.message cru");
+assert.doesNotMatch(sell, /setChargeFailure\(\{ message: result\.message/, "falha de retry de cobrança não pode mais usar result.message cru");
+assert.doesNotMatch(sell, /message: err instanceof Error \? err\.message : "Erro desconhecido", payload/, "catch do retry de cobrança não pode mais usar err.message cru");
+assert.match(sell, /setChargeFailure\(\{ message: sanitizeChargeFailureMessage\(chargeResult\.status\), payload: chargePayload \}\)/);
+assert.match(sell, /setChargeFailure\(\{ message: sanitizeChargeFailureMessage\(result\.status\), payload: chargeFailure\.payload \}\)/);
+assert.match(sell, /setChargeFailure\(\{ message: sanitizeChargeFailureMessage\(\), payload: chargeFailure\.payload \}\)/);
+// O texto cru continua preservado pro debug — nenhum logError foi removido, e o retry ganhou dois que
+// não existiam antes (result.message e err.message da exceção).
+assert.match(sell, /logError\("sale_charge_creation_failed", chargeResult\.message,/);
+assert.match(sell, /logError\("sale_charge_retry_failed", result\.message,/);
+assert.match(sell, /logError\("sale_charge_retry_error", errorMsg,/);
 
 // --- Investigação P0: causa raiz da falha real de venda no Galaxy ---
 // requireAuth/requireOwnership respondem com { error }, não { message } — confirmado no próprio servidor.
@@ -5746,6 +5789,19 @@ assert.match(ordersPage, /await updateOrderStatus\(statusOrder\.id, status\);/);
 for (const [name, source] of [["orders.tsx", ordersPage], ["OrderStatusSheet", orderStatusSheet], ["OrderDetailsSheet", orderDetailsSheet]] as const) {
   assert.doesNotMatch(source, /setDoc|updateDoc|getFirestore/, `${name} não pode escrever no Firestore direto — a escrita mora só em useOrdersData`);
 }
+
+// PRODUCT-HARDENING-02 — regressão: os 3 catches de mutação (status/criação/pagamento) não podem mais
+// exibir err.message cru ao usuário (setDoc pode lançar um erro técnico do SDK do Firestore, ex.
+// "Missing or insufficient permissions.") — precisam usar uma mensagem fixa em português e logar o
+// original via logError para investigação.
+assert.doesNotMatch(ordersPage, /notifyError\(err instanceof Error && err\.message/, "nenhum catch de mutação de pedido pode mais exibir err.message cru");
+assert.match(ordersPage, /import \{ logError \} from "@\/lib\/firebase";/);
+assert.match(ordersPage, /notifyError\("Não foi possível alterar o status do pedido\. Tente novamente\."\);/);
+assert.match(ordersPage, /logError\("order_status_update_failed", err instanceof Error \? err\.message : String\(err\)/);
+assert.match(ordersPage, /notifyError\("Não foi possível criar o pedido\. Tente novamente\."\);/);
+assert.match(ordersPage, /logError\("order_create_failed", err instanceof Error \? err\.message : String\(err\)\)/);
+assert.match(ordersPage, /notifyError\("Não foi possível confirmar o pagamento\. Tente novamente\."\);/);
+assert.match(ordersPage, /logError\("order_confirm_payment_failed", err instanceof Error \? err\.message : String\(err\)/);
 
 // 5. Filtros e busca: locais, combináveis e sem nova consulta por clique.
 assert.match(ordersPage, /const matchesStatus = statusFilter === "todos" \|\| order\.status === statusFilter;/);

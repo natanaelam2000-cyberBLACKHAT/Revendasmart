@@ -9,6 +9,7 @@ import { OrderStatusSheet } from "@/components/orders/OrderStatusSheet";
 import { useOrdersData } from "@/hooks/useOrdersData";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { notifyError, notifySuccess } from "@/lib/notify";
+import { logError } from "@/lib/firebase";
 import { ORDER_STATUS_IDS, ORDER_STATUS_LABELS, resolveOrdersFeatureLabel, type Order, type OrderStatus } from "@/lib/orders";
 
 const STATUS_FILTERS: { value: "todos" | OrderStatus; label: string }[] = [
@@ -63,7 +64,11 @@ export default function Orders() {
       notifySuccess(`Pedido marcado como ${ORDER_STATUS_LABELS[status]}.`);
       setStatusOrderId(null);
     } catch (err) {
-      notifyError(err instanceof Error && err.message ? err.message : "Não foi possível alterar o status do pedido.");
+      // PRODUCT-HARDENING-02 — nunca exibe err.message cru (a escrita em useOrdersData pode lançar um
+      // erro técnico do SDK do Firestore, ex. "Missing or insufficient permissions.") — mensagem fixa e
+      // acionável para o usuário; o texto original ainda vai pro logError para investigação.
+      notifyError("Não foi possível alterar o status do pedido. Tente novamente.");
+      logError("order_status_update_failed", err instanceof Error ? err.message : String(err), { context: { orderId: statusOrder.id, status } });
     }
   };
 
@@ -75,7 +80,8 @@ export default function Orders() {
       notifySuccess("Pedido criado.");
       return order;
     } catch (err) {
-      notifyError(err instanceof Error && err.message ? err.message : "Não foi possível criar o pedido.");
+      notifyError("Não foi possível criar o pedido. Tente novamente.");
+      logError("order_create_failed", err instanceof Error ? err.message : String(err));
       throw err;
     }
   };
@@ -85,7 +91,8 @@ export default function Orders() {
       await confirmOrderPayment(order.id);
       notifySuccess("Pagamento confirmado.");
     } catch (err) {
-      notifyError(err instanceof Error && err.message ? err.message : "Não foi possível confirmar o pagamento.");
+      notifyError("Não foi possível confirmar o pagamento. Tente novamente.");
+      logError("order_confirm_payment_failed", err instanceof Error ? err.message : String(err), { context: { orderId: order.id } });
     }
   };
 
