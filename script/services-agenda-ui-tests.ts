@@ -62,6 +62,36 @@ function run() {
   assert.equal(dayOfWeekForDateKeyInTimezone("2026-09-06", "America/Sao_Paulo"), 0, "2026-09-06 é domingo");
   assert.equal(typeof todayDateKey(), "string");
   assert.match(todayDateKey(), /^\d{4}-\d{2}-\d{2}$/);
+  // PRODUCT-QA-01 — regressão: todayDateKey(timeZone) precisa derivar o dia NO TIMEZONE do resource, nunca
+  // no relógio local do processo que roda o teste — do contrário a Agenda mostra o dia errado perto da
+  // meia-noite quando o navegador do vendedor está em um timezone diferente do resource (§20).
+  {
+    // 2026-09-01T03:30:00.000Z: São Paulo (UTC-3) já é 2026-09-01T00:30 -> já virou o dia; no MESMO instante,
+    // New York (EDT, UTC-4) ainda é 2026-08-31T23:30 -> ainda o dia anterior. Instante deliberadamente
+    // escolhido dentro da janela entre a meia-noite de SP e a de NY, provando que todayDateKey(timeZone) usa
+    // o timezone passado, nunca o do processo/navegador.
+    const FIXED_INSTANT = "2026-09-01T03:30:00.000Z";
+    const RealDate = Date;
+    class FixedDate extends RealDate {
+      constructor(...args: ConstructorParameters<typeof RealDate>) {
+        if (args.length === 0) {
+          super(FIXED_INSTANT);
+        } else {
+          // @ts-expect-error - forwarding varargs to the real Date constructor
+          super(...args);
+        }
+      }
+      static now() { return new RealDate(FIXED_INSTANT).getTime(); }
+    }
+    // @ts-expect-error - test-only global Date substitution, restored immediately after
+    globalThis.Date = FixedDate;
+    try {
+      assert.equal(todayDateKey("America/Sao_Paulo"), "2026-09-01", "já virou o dia em São Paulo");
+      assert.equal(todayDateKey("America/New_York"), "2026-08-31", "MESMO instante, timezone diferente -> dia diferente (nunca o do processo)");
+    } finally {
+      globalThis.Date = RealDate;
+    }
+  }
   assert.equal(formatTimeInTimezone("2026-08-31T13:00:00.000Z", "America/Sao_Paulo"), "10:00");
   // §20 — MESMO instante, timezone diferente, horário exibido diferente (nunca o do navegador).
   assert.equal(formatTimeInTimezone("2026-08-31T13:00:00.000Z", "America/New_York"), "09:00");
@@ -147,6 +177,12 @@ function run() {
   assert.doesNotMatch(agendaSource, /\bsetDoc\b|\bupdateDoc\b|\bdeleteDoc\b|\baddDoc\b/, "UI8: a Agenda nunca escreve Booking/Block direto no Firestore — só via comandos server-side");
   assert.doesNotMatch(agendaSource, /from "firebase\/firestore"/, "UI8: nenhum import do SDK de escrita do Firestore nesta página");
 
+  // PRODUCT-QA-01 — botão "Hoje" precisa usar o timezone real do resource (já calculado em `timeZone`),
+  // nunca o relógio local do navegador quando um schedule real já foi carregado (§20). Regressão do bug:
+  // perto da virada do dia, clicar "Hoje" mostrava o dia errado para um vendedor cujo navegador está num
+  // timezone diferente do resource configurado.
+  assert.match(agendaSource, /setSelectedDate\(todayDateKey\(timeZone\)\)/, "botão \"Hoje\" precisa passar o timezone do resource para todayDateKey");
+
   // §0 — rota lazy, sem lib de calendário nova, sem recharts.
   const routerSource = read("client/src/routers/PrivateRouter.tsx");
   assert.match(routerSource, /const ServiceAgenda = lazy\(\(\) => import\("@\/pages\/service-agenda"\)\)/, "AGENDA_ROUTE_LAZY: a rota precisa ser lazy-loaded");
@@ -155,6 +191,20 @@ function run() {
   assert.doesNotMatch(agendaSource, /full-?calendar|react-big-calendar|daypilot|syncfusion/i, "nenhuma lib de calendário pesada foi adicionada (§0)");
 
   console.log("Services agenda structural tests passed: cancel/reschedule/block-create/block-delete use only the existing server-side commands (never a direct Firestore write for Booking/Block, UI8), reschedule queries real availability before offering slots (UI5) and refreshes candidates after a conflict (UI6), date navigation recomputes the queried range (UI7), the route is lazy-loaded with no calendar library and no recharts import.");
+
+  // ===== PRODUCT-QA-01 — regressão: validUntil de Quote precisa ser fim do dia LOCAL, nunca 23:59:59 UTC
+  // fixo (23:59:59Z é ~21h em São Paulo — expirava o orçamento ~3h antes do fim do dia escolhido). =====
+  {
+    // Mesma técnica DST-safe já validada acima para zonedWallClockToUtcInstant: 2026-08-31 23:59 em
+    // São Paulo (UTC-3) é 2026-09-01T02:59:00Z, nunca 2026-08-31T23:59:59Z (que seria ~21h local).
+    const endOfDaySp = zonedWallClockToUtcInstant("2026-08-31", 23 * 60 + 59, "America/Sao_Paulo");
+    assert.equal(endOfDaySp.toISOString(), "2026-09-01T02:59:00.000Z", "fim do dia em São Paulo precisa cruzar para o dia seguinte em UTC, nunca ficar em 23:59:59Z");
+
+    const workDetailSource = read("client/src/pages/service-work-detail.tsx");
+    assert.doesNotMatch(workDetailSource, /new Date\(`\$\{quoteValidUntil\}T23:59:59\.000Z`\)/, "validUntil não pode mais usar um horário UTC fixo — precisa ser o fim do dia no timezone do vendedor");
+    const validUntilCallCount = (workDetailSource.match(/endOfLocalDayIso\(quoteValidUntil, bookingTimeZone \|\| Intl\.DateTimeFormat\(\)\.resolvedOptions\(\)\.timeZone\)/g) ?? []).length;
+    assert.equal(validUntilCallCount, 2, "os dois pontos que setam validUntil (criar orçamento e salvar rascunho) precisam usar endOfLocalDayIso com o timezone real");
+  }
 }
 
 function closeWeekWithMonday(): WeeklyHours {

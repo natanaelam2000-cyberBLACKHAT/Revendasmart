@@ -311,7 +311,7 @@ export default function ServiceAgenda() {
           </button>
           <div className="flex flex-col items-center">
             <span className="text-sm font-black capitalize text-foreground" data-testid="text-agenda-date">{headerLabel}</span>
-            <button type="button" onClick={() => setSelectedDate(todayDateKey())} className="text-xs font-bold text-primary">Hoje</button>
+            <button type="button" onClick={() => setSelectedDate(todayDateKey(timeZone))} className="text-xs font-bold text-primary">Hoje</button>
           </div>
           <button type="button" onClick={() => setSelectedDate((current) => addDaysToDateKey(current, 1))} aria-label="Próximo dia" data-testid="button-agenda-next-day" className="rs-icon-press flex h-10 w-10 items-center justify-center rounded-full bg-secondary">
             <ChevronRight className="h-5 w-5" />

@@ -22,7 +22,7 @@ import { listServicePayments, listServiceRefunds } from "@/lib/service-payments-
 import { recordServicePayment, refundServicePayment } from "@/lib/service-payment-commands";
 import { notifyError, notifySuccess } from "@/lib/notify";
 import { format as formatLocalDate, ptBR } from "@/lib/date-utils";
-import { formatTimeInTimezone } from "@/lib/service-agenda-helpers";
+import { formatTimeInTimezone, zonedWallClockToUtcInstant } from "@/lib/service-agenda-helpers";
 import {
   financialStatusLabel,
   formatCentsBRL,
@@ -45,6 +45,13 @@ import type { Quote } from "@shared/service-quotes";
 type Movement =
   | { readonly kind: "payment"; readonly at: string; readonly amountCents: number; readonly method: ServicePaymentRecord["method"] }
   | { readonly kind: "refund"; readonly at: string; readonly amountCents: number };
+
+/** "YYYY-MM-DD" (do input de data "válido até") -> instante UTC do fim daquele dia NO TIMEZONE informado —
+ * nunca `T23:59:59.000Z` fixo (23:59:59 UTC é ~21h em São Paulo, expirando o orçamento ~3h antes do fim do
+ * dia que o vendedor escolheu). Mesma técnica DST-safe de zonedWallClockToUtcInstant (service-agenda-helpers). */
+function endOfLocalDayIso(dateKey: string, timeZone: string): string {
+  return zonedWallClockToUtcInstant(dateKey, 23 * 60 + 59, timeZone).toISOString();
+}
 
 export default function ServiceWorkDetail() {
   const { workId } = useParams<{ workId: string }>();
@@ -245,7 +252,7 @@ export default function ServiceWorkDetail() {
     if (!work) return;
     setCreatingQuote(true);
     try {
-      const nextValidUntil = quoteValidUntil ? new Date(`${quoteValidUntil}T23:59:59.000Z`).toISOString() : undefined;
+      const nextValidUntil = quoteValidUntil ? endOfLocalDayIso(quoteValidUntil, bookingTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone) : undefined;
       await createServiceQuoteForWork(work.id, { customerMessage: quoteMessage || undefined, validUntil: nextValidUntil });
       notifySuccess("Orçamento criado a partir dos itens deste atendimento.");
       setQuoteDialogOpen(false);
@@ -268,7 +275,7 @@ export default function ServiceWorkDetail() {
     if (!quote || quote.status !== "draft") return;
     setSavingQuoteDraft(true);
     try {
-      const nextValidUntil = quoteValidUntil ? new Date(`${quoteValidUntil}T23:59:59.000Z`).toISOString() : undefined;
+      const nextValidUntil = quoteValidUntil ? endOfLocalDayIso(quoteValidUntil, bookingTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone) : undefined;
       const updated = await updateQuoteDraft(quote.id, {
         customerId: quote.customerId,
         items: quote.draftItems,

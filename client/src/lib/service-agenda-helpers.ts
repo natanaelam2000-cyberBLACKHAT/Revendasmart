@@ -77,9 +77,18 @@ export function addDaysToDateKey(dateKey: string, days: number): string {
   return `${next.getUTCFullYear()}-${pad2(next.getUTCMonth() + 1)}-${pad2(next.getUTCDate())}`;
 }
 
-export function todayDateKey(): string {
+/** "YYYY-MM-DD" de hoje. Sem `timeZone`, usa o relógio local do navegador (§20 — só aceitável quando
+ * nenhum ServiceResourceSchedule existe ainda). Com `timeZone`, deriva o dia no timezone do resource —
+ * necessário porque o dia local do navegador pode já ter virado (ou ainda não) em relação ao dia local do
+ * resource perto da meia-noite, escondendo/mostrando o dia errado na Agenda. */
+export function todayDateKey(timeZone?: string): string {
   const now = new Date();
-  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+  if (!timeZone) {
+    return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+  }
+  const dtf = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" });
+  const parts = Object.fromEntries(dtf.formatToParts(now).map((part) => [part.type, part.value])) as Record<string, string>;
+  return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
 /** dia da semana (0=domingo) de "YYYY-MM-DD" NO TIMEZONE do resource — nunca o do navegador. */
