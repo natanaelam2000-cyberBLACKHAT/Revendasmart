@@ -251,6 +251,31 @@ export function getCurrentFirebaseUser(): User | null {
   return auth?.currentUser ?? null;
 }
 
+let authReadyPromise: Promise<User | null> | null = null;
+
+/**
+ * PRODUCT-QA-02 — resolve com o usuário atual (ou null) assim que o Firebase Auth confirmar o estado
+ * INICIAL da sessão (a primeira emissão de onAuthStateChanged), nunca antes. `getCurrentFirebaseUser()`
+ * sozinho lê `auth.currentUser` de forma síncrona, que é `null` durante essa janela mesmo quando existe
+ * uma sessão persistida válida (localStorage/IndexedDB ainda sendo restaurada) — um efeito de carregamento
+ * que chama uma função dependente de uid nesse momento (ex.: requireCurrentUid() em services-persistence.ts)
+ * lança "UNAUTHENTICATED" e mostra "Sessão inválida" para um usuário genuinamente autenticado, reproduzível
+ * em qualquer navegação de página cheia (não-SPA) para uma rota que busca dados no mount. Promise única
+ * (cacheada) — só se inscreve uma vez, nunca uma por chamador. */
+export function waitForAuthReady(): Promise<User | null> {
+  const auth = getFirebaseAuth();
+  if (!auth) return Promise.resolve(null);
+  if (!authReadyPromise) {
+    authReadyPromise = new Promise((resolve) => {
+      const unsubscribe = onAuthStateChanged(auth, (user) => {
+        unsubscribe();
+        resolve(user);
+      });
+    });
+  }
+  return authReadyPromise;
+}
+
 // Returns true if Firebase is configured and initialized
 export function isFirebaseConfigured(): boolean {
   const { app } = initializeFirebase();

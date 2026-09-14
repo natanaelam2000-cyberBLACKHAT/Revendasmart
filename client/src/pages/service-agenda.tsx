@@ -18,8 +18,9 @@ import { listServiceBookingsForResourceAndRange } from "@/lib/service-bookings-p
 import { cancelServiceBooking, rescheduleServiceBooking } from "@/lib/service-booking-commands";
 import { listServices, getServiceWork, countServiceBookings } from "@/lib/services-persistence";
 import { notifyError, notifySuccess } from "@/lib/notify";
-import { getFirebaseAuth } from "@/lib/firebase";
+import { getFirebaseAuth, waitForAuthReady } from "@/lib/firebase";
 import { fireServerCountedFirstOccurrence } from "@/lib/analytics-milestones";
+import { serviceWorkStatusLabel } from "@/lib/service-work-helpers";
 import { format as formatLocalDate, ptBR } from "@/lib/date-utils";
 import {
   addDaysToDateKey,
@@ -119,6 +120,11 @@ export default function ServiceAgenda() {
     let cancelled = false;
     (async () => {
       try {
+        // PRODUCT-QA-02 — mesmo motivo do work-detail: espera o Firebase Auth confirmar o estado inicial
+        // da sessão antes de buscar dados dependentes de uid, para não lançar UNAUTHENTICATED numa
+        // navegação de página cheia para /servicos/agenda antes da sessão persistida terminar de restaurar.
+        await waitForAuthReady();
+        if (cancelled) return;
         const [resourceSchedule, serviceList, blockList] = await Promise.all([
           getServiceResourceSchedule(DEFAULT_RESOURCE_ID),
           listServices(),
@@ -435,7 +441,7 @@ export default function ServiceAgenda() {
                 {workLoading ? (
                   <p className="text-muted-foreground">Carregando atendimento…</p>
                 ) : selectedWork ? (
-                  <p><span className="font-bold">Atendimento:</span> {selectedWork.status}</p>
+                  <p><span className="font-bold">Atendimento:</span> {serviceWorkStatusLabel(selectedWork.status)}</p>
                 ) : null}
               </div>
               <div className="mt-4">
@@ -443,7 +449,7 @@ export default function ServiceAgenda() {
                   <a href={`/servicos/atendimentos/${selectedBooking.workId}`} data-testid="link-booking-open-work">Ver atendimento completo</a>
                 </Button>
               </div>
-              {selectedBooking.status === "confirmed" && (
+              {selectedBooking.status === "confirmed" && selectedWork?.status === "planned" && (
                 <div className="mt-6 flex flex-col gap-2">
                   <Button type="button" onClick={openReschedule} data-testid="button-booking-reschedule" className="rounded-full">Reagendar</Button>
                   <ConfirmActionDialog

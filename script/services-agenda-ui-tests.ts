@@ -183,6 +183,26 @@ function run() {
   // timezone diferente do resource configurado.
   assert.match(agendaSource, /setSelectedDate\(todayDateKey\(timeZone\)\)/, "botão \"Hoje\" precisa passar o timezone do resource para todayDateKey");
 
+  // PRODUCT-QA-02 — regressão: o efeito que carrega schedule/services/blocks precisa esperar o Firebase
+  // Auth confirmar o estado inicial da sessão antes de buscar dados dependentes de uid. Sem isto, uma
+  // navegação de página cheia para /servicos/agenda (ex.: um link direto, ou refresh) chega antes da sessão
+  // persistida terminar de ser restaurada, e a busca falha com "UNAUTHENTICATED" para um usuário
+  // genuinamente autenticado — reproduzido ao vivo neste sprint via Browser pane.
+  assert.match(agendaSource, /await waitForAuthReady\(\);\s*\n\s*if \(cancelled\) return;\s*\n\s*const \[resourceSchedule, serviceList, blockList\]/, "o efeito de carga inicial da Agenda precisa esperar waitForAuthReady() antes de buscar schedule/services/blocks");
+
+  // PRODUCT-QA-02 — regressão: o status do Atendimento no painel de detalhes do Booking precisa ser
+  // traduzido (serviceWorkStatusLabel), nunca o valor cru do enum do servidor ("planned"/"in_progress"/...)
+  // exposto diretamente ao vendedor.
+  assert.doesNotMatch(agendaSource, /\{selectedWork\.status\}/, "o status do atendimento não pode mais ser exibido cru — precisa passar por serviceWorkStatusLabel()");
+  assert.match(agendaSource, /\{serviceWorkStatusLabel\(selectedWork\.status\)\}/, "o status do atendimento precisa ser traduzido via serviceWorkStatusLabel()");
+
+  // PRODUCT-QA-02 — regressão: "Reagendar"/"Cancelar agendamento" só podem aparecer quando o Work ligado
+  // ainda está "planned" — mesma regra que o servidor já aplica (WORK_NOT_CANCELABLE/
+  // BOOKING_NOT_RESCHEDULABLE quando work.status !== "planned", server/service-booking-commands.ts).
+  // Antes desta correção a UI oferecia os dois botões para qualquer Booking confirmado, mesmo com o
+  // atendimento já concluído/cancelado — o clique chegava a errar no servidor em vez de nunca aparecer.
+  assert.match(agendaSource, /selectedBooking\.status === "confirmed" && selectedWork\?\.status === "planned"/, "Reagendar/Cancelar só podem aparecer quando o Work ligado ainda está \"planned\", igual à regra do servidor");
+
   // §0 — rota lazy, sem lib de calendário nova, sem recharts.
   const routerSource = read("client/src/routers/PrivateRouter.tsx");
   assert.match(routerSource, /const ServiceAgenda = lazy\(\(\) => import\("@\/pages\/service-agenda"\)\)/, "AGENDA_ROUTE_LAZY: a rota precisa ser lazy-loaded");
@@ -204,6 +224,18 @@ function run() {
     assert.doesNotMatch(workDetailSource, /new Date\(`\$\{quoteValidUntil\}T23:59:59\.000Z`\)/, "validUntil não pode mais usar um horário UTC fixo — precisa ser o fim do dia no timezone do vendedor");
     const validUntilCallCount = (workDetailSource.match(/endOfLocalDayIso\(quoteValidUntil, bookingTimeZone \|\| Intl\.DateTimeFormat\(\)\.resolvedOptions\(\)\.timeZone\)/g) ?? []).length;
     assert.equal(validUntilCallCount, 2, "os dois pontos que setam validUntil (criar orçamento e salvar rascunho) precisam usar endOfLocalDayIso com o timezone real");
+
+    // PRODUCT-QA-02 — regressão: o efeito que carrega o Work (+ Booking ligado) precisa esperar
+    // waitForAuthReady() antes de chamar getServiceWork()/listServiceBookingsForWork() — reproduzido ao
+    // vivo neste sprint: o link "Ver atendimento completo" da Agenda é um <a href> (navegação de página
+    // cheia), e chegar aqui antes da sessão persistida terminar de restaurar fazia requireCurrentUid()
+    // lançar "UNAUTHENTICATED", mostrando "Sessão inválida. Faça login novamente." para um usuário
+    // genuinamente autenticado.
+    assert.match(
+      workDetailSource,
+      /await waitForAuthReady\(\);\s*\n\s*if \(cancelled\) return;\s*\n\s*const \[loadedWork, relatedBookings\]/,
+      "o efeito que carrega o Work precisa esperar waitForAuthReady() antes de buscar dados dependentes de uid",
+    );
   }
 }
 

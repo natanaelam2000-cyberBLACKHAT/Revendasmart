@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useClientsLiteData } from "@/hooks/useClientsLiteData";
+import { waitForAuthReady } from "@/lib/firebase";
 import { getServiceWork } from "@/lib/services-persistence";
 import { startServiceWork, completeServiceWork, cancelServiceWork } from "@/lib/service-work-commands";
 import { listServiceBookingsForWork } from "@/lib/service-bookings-persistence";
@@ -101,6 +102,13 @@ export default function ServiceWorkDetail() {
     let cancelled = false;
     (async () => {
       try {
+        // PRODUCT-QA-02 — espera o Firebase Auth confirmar o estado INICIAL da sessão antes de buscar
+        // dados dependentes de uid. Sem isto, uma navegação de página cheia (ex.: o link "Ver atendimento
+        // completo" da Agenda, ou um refresh/link direto) chega aqui antes da sessão persistida terminar
+        // de ser restaurada — requireCurrentUid() via getServiceWork() lança UNAUTHENTICATED e mostra
+        // "Sessão inválida" para um usuário genuinamente autenticado.
+        await waitForAuthReady();
+        if (cancelled) return;
         const [loadedWork, relatedBookings] = await Promise.all([
           getServiceWork(workId),
           listServiceBookingsForWork(workId),
