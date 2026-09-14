@@ -50,6 +50,15 @@ export const OPPORTUNITY_RESPONSE_LIMIT = 30;
  * uma segunda passada/nova query, só uma folga na PRIMEIRA página, ainda assim bounded. */
 export const OPPORTUNITY_QUERY_PAGE_SIZE = 60;
 
+/** PRODUCT-GROWTH-05 §11 — teto de UMA leitura em lote de users/{uid}/opportunity_actions por request
+ * (nunca uma leitura por fingerprint candidato — ver loadOpportunityActionState em
+ * server/opportunity-engine.ts). Essa coleção só cresce por ação EXPLÍCITA do usuário (marcar
+ * feito/dispensar), nunca por carregamento de página — na prática, muito menor que este teto para a
+ * grande maioria dos tenants; generoso o bastante para nunca truncar um histórico real de uso normal,
+ * ainda assim bounded. Ordenado por updatedAt desc (ver o mesmo arquivo), então um truncamento
+ * hipotético perde as ações MAIS ANTIGAS primeiro, nunca as mais recentes. */
+export const OPPORTUNITY_ACTION_STATE_QUERY_LIMIT = 500;
+
 // ===================================================================================================
 // Shape canônico — §5 do ticket, adaptado às necessidades reais do domínio.
 // ===================================================================================================
@@ -89,8 +98,18 @@ export interface OpportunityEntityReference {
 /** §5/§7/§26 — shape final de uma oportunidade determinística. `evidence` é sempre fatos limitados
  * (nunca notas/texto livre do tenant) — WHAT é `type`, WHY é `reason`+`evidence`, ACTION é `action`. */
 export interface Opportunity {
-  /** §26 — estável: `${type}:${entityId}:${RULE_VERSION}`, nunca um UUID aleatório por avaliação. */
+  /** §26 — estável: `${type}:${entityId}:${RULE_VERSION}`, nunca um UUID aleatório por avaliação.
+   * Identidade da oportunidade COMO COMPUTADA nesta resposta (React key, data-testid) — não usar para
+   * persistência de lifecycle (PRODUCT-GROWTH-05): ver `fingerprint` abaixo. */
   readonly id: string;
+  /** PRODUCT-GROWTH-05 §6 — identidade estável do CICLO da condição de negócio subjacente, usada como
+   * chave de persistência em users/{uid}/opportunity_actions (mark-acted/dismiss/history). Diferente de
+   * `id`: `id` é estável por type+entidade PARA SEMPRE (nunca muda, mesmo entre ciclos diferentes da
+   * mesma condição); `fingerprint` inclui uma "cycle key" derivada de um campo mutável da própria fonte
+   * de dados (ex. lastPurchaseAt/lastSoldDate) quando a condição pode genuinamente se repetir — ver
+   * buildOpportunityFingerprint. Para overdue_receivable (condição de disparo único por parcela, nunca
+   * reabre depois de resolvida) `fingerprint === id` sem sufixo de ciclo — ver comentário na função. */
+  readonly fingerprint: string;
   readonly type: OpportunityType;
   readonly priority: OpportunityPriority;
   /** Frase curta, pronta pra UI, construída só a partir de `evidence` (nunca texto livre do tenant). */
@@ -107,6 +126,59 @@ export const OPPORTUNITY_RULE_VERSION = 1;
 export function buildOpportunityId(type: OpportunityType, entityId: string): string {
   return `${type}:${entityId}:v${OPPORTUNITY_RULE_VERSION}`;
 }
+
+/**
+ * PRODUCT-GROWTH-05 §6/§7 — fingerprint determinístico para persistência de lifecycle. `cycleKey`,
+ * quando fornecida, é sempre um campo já existente e mantido pela própria fonte de dados (nunca um
+ * timestamp de avaliação/agora, que mudaria a cada request e nunca deixaria uma ação persistir) —
+ * `lastPurchaseAt`/`lastSoldDate` para inactive_client/stalled_product (ambos escritos
+ * transacionalmente só quando uma venda real acontece, nunca em toda avaliação), um bucket de janela
+ * derivado de IDLE_SCHEDULE_WINDOW_DAYS para idle_schedule (não existe um campo mutável natural por
+ * "entidade" — o resource é sempre "default" — então o próprio período de 14 dias já usado pelo
+ * detector vira o ciclo: dispensar/marcar feito vale para O PERÍODO atual, nunca para sempre). Omitir
+ * `cycleKey` (overdue_receivable) produz o mesmo valor de `buildOpportunityId` sem o sufixo de versão —
+ * correto, porque uma parcela é uma condição de disparo único por natureza (nunca "reabre" depois de
+ * paga; um parcelamento novo é sempre um installmentId novo, nunca o mesmo documento reaparecendo).
+ */
+export function buildOpportunityFingerprint(type: OpportunityType, entityId: string, cycleKey?: string | number): string {
+  return cycleKey === undefined ? `${type}:${entityId}` : `${type}:${entityId}:${cycleKey}`;
+}
+
+// ===================================================================================================
+// Lifecycle (PRODUCT-GROWTH-05) — estado de interação do usuário sobre uma oportunidade, persistido
+// separadamente do cálculo determinístico em si (§2 do ticket: "a oportunidade em si continua computada
+// a partir dos dados-fonte; persiste-se só o estado de interação do usuário", nunca uma segunda cópia
+// do payload inteiro). Vive aqui porque tanto o server (opportunity-engine.ts, que lê/escreve o
+// Firestore) quanto o client (opportunities-client.ts, que só tipa a resposta HTTP) precisam do mesmo
+// shape — mesma fronteira já respeitada por `Opportunity`/`OpportunitySummary` acima.
+// ===================================================================================================
+
+/** §2 — só 2 estados terminais fechados, nunca um workflow com mais etapas do que o pedido precisa. */
+export type OpportunityActionStatus = "acted" | "dismissed";
+
+/** §2/§5 — um registro de ação persistido. `title`/`reasonSnapshot` são um retrato do texto exibido NO
+ * MOMENTO da ação (nunca recalculado depois) — só assim o Histórico continua útil mesmo se a condição de
+ * origem já tiver sido resolvida/apagada (§5: "se o dado de origem não estiver mais disponível, mostre
+ * um resumo histórico honesto"). Isto NÃO é uma segunda fonte de verdade de negócio: nenhum valor
+ * financeiro/quantidade é persistido aqui além do que já está embutido no texto de `reasonSnapshot`
+ * (mesmo texto que `reason` já mostrava, nunca um novo cálculo). */
+export interface OpportunityActionRecord {
+  readonly fingerprint: string;
+  readonly opportunityType: OpportunityType;
+  readonly status: OpportunityActionStatus;
+  readonly title: string;
+  readonly reasonSnapshot: string;
+  readonly actedAt: string | null;
+  readonly dismissedAt: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** §2 — tamanho máximo de `title`/`reasonSnapshot` aceito pelo endpoint de ação; texto de exibição
+ * inerte (nunca executado, nunca usado em decisão de autorização/valor financeiro — a query real
+ * continua sendo a única autoridade sobre o que está ativo), mas limitado mesmo assim contra um payload
+ * abusivo. */
+export const OPPORTUNITY_ACTION_SNAPSHOT_MAX_LENGTH = 240;
 
 /** PLAN-IMPL-07B §11/§29/§30 — shape do resumo consumido pela seção estratégica de Relatórios
  * (Premium). Vive aqui (shared, não em server/opportunity-engine.ts) porque tanto o server

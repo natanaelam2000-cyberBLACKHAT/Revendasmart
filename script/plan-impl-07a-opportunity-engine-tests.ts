@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import type { AddressInfo } from "node:net";
+import express from "express";
 import { initializeFirebaseAdmin } from "../server/firebase-admin-init";
-import { computeOpportunities } from "../server/opportunity-engine";
+import { computeOpportunities, registerOpportunityRoutes } from "../server/opportunity-engine";
 import { backfillClientLastPurchase } from "../server/backfill-client-last-purchase";
 import { finalizeSaleTransaction } from "../server/sale-finalize-transaction";
+import { resolveServerPlan } from "../server/plan-authoritative-mutations";
 import {
   INACTIVE_CLIENT_THRESHOLD_DAYS,
   STALLED_PRODUCT_THRESHOLD_DAYS,
   IDLE_SCHEDULE_WINDOW_DAYS,
   OPPORTUNITY_RESPONSE_LIMIT,
+  buildOpportunityFingerprint,
   buildOpportunityId,
   compareOpportunities,
   hasAdvancedOpportunityAccess,
@@ -31,6 +35,17 @@ import type { Firestore as AdminFirestore } from "firebase-admin/firestore";
  * mesma engine) com RC1-RC8 (overdue_receivable, o 4º tipo de oportunidade) e as asserções A7/A1 do
  * novo action type open_billing — mesma disciplina, mesma autoridade real (computeOpportunities/
  * opportunity-actions.ts), nenhuma lógica reimplementada aqui.
+ *
+ * PRODUCT-GROWTH-05 — mesmo arquivo de novo, com FP (fingerprint puro) + LC (lifecycle) + RA
+ * (reappearance) + OL (overdue lifecycle §12) + GT (suporte genérico aos 4 tipos §13). Diferente das
+ * seções anteriores (que só chamam computeOpportunities diretamente), LC/RA/OL/GT sobem um Express real
+ * via registerOpportunityRoutes (a MESMA função que server/routes.ts registra em produção) num servidor
+ * HTTP efêmero (porta 0) e fazem requisições HTTP de verdade contra ele — a rota de ação e a de
+ * histórico são testadas fim-a-fim (validação, persistência, idempotência, isolamento de tenant, gate
+ * de plano), nunca reimplementadas como uma função de teste separada. `requireAuth` é substituído por um
+ * middleware mínimo que só lê um header de teste (x-test-uid) — a verificação de token do Firebase Auth
+ * em si já é responsabilidade de um middleware EXISTENTE e não tocado por esta ticket, fora de escopo
+ * re-testar aqui; `resolveServerPlan` é sempre a função REAL (server/plan-authoritative-mutations.ts).
  */
 
 process.env.FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "demo-revendasmart";
@@ -68,6 +83,83 @@ async function seedProduct(db: AdminFirestore, uid: string, productId: string, f
 async function seedHistoricalSale(db: AdminFirestore, uid: string, saleId: string, clientId: string, date: string): Promise<void> {
   await db.collection("users").doc(uid).collection("sales").doc(saleId).set({ id: saleId, clientId, date });
 }
+/** PRODUCT-GROWTH-05 — as rotas de lifecycle passam por isAdminUid(uid) (mesmo gate que /api/
+ * opportunities já usa), que chama auth().getUser(uid) de verdade contra o Auth Emulator — precisa
+ * existir um registro de usuário real, nunca só uma string de uid inventada (os detectores testados
+ * direto via computeOpportunities acima nunca passavam por este caminho, por isso nunca precisaram
+ * disto). Idempotente: se o uid já existe (reuso entre testes), ignora o erro "already exists". */
+async function createAuthUser(uid: string): Promise<void> {
+  try {
+    await initializeFirebaseAdmin().auth().createUser({ uid, email: `${uid}@example.test` });
+  } catch (error) {
+    const code = (error as { code?: string })?.code;
+    if (code !== "auth/uid-already-exists") throw error;
+  }
+}
+
+/** PRODUCT-GROWTH-05 — Premium explícito (nunca depende do trial automático de conta nova, que expira e
+ * tornaria o teste não-determinístico com o tempo) via o MESMO planData/main que o app real lê
+ * (resolveServerPlan -> resolveUserEntitlements -> users/{uid}/planData/main). */
+async function grantPremium(db: AdminFirestore, uid: string): Promise<void> {
+  await db.collection("users").doc(uid).collection("planData").doc("main").set({
+    currentPlan: "premium", premiumActive: true, premiumExpiresAt: null,
+    premiumStartedAt: new Date().toISOString(), premiumSource: "manual",
+  });
+}
+
+/**
+ * PRODUCT-GROWTH-05 — servidor Express efêmero (porta 0, nunca uma porta fixa que colidiria entre
+ * execuções paralelas) registrando as rotas REAIS via registerOpportunityRoutes — a mesma função que
+ * server/routes.ts chama em produção, nunca uma reimplementação. `requireAuth` fake só popula
+ * req.firebaseUid a partir de um header de teste; ausência do header simula um caller não autenticado
+ * (mesmo formato que o middleware real produziria para um token ausente/inválido).
+ */
+async function startTestOpportunityServer(): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    const uid = req.header("x-test-uid");
+    if (uid) (req as express.Request & { firebaseUid?: string }).firebaseUid = uid;
+    next();
+  });
+  registerOpportunityRoutes(app, (req, res, next) => {
+    if (!(req as express.Request & { firebaseUid?: string }).firebaseUid) {
+      res.status(401).json({ code: "UNAUTHORIZED", message: "Sessão inválida. Faça login novamente." });
+      return;
+    }
+    next();
+  }, resolveServerPlan);
+  return new Promise((resolve) => {
+    const server = app.listen(0, "127.0.0.1", () => {
+      const { port } = server.address() as AddressInfo;
+      resolve({
+        baseUrl: `http://127.0.0.1:${port}`,
+        close: () => new Promise((res) => server.close(() => res())),
+      });
+    });
+  });
+}
+
+interface TestApiResult {
+  readonly status: number;
+  readonly body: any;
+}
+
+async function callOpportunityApi(baseUrl: string, uid: string | null, path: string, init: { method?: string; body?: unknown } = {}): Promise<TestApiResult> {
+  const headers: Record<string, string> = {};
+  if (uid) headers["x-test-uid"] = uid;
+  let requestBody: string | undefined;
+  if (init.body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    requestBody = JSON.stringify(init.body);
+  }
+  const response = await fetch(`${baseUrl}${path}`, { method: init.method ?? "GET", headers, body: requestBody });
+  const text = await response.text();
+  let body: unknown;
+  try { body = text ? JSON.parse(text) : undefined; } catch { body = text; }
+  return { status: response.status, body };
+}
+
 /** PRODUCT-GROWTH-04 — mesma shape que server/sale-finalize-transaction.ts realmente grava (id, saleId,
  * clientId, amount, dueDate, status, paidAmount, installmentNumber, totalInstallments, createdAt) —
  * nunca um fixture com um campo que o writer real não produz. */
@@ -315,6 +407,290 @@ async function runOverdueReceivableTests(db: AdminFirestore): Promise<void> {
 }
 
 // ===================================================================================================
+// FP1-FP6 — PRODUCT-GROWTH-05 §6: fingerprint determinístico, puro, sem emulador.
+// ===================================================================================================
+function runFingerprintTests(): void {
+  assert.equal(buildOpportunityFingerprint("inactive_client", "c1", "2026-01-01T00:00:00.000Z"), buildOpportunityFingerprint("inactive_client", "c1", "2026-01-01T00:00:00.000Z"), "FP1: puro — mesmo type+entidade+cycleKey, mesmo resultado sempre");
+  assert.notEqual(buildOpportunityFingerprint("inactive_client", "c1", "2026-01-01T00:00:00.000Z"), buildOpportunityFingerprint("inactive_client", "c1", "2026-02-01T00:00:00.000Z"), "FP2: cycleKey diferente (nova lastPurchaseAt) -> fingerprint diferente -> um novo ciclo nunca fica preso pela ação de um ciclo antigo");
+  assert.notEqual(buildOpportunityFingerprint("inactive_client", "c1", "2026-01-01T00:00:00.000Z"), buildOpportunityFingerprint("stalled_product", "c1", "2026-01-01T00:00:00.000Z"), "FP3: type diferente com o mesmo entityId+cycleKey nunca colide (namespace por type embutido)");
+  assert.equal(buildOpportunityFingerprint("overdue_receivable", "inst1"), buildOpportunityFingerprint("overdue_receivable", "inst1"), "FP4: sem cycleKey (overdue_receivable) continua puro/determinístico");
+  assert.notEqual(buildOpportunityFingerprint("overdue_receivable", "inst1"), buildOpportunityId("overdue_receivable", "inst1"), "FP5: fingerprint (sem sufixo de versão) é literalmente diferente de id (com :vN) — dois conceitos distintos, nunca acidentalmente iguais por coincidência de string");
+  assert.equal(buildOpportunityFingerprint("idle_schedule", "default", 0), "idle_schedule:default:0", "FP6: shape explícito type:entityId:cycleKey, nunca um hash opaco — legível/depurável");
+  console.log("PASS FP1-FP6 buildOpportunityFingerprint is pure and deterministic; a different cycle key (new lastPurchaseAt/lastSoldDate/window bucket) always produces a different fingerprint, type is embedded so different types never collide on the same entityId+cycleKey, and fingerprint is structurally distinct from id even when both describe the same entity");
+}
+
+// ===================================================================================================
+// LC1-LC14 — PRODUCT-GROWTH-05: lifecycle fim-a-fim contra rotas HTTP reais (Express efêmero).
+// ===================================================================================================
+async function runLifecycleCoreTests(db: AdminFirestore): Promise<void> {
+  const { baseUrl, close } = await startTestOpportunityServer();
+  try {
+    const uid = tenantUid("lc");
+    await createAuthUser(uid);
+    await grantPremium(db, uid);
+    await seedClient(db, uid, "maria", { name: "Maria Lifecycle", lastPurchaseAt: isoDaysAgo(INACTIVE_CLIENT_THRESHOLD_DAYS + 5) });
+    await seedClient(db, uid, "joao", { name: "João Lifecycle", lastPurchaseAt: isoDaysAgo(INACTIVE_CLIENT_THRESHOLD_DAYS + 8) });
+
+    // LC1 — sem nenhum opportunity_actions doc, a oportunidade aparece normalmente em Ativas.
+    let list = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    assert.equal(list.status, 200, "LC1: 200 com Premium real");
+    const maria = list.body.opportunities.find((o: any) => o.entityReference.id === "maria");
+    assert.ok(maria, "LC1: cliente inativo sem nenhuma ação registrada aparece em Ativas (estado padrão)");
+    const mariaFingerprint = maria.fingerprint as string;
+    assert.ok(mariaFingerprint.startsWith("inactive_client:maria:"), "LC1: fingerprint tem o shape esperado");
+
+    // LC2 — marcar como feito: 200, some da lista ativa.
+    const actPayload = { status: "acted", type: maria.type, title: maria.entityReference.name, reason: maria.reason };
+    const actResult = await callOpportunityApi(baseUrl, uid, `/api/opportunities/${encodeURIComponent(mariaFingerprint)}/action`, { method: "POST", body: actPayload });
+    assert.equal(actResult.status, 200, "LC2: mark-acted retorna 200");
+    assert.equal(actResult.body.action.status, "acted", "LC2: status persistido é 'acted'");
+    assert.ok(actResult.body.action.actedAt, "LC2: actedAt preenchido");
+    assert.equal(actResult.body.action.dismissedAt, null, "LC2: dismissedAt continua null para uma ação 'acted'");
+    list = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    assert.equal(list.body.opportunities.some((o: any) => o.entityReference.id === "maria"), false, "LC2: depois de marcado como feito, some IMEDIATAMENTE da lista Ativa");
+    console.log("PASS LC1/LC2 a fresh opportunity with no action state appears in Active by default; marking it acted persists status='acted' with actedAt set and removes it from Active immediately");
+
+    // LC3 — dismiss num segundo cliente.
+    const joao = list.body.opportunities.find((o: any) => o.entityReference.id === "joao") ?? (await callOpportunityApi(baseUrl, uid, "/api/opportunities")).body.opportunities.find((o: any) => o.entityReference.id === "joao");
+    assert.ok(joao, "LC3: joão continua ativo antes de dispensar");
+    const dismissResult = await callOpportunityApi(baseUrl, uid, `/api/opportunities/${encodeURIComponent(joao.fingerprint)}/action`, {
+      method: "POST", body: { status: "dismissed", type: joao.type, title: joao.entityReference.name, reason: joao.reason },
+    });
+    assert.equal(dismissResult.status, 200, "LC3: dismiss retorna 200");
+    assert.equal(dismissResult.body.action.status, "dismissed", "LC3: status persistido é 'dismissed'");
+    assert.ok(dismissResult.body.action.dismissedAt, "LC3: dismissedAt preenchido");
+    list = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    assert.equal(list.body.opportunities.some((o: any) => o.entityReference.id === "joao"), false, "LC3: depois de dispensado, some da lista Ativa");
+    console.log("PASS LC3 dismissing an opportunity persists status='dismissed' with dismissedAt set and removes it from Active");
+
+    // LC4 — "reload": chamar GET de novo simula uma nova carga de página; o estado persiste no servidor,
+    // nunca dependeu de nenhum estado local do browser.
+    const reload = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    assert.equal(reload.body.opportunities.some((o: any) => o.entityReference.id === "maria" || o.entityReference.id === "joao"), false, "LC4: um GET completamente novo (simulando reload) continua sem maria/joão — persistido no servidor, nunca um estado só-de-sessão do client");
+    console.log("PASS LC4 a brand-new GET request (simulating a page reload with zero client-side state) still correctly excludes both acted and dismissed opportunities — the state lives server-side, never only in the browser session");
+
+    // LC5 — double action / idempotência: chamar a MESMA ação duas vezes não erra e não duplica.
+    const first = await callOpportunityApi(baseUrl, uid, `/api/opportunities/${encodeURIComponent(mariaFingerprint)}/action`, { method: "POST", body: actPayload });
+    const second = await callOpportunityApi(baseUrl, uid, `/api/opportunities/${encodeURIComponent(mariaFingerprint)}/action`, { method: "POST", body: actPayload });
+    assert.equal(first.status, 200, "LC5: primeira chamada 200");
+    assert.equal(second.status, 200, "LC5: segunda chamada idêntica também 200, nunca um erro de duplicidade");
+    assert.equal(first.body.action.createdAt, second.body.action.createdAt, "LC5: createdAt idêntico entre as duas chamadas — um único documento upsertado (.set), nunca dois registros distintos para o mesmo fingerprint");
+    console.log("PASS LC5 calling the exact same action twice is fully idempotent — both calls succeed with 200, and createdAt stays identical across both, proving a single upserted document rather than a duplicate");
+
+    // LC6 — isolamento de tenant: o MESMO fingerprint sob um uid diferente nunca é afetado.
+    const uidOther = tenantUid("lc-other");
+    await createAuthUser(uidOther);
+    await grantPremium(db, uidOther);
+    await seedClient(db, uidOther, "maria", { name: "Maria Outro Tenant", lastPurchaseAt: isoDaysAgo(INACTIVE_CLIENT_THRESHOLD_DAYS + 5) });
+    const otherList = await callOpportunityApi(baseUrl, uidOther, "/api/opportunities");
+    const otherMaria = otherList.body.opportunities.find((o: any) => o.entityReference.id === "maria");
+    assert.ok(otherMaria, "LC6: outro tenant, MESMO clientId 'maria', continua ativo — a ação do primeiro tenant nunca vaza para cá, mesmo com um fingerprint textualmente parecido/idêntico se as datas coincidissem");
+    const crossTenantAttempt = await callOpportunityApi(baseUrl, uidOther, `/api/opportunities/${encodeURIComponent(mariaFingerprint)}/action`, {
+      method: "POST", body: { status: "dismissed", type: "inactive_client", title: "x", reason: "x" },
+    });
+    assert.equal(crossTenantAttempt.status, 200, "LC6: a chamada em si é aceita (fingerprint é só uma string, sem verificação cross-tenant no valor)");
+    const originalTenantList = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    assert.equal(originalTenantList.body.opportunities.some((o: any) => o.entityReference.id === "maria"), false, "LC6: mesmo com uma tentativa de escrever o MESMO texto de fingerprint como outro uid, o tenant ORIGINAL nunca é afetado — cada write vai para users/{SEU PRÓPRIO uid}/opportunity_actions/..., nunca um caminho compartilhado");
+    const unauthenticated = await callOpportunityApi(baseUrl, null, "/api/opportunities");
+    assert.equal(unauthenticated.status, 401, "LC6/§3: sem uid autenticado, 401 — nunca aceita um tenantUid vindo do client de qualquer outra forma");
+    console.log("PASS LC6 cross-tenant isolation holds: two tenants can independently have opportunities that produce the identical fingerprint text, but each write only ever lands under the CALLER's own users/{uid}/opportunity_actions — one tenant's action can never affect another tenant's active list; requests with no authenticated uid are rejected with 401");
+
+    // LC7 — gate de plano nas DUAS rotas novas (não só na já existente /api/opportunities).
+    const uidFree = tenantUid("lc-free");
+    await createAuthUser(uidFree);
+    // Nenhum planData/main gravado -> resolveServerPlan cai no fallback Free por padrão (nunca Premium).
+    const freeAction = await callOpportunityApi(baseUrl, uidFree, `/api/opportunities/${encodeURIComponent(mariaFingerprint)}/action`, {
+      method: "POST", body: { status: "acted", type: "inactive_client", title: "x", reason: "x" },
+    });
+    assert.equal(freeAction.status, 403, "LC7: POST .../action para uma conta Free/sem trial é 403, nunca 200 — nenhum acesso ao endpoint de lifecycle sem Premium");
+    assert.equal(freeAction.body.code, "OPPORTUNITIES_PLAN_REQUIRED", "LC7: código de erro correto");
+    const freeHistory = await callOpportunityApi(baseUrl, uidFree, "/api/opportunities/history");
+    assert.equal(freeHistory.status, 403, "LC7: GET /api/opportunities/history para Free também é 403 — nenhum vazamento de dado de histórico");
+    console.log("PASS LC7 both new lifecycle endpoints (mark-action and history) reuse the exact same server-side Premium gate as the existing list endpoint — a Free/non-trial account gets 403 on both, with zero data returned");
+
+    // LC8 — Histórico: depois de acted (maria) + dismissed (joão), ambos aparecem com os campos certos.
+    const history = await callOpportunityApi(baseUrl, uid, "/api/opportunities/history");
+    assert.equal(history.status, 200, "LC8: histórico 200 para Premium");
+    const historyItems = history.body.items as any[];
+    const mariaHistory = historyItems.find((item) => item.fingerprint === mariaFingerprint);
+    const joaoHistory = historyItems.find((item) => item.fingerprint === joao.fingerprint);
+    assert.ok(mariaHistory, "LC8: maria (acted) aparece no histórico");
+    assert.equal(mariaHistory.status, "acted", "LC8: status correto no histórico");
+    assert.equal(mariaHistory.title, "Maria Lifecycle", "LC8: title é o snapshot do nome no momento da ação");
+    assert.match(mariaHistory.reasonSnapshot, /Sem compra há \d+ dias/, "LC8: reasonSnapshot é o texto real exibido no momento da ação, não recalculado depois");
+    assert.ok(joaoHistory, "LC8: joão (dismissed) também aparece");
+    assert.equal(joaoHistory.status, "dismissed", "LC8: status correto");
+    console.log("PASS LC8 the history endpoint returns both the acted and the dismissed item, each with the exact title/reason snapshot captured at action time (never a live recomputation) and the correct terminal status");
+
+    // LC9 — validação: status/type inválidos nunca viram uma escrita silenciosa.
+    const badStatus = await callOpportunityApi(baseUrl, uid, `/api/opportunities/${encodeURIComponent("inactive_client:x:1")}/action`, {
+      method: "POST", body: { status: "not-a-real-status", type: "inactive_client", title: "x", reason: "x" },
+    });
+    assert.equal(badStatus.status, 400, "LC9: status inválido -> 400, nunca aceito silenciosamente");
+    const badType = await callOpportunityApi(baseUrl, uid, `/api/opportunities/${encodeURIComponent("inactive_client:x:1")}/action`, {
+      method: "POST", body: { status: "acted", type: "not-a-real-type", title: "x", reason: "x" },
+    });
+    assert.equal(badType.status, 400, "LC9: type inválido -> 400");
+    console.log("PASS LC9 an invalid status or opportunity type is rejected with 400 before any write — never silently accepted or coerced");
+  } finally {
+    await close();
+  }
+}
+
+// ===================================================================================================
+// RA1-RA4 — PRODUCT-GROWTH-05 §7: reaparecimento em um novo ciclo (inactive_client/stalled_product).
+// ===================================================================================================
+async function runReappearanceTests(db: AdminFirestore): Promise<void> {
+  const { baseUrl, close } = await startTestOpportunityServer();
+  try {
+    const uid = tenantUid("ra");
+    await createAuthUser(uid);
+    await grantPremium(db, uid);
+
+    // RA1/RA2 — inactive_client: dispensar o ciclo 1, comprar de novo (condição desaparece
+    // naturalmente), ficar inativo num ciclo 2 NOVO -> reaparece (fingerprint diferente).
+    const cycle1 = isoDaysAgo(INACTIVE_CLIENT_THRESHOLD_DAYS + 5);
+    await seedClient(db, uid, "ciclo-cliente", { name: "Cliente Cíclico", lastPurchaseAt: cycle1 });
+    let list = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    let found = list.body.opportunities.find((o: any) => o.entityReference.id === "ciclo-cliente");
+    assert.ok(found, "RA1: ciclo 1 ativo");
+    const fingerprintCycle1 = found.fingerprint;
+    await callOpportunityApi(baseUrl, uid, `/api/opportunities/${encodeURIComponent(fingerprintCycle1)}/action`, {
+      method: "POST", body: { status: "dismissed", type: found.type, title: found.entityReference.name, reason: found.reason },
+    });
+    list = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    assert.equal(list.body.opportunities.some((o: any) => o.entityReference.id === "ciclo-cliente"), false, "RA1: dispensado, some da lista ativa");
+
+    // Compra nova (recente) -> condição desaparece por si só (nada a ver com lifecycle).
+    await seedClient(db, uid, "ciclo-cliente", { name: "Cliente Cíclico", lastPurchaseAt: isoDaysAgo(2) });
+    list = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    assert.equal(list.body.opportunities.some((o: any) => o.entityReference.id === "ciclo-cliente"), false, "RA2: com compra recente, a condição em si não existe mais (nem precisa do dismiss para sumir)");
+
+    // Novo ciclo de inatividade — mesma clientId, lastPurchaseAt DIFERENTE do ciclo 1.
+    const cycle2 = isoDaysAgo(INACTIVE_CLIENT_THRESHOLD_DAYS + 30);
+    await seedClient(db, uid, "ciclo-cliente", { name: "Cliente Cíclico", lastPurchaseAt: cycle2 });
+    list = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    found = list.body.opportunities.find((o: any) => o.entityReference.id === "ciclo-cliente");
+    assert.ok(found, "RA3: um ciclo 2 de inatividade GENUINAMENTE NOVO reaparece como oportunidade ativa, mesmo tendo sido dispensado no ciclo 1 — nunca suprimido para sempre por uma ação antiga");
+    assert.notEqual(found.fingerprint, fingerprintCycle1, "RA3: fingerprint do ciclo 2 é DIFERENTE do ciclo 1 (cycleKey=lastPurchaseAt mudou)");
+    console.log("PASS RA1/RA2/RA3 dismissing an inactive_client opportunity does not permanently suppress that client: a genuine new purchase clears the condition naturally, and a later, distinct inactivity cycle (different lastPurchaseAt) reappears as a fresh active opportunity with a different fingerprint — the old dismissal never silently swallows the new cycle");
+
+    // RA4 — mesmo padrão para stalled_product (lastSoldDate como cycleKey).
+    const productCycle1 = isoDaysAgo(STALLED_PRODUCT_THRESHOLD_DAYS + 5);
+    await seedProduct(db, uid, "produto-ciclico", { stock: 5, lastSoldDate: productCycle1 });
+    list = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    let stalledFound = list.body.opportunities.find((o: any) => o.entityReference.id === "produto-ciclico");
+    assert.ok(stalledFound, "RA4: produto parado ciclo 1 ativo");
+    await callOpportunityApi(baseUrl, uid, `/api/opportunities/${encodeURIComponent(stalledFound.fingerprint)}/action`, {
+      method: "POST", body: { status: "dismissed", type: stalledFound.type, title: stalledFound.entityReference.name, reason: stalledFound.reason },
+    });
+    const productCycle2 = isoDaysAgo(STALLED_PRODUCT_THRESHOLD_DAYS + 40);
+    await seedProduct(db, uid, "produto-ciclico", { stock: 5, lastSoldDate: productCycle2 });
+    list = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    stalledFound = list.body.opportunities.find((o: any) => o.entityReference.id === "produto-ciclico");
+    assert.ok(stalledFound, "RA4: depois de vender (lastSoldDate atualizado) e parar de novo num ciclo genuinamente novo, o produto reaparece mesmo tendo sido dispensado no ciclo anterior");
+    console.log("PASS RA4 the same reappearance behavior holds for stalled_product: dismissing one stalled cycle never suppresses a later, genuinely distinct stalled cycle after an intervening sale");
+  } finally {
+    await close();
+  }
+}
+
+// ===================================================================================================
+// OL1-OL4 — PRODUCT-GROWTH-05 §12: lifecycle de overdue_receivable especificamente.
+// ===================================================================================================
+async function runOverdueLifecycleTests(db: AdminFirestore): Promise<void> {
+  const { baseUrl, close } = await startTestOpportunityServer();
+  try {
+    const uid = tenantUid("ol");
+    await createAuthUser(uid);
+    await grantPremium(db, uid);
+    await seedClient(db, uid, "devedor", { name: "Cliente Devedor" });
+    await seedInstallment(db, uid, "parcela-1", { clientId: "devedor", amount: 100, dueDate: isoDaysAgo(10), status: "pending" });
+
+    // OL1 — ativa antes de qualquer ação.
+    let list = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    const found = list.body.opportunities.find((o: any) => o.id.includes("parcela-1"));
+    assert.ok(found, "OL1: parcela vencida ativa");
+
+    // OL2 — marcar como feito -> some de Ativas, aparece no Histórico.
+    const actResult = await callOpportunityApi(baseUrl, uid, `/api/opportunities/${encodeURIComponent(found.fingerprint)}/action`, {
+      method: "POST", body: { status: "acted", type: found.type, title: found.entityReference.name, reason: found.reason },
+    });
+    assert.equal(actResult.status, 200, "OL2: marcar como feito 200");
+    list = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    assert.equal(list.body.opportunities.some((o: any) => o.id.includes("parcela-1")), false, "OL2: some de Ativas");
+    let history = await callOpportunityApi(baseUrl, uid, "/api/opportunities/history");
+    assert.ok(history.body.items.some((item: any) => item.fingerprint === found.fingerprint && item.status === "acted"), "OL2: aparece no Histórico como 'acted'");
+    console.log("PASS OL1/OL2 an overdue installment is active by default, and marking it acted removes it from Active and adds it to History — exactly the ticket §12 scenario");
+
+    // OL3 — "reload persiste o estado": um GET novo continua sem a parcela.
+    const reload = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    assert.equal(reload.body.opportunities.some((o: any) => o.id.includes("parcela-1")), false, "OL3: reload (novo GET) continua excluindo a parcela já tratada");
+    console.log("PASS OL3 reload persists the acted state for the overdue receivable");
+
+    // OL4 — §12: se a parcela for paga depois, a oportunidade COMPUTADA desaparece naturalmente (pelo
+    // detector, não pelo lifecycle) e o Histórico continua mostrando a ação antiga (resumo histórico
+    // gracioso, nunca dependente de reconsultar a parcela já resolvida).
+    await db.collection("users").doc(uid).collection("installments").doc("parcela-1").set({ status: "paid" }, { merge: true });
+    list = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    assert.equal(list.body.opportunities.some((o: any) => o.id.includes("parcela-1")), false, "OL4: paga -> o detector já exclui por conta própria (status != pending/partial), nada a ver com o lifecycle");
+    history = await callOpportunityApi(baseUrl, uid, "/api/opportunities/history");
+    const paidHistory = history.body.items.find((item: any) => item.fingerprint === found.fingerprint);
+    assert.ok(paidHistory, "OL4: o Histórico continua mostrando a ação, mesmo depois da parcela de origem ter sido resolvida/paga — resumo histórico gracioso, usa o snapshot já salvo, nunca tenta reconsultar a parcela");
+    assert.equal(paidHistory.status, "acted", "OL4: status do histórico continua o que foi de fato registrado");
+    console.log("PASS OL4 once the installment is paid, the computed opportunity disappears on its own (the detector's normal status filter, unrelated to lifecycle) while History still shows the historical action using its saved snapshot — a graceful summary that never depends on re-reading the now-resolved installment");
+  } finally {
+    await close();
+  }
+}
+
+// ===================================================================================================
+// GT1-GT4 — PRODUCT-GROWTH-05 §13: suporte genérico aos 4 tipos (nenhuma lógica hardcoded só para o
+// tipo novo) — idle_schedule especificamente (os outros 3 já cobertos em LC/RA/OL acima).
+// ===================================================================================================
+async function runGenericLifecycleSupportTests(db: AdminFirestore): Promise<void> {
+  const { baseUrl, close } = await startTestOpportunityServer();
+  try {
+    const uid = tenantUid("gt");
+    await createAuthUser(uid);
+    await grantPremium(db, uid);
+    const weeklyHours = {
+      sunday: [], monday: [{ start: "09:00", end: "18:00" }], tuesday: [{ start: "09:00", end: "18:00" }],
+      wednesday: [{ start: "09:00", end: "18:00" }], thursday: [{ start: "09:00", end: "18:00" }], friday: [{ start: "09:00", end: "18:00" }], saturday: [],
+    };
+    await db.collection("users").doc(uid).collection("serviceResourceSchedules").doc("default").set({
+      id: "default", tenantUid: uid, resourceId: "default", timezone: "America/Sao_Paulo", slotStepMinutes: 30, minAdvanceMinutes: 0, weeklyHours,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    });
+
+    let list = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    const idle = list.body.opportunities.find((o: any) => o.type === "idle_schedule");
+    assert.ok(idle, "GT1: idle_schedule (o '3º tipo existente') continua elegível normalmente");
+    const dismissResult = await callOpportunityApi(baseUrl, uid, `/api/opportunities/${encodeURIComponent(idle.fingerprint)}/action`, {
+      method: "POST", body: { status: "dismissed", type: idle.type, title: idle.entityReference.name, reason: idle.reason },
+    });
+    assert.equal(dismissResult.status, 200, "GT2: dismiss funciona para idle_schedule sem nenhum código especial");
+    list = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    assert.equal(list.body.opportunities.some((o: any) => o.type === "idle_schedule"), false, "GT2: some da lista ativa igual aos outros 3 tipos");
+    const history = await callOpportunityApi(baseUrl, uid, "/api/opportunities/history");
+    assert.ok(history.body.items.some((item: any) => item.opportunityType === "idle_schedule" && item.status === "dismissed"), "GT3: aparece no Histórico com o type correto");
+    console.log("PASS GT1/GT2/GT3 idle_schedule (the 3rd pre-existing type) supports the full lifecycle — active by default, dismissible, excluded from Active afterward, and visible in History — through the exact same generic code path as every other type, no type-specific branch needed");
+
+    // GT4 — prova estrutural: nem o filtro de lifecycle em computeOpportunities nem as rotas de
+    // ação/histórico têm um `if (type === "...")`/switch especial por tipo — o MESMO Map/filtro/rota
+    // atende os 4 tipos genericamente.
+    const engineSrc = sourceOf("server/opportunity-engine.ts");
+    const lifecycleSectionStart = engineSrc.indexOf("async function loadOpportunityActionState");
+    const lifecycleSectionEnd = engineSrc.indexOf("function isValidOpportunityType");
+    const lifecycleSrc = engineSrc.slice(lifecycleSectionStart, lifecycleSectionEnd);
+    assert.doesNotMatch(lifecycleSrc, /type === "inactive_client"|type === "stalled_product"|type === "idle_schedule"|type === "overdue_receivable"/, "GT4: o filtro de lifecycle (loadOpportunityActionState + o .filter em computeOpportunities) nunca faz um branch por tipo específico — genérico por construção, os 4 tipos passam pelo mesmo caminho");
+    console.log("PASS GT4 (source confirmation) the lifecycle filter itself contains no type-specific branch — genericness is structural, not the result of 4 parallel if-checks that could silently miss a 5th type added later");
+  } finally {
+    await close();
+  }
+}
+
+// ===================================================================================================
 // H1-H4 — suporte híbrido natural (nenhuma detecção de "tipo de negócio" precisa existir).
 // ===================================================================================================
 async function runHybridTests(db: AdminFirestore): Promise<void> {
@@ -468,8 +844,20 @@ function runActionTests(): void {
   console.log("PASS A5 no action depends on generative AI — 'Criar anúncio' just opens the existing deterministic product/marketing flow, never requires a generation call to complete");
 
   const engineSrc = sourceOf("server/opportunity-engine.ts");
-  assert.doesNotMatch(engineSrc, /\.set\(|\.update\(|\.create\(|\.delete\(|db\.batch\(|db\.runTransaction\(/, "A6: a engine de detecção nunca muta NADA (estoque, cliente, booking, catálogo, anúncio) — só leitura; a única exceção real do código-fonte é o próprio backfill opcional, um arquivo SEPARADO nunca importado por esta engine");
-  console.log("PASS A6 the detection engine itself performs zero writes/mutations — evaluating an opportunity never changes stock, contacts a client, creates a booking, or publishes anything; the user must explicitly trigger every action");
+  // A6 (atualizado por PRODUCT-GROWTH-05 §2/§8/§11): detecção + as duas rotas SÓ-LEITURA (lista e
+  // histórico) continuam 100% sem mutação — a única exceção real do arquivo agora é a rota de ação
+  // (mark-acted/dismiss), que SÓ existe porque o usuário clicou explicitamente em um botão de lifecycle,
+  // nunca como efeito colateral de listar/avaliar oportunidades. Fatiado no início literal da rota de
+  // ação para provar isso separadamente, em vez de enfraquecer a asserção original para "qualquer coisa
+  // vale em qualquer lugar do arquivo".
+  const actionRouteStart = engineSrc.indexOf('app.post("/api/opportunities/:fingerprint/action"');
+  assert.ok(actionRouteStart > 0, "A6: a rota de ação (PRODUCT-GROWTH-05) precisa existir no arquivo");
+  const detectionAndReadOnlySrc = engineSrc.slice(0, actionRouteStart);
+  assert.doesNotMatch(detectionAndReadOnlySrc, /\.set\(|\.update\(|\.create\(|\.delete\(|db\.batch\(|db\.runTransaction\(/, "A6: todo o código ANTES da rota de ação (os 4 detectores, computeOpportunities, loadOpportunityActionState, GET /api/opportunities, GET /api/opportunities/history) nunca muta NADA — só leitura; a única exceção real do arquivo é a própria rota de ação, abaixo desta fatia");
+  const actionRouteSrc = engineSrc.slice(actionRouteStart);
+  const actionRouteSetCalls = actionRouteSrc.match(/\.set\(/g) ?? [];
+  assert.equal(actionRouteSetCalls.length, 1, "A6/PRODUCT-GROWTH-05: exatamente UMA escrita em todo o arquivo (ref.set(record), dentro da rota de ação) — nunca um segundo caminho de mutação escondido em outro lugar");
+  console.log("PASS A6 (updated for PRODUCT-GROWTH-05) every detector, computeOpportunities, loadOpportunityActionState, and both read-only routes (list + history) remain strictly read-only; the file's only write is the single ref.set(record) inside the explicit user-triggered mark-acted/dismiss route — listing or evaluating opportunities never mutates anything by itself, and the (still-separate, still-never-imported) backfill script remains the only other historical exception");
 }
 
 // ===================================================================================================
@@ -563,6 +951,7 @@ async function run(): Promise<void> {
   runCostScaleTests();
   runUiTests();
   runPrivacyAndAnalyticsTests();
+  runFingerprintTests();
 
   requireEmulatorEnv();
   initializeFirebaseAdmin();
@@ -574,13 +963,17 @@ async function run(): Promise<void> {
   await runOverdueReceivableTests(db);
   await runHybridTests(db);
   await runBackfillVerificationTests(db);
+  await runLifecycleCoreTests(db);
+  await runReappearanceTests(db);
+  await runOverdueLifecycleTests(db);
+  await runGenericLifecycleSupportTests(db);
 
   // RP1-RP6 — deferido (zero dado de cadência de recompra hoje, ver relatório final). Reportado
   // honestamente, nunca implementado com uma regra fabricada. Reconfirmado sem mudança por
-  // PRODUCT-GROWTH-04 — nenhum novo dado de cadência de recompra foi introduzido por esta ticket.
+  // PRODUCT-GROWTH-04/05 — nenhum novo dado de cadência de recompra foi introduzido por nenhuma das duas.
   console.log("N/A RP1-RP6 repurchase_candidate is REPURCHASE_RUNTIME = DEFERRED_SCHEMA_PREREQUISITE this round (zero prior art, zero purchase-cadence data — see final report) — no fabricated rule was built to fill this gap");
 
-  console.log(`\nPLAN-IMPL-07A + PRODUCT-GROWTH-04 opportunity engine — all E/IC/SP/IS/RC/H/PG/A/CS/UI/BACKFILL assertions passed (OPPORTUNITY_RESPONSE_LIMIT=${OPPORTUNITY_RESPONSE_LIMIT}, IDLE_SCHEDULE_WINDOW_DAYS=${IDLE_SCHEDULE_WINDOW_DAYS}). B1-B11 (browser) status: see final report.`);
+  console.log(`\nPLAN-IMPL-07A + PRODUCT-GROWTH-04 + PRODUCT-GROWTH-05 opportunity engine — all E/IC/SP/IS/RC/H/PG/A/CS/UI/BACKFILL/FP/LC/RA/OL/GT assertions passed (OPPORTUNITY_RESPONSE_LIMIT=${OPPORTUNITY_RESPONSE_LIMIT}, IDLE_SCHEDULE_WINDOW_DAYS=${IDLE_SCHEDULE_WINDOW_DAYS}). B1-B11 (browser) status: see final report.`);
 }
 
 run().catch((error) => {

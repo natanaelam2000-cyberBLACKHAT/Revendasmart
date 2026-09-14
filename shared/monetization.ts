@@ -275,8 +275,10 @@ export const PLAN_PRESENTATION: Record<PlanType, PlanPresentation> = {
       // PLAN-IMPL-07A §36 — só entrou aqui depois do runtime real existir (client/src/pages/
       // opportunities.tsx + server/opportunity-engine.ts). Nunca promete IA/previsão/receita garantida —
       // só o que a engine determinística de fato entrega hoje (repurchase_candidate está deliberadamente
-      // fora, DEFERRED_SCHEMA_PREREQUISITE, nunca anunciado).
-      'Oportunidades comerciais: clientes inativos, produtos parados e agenda ociosa',
+      // fora, DEFERRED_SCHEMA_PREREQUISITE, nunca anunciado). PRODUCT-GROWTH-04 adicionou um 4º tipo
+      // (parcelas em atraso) — atualizado aqui (PRODUCT-GROWTH-05 §16) para a lista continuar completa;
+      // repurchase_candidate continua ausente/nunca anunciado.
+      'Oportunidades comerciais: clientes inativos, produtos parados, parcelas em atraso e agenda ociosa',
       // PLAN-IMPL-07B §42 — complementa a linha de oportunidades acima (mesma fonte de dados,
       // server/opportunity-engine.ts, nunca uma segunda engine), mas anuncia a SUPERFÍCIE nova e
       // distinta: a seção estratégica dentro de /reports (Relatórios), não a página /opportunities em

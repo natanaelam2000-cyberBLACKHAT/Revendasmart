@@ -326,12 +326,14 @@ function runSourceTextTests(): void {
   // PLAN-IMPL-07A §36 — mesmo raciocínio do §37 acima: só depois do runtime real de opportunities
   // existir, Premium pode anunciar a capacidade. Frase em linguagem simples de negócio (§35), nunca
   // "IA"/"previsão"/"inteligência avançada" — e nunca menciona repurchase_candidate (deferido).
-  assert.match(monetizationSource, /'Oportunidades comerciais: clientes inativos, produtos parados e agenda ociosa'/, "§36: Premium deve anunciar a capacidade real de opportunities em PLAN_PRESENTATION.premium.sellableHighlights, só depois do runtime existir");
+  // PRODUCT-GROWTH-05 §16 — atualizado para os 4 tipos reais (PRODUCT-GROWTH-04 adicionou parcelas em
+  // atraso); a cópia não pode ficar materialmente incompleta descrevendo só 3 de 4 capacidades reais.
+  assert.match(monetizationSource, /'Oportunidades comerciais: clientes inativos, produtos parados, parcelas em atraso e agenda ociosa'/, "§36/PRODUCT-GROWTH-05 §16: Premium deve anunciar os 4 tipos reais de opportunities em PLAN_PRESENTATION.premium.sellableHighlights");
   // [^'\n]* (nunca [^']*) — precisa ficar dentro de UMA linha/UM literal, senão casa através de
   // comentários inteiros entre duas aspas não relacionadas (armadilha de regex já cometida e corrigida
   // aqui: [^']* sem excluir \n também casa quebra de linha, "vazando" para comentários mais abaixo).
   assert.doesNotMatch(monetizationSource, /'[^'\n]*recompra[^'\n]*'|'[^'\n]*repurchase[^'\n]*'/i, "§36/§11: nenhuma sellableHighlight pode prometer recompra — repurchase_candidate está deferido, nunca anunciado");
-  console.log("PASS §36 Premium now advertises the real deterministic opportunities capability (inactive clients, stalled products, idle schedule) in plain business language — never mentions repurchase, which remains deferred and unadvertised");
+  console.log("PASS §36 Premium now advertises the real deterministic opportunities capability (inactive clients, stalled products, overdue receivables, idle schedule) in plain business language — never mentions repurchase, which remains deferred and unadvertised");
 }
 
 // ===================================================================================================

@@ -297,7 +297,7 @@ export default function Dashboard() {
             </span>
             <span className="min-w-0 flex-1">
               <span className="block text-sm font-black text-foreground">Oportunidades comerciais</span>
-              <span className="block text-xs text-muted-foreground">Clientes inativos, produtos parados e agenda ociosa</span>
+              <span className="block text-xs text-muted-foreground">Clientes inativos, produtos parados, parcelas em atraso e agenda ociosa</span>
             </span>
             <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground" />
           </button>

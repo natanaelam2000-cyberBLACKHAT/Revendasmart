@@ -33,9 +33,12 @@ import type { Express, NextFunction, Request, Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 import {
   type Opportunity,
+  type OpportunityActionRecord,
+  type OpportunityActionStatus,
   type OpportunityPriority,
   type OpportunityType,
   type OpportunitySummary,
+  buildOpportunityFingerprint,
   buildOpportunityId,
   compareOpportunities,
   hasAdvancedOpportunityAccess,
@@ -45,6 +48,8 @@ import {
   IDLE_SCHEDULE_UNDERUSED_RATIO,
   OPPORTUNITY_RESPONSE_LIMIT,
   OPPORTUNITY_QUERY_PAGE_SIZE,
+  OPPORTUNITY_ACTION_STATE_QUERY_LIMIT,
+  OPPORTUNITY_ACTION_SNAPSHOT_MAX_LENGTH,
 } from "../shared/opportunity-rules";
 import { intervalsOverlap, type WeeklyHours } from "../shared/service-availability";
 import type { PlanType } from "../shared/monetization";
@@ -86,6 +91,10 @@ async function detectInactiveClientOpportunities(db: Firestore, uid: string, now
     const name = typeof data.name === "string" && data.name.trim() ? data.name : "Cliente";
     return {
       id: buildOpportunityId("inactive_client", doc.id),
+      // PRODUCT-GROWTH-05 §7 — cycleKey=lastPurchaseAt: se este cliente comprar de novo e mais tarde
+      // ficar inativo outra vez, lastPurchaseAt terá um valor NOVO -> fingerprint novo -> a oportunidade
+      // antiga (dispensada/marcada feito) nunca suprime silenciosamente o novo ciclo.
+      fingerprint: buildOpportunityFingerprint("inactive_client", doc.id, lastPurchaseAt),
       type: "inactive_client",
       priority,
       reason: `Sem compra há ${daysSinceLastPurchase} dias`,
@@ -128,6 +137,9 @@ async function detectStalledProductOpportunities(db: Firestore, uid: string, now
     const name = typeof data.name === "string" && data.name.trim() ? data.name : "Produto";
     opportunities.push({
       id: buildOpportunityId("stalled_product", doc.id),
+      // PRODUCT-GROWTH-05 §7 — cycleKey=lastSoldDate: se o produto vender de novo e mais tarde ficar
+      // parado outra vez, lastSoldDate terá um valor NOVO -> novo fingerprint -> elegível de novo.
+      fingerprint: buildOpportunityFingerprint("stalled_product", doc.id, lastSoldDate),
       type: "stalled_product",
       priority,
       reason: `${stock} em estoque, sem vender há ${daysSinceLastSale} dias`,
@@ -194,6 +206,10 @@ async function detectOverdueReceivableOpportunities(db: Firestore, uid: string, 
     const formattedAmount = remaining.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
     opportunities.push({
       id: buildOpportunityId("overdue_receivable", doc.id),
+      // PRODUCT-GROWTH-05 §7/§12 — sem cycleKey: uma parcela é um disparo único por natureza (nunca
+      // "reabre" depois de paga; um parcelamento futuro é sempre um installmentId novo). Dispensar/
+      // marcar feito vale para esta parcela específica enquanto ela continuar pending/partial.
+      fingerprint: buildOpportunityFingerprint("overdue_receivable", doc.id),
       type: "overdue_receivable",
       priority: "high",
       reason: `Parcela de ${formattedAmount} vencida há ${daysOverdue} dia(s)`,
@@ -298,8 +314,15 @@ async function detectIdleScheduleOpportunities(db: Firestore, uid: string, nowMs
 
   const underusedPercent = Math.round((1 - bookedRatio) * 100);
   const priority: OpportunityPriority = bookedRatio <= IDLE_SCHEDULE_UNDERUSED_RATIO / 2 ? "high" : "medium";
+  // PRODUCT-GROWTH-05 §7 — cycleKey=janela de IDLE_SCHEDULE_WINDOW_DAYS dias desde a época: não existe
+  // um campo mutável natural por "entidade" aqui (o resource é sempre "default"), então o mesmo período
+  // que já governa o detector vira o ciclo — dispensar/marcar feito vale para ESTA janela de avaliação,
+  // nunca para sempre; uma janela futura (agenda genuinamente ociosa de novo, semanas depois) recebe um
+  // bucket novo e fica elegível de novo.
+  const windowCycleBucket = Math.floor(nowMs / (IDLE_SCHEDULE_WINDOW_DAYS * DAY_MS));
   return [{
     id: buildOpportunityId("idle_schedule", DEFAULT_RESOURCE_ID),
+    fingerprint: buildOpportunityFingerprint("idle_schedule", DEFAULT_RESOURCE_ID, windowCycleBucket),
     type: "idle_schedule",
     priority,
     reason: `${underusedPercent}% da agenda livre nos próximos ${IDLE_SCHEDULE_WINDOW_DAYS} dias`,
@@ -311,13 +334,50 @@ async function detectIdleScheduleOpportunities(db: Firestore, uid: string, nowMs
 }
 
 // ===================================================================================================
+// Lifecycle (PRODUCT-GROWTH-05) — §2/§4/§11: users/{uid}/opportunity_actions é a ÚNICA leitura extra
+// por request (nunca uma leitura por fingerprint candidato — ver CS2's N+1 guard, reaproveitado aqui),
+// bounded por OPPORTUNITY_ACTION_STATE_QUERY_LIMIT. Sem regra de firestore.rules dedicada de propósito:
+// o catch-all "deny all" já existente (firestore.rules, fim do arquivo) cobre esta subcoleção
+// automaticamente, e todo acesso passa exclusivamente por estas rotas HTTP (Admin SDK + requireAuth) —
+// nunca o SDK client-side lendo/escrevendo direto, então nenhuma regra nova precisa existir.
+// ===================================================================================================
+async function loadOpportunityActionState(db: Firestore, uid: string): Promise<Record<string, OpportunityActionRecord>> {
+  const snapshot = await db.collection("users").doc(uid).collection("opportunity_actions")
+    .orderBy("updatedAt", "desc")
+    .limit(OPPORTUNITY_ACTION_STATE_QUERY_LIMIT)
+    .get();
+  // Objeto simples, não Map — mesmo motivo do clientNameById em detectOverdueReceivableOpportunities
+  // acima: o método mutador de um Map tem o mesmo nome do método de escrita do Firestore, o que
+  // colidiria com a asserção textual A6, mesmo sendo só uma estrutura em memória. Chaves aqui são sempre
+  // fingerprints (contêm ":", nunca parecem um índice numérico), então a ordem de inserção (mesma ordem
+  // já vinda de updatedAt desc) é preservada por Object.values() normalmente.
+  const byFingerprint: Record<string, OpportunityActionRecord> = {};
+  for (const doc of snapshot.docs) {
+    const data = doc.data();
+    if (data.status !== "acted" && data.status !== "dismissed") continue;
+    byFingerprint[doc.id] = {
+      fingerprint: doc.id,
+      opportunityType: data.opportunityType,
+      status: data.status,
+      title: typeof data.title === "string" ? data.title : "",
+      reasonSnapshot: typeof data.reasonSnapshot === "string" ? data.reasonSnapshot : "",
+      actedAt: typeof data.actedAt === "string" ? data.actedAt : null,
+      dismissedAt: typeof data.dismissedAt === "string" ? data.dismissedAt : null,
+      createdAt: typeof data.createdAt === "string" ? data.createdAt : "",
+      updatedAt: typeof data.updatedAt === "string" ? data.updatedAt : "",
+    };
+  }
+  return byFingerprint;
+}
+
+// ===================================================================================================
 // Combinação — §14 (suporte híbrido natural: um tenant só-produto nunca recebe idle_schedule porque a
 // query de schedule simplesmente não acha nada; um tenant só-serviço nunca recebe stalled_product pelo
 // mesmo motivo — nenhuma detecção de "tipo de negócio" precisa existir, cada detector já responde
 // vazio quando o domínio dele não se aplica), §25/§32 (ordenação estável, resposta limitada).
 // ===================================================================================================
 export async function computeOpportunities(db: Firestore, uid: string, nowMs: number = Date.now()): Promise<Opportunity[]> {
-  const [inactiveClients, stalledProducts, idleSchedule, overdueReceivables] = await Promise.all([
+  const [inactiveClients, stalledProducts, idleSchedule, overdueReceivables, actionState] = await Promise.all([
     detectInactiveClientOpportunities(db, uid, nowMs).catch((error) => {
       logWarn("opportunity_engine.inactive_client_failed", { reason: error instanceof Error ? error.name : "unknown" });
       return [];
@@ -334,15 +394,26 @@ export async function computeOpportunities(db: Firestore, uid: string, nowMs: nu
       logWarn("opportunity_engine.overdue_receivable_failed", { reason: error instanceof Error ? error.name : "unknown" });
       return [];
     }),
+    loadOpportunityActionState(db, uid).catch((error) => {
+      logWarn("opportunity_engine.action_state_failed", { reason: error instanceof Error ? error.name : "unknown" });
+      // §4/§42 — falha ao carregar o estado de ação nunca deve mostrar de volta algo que o usuário já
+      // tratou (seria pior que uma lista temporariamente incompleta); objeto vazio = filtro vira no-op =
+      // fail CLOSED para "esconder", nunca fail open para "mostrar tudo de novo".
+      return {} as Record<string, OpportunityActionRecord>;
+    }),
   ]);
 
   const all = [...inactiveClients, ...stalledProducts, ...idleSchedule, ...overdueReceivables] as (Opportunity & { magnitude: number })[];
-  all.sort((a, b) => compareOpportunities(a, b));
+  // §4 — Ativa = sem ação terminal registrada para este fingerprint específico (não para o type/entidade
+  // em geral — um ciclo novo, com um fingerprint novo, nunca fica preso por uma ação de um ciclo antigo).
+  const active = all.filter((opportunity) => !actionState[opportunity.fingerprint]);
+  active.sort((a, b) => compareOpportunities(a, b));
   // magnitude é um detalhe de ordenação interno, nunca exposto na resposta HTTP (§5 — evidence só leva
   // fatos já nomeados por tipo) — reconstrução explícita do objeto público, em vez de destructure-and-
   // discard, para nunca vazar um campo interno por engano se o shape mudar no futuro.
-  return all.slice(0, OPPORTUNITY_RESPONSE_LIMIT).map((opportunity): Opportunity => ({
+  return active.slice(0, OPPORTUNITY_RESPONSE_LIMIT).map((opportunity): Opportunity => ({
     id: opportunity.id,
+    fingerprint: opportunity.fingerprint,
     type: opportunity.type,
     priority: opportunity.priority,
     reason: opportunity.reason,
@@ -381,6 +452,22 @@ export function summarizeOpportunities(opportunities: readonly Opportunity[]): O
  * resolução de plano nunca vira "assume Free" nem "assume Premium": simplesmente indisponível (503),
  * já que esta é uma superfície só-leitura, nenhuma mutação em jogo.
  */
+function isValidOpportunityType(value: unknown): value is OpportunityType {
+  return value === "inactive_client" || value === "stalled_product" || value === "idle_schedule" || value === "overdue_receivable";
+}
+
+function isValidActionStatus(value: unknown): value is OpportunityActionStatus {
+  return value === "acted" || value === "dismissed";
+}
+
+/** §2 — texto de exibição inerte, nunca vazio (fallback), sempre limitado (§2). */
+function sanitizeSnapshotText(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  return trimmed.slice(0, OPPORTUNITY_ACTION_SNAPSHOT_MAX_LENGTH);
+}
+
 export function registerOpportunityRoutes(
   app: Express,
   requireAuth: (req: Request, res: Response, next: NextFunction) => void,
@@ -403,6 +490,90 @@ export function registerOpportunityRoutes(
     } catch (error) {
       logError("opportunity_engine.route_failed", error, { requestId: req.requestId });
       return res.status(503).json({ code: "OPPORTUNITIES_UNAVAILABLE", message: "Não foi possível carregar oportunidades agora. Tente novamente." });
+    }
+  });
+
+  /**
+   * PRODUCT-GROWTH-05 §2/§3/§8 — marca uma oportunidade como "acted" ou "dismissed". `fingerprint` vem
+   * da URL (nunca do body — evita um segundo caminho para o mesmo valor divergir); uid SEMPRE de
+   * `req.firebaseUid` (verificado por requireAuth, nunca aceito do client, §3 — cross-tenant é P0).
+   * Idempotente por construção: a escrita sempre substitui o documento inteiro cuja chave já é o
+   * fingerprint (nunca uma criação que falharia se o documento já existisse) — chamar duas vezes com o
+   * mesmo status produz o mesmo resultado, nunca um erro de duplicidade (§9/§14 "double action").
+   * `type`/`title`/`reason` vêm do client (o MESMO payload que
+   * /api/opportunities acabou de servir para esta mesma oportunidade) — texto de exibição inerte só
+   * (§2: nunca usado em autorização/valor financeiro; a query real em computeOpportunities continua
+   * sendo a única autoridade sobre o que está ativo), sanitizado/limitado antes de persistir.
+   */
+  app.post("/api/opportunities/:fingerprint/action", requireAuth, async (req: Request, res: Response) => {
+    const uid = (req as Request & { firebaseUid?: string }).firebaseUid;
+    if (!uid) return res.status(401).json({ code: "UNAUTHORIZED", message: "Sessão inválida. Faça login novamente." });
+    const fingerprint = String(req.params.fingerprint || "");
+    if (!fingerprint || fingerprint.length > 300) {
+      return res.status(400).json({ code: "INVALID_FINGERPRINT", message: "Identificador de oportunidade inválido." });
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (!isValidActionStatus(body.status)) {
+      return res.status(400).json({ code: "INVALID_STATUS", message: "Status inválido." });
+    }
+    if (!isValidOpportunityType(body.type)) {
+      return res.status(400).json({ code: "INVALID_TYPE", message: "Tipo de oportunidade inválido." });
+    }
+    try {
+      const db = getFirebaseAdmin().firestore();
+      const admin = await isAdminUid(uid);
+      if (!admin) {
+        const effectivePlan = await resolveServerPlan(db, uid);
+        if (!hasAdvancedOpportunityAccess(effectivePlan)) {
+          return res.status(403).json({ code: "OPPORTUNITIES_PLAN_REQUIRED", message: "Oportunidades comerciais é um recurso do plano Premium." });
+        }
+      }
+      const ref = db.collection("users").doc(uid).collection("opportunity_actions").doc(fingerprint);
+      const existing = await ref.get();
+      const nowIso = new Date().toISOString();
+      const existingCreatedAt = existing.exists && typeof existing.data()?.createdAt === "string" ? String(existing.data()!.createdAt) : nowIso;
+      const status = body.status;
+      const record: OpportunityActionRecord = {
+        fingerprint,
+        opportunityType: body.type,
+        status,
+        title: sanitizeSnapshotText(body.title, "Oportunidade"),
+        reasonSnapshot: sanitizeSnapshotText(body.reason, ""),
+        actedAt: status === "acted" ? nowIso : null,
+        dismissedAt: status === "dismissed" ? nowIso : null,
+        createdAt: existingCreatedAt,
+        updatedAt: nowIso,
+      };
+      await ref.set(record);
+      return res.status(200).json({ action: record });
+    } catch (error) {
+      logError("opportunity_engine.action_route_failed", error, { requestId: req.requestId });
+      return res.status(503).json({ code: "OPPORTUNITY_ACTION_UNAVAILABLE", message: "Não foi possível registrar a ação agora. Tente novamente." });
+    }
+  });
+
+  /**
+   * PRODUCT-GROWTH-05 §5 — Histórico: lê a MESMA coleção que computeOpportunities já usa para filtrar a
+   * lista ativa (loadOpportunityActionState, nenhuma segunda leitura/lógica), já ordenada por
+   * updatedAt desc pela própria query — mais recente primeiro, nenhum sort adicional necessário.
+   */
+  app.get("/api/opportunities/history", requireAuth, async (req: Request, res: Response) => {
+    const uid = (req as Request & { firebaseUid?: string }).firebaseUid;
+    if (!uid) return res.status(401).json({ code: "UNAUTHORIZED", message: "Sessão inválida. Faça login novamente." });
+    try {
+      const db = getFirebaseAdmin().firestore();
+      const admin = await isAdminUid(uid);
+      if (!admin) {
+        const effectivePlan = await resolveServerPlan(db, uid);
+        if (!hasAdvancedOpportunityAccess(effectivePlan)) {
+          return res.status(403).json({ code: "OPPORTUNITIES_PLAN_REQUIRED", message: "Oportunidades comerciais é um recurso do plano Premium." });
+        }
+      }
+      const actionState = await loadOpportunityActionState(db, uid);
+      return res.status(200).json({ items: Object.values(actionState) });
+    } catch (error) {
+      logError("opportunity_engine.history_route_failed", error, { requestId: req.requestId });
+      return res.status(503).json({ code: "OPPORTUNITY_HISTORY_UNAVAILABLE", message: "Não foi possível carregar o histórico agora. Tente novamente." });
     }
   });
 }
