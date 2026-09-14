@@ -16,7 +16,9 @@ import {
   buildOpportunityId,
   compareOpportunities,
   hasAdvancedOpportunityAccess,
+  type Opportunity,
 } from "../shared/opportunity-rules";
+import { buildOpportunityMessage, buildWhatsAppUrl } from "../client/src/lib/opportunity-messages";
 import type { Firestore as AdminFirestore } from "firebase-admin/firestore";
 
 /**
@@ -46,6 +48,12 @@ import type { Firestore as AdminFirestore } from "firebase-admin/firestore";
  * middleware mínimo que só lê um header de teste (x-test-uid) — a verificação de token do Firebase Auth
  * em si já é responsabilidade de um middleware EXISTENTE e não tocado por esta ticket, fora de escopo
  * re-testar aqui; `resolveServerPlan` é sempre a função REAL (server/plan-authoritative-mutations.ts).
+ *
+ * PRODUCT-GROWTH-06 — mesmo arquivo de novo, com MB (message builder, §7 — client/src/lib/
+ * opportunity-messages.ts, importado e testado DIRETO, sem emulador: o módulo é puro, sem import de
+ * firebase.ts, mesma técnica já usada por script/smoke-tests.ts para normalizeWhatsappPhone) + CA (ação
+ * comercial, prova por texto-fonte de que abrir WhatsApp/copiar/CTA de domínio nunca marcam como feito
+ * sozinhos, e que telefone nunca é lido/exposto pelo engine server-side, §15).
  */
 
 process.env.FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "demo-revendasmart";
@@ -417,6 +425,74 @@ function runFingerprintTests(): void {
   assert.notEqual(buildOpportunityFingerprint("overdue_receivable", "inst1"), buildOpportunityId("overdue_receivable", "inst1"), "FP5: fingerprint (sem sufixo de versão) é literalmente diferente de id (com :vN) — dois conceitos distintos, nunca acidentalmente iguais por coincidência de string");
   assert.equal(buildOpportunityFingerprint("idle_schedule", "default", 0), "idle_schedule:default:0", "FP6: shape explícito type:entityId:cycleKey, nunca um hash opaco — legível/depurável");
   console.log("PASS FP1-FP6 buildOpportunityFingerprint is pure and deterministic; a different cycle key (new lastPurchaseAt/lastSoldDate/window bucket) always produces a different fingerprint, type is embedded so different types never collide on the same entityId+cycleKey, and fingerprint is structurally distinct from id even when both describe the same entity");
+}
+
+// ===================================================================================================
+// MB1-MB12 — PRODUCT-GROWTH-06 §7/§16: message builder puro (sem IO), testado diretamente — nenhuma
+// reimplementação: importa a função REAL de client/src/lib/opportunity-messages.ts (mesmo padrão já
+// usado por script/smoke-tests.ts para normalizeWhatsappPhone — módulos client/src/lib/*.ts puros, sem
+// import de firebase.ts, rodam direto em Node/tsx sem precisar de texto-fonte/emulador).
+// ===================================================================================================
+function fixtureOpportunity(overrides: Partial<Pick<Opportunity, "type" | "evidence" | "entityReference">>): Pick<Opportunity, "type" | "evidence" | "entityReference"> {
+  return {
+    type: "inactive_client",
+    evidence: { daysSinceLastPurchase: 65, lastPurchaseAt: "2026-01-01T00:00:00.000Z" },
+    entityReference: { type: "client", id: "c1", name: "Maria Silva" },
+    ...overrides,
+  };
+}
+
+function runMessageBuilderTests(): void {
+  // MB1 — inactive_client: cumprimento com nome, sem produto/desconto fabricado, tom do próprio pedido.
+  const inactive = buildOpportunityMessage(fixtureOpportunity({ type: "inactive_client", entityReference: { type: "client", id: "c1", name: "Maria Silva" } }));
+  assert.equal(inactive, "Olá, Maria Silva! Tudo bem? Faz um tempinho que não nos falamos. Passando para saber se você precisa de algum produto ou atendimento. Se quiser, posso te mostrar as opções disponíveis 😊", "MB1: mensagem de cliente inativo bate exatamente com o tom do exemplo do pedido");
+  console.log("PASS MB1 inactive_client message greets by name and matches the requested tone exactly");
+
+  // MB2 — nome ausente/genérico: fallback sem nome, nunca "Olá, Cliente!" nem "Olá, !" malformado.
+  const inactiveNoName = buildOpportunityMessage(fixtureOpportunity({ entityReference: { type: "client", id: "c2", name: "Cliente" } }));
+  assert.ok(inactiveNoName?.startsWith("Olá! Tudo bem?"), "MB2a: nome genérico 'Cliente' nunca aparece citado (\"Olá, Cliente!\" soaria robótico)");
+  assert.doesNotMatch(inactiveNoName ?? "", /Olá,\s*!/, "MB2b: nunca um espaço/vírgula malformado quando o nome é omitido");
+  const inactiveEmptyName = buildOpportunityMessage(fixtureOpportunity({ entityReference: { type: "client", id: "c3", name: "" } }));
+  assert.ok(inactiveEmptyName?.startsWith("Olá! Tudo bem?"), "MB2c: nome vazio (string) tem o mesmo fallback seguro");
+  console.log("PASS MB2 a missing/generic customer name never produces a broken or robotic-sounding greeting");
+
+  // MB3 — overdue_receivable: valor em BRL (vírgula decimal), nunca ids/status internos. O valor
+  // esperado usa a MESMA chamada toLocaleString (nunca uma string "R$ 120,00" digitada à mão) — o
+  // Node/ICU pode formatar o separador entre "R$" e o número como espaço normal OU NBSP (U+00A0)
+  // dependendo do ambiente; comparar contra a saída real da mesma função, nunca um literal adivinhado,
+  // evita um falso negativo por causa só do tipo de espaço.
+  const overdue = buildOpportunityMessage(fixtureOpportunity({ type: "overdue_receivable", evidence: { daysOverdue: 8, amount: 120, dueDate: "2026-01-01T00:00:00.000Z" } }));
+  const expectedOverdueAmountText = (120).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  assert.equal(overdue, `Olá, Maria Silva! Tudo bem? Identificamos uma parcela em aberto no valor de ${expectedOverdueAmountText}. Se precisar confirmar os dados ou combinar o pagamento, estou à disposição.`, "MB3: mensagem de parcela em atraso bate exatamente com o tom do exemplo do pedido, valor em BRL pt-BR");
+  assert.doesNotMatch(overdue ?? "", /installmentId|pending|partial|status/i, "MB3b: nunca expõe id/status interno da parcela no texto");
+  assert.doesNotMatch(overdue ?? "", /pix|chave|copia\s*e\s*cola/i, "MB3c: nunca inventa dados de Pix/pagamento que a engine não forneceu");
+  console.log("PASS MB3 overdue_receivable message uses canonical BRL formatting (comma decimal) and never leaks internal ids/status or invents payment details");
+
+  // MB4 — evidence.amount ausente/inválido: nunca "R$ NaN"/"R$ undefined", cai em R$ 0,00.
+  const overdueNoAmount = buildOpportunityMessage(fixtureOpportunity({ type: "overdue_receivable", evidence: { daysOverdue: 8, dueDate: "2026-01-01T00:00:00.000Z" } }));
+  assert.match(overdueNoAmount ?? "", /R\$\s?0,00/, "MB4a: evidence.amount ausente cai em R$ 0,00, nunca quebra o template");
+  const overdueStringAmount = buildOpportunityMessage(fixtureOpportunity({ type: "overdue_receivable", evidence: { daysOverdue: 8, amount: "corrupted" as unknown as number, dueDate: "x" } }));
+  assert.match(overdueStringAmount ?? "", /R\$\s?0,00/, "MB4b: evidence.amount não-numérico também cai em R$ 0,00, nunca 'R$ corrupted'");
+  console.log("PASS MB4 a missing or non-numeric evidence.amount always falls back to R$ 0,00 — never NaN, undefined, or the raw corrupted value");
+
+  // MB5 — stalled_product/idle_schedule: sem mensagem (self-service do vendedor, §5/§6).
+  assert.equal(buildOpportunityMessage(fixtureOpportunity({ type: "stalled_product", entityReference: { type: "product", id: "p1", name: "Produto X" } })), null, "MB5a: stalled_product nunca tem mensagem comercial (não identifica um cliente específico)");
+  assert.equal(buildOpportunityMessage(fixtureOpportunity({ type: "idle_schedule", entityReference: { type: "schedule", id: "default", name: "Agenda" } })), null, "MB5b: idle_schedule nunca tem mensagem comercial (não identifica um cliente específico)");
+  console.log("PASS MB5 stalled_product and idle_schedule correctly have no commercial message — both are seller-facing self-actions, never inferred customer outreach");
+
+  // MB6 — nenhuma mensagem gerada contém "undefined"/"null" literal, para nenhum dos casos acima.
+  for (const message of [inactive, inactiveNoName, inactiveEmptyName, overdue, overdueNoAmount, overdueStringAmount]) {
+    assert.doesNotMatch(message ?? "", /undefined|null/i, `MB6: mensagem nunca contém "undefined"/"null" literal: ${message}`);
+    assert.doesNotMatch(message ?? "", /\s{2,}/, `MB6b: mensagem nunca tem espaço duplo/malformado: ${message}`);
+  }
+  console.log("PASS MB6 no generated message ever contains a literal 'undefined'/'null' or malformed double-whitespace, across every tested input combination");
+
+  // MB7 — buildWhatsAppUrl: texto sempre codificado (espaço/emoji/acento nunca aparecem crus na URL).
+  const url = buildWhatsAppUrl("5511987654321", inactive!);
+  assert.equal(url, `https://wa.me/5511987654321?text=${encodeURIComponent(inactive!)}`, "MB7a: URL usa exatamente o mesmo phoneDigits + encodeURIComponent(message), nenhuma segunda lógica de montagem");
+  assert.doesNotMatch(url, / /, "MB7b: nenhum espaço cru na URL (tudo passou por encodeURIComponent)");
+  assert.equal(decodeURIComponent(url.split("?text=")[1]), inactive, "MB7c: a URL decodifica de volta para o texto exato — round-trip sem perda/corrupção");
+  console.log("PASS MB7 buildWhatsAppUrl always safely encodes the message text (no raw spaces/accents/emoji in the URL) and round-trips back to the exact original text");
 }
 
 // ===================================================================================================
@@ -908,6 +984,84 @@ function runUiTests(): void {
 }
 
 // ===================================================================================================
+// CA1-CA10 — PRODUCT-GROWTH-06: ação comercial pronta (WhatsApp/copiar), prova por texto-fonte de que
+// abrir/copiar nunca marca como feito sozinho, reaproveita infra existente (nunca duplica), e nunca
+// vaza telefone via /api/opportunities.
+// ===================================================================================================
+function runCommercialActionTests(): void {
+  const pageSrc = sourceOf("client/src/pages/opportunities.tsx");
+  const messagesSrc = sourceOf("client/src/lib/opportunity-messages.ts");
+  const engineSrc = sourceOf("server/opportunity-engine.ts");
+
+  // CA1 — reuso: normalizeWhatsappPhone (RELEASE-32, já testado em smoke-tests.ts) é IMPORTADO, nunca
+  // uma segunda regra de validação de telefone reimplementada aqui.
+  assert.match(pageSrc, /import \{ normalizeWhatsappPhone \} from "@\/lib\/whatsapp-phone";/, "CA1a: reaproveita o normalizador canônico existente, nunca uma segunda regra de telefone");
+  assert.doesNotMatch(pageSrc, /replace\(\/\\D\/g/, "CA1b: nenhuma limpeza de dígitos cru reimplementada em opportunities.tsx — sempre via normalizeWhatsappPhone");
+  // CA1c — a URL wa.me só é montada DENTRO de opportunity-messages.ts (buildWhatsAppUrl); opportunities.tsx
+  // nunca duplica esse literal — reaproveita a função, não reinventa o link.
+  assert.doesNotMatch(pageSrc, /wa\.me/, "CA1c: opportunities.tsx nunca constrói o link wa.me diretamente — sempre via buildWhatsAppUrl (opportunity-messages.ts)");
+  assert.match(messagesSrc, /https:\/\/wa\.me\/\$\{phoneDigits\}\?text=\$\{encodeURIComponent\(message\)\}/, "CA1d: buildWhatsAppUrl usa exatamente o mesmo formato já usado em billings.tsx/client-detail.tsx");
+  console.log("PASS CA1 phone normalization and the wa.me URL format both reuse existing canonical helpers — no duplicate WhatsApp/phone logic exists in opportunities.tsx itself");
+
+  // CA2 — §15: telefone NUNCA é lido/exposto pelo engine server-side (mesma garantia §40, ainda válida
+  // após esta ticket) — a resolução de telefone é 100% client-side, tenant-scoped por firestore.rules.
+  assert.doesNotMatch(engineSrc, /\bphone\b/, "CA2: server/opportunity-engine.ts continua nunca lendo/expondo phone — telefone é resolvido só client-side (§15)");
+  assert.match(pageSrc, /collection\(db, "users", uid, "clients"\)/, "CA2b: a leitura de telefone usa o MESMO caminho tenant-scoped (users/{uid}/clients) já protegido por firestore.rules — nenhuma rota nova de acesso a dado sensível");
+  assert.match(pageSrc, /where\(documentId\(\), "in", batch\)/, "CA2c: mesmo padrão de leitura em lote (documentId() in, até 10) já estabelecido em billings.tsx's fetchClientsByIds — nunca uma leitura individual por card (N+1)");
+  console.log("PASS CA2 phone is never exposed by the server engine or the generic /api/opportunities payload — it's resolved by a separate, tenant-scoped, batched client-side Firestore read, the same pattern already established in billings.tsx");
+
+  // CA3 — §8/§12: abrir WhatsApp/copiar/ir para a rota de domínio NUNCA chama a mutação de lifecycle
+  // diretamente — só marcam "engaged" (session-only, nunca persistido) via onEngaged, nunca onAct/onDismiss.
+  const cardBlock = pageSrc.slice(pageSrc.indexOf("function OpportunityCard"), pageSrc.indexOf("function HistoryItemCard"));
+  const openWhatsAppBlock = cardBlock.slice(cardBlock.indexOf("const openWhatsApp"), cardBlock.indexOf("const copyMessage"));
+  const copyMessageBlock = cardBlock.slice(cardBlock.indexOf("const copyMessage"), cardBlock.indexOf("return ("));
+  const goToPrimaryRouteBlock = cardBlock.slice(cardBlock.indexOf("const goToPrimaryRoute"), cardBlock.indexOf("const openWhatsApp"));
+  for (const [name, block] of [["openWhatsApp", openWhatsAppBlock], ["copyMessage", copyMessageBlock], ["goToPrimaryRoute", goToPrimaryRouteBlock]] as const) {
+    assert.doesNotMatch(block, /onAct\(|onDismiss\(|markOpportunityAction/, `CA3: ${name} nunca chama a mutação de lifecycle (onAct/onDismiss/markOpportunityAction) — só onEngaged, puramente em memória`);
+  }
+  console.log("PASS CA3 opening WhatsApp, copying the message, and navigating to the primary domain route are all structurally incapable of calling the lifecycle mutation — only the explicit 'Marcar como feito'/'Dispensar' buttons ever do");
+
+  // CA4 — §12: "engaged" nunca é persistido — só um useState em memória do componente pai, nunca gravado
+  // em nenhum request de rede (nem markOpportunityAction, nem um novo endpoint).
+  assert.match(pageSrc, /const \[engagedFingerprints, setEngagedFingerprints\] = useState<Set<string>>\(new Set\(\)\);/, "CA4a: engaged é um Set em memória, nunca persistido");
+  assert.doesNotMatch(pageSrc, /engaged.*apiRequest|apiRequest.*engaged/is, "CA4b: engagedFingerprints nunca é enviado em nenhuma chamada de API");
+  console.log("PASS CA4 the 'engaged' highlight state is purely in-memory (React state only) and is never sent in any network request — it cannot accidentally persist a false action");
+
+  // CA5 — §10: copiar mensagem usa o MESMO padrão já estabelecido (navigator.clipboard.writeText,
+  // try/catch, feedback de sucesso com timeout, notifyError na falha — nunca o erro bruto do browser).
+  assert.match(pageSrc, /await navigator\.clipboard\.writeText\(message\);/, "CA5a: mesmo clipboard API já usado em billings.tsx's copyChargeLink");
+  assert.match(pageSrc, /setTimeout\(\(\) => setCopied\(false\), 2000\)/, "CA5b: mesmo timeout de 2s do feedback visual 'Copiado!' já usado em billings.tsx");
+  assert.match(pageSrc, /catch \{\s*notifyError\("Não foi possível copiar a mensagem\."\);\s*\}/, "CA5c: falha de clipboard nunca mostra o erro bruto do browser, sempre uma mensagem amigável");
+  console.log("PASS CA5 copy-message reuses the exact same clipboard pattern already established in billings.tsx — success feedback with a 2s timeout, graceful failure with a friendly message, never a raw browser error");
+
+  // CA6 — §3: telefone ausente/inválido nunca produz um botão WhatsApp quebrado — o fallback real
+  // (rota de domínio) é usado no lugar, nunca um wa.me/undefined.
+  assert.match(pageSrc, /normalizedPhone \? \(/, "CA6: o botão WhatsApp só renderiza quando normalizedPhone (já validado por normalizeWhatsappPhone) existe — o ramo else é sempre o fallback real, nunca um link quebrado");
+  console.log("PASS CA6 a missing/invalid phone never produces a broken wa.me link — the button set falls back to the real domain-CTA action instead");
+
+  // CA7 — §14: o painel de ação comercial só pode existir dentro do ramo já gateado por hasPremiumAccess
+  // (mesma prova estrutural de UI5, reforçada aqui: OpportunityCard só é referenciado uma vez no arquivo,
+  // dentro do .map() que já está sob o gate).
+  const opportunityCardUsages = [...pageSrc.matchAll(/<OpportunityCard/g)];
+  assert.equal(opportunityCardUsages.length, 1, "CA7: <OpportunityCard> (que renderiza a mensagem/WhatsApp/copiar) só é usado uma vez — dentro do .map() já gateado por hasPremiumAccess, nunca um segundo caminho de renderização");
+  console.log("PASS CA7 the commercial action panel (message/WhatsApp/copy) only ever renders through the single, already-Premium-gated OpportunityCard usage — no second, ungated render path exists");
+
+  // CA8 — §7: nenhuma menção a desconto/promoção fabricada em nenhum template de mensagem.
+  assert.doesNotMatch(messagesSrc, /desconto|promoç|off\b|%\s*OFF/i, "CA8: nenhum template de mensagem menciona desconto/promoção — a engine não fornece esse dado, e o builder nunca inventa um");
+  console.log("PASS CA8 no message template fabricates a discount or promotion the engine never provided");
+
+  // CA9 — §11: WhatsApp só abre por clique explícito (window.open dentro do handler de clique do botão),
+  // nunca em um useEffect/efeito automático ao montar o card.
+  assert.doesNotMatch(pageSrc, /useEffect\([^)]*window\.open/s, "CA9: window.open nunca aparece dentro de um useEffect — só dentro de um onClick explícito");
+  console.log("PASS CA9 WhatsApp only ever opens from an explicit onClick handler, never automatically from a mount-time effect");
+
+  // CA10 — §16 "stalled product action / idle schedule action": ambos continuam sem WhatsApp/mensagem,
+  // usando só a rota de domínio já existente (open_product/open_schedule, inalterados desde PLAN-IMPL-07A).
+  assert.match(messagesSrc, /case "stalled_product":\s*\n\s*case "idle_schedule":\s*\n\s*return null;/, "CA10: stalled_product/idle_schedule confirmados sem mensagem no próprio builder (mesma prova de MB5, agora também por texto-fonte)");
+  console.log("PASS CA10 stalled_product and idle_schedule are confirmed (by source, matching the MB5 behavioral proof) to have no commercial message — both keep using only their existing domain-route action");
+}
+
+// ===================================================================================================
 // Privacidade/analytics — §39/§40/§62 do ticket.
 // ===================================================================================================
 function runPrivacyAndAnalyticsTests(): void {
@@ -950,8 +1104,10 @@ async function run(): Promise<void> {
   runActionTests();
   runCostScaleTests();
   runUiTests();
+  runCommercialActionTests();
   runPrivacyAndAnalyticsTests();
   runFingerprintTests();
+  runMessageBuilderTests();
 
   requireEmulatorEnv();
   initializeFirebaseAdmin();
@@ -973,7 +1129,7 @@ async function run(): Promise<void> {
   // PRODUCT-GROWTH-04/05 — nenhum novo dado de cadência de recompra foi introduzido por nenhuma das duas.
   console.log("N/A RP1-RP6 repurchase_candidate is REPURCHASE_RUNTIME = DEFERRED_SCHEMA_PREREQUISITE this round (zero prior art, zero purchase-cadence data — see final report) — no fabricated rule was built to fill this gap");
 
-  console.log(`\nPLAN-IMPL-07A + PRODUCT-GROWTH-04 + PRODUCT-GROWTH-05 opportunity engine — all E/IC/SP/IS/RC/H/PG/A/CS/UI/BACKFILL/FP/LC/RA/OL/GT assertions passed (OPPORTUNITY_RESPONSE_LIMIT=${OPPORTUNITY_RESPONSE_LIMIT}, IDLE_SCHEDULE_WINDOW_DAYS=${IDLE_SCHEDULE_WINDOW_DAYS}). B1-B11 (browser) status: see final report.`);
+  console.log(`\nPLAN-IMPL-07A + PRODUCT-GROWTH-04 + PRODUCT-GROWTH-05 + PRODUCT-GROWTH-06 opportunity engine — all E/IC/SP/IS/RC/H/PG/A/CS/UI/CA/BACKFILL/FP/MB/LC/RA/OL/GT assertions passed (OPPORTUNITY_RESPONSE_LIMIT=${OPPORTUNITY_RESPONSE_LIMIT}, IDLE_SCHEDULE_WINDOW_DAYS=${IDLE_SCHEDULE_WINDOW_DAYS}). B1-B11 (browser) status: see final report.`);
 }
 
 run().catch((error) => {

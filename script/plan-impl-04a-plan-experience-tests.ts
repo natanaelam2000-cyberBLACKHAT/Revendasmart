@@ -240,12 +240,23 @@ function runSourceTextTests(): void {
   // importa agora é a versão client-side da mesma prova PA3/PA4/PA7/SEC1 (server-side, em
   // plan-impl-04b-provider-pricing-tests.ts): o client não escolhe o valor cobrado nem fala com o
   // endpoint legado.
+  //
+  // PRODUCT-GROWTH-06 §18 — investigado (leitura completa de plans.tsx, nunca só a contagem antiga):
+  // 2 call sites de apiRequest são legítimos e atuais, não um regresso. O 2º
+  // (fetchCurrentPurchaseOffer -> GET /api/plans/purchase-availability, sem body) é uma checagem de
+  // preço FRESCO chamada logo antes do submit — se o preço mudou desde que a página carregou, um
+  // window.confirm mostra o preço NOVO e pede confirmação explícita antes de prosseguir, em vez de
+  // enviar silenciosamente um valor potencialmente desatualizado. Isso REFORÇA a garantia original
+  // (nunca a enfraquece): o client continua nunca escolhendo o valor cobrado, e agora também nunca
+  // submete uma compra sabendo que o preço mostrado pode estar obsoleto.
   const apiRequestCalls = [...plansSource.matchAll(/apiRequest[<(]/g)];
-  assert.equal(apiRequestCalls.length, 1, "PS5a: plans.tsx deve ter exatamente 1 call site de apiRequest (o fluxo de compra novo)");
-  assert.match(plansSource, /apiRequest<\{[^}]*\}>\("\/api\/subscriptions\/create"/, "PS5b: a única chamada mira o endpoint v2 novo, nunca o legado");
+  assert.equal(apiRequestCalls.length, 2, "PS5a: plans.tsx tem exatamente 2 call sites de apiRequest — o fluxo de compra em si, e a checagem de disponibilidade/preço fresco chamada antes de enviar");
+  assert.match(plansSource, /apiRequest<import\("@shared\/monetization"\)\.PlanPurchaseAvailability>\("\/api\/plans\/purchase-availability\?channel=web"/, "PS5a2: a checagem de preço fresco mira o endpoint real de LEITURA de disponibilidade/preço, nunca um endpoint de escrita/compra");
+  assert.match(plansSource, /apiRequest<\{[^}]*\}>\("\/api\/subscriptions\/create"/, "PS5b: a chamada de compra em si mira o endpoint v2 novo, nunca o legado");
   assert.doesNotMatch(plansSource, /\/api\/app-subscription\/create/, "PS5c: plans.tsx nunca fala com o endpoint legado de criação");
-  assert.match(plansSource, /body:\s*\{\s*plan,\s*billingCycle:\s*cycle\s*\}/, "PS5d: o corpo enviado só contém plan/billingCycle — nunca amount/price/transactionAmount escolhido pelo client");
-  console.log("PASS PS5 Plans page's purchase flow (added in PLAN-IMPL-04B) calls only the new price-authoritative v2 endpoint, sends only plan/billingCycle (never an amount the client could choose), and never touches the legacy create endpoint");
+  assert.match(plansSource, /body:\s*\{\s*plan,\s*billingCycle:\s*cycle,\s*expectedPricingVersion:\s*currentOffer\.offer\.pricingVersion,\s*expectedOfferId:\s*currentOffer\.offer\.offerId,?\s*\}/, "PS5d: o corpo da compra contém plan/billingCycle + identificadores de versão de preço (para o server validar que o cliente viu o preço certo) — nunca um valor monetário em si");
+  assert.doesNotMatch(plansSource, /body:\s*\{[^}]*\b(amount|price|transactionAmount|priceCents)\b/, "PS5e: nenhum body de apiRequest em plans.tsx pode conter um campo de valor monetário — o preço é sempre resolvido pelo server a partir de plan/billingCycle/expectedPricingVersion, nunca recebido do client");
+  console.log("PASS PS5 Plans page's purchase flow (PLAN-IMPL-04B) and its pre-submit price-freshness check (both legitimate — confirmed by reading the full file, not just the old call count) call only the new price-authoritative v2 endpoints; the purchase body sends plan/billingCycle plus version identifiers for server-side validation, never a client-chosen monetary value, and never touches the legacy create endpoint");
 
   // PS3 — atualizado em PLAN-IMPL-04B: subscribe.tsx (a TELA de gestão) continuava com diff zero — a
   // premissa original ainda valia integralmente para o client. server/subscriptions.ts, por outro lado,
