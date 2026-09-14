@@ -26,6 +26,16 @@ type InstallmentFilter = "today" | "late" | "next" | "all";
 const INSTALLMENTS_PAGE_SIZE = 30;
 const CLIENT_LOOKUP_BATCH_SIZE = 10;
 
+/** PRODUCT-GROWTH-04 — mesmo padrão de leitura de query string (lida uma vez, na montagem) já usado por
+ * products.tsx/clients.tsx (PRIORITY_QUERY_PARAM): permite que a ação "Ver cobrança" de uma oportunidade
+ * de parcela vencida (client/src/lib/opportunity-actions.ts) abra Cobranças já na aba Parcelas, em vez
+ * de deixar o dono clicar a aba manualmente. Nunca escreve de volta na URL, nunca reage a mudanças
+ * depois da montagem — só o estado inicial. */
+function readInitialBillingTab(): BillingTab {
+  if (typeof window === "undefined") return "charges";
+  return new URLSearchParams(window.location.search).get("tab") === "installments" ? "installments" : "charges";
+}
+
 interface BillingClient { id: string; name: string; phone?: string }
 type ClientSnapshotFields = { clientName?: string; clientPhone?: string };
 type InstallmentWithClientSnapshot = Installment & ClientSnapshotFields;
@@ -76,7 +86,7 @@ export default function Billings() {
   const [clientLookup, setClientLookup] = useState<BillingClient[]>([]);
   const [modalClients, setModalClients] = useState<BillingClient[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<BillingTab>("charges");
+  const [activeTab, setActiveTab] = useState<BillingTab>(readInitialBillingTab);
   const [filter, setFilter] = useState<InstallmentFilter>("all");
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);

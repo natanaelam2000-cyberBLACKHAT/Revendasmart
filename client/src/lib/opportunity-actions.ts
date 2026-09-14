@@ -18,6 +18,12 @@ export function resolveOpportunityActionRoute(actionType: OpportunityActionType,
       return `/edit-product/${encodeURIComponent(entity.id)}`;
     case "open_schedule":
       return "/servicos/disponibilidade";
+    case "open_billing":
+      // PRODUCT-GROWTH-04 — Cobranças já mostra valor/vencimento da parcela e tem seu próprio lembrete
+      // por WhatsApp pronto (billings.tsx's sendWhatsApp) — nenhuma tela financeira nova dentro de
+      // Opportunities. `tab=installments` abre direto na aba Parcelas (billings.tsx lê o mesmo padrão
+      // de query string que products.tsx/clients.tsx já usam para PRIORITY_QUERY_PARAM).
+      return "/billings?tab=installments";
     default: {
       const exhaustiveCheck: never = actionType;
       throw new Error(`Unhandled opportunity action type: ${String(exhaustiveCheck)}`);

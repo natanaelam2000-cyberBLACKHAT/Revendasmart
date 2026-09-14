@@ -54,17 +54,23 @@ export const OPPORTUNITY_QUERY_PAGE_SIZE = 60;
 // Shape canônico — §5 do ticket, adaptado às necessidades reais do domínio.
 // ===================================================================================================
 
-/** §65/§20 — só os 3 tipos com suporte de dados eficiente confirmado nesta ticket (auditoria
- * PLAN-IMPL-07A). "repurchase_candidate" deliberadamente ausente — ver REPURCHASE_RUNTIME no relatório
- * final; nenhuma dessas 3 strings pode ser confundida com um tipo inventado. */
-export type OpportunityType = "inactive_client" | "stalled_product" | "idle_schedule";
+/** §65/§20 — só os tipos com suporte de dados eficiente confirmado (auditoria PLAN-IMPL-07A + a
+ * extensão PRODUCT-GROWTH-04, que adicionou "overdue_receivable" reaproveitando o índice composto
+ * status+dueDate de installments já existente — nenhum índice novo, nenhum N+1). "repurchase_candidate"
+ * continua deliberadamente ausente — ver REPURCHASE_RUNTIME no relatório final de PLAN-IMPL-07A (zero
+ * dado de cadência de recompra, reconfirmado sem mudança nesta ticket); nenhuma dessas strings pode ser
+ * confundida com um tipo inventado. */
+export type OpportunityType = "inactive_client" | "stalled_product" | "idle_schedule" | "overdue_receivable";
 
 /** §8/§25 — só 3 buckets fechados, nunca um score/porcentagem fabricado. */
 export type OpportunityPriority = "high" | "medium" | "low";
 
 /** §17 — catálogo fechado de ações; cada uma mapeia para uma rota REAL existente (nunca um CTA morto,
- * §18). Ver ACTION_ROUTE_BY_TYPE em client/src/lib/opportunity-actions.ts para o mapeamento real. */
-export type OpportunityActionType = "contact_client" | "open_product" | "open_schedule";
+ * §18). Ver ACTION_ROUTE_BY_TYPE em client/src/lib/opportunity-actions.ts para o mapeamento real.
+ * "open_billing" (PRODUCT-GROWTH-04) aponta para /billings — a mesma Cobranças/Parcelas que já mostra
+ * valor/vencimento e já tem seu próprio botão de lembrete por WhatsApp (billings.tsx's sendWhatsApp),
+ * nunca uma segunda tela financeira dentro de Opportunities. */
+export type OpportunityActionType = "contact_client" | "open_product" | "open_schedule" | "open_billing";
 
 export interface OpportunityAction {
   readonly type: OpportunityActionType;

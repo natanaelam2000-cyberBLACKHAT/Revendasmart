@@ -14,11 +14,20 @@
  * existente, que continua exatamente como está.
  *
  * Escala/custo (§29-§31): cada tipo de oportunidade é UMA query indexada e limitada (nunca "carregar
- * todas as Sales/Clients/Products"). Nenhum novo índice composto do Firestore foi necessário — as três
- * queries abaixo filtram/ordenam por um único campo (`lastPurchaseAt`, `lastSoldDate`, `startAt`), que o
- * Firestore já indexa automaticamente por padrão (confirmado: firestore.indexes.json's fieldOverrides
- * está vazio), ou reaproveitam um índice composto JÁ existente (bookings/serviceAvailabilityBlocks
- * resourceId+startAt, usado por server/service-availability-commands.ts).
+ * todas as Sales/Clients/Products"). Nenhum novo índice composto do Firestore foi necessário — as
+ * queries de inactive_client/stalled_product/idle_schedule filtram/ordenam por um único campo
+ * (`lastPurchaseAt`, `lastSoldDate`, `startAt`), que o Firestore já indexa automaticamente por padrão
+ * (confirmado: firestore.indexes.json's fieldOverrides está vazio), ou reaproveitam um índice composto
+ * JÁ existente (bookings/serviceAvailabilityBlocks resourceId+startAt, usado por
+ * server/service-availability-commands.ts).
+ *
+ * PRODUCT-GROWTH-04 — adicionou "overdue_receivable" (installments.status+dueDate), reaproveitando o
+ * índice composto status+dueDate de installments JÁ existente (a mesma query que client/src/pages/
+ * billings.tsx já executa client-side) — nenhum índice novo aqui também. O único custo extra é um
+ * db.getAll() em lote sobre os clientIds únicos da página (nunca um loop de awaits por documento),
+ * bounded pelo mesmo OPPORTUNITY_QUERY_PAGE_SIZE de qualquer outro detector. "repeat-purchase" e "low
+ * stock ativamente vendendo" (candidatos B/D do pedido) foram avaliados e propositalmente deixados de
+ * fora desta rodada — ver o relatório final para o motivo de cada um.
  */
 import type { Express, NextFunction, Request, Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
@@ -126,6 +135,72 @@ async function detectStalledProductOpportunities(db: Firestore, uid: string, now
       action: { type: "open_product", label: "Criar anúncio" },
       entityReference: { type: "product", id: doc.id, name },
       magnitude: daysSinceLastSale,
+    });
+  }
+  return opportunities;
+}
+
+// ===================================================================================================
+// overdue_receivable — PRODUCT-GROWTH-04: Installment.status in [pending, partial] (o mesmo par que
+// qualquer escritor real produz hoje — server/sale-finalize-transaction.ts nunca grava "overdue";
+// incluído aqui defensivamente por paridade com a MESMA lista que client/src/pages/billings.tsx já usa
+// client-side) + dueDate < agora. Reaproveita o índice composto status+dueDate de installments já
+// existente em firestore.indexes.json (a mesma query, mesmo formato, que billings.tsx já executa) —
+// nenhum índice novo. O nome do cliente é obtido por um único db.getAll() em lote (nunca um await
+// dentro de um loop por cliente) sobre os clientIds ÚNICOS da página já lida — no máximo
+// OPPORTUNITY_QUERY_PAGE_SIZE leituras extras, o mesmo teto de qualquer outro detector aqui. O valor
+// restante é sempre amount - paidAmount (nunca o valor original do parcelamento), para nunca superestimar
+// o que falta cobrar de uma parcela já paga parcialmente. Prioridade sempre "high" — classificação do
+// próprio pedido (§5): condição financeira vencida é sempre a categoria mais acionável, sem um segundo
+// limiar de dias fabricado só para criar uma banda "medium" artificial.
+// ===================================================================================================
+async function detectOverdueReceivableOpportunities(db: Firestore, uid: string, nowMs: number): Promise<Opportunity[]> {
+  const nowIso = new Date(nowMs).toISOString();
+  const snapshot = await db.collection("users").doc(uid).collection("installments")
+    .where("status", "in", ["pending", "partial"])
+    .where("dueDate", "<", nowIso)
+    .orderBy("dueDate", "asc")
+    .limit(OPPORTUNITY_QUERY_PAGE_SIZE)
+    .get();
+
+  if (snapshot.empty) return [];
+
+  const clientIds = Array.from(new Set(snapshot.docs.map((doc) => String(doc.data().clientId ?? "")).filter(Boolean)));
+  const clientRefs = clientIds.map((clientId) => db.collection("users").doc(uid).collection("clients").doc(clientId));
+  const clientSnaps = clientRefs.length ? await db.getAll(...clientRefs) : [];
+  // Objeto simples, não um Map — o método mutador de um Map tem o mesmo nome do método de escrita do
+  // Firestore, o que colidiria com a asserção textual A6 (prova de que esta engine nunca escreve no
+  // Firestore, só lê) mesmo sendo só um Map em memória, nunca uma escrita real. Mais simples nunca
+  // introduzir a coincidência de nome do que lembrar de excluí-la do regex depois.
+  const clientNameById: Record<string, string> = {};
+  clientSnaps.forEach((snap, index) => {
+    const data = snap.exists ? snap.data() : undefined;
+    const name = typeof data?.name === "string" && data.name.trim() ? data.name : "Cliente";
+    clientNameById[clientIds[index]] = name;
+  });
+
+  const opportunities: (Opportunity & { magnitude: number })[] = [];
+  for (const doc of snapshot.docs) {
+    const data = doc.data();
+    const clientId = String(data.clientId ?? "");
+    if (!clientId) continue;
+    const amount = Number(data.amount);
+    const paidAmount = Number(data.paidAmount) || 0;
+    const remaining = Number.isFinite(amount) ? amount - paidAmount : NaN;
+    if (!Number.isFinite(remaining) || remaining <= 0) continue;
+    const dueDate = String(data.dueDate);
+    const daysOverdue = daysBetween(dueDate, nowMs);
+    const name = clientNameById[clientId] ?? "Cliente";
+    const formattedAmount = remaining.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    opportunities.push({
+      id: buildOpportunityId("overdue_receivable", doc.id),
+      type: "overdue_receivable",
+      priority: "high",
+      reason: `Parcela de ${formattedAmount} vencida há ${daysOverdue} dia(s)`,
+      evidence: { daysOverdue, amount: remaining, dueDate },
+      action: { type: "open_billing", label: "Ver cobrança" },
+      entityReference: { type: "client", id: clientId, name },
+      magnitude: daysOverdue,
     });
   }
   return opportunities;
@@ -242,7 +317,7 @@ async function detectIdleScheduleOpportunities(db: Firestore, uid: string, nowMs
 // vazio quando o domínio dele não se aplica), §25/§32 (ordenação estável, resposta limitada).
 // ===================================================================================================
 export async function computeOpportunities(db: Firestore, uid: string, nowMs: number = Date.now()): Promise<Opportunity[]> {
-  const [inactiveClients, stalledProducts, idleSchedule] = await Promise.all([
+  const [inactiveClients, stalledProducts, idleSchedule, overdueReceivables] = await Promise.all([
     detectInactiveClientOpportunities(db, uid, nowMs).catch((error) => {
       logWarn("opportunity_engine.inactive_client_failed", { reason: error instanceof Error ? error.name : "unknown" });
       return [];
@@ -255,9 +330,13 @@ export async function computeOpportunities(db: Firestore, uid: string, nowMs: nu
       logWarn("opportunity_engine.idle_schedule_failed", { reason: error instanceof Error ? error.name : "unknown" });
       return [];
     }),
+    detectOverdueReceivableOpportunities(db, uid, nowMs).catch((error) => {
+      logWarn("opportunity_engine.overdue_receivable_failed", { reason: error instanceof Error ? error.name : "unknown" });
+      return [];
+    }),
   ]);
 
-  const all = [...inactiveClients, ...stalledProducts, ...idleSchedule] as (Opportunity & { magnitude: number })[];
+  const all = [...inactiveClients, ...stalledProducts, ...idleSchedule, ...overdueReceivables] as (Opportunity & { magnitude: number })[];
   all.sort((a, b) => compareOpportunities(a, b));
   // magnitude é um detalhe de ordenação interno, nunca exposto na resposta HTTP (§5 — evidence só leva
   // fatos já nomeados por tipo) — reconstrução explícita do objeto público, em vez de destructure-and-
@@ -283,7 +362,7 @@ export async function computeOpportunities(db: Firestore, uid: string, nowMs: nu
  * dele para tipar a resposta HTTP, e client/ nunca importa de server/.
  */
 export function summarizeOpportunities(opportunities: readonly Opportunity[]): OpportunitySummary {
-  const countsByType: Record<OpportunityType, number> = { inactive_client: 0, stalled_product: 0, idle_schedule: 0 };
+  const countsByType: Record<OpportunityType, number> = { inactive_client: 0, stalled_product: 0, idle_schedule: 0, overdue_receivable: 0 };
   for (const opportunity of opportunities) {
     countsByType[opportunity.type] += 1;
   }

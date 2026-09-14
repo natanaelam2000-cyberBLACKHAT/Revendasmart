@@ -26,6 +26,11 @@ import type { Firestore as AdminFirestore } from "firebase-admin/firestore";
  * Diferente de PLAN-IMPL-06: aqui a engine inteira é server-side (Admin SDK), então quase toda a
  * matriz roda de verdade contra o emulador — não há o mesmo limite de "módulo client importa
  * firebase.ts" que forçou PLAN-IMPL-06 a depender tanto de texto-fonte.
+ *
+ * PRODUCT-GROWTH-04 — estendeu este MESMO arquivo (nunca um segundo arquivo de teste paralelo para a
+ * mesma engine) com RC1-RC8 (overdue_receivable, o 4º tipo de oportunidade) e as asserções A7/A1 do
+ * novo action type open_billing — mesma disciplina, mesma autoridade real (computeOpportunities/
+ * opportunity-actions.ts), nenhuma lógica reimplementada aqui.
  */
 
 process.env.FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "demo-revendasmart";
@@ -62,6 +67,15 @@ async function seedProduct(db: AdminFirestore, uid: string, productId: string, f
  * predatam este campo, não sobre um fixture artificialmente completo. */
 async function seedHistoricalSale(db: AdminFirestore, uid: string, saleId: string, clientId: string, date: string): Promise<void> {
   await db.collection("users").doc(uid).collection("sales").doc(saleId).set({ id: saleId, clientId, date });
+}
+/** PRODUCT-GROWTH-04 — mesma shape que server/sale-finalize-transaction.ts realmente grava (id, saleId,
+ * clientId, amount, dueDate, status, paidAmount, installmentNumber, totalInstallments, createdAt) —
+ * nunca um fixture com um campo que o writer real não produz. */
+async function seedInstallment(db: AdminFirestore, uid: string, installmentId: string, fields: Record<string, unknown>): Promise<void> {
+  await db.collection("users").doc(uid).collection("installments").doc(installmentId).set({
+    id: installmentId, saleId: `sale-${installmentId}`, amount: 100, dueDate: isoDaysAgo(0), status: "pending", paidAmount: 0,
+    installmentNumber: 1, totalInstallments: 1, createdAt: new Date().toISOString(), ...fields,
+  });
 }
 
 // ===================================================================================================
@@ -240,6 +254,67 @@ async function runIdleScheduleTests(db: AdminFirestore): Promise<void> {
 }
 
 // ===================================================================================================
+// RC1-RC8 — PRODUCT-GROWTH-04: parcela vencida (overdue_receivable), execução real.
+// ===================================================================================================
+async function runOverdueReceivableTests(db: AdminFirestore): Promise<void> {
+  const uid = tenantUid("rc");
+  await seedClient(db, uid, "maria", { name: "Maria Silva" });
+
+  await seedInstallment(db, uid, "not-due-yet", { clientId: "maria", dueDate: isoDaysAgo(-5), status: "pending" }); // RC1 — vence no futuro.
+  await seedInstallment(db, uid, "overdue-pending", { clientId: "maria", dueDate: isoDaysAgo(8), status: "pending", amount: 120 }); // RC2
+  await seedInstallment(db, uid, "overdue-but-paid", { clientId: "maria", dueDate: isoDaysAgo(10), status: "paid" }); // RC3
+  await seedInstallment(db, uid, "overdue-partial", { clientId: "maria", dueDate: isoDaysAgo(3), status: "partial", amount: 200, paidAmount: 150 }); // RC4
+  await seedInstallment(db, uid, "fully-covered", { clientId: "maria", dueDate: isoDaysAgo(3), status: "partial", amount: 90, paidAmount: 90 }); // RC5 — defensivo: paidAmount==amount, status ainda não é 'paid'.
+  await seedInstallment(db, uid, "overdue-second", { clientId: "maria", dueDate: isoDaysAgo(20), status: "pending", amount: 50 }); // RC6 — MESMO cliente, parcela DIFERENTE.
+
+  const opportunities = await computeOpportunities(db, uid);
+  const overdue = opportunities.filter((o) => o.type === "overdue_receivable");
+
+  assert.equal(overdue.some((o) => o.id.includes("not-due-yet")), false, "RC1: parcela que ainda não venceu nunca é uma oportunidade");
+  const primary = overdue.find((o) => o.id === buildOpportunityId("overdue_receivable", "overdue-pending"));
+  assert.ok(primary, "RC2: parcela vencida + status pending -> oportunidade");
+  assert.equal(primary!.priority, "high", "RC2: parcela vencida é sempre prioridade alta (classificação do próprio pedido — condição financeira vencida)");
+  assert.match(primary!.reason, /Parcela de R\$\s?120,00 vencida há 8 dia\(s\)/, "RC2: reason em pt-BR (vírgula decimal), nunca ponto — mesmo formato do exemplo do próprio pedido");
+  assert.equal(primary!.evidence.daysOverdue, 8, "RC2: evidence.daysOverdue correto");
+  assert.equal(primary!.evidence.amount, 120, "RC2: evidence.amount é o valor restante (aqui igual ao total, pois paidAmount=0)");
+  assert.equal(primary!.entityReference.name, "Maria Silva", "RC2: nome do cliente enriquecido via db.getAll() em lote, nunca 'Cliente' genérico quando o cadastro existe");
+  assert.deepEqual(primary!.action, { type: "open_billing", label: "Ver cobrança" }, "RC2: ação real, mapeada para uma rota existente");
+  console.log("PASS RC1/RC2 a not-yet-due installment is never flagged; an overdue pending installment is flagged high-priority with a correct pt-BR reason, evidence, enriched client name, and a real action");
+
+  assert.equal(overdue.some((o) => o.id.includes("overdue-but-paid")), false, "RC3: parcela paga nunca é oportunidade, mesmo com dueDate no passado — status manda, não a data sozinha");
+  console.log("PASS RC3 a fully-paid installment is never flagged as overdue, regardless of how far in the past its due date is");
+
+  const partial = overdue.find((o) => o.id === buildOpportunityId("overdue_receivable", "overdue-partial"));
+  assert.ok(partial, "RC4: parcela parcialmente paga e vencida -> oportunidade");
+  assert.equal(partial!.evidence.amount, 50, "RC4: evidence.amount é amount-paidAmount (200-150=50), NUNCA o valor original da parcela — nunca superestima o que falta cobrar");
+  console.log("PASS RC4 a partially-paid overdue installment is flagged with the REMAINING balance (amount - paidAmount), never the original installment amount");
+
+  assert.equal(overdue.some((o) => o.id.includes("fully-covered")), false, "RC5: paidAmount >= amount nunca vira oportunidade mesmo se o status ainda não foi atualizado para 'paid' — guarda defensiva contra remaining <= 0");
+  console.log("PASS RC5 an installment already fully covered by paidAmount (remaining <= 0) is never flagged, even if its status field lags behind as non-'paid' — defensive against a stale/inconsistent status");
+
+  assert.ok(overdue.some((o) => o.id === buildOpportunityId("overdue_receivable", "overdue-second")), "RC6: uma SEGUNDA parcela vencida do MESMO cliente também aparece");
+  const idsForMaria = overdue.filter((o) => o.entityReference.id === "maria").map((o) => o.id);
+  assert.equal(new Set(idsForMaria).size, idsForMaria.length, "RC6: ids nunca colidem entre duas parcelas do mesmo cliente (id é por installmentId, nunca por clientId) — cada parcela vencida é sua própria oportunidade, independente de quantas o mesmo cliente tenha");
+  assert.ok(idsForMaria.length >= 3, "RC6: as 3 parcelas vencidas e não-pagas de Maria (pending, partial, second) aparecem todas simultaneamente, nenhuma sobrescrevendo a outra");
+  console.log("PASS RC6 a client with multiple distinct overdue installments gets one distinct opportunity per installment (ids keyed by installmentId, never clientId) — never collapsed or overwritten into a single entry");
+
+  // RC7 — cliente ausente (ex.: apagado depois da parcela criada): nunca quebra, cai para o nome genérico.
+  await seedInstallment(db, uid, "orphaned", { clientId: "ghost-client", dueDate: isoDaysAgo(4), status: "pending", amount: 30 });
+  const opportunitiesWithGhost = await computeOpportunities(db, uid);
+  const ghost = opportunitiesWithGhost.find((o) => o.id === buildOpportunityId("overdue_receivable", "orphaned"));
+  assert.ok(ghost, "RC7: parcela de um clientId sem cadastro correspondente ainda vira oportunidade (nunca descartada por um join que falhou)");
+  assert.equal(ghost!.entityReference.name, "Cliente", "RC7: nome cai para o genérico 'Cliente' quando o cadastro não existe mais, nunca lança/quebra a engine inteira");
+  console.log("PASS RC7 an installment whose client document no longer exists still produces a valid opportunity (never dropped or thrown), falling back to the same generic 'Cliente' label used elsewhere in the engine");
+
+  // RC8 — bounded: query real usa where+where+orderBy+limit; enriquecimento é um único db.getAll() em
+  // lote, nunca um loop de awaits por cliente (mesma prova estrutural de CS1/CS2, específica desta query).
+  const engineSrc = sourceOf("server/opportunity-engine.ts");
+  assert.match(engineSrc, /collection\("installments"\)\s*\.where\("status", "in", \["pending", "partial"\]\)\s*\.where\("dueDate", "<", nowIso\)\s*\.orderBy\("dueDate", "asc"\)\s*\.limit\(OPPORTUNITY_QUERY_PAGE_SIZE\)/, "RC8: a query de parcela vencida precisa ser where+where+orderBy+limit, nunca um scan sem limite");
+  assert.match(engineSrc, /await db\.getAll\(\.\.\.clientRefs\)/, "RC8: enriquecimento do nome do cliente é um único getAll() em lote");
+  console.log("PASS RC8 the overdue-receivable query is a single bounded, indexed range query (where + where + orderBy + limit, reusing the existing installments status+dueDate composite index) and client-name enrichment is one batched getAll() call, never a per-installment await loop");
+}
+
+// ===================================================================================================
 // H1-H4 — suporte híbrido natural (nenhuma detecção de "tipo de negócio" precisa existir).
 // ===================================================================================================
 async function runHybridTests(db: AdminFirestore): Promise<void> {
@@ -382,7 +457,9 @@ function runActionTests(): void {
   assert.match(routerSrc, /<Route path="\/edit-product\/:id" component=\{AddProduct\} \/>/, "A1: /edit-product/:id precisa ser uma rota REAL registrada");
   assert.match(actionsSrc, /return "\/servicos\/disponibilidade";/, "A1: open_schedule aponta para a rota real de disponibilidade");
   assert.match(routerSrc, /<Route path="\/servicos\/disponibilidade" component=\{ServiceAvailabilitySettings\} \/>/, "A1: /servicos/disponibilidade precisa ser uma rota REAL registrada");
-  console.log("PASS A1/A3/A4 every OpportunityActionType maps to a real, currently-registered route — contact_client resolves the owned Client detail page, open_product the owned Product edit page");
+  assert.match(actionsSrc, /return "\/billings\?tab=installments";/, "A1/A7 (PRODUCT-GROWTH-04): open_billing aponta para a rota real de Cobranças, já na aba Parcelas");
+  assert.match(routerSrc, /<Route path="\/billings" component=\{Billings\} \/>/, "A1: /billings precisa ser uma rota REAL registrada");
+  console.log("PASS A1/A3/A4/A7 every OpportunityActionType maps to a real, currently-registered route — contact_client resolves the owned Client detail page, open_product the owned Product edit page, open_billing the owned Cobranças page pre-selected to the Parcelas tab");
 
   assert.match(actionsSrc, /default: \{\s*const exhaustiveCheck: never = actionType;/, "A2: switch exaustivo (never) — impossível adicionar um novo OpportunityActionType sem também mapear sua rota, nunca um CTA morto por esquecimento");
   console.log("PASS A2 the action-to-route switch is exhaustively typed (never-check) — a new action type without a mapped route fails to compile, structurally preventing a dead CTA");
@@ -494,14 +571,16 @@ async function run(): Promise<void> {
   await runInactiveClientTests(db);
   await runStalledProductTests(db);
   await runIdleScheduleTests(db);
+  await runOverdueReceivableTests(db);
   await runHybridTests(db);
   await runBackfillVerificationTests(db);
 
   // RP1-RP6 — deferido (zero dado de cadência de recompra hoje, ver relatório final). Reportado
-  // honestamente, nunca implementado com uma regra fabricada.
+  // honestamente, nunca implementado com uma regra fabricada. Reconfirmado sem mudança por
+  // PRODUCT-GROWTH-04 — nenhum novo dado de cadência de recompra foi introduzido por esta ticket.
   console.log("N/A RP1-RP6 repurchase_candidate is REPURCHASE_RUNTIME = DEFERRED_SCHEMA_PREREQUISITE this round (zero prior art, zero purchase-cadence data — see final report) — no fabricated rule was built to fill this gap");
 
-  console.log(`\nPLAN-IMPL-07A opportunity engine — all E/IC/SP/IS/H/PG/A/CS/UI/BACKFILL assertions passed (OPPORTUNITY_RESPONSE_LIMIT=${OPPORTUNITY_RESPONSE_LIMIT}, IDLE_SCHEDULE_WINDOW_DAYS=${IDLE_SCHEDULE_WINDOW_DAYS}). B1-B11 (browser) status: see final report.`);
+  console.log(`\nPLAN-IMPL-07A + PRODUCT-GROWTH-04 opportunity engine — all E/IC/SP/IS/RC/H/PG/A/CS/UI/BACKFILL assertions passed (OPPORTUNITY_RESPONSE_LIMIT=${OPPORTUNITY_RESPONSE_LIMIT}, IDLE_SCHEDULE_WINDOW_DAYS=${IDLE_SCHEDULE_WINDOW_DAYS}). B1-B11 (browser) status: see final report.`);
 }
 
 run().catch((error) => {

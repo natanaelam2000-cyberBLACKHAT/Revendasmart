@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
-import { Sparkles, Users, Package, CalendarClock, ArrowRight, Lock } from "lucide-react";
+import { Sparkles, Users, Package, CalendarClock, Receipt, ArrowRight, Lock } from "lucide-react";
 import { Layout } from "@/components/layout";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { EmptyState } from "@/components/EmptyState";
@@ -24,12 +24,14 @@ const TYPE_ICON: Record<OpportunityType, typeof Users> = {
   inactive_client: Users,
   stalled_product: Package,
   idle_schedule: CalendarClock,
+  overdue_receivable: Receipt,
 };
 
 const TYPE_LABEL: Record<OpportunityType, string> = {
   inactive_client: "Cliente inativo",
   stalled_product: "Produto parado",
   idle_schedule: "Agenda ociosa",
+  overdue_receivable: "Parcela em atraso",
 };
 
 function OpportunityCard({ opportunity }: { opportunity: Opportunity }) {
@@ -79,7 +81,7 @@ function PremiumUpsell({ currentPlan }: { currentPlan: PlanType }) {
       icon={<Lock className="w-10 h-10 text-primary/60" />}
       title="Oportunidades é um recurso Premium"
       // §23/§36 — nunca promete IA/previsão/receita garantida; só o que este runtime de fato entrega.
-      description="Encontre automaticamente clientes inativos, produtos parados e horários ociosos na sua agenda no plano Premium."
+      description="Encontre automaticamente clientes inativos, produtos parados, parcelas em atraso e horários ociosos na sua agenda no plano Premium."
       action={
         <button
           type="button"
@@ -138,7 +140,7 @@ export default function Opportunities() {
           <EmptyState
             icon={<Sparkles className="w-10 h-10 text-emerald-500/60" />}
             title="Nenhuma oportunidade prioritária encontrada agora"
-            description="Assim que uma condição real do seu negócio pedir atenção — cliente sem comprar, produto parado ou agenda livre — ela aparece aqui."
+            description="Assim que uma condição real do seu negócio pedir atenção — cliente sem comprar, produto parado, parcela vencida ou agenda livre — ela aparece aqui."
           />
         ) : (
           <div className="space-y-3">
