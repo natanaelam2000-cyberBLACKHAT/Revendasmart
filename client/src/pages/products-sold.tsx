@@ -7,6 +7,7 @@ import { ChevronLeft, Package, PlusCircle } from "lucide-react";
 import { useProductsData } from "@/hooks/useProductsData";
 import { useMonthlySalesData } from "@/hooks/useMonthlySalesData";
 import { parseISO } from "@/lib/date-utils";
+import { formatCurrency } from "@/lib/product-pricing";
 
 export default function ProductsSold() {
   const [, setLocation] = useLocation();
@@ -99,7 +100,7 @@ export default function ProductsSold() {
                     <span data-testid={`text-qty-${product.id}`}>{product.quantitySold}x vendido</span>
                   </p>
                   <p className="text-lg font-bold text-primary" data-testid={`text-revenue-${product.id}`}>
-                    R$ {product.totalRevenue.toFixed(2)}
+                    {formatCurrency(product.totalRevenue)}
                   </p>
                 </div>
               </div>

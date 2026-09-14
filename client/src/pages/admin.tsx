@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { format, subDays, isSameDay } from "@/lib/date-utils";
 import { getApiUrl } from "@/lib/api-config";
+import { formatCurrency } from "@/lib/product-pricing";
 
 export default function AdminMetrics() {
   const [, setLocation] = useLocation();
@@ -470,7 +471,7 @@ export default function AdminMetrics() {
                 <span className="text-xs font-bold text-muted-foreground">{day.date}</span>
                 <div className="flex items-center gap-4">
                   <span className="text-[10px] font-black bg-secondary px-2 py-1 rounded-lg uppercase">{day.count} vendas</span>
-                  <span className="text-xs font-black text-primary">R$ {day.total.toFixed(2)}</span>
+                  <span className="text-xs font-black text-primary">{formatCurrency(day.total)}</span>
                 </div>
               </div>
             ))}

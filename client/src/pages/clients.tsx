@@ -18,6 +18,7 @@ import { useSalesData } from "@/hooks/useSalesData";
 import { buildLastSaleByClientId, isClientInactive } from "@/lib/client-activity";
 import { useDismissibleOnBack } from "@/hooks/useDismissibleOnBack";
 import { PRIORITY_QUERY_PARAM } from "@/lib/home-dashboard-view-model";
+import { formatCurrency } from "@/lib/product-pricing";
 
 /**
  * RELEASE-26: lê o contexto do card de Prioridades ("N clientes sem comprar há +60 dias") ANTES de
@@ -295,30 +296,29 @@ export default function Clients() {
                         {isSelected ? <CheckSquare className="w-6 h-6 text-primary" /> : <Square className="w-6 h-6 text-muted-foreground/30" />}
                       </button>
                     )}
-                    <Link href={isSelectionMode ? "#" : `/clients/${client.id}`} className="flex-1">
-                      <a
-                        onClick={(e) => {
-                          if (isSelectionMode) {
-                            e.preventDefault();
-                            toggleSelection(client.id);
-                          }
-                        }}
-                        className={`bg-white p-4 rounded-3xl border border-border/50 flex items-center gap-4 shadow-sm active:bg-secondary/30 transition-colors group w-full ${isSelected ? 'border-primary ring-2 ring-primary/5' : ''}`}
-                      >
-                        <div className="w-12 h-12 bg-primary/10 rounded-2xl flex items-center justify-center text-primary font-bold group-hover:bg-primary group-hover:text-white transition-colors">
-                          {client.name.charAt(0)}
-                        </div>
-                        <div className="flex-1">
-                          <h3 className="font-bold text-sm">{client.name}</h3>
-                          <p className="text-xs text-muted-foreground">{client.phone}</p>
-                        </div>
-                        <div className="text-right">
-                          <p className={`text-xs font-bold ${balance > 0 ? 'text-destructive' : 'text-green-600'}`}>
-                            {balance > 0 ? `R$ ${balance.toFixed(2)}` : 'Em dia'}
-                          </p>
-                          <ChevronRight className="w-4 h-4 text-muted-foreground ml-auto mt-1" />
-                        </div>
-                      </a>
+                    <Link
+                      href={isSelectionMode ? "#" : `/clients/${client.id}`}
+                      onClick={(e) => {
+                        if (isSelectionMode) {
+                          e.preventDefault();
+                          toggleSelection(client.id);
+                        }
+                      }}
+                      className={`flex-1 bg-white p-4 rounded-3xl border border-border/50 flex items-center gap-4 shadow-sm active:bg-secondary/30 transition-colors group w-full ${isSelected ? 'border-primary ring-2 ring-primary/5' : ''}`}
+                    >
+                      <div className="w-12 h-12 bg-primary/10 rounded-2xl flex items-center justify-center text-primary font-bold group-hover:bg-primary group-hover:text-white transition-colors">
+                        {client.name.charAt(0)}
+                      </div>
+                      <div className="flex-1">
+                        <h3 className="font-bold text-sm">{client.name}</h3>
+                        <p className="text-xs text-muted-foreground">{client.phone}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className={`text-xs font-bold ${balance > 0 ? 'text-destructive' : 'text-green-600'}`}>
+                          {balance > 0 ? formatCurrency(balance) : 'Em dia'}
+                        </p>
+                        <ChevronRight className="w-4 h-4 text-muted-foreground ml-auto mt-1" />
+                      </div>
                     </Link>
                     {/* P1-02: min-h-11/min-w-11 = 44px de área de toque real — o ícone continua w-4 h-4
                         visualmente, só a área clicável cresce (era 36px, abaixo do confortável em mobile). */}

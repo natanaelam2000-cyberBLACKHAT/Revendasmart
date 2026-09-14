@@ -182,6 +182,8 @@ const productsSold = read("client/src/pages/products-sold.tsx");
 const monthlySalesHook = read("client/src/hooks/useMonthlySalesData.ts");
 const chargesHook = read("client/src/hooks/useCharges.ts");
 const billingsPage = read("client/src/pages/billings.tsx");
+const billingCalendar = read("client/src/pages/billing-calendar.tsx");
+const adminMetrics = read("client/src/pages/admin.tsx");
 const sharedCharges = read("shared/charges.ts");
 const firestoreIndexes = read("firestore.indexes.json");
 const firestoreIndexConfig = JSON.parse(firestoreIndexes);
@@ -1445,6 +1447,37 @@ assert.match(clientsPage, /Exportando clientes carregados/);
 assert.doesNotMatch(clientsPage, /<input\s+required\s+type="tel"/, "o campo de WhatsApp não pode mais ser required — bloqueava editar um cliente criado sem telefone");
 assert.match(clientsPage, /placeholder="WhatsApp \(opcional, apenas números\)"/);
 assert.match(clientsPage, /pattern="\\d\{10,15\}"/, "quando um telefone É informado, o formato continua validado");
+
+// PRODUCT-CLEANUP-03 — regressão: a linha de cliente usava <Link href=...><a onClick=...>...</a></Link>.
+// No wouter v3, Link já renderiza seu próprio <a> — um <a> filho explícito produzia <a> aninhado em
+// <a>, HTML inválido e aviso de hidratação do React. onClick/className precisam estar diretamente no
+// Link (que os repassa para a âncora que ele mesmo renderiza), sem nenhum <a> filho.
+assert.doesNotMatch(clientsPage, /<Link[^>]*>\s*<a\b/, "Link não pode mais envolver um <a> filho explícito — <a> aninhado em <a> é HTML inválido");
+assert.match(clientsPage, /href=\{isSelectionMode \? "#" : `\/clients\/\$\{client\.id\}`\}/, "a navegação para /clients/:id precisa continuar funcionando");
+assert.match(clientsPage, /toggleSelection\(client\.id\)/, "o clique em modo de seleção precisa continuar alternando o cliente selecionado");
+
+// PRODUCT-CLEANUP-03 — mesma correção de formatCurrency do PRODUCT-HARDENING-02 (ProductCard.tsx/
+// sell.tsx), agora nas telas financeiras restantes: nenhum valor de dinheiro exibido ao usuário pode
+// usar `.toFixed(2)` cru (sempre ponto, nunca vírgula — "R$ 59.90" em vez de "R$ 59,90"). Cálculos
+// internos, payloads de API/provedor e exportação CSV (toCsvRow em billings.tsx) NÃO são afetados —
+// só a exibição/mensagem lida por um humano precisa de formatCurrency.
+for (const [name, source] of [
+  ["clients.tsx", clientsPage],
+  ["products.tsx", productsPage],
+  ["products-sold.tsx", productsSold],
+  ["monthly-sales.tsx", monthlySales],
+  ["admin.tsx", adminMetrics],
+  ["billing-calendar.tsx", billingCalendar],
+  ["billings.tsx", billingsPage],
+  ["PartialPaymentModal.tsx", partialPaymentModal],
+] as const) {
+  assert.doesNotMatch(source, /R\$ \{[^}]*\.toFixed\(2\)[^}]*\}/, `${name}: nenhum valor exibido pode mais usar "R$ {...toFixed(2)}" cru`);
+  assert.doesNotMatch(source, /R\$ \$\{[^}]*\.toFixed\(2\)[^}]*\}/, `${name}: nenhuma template literal exibida pode mais usar "R$ \${...toFixed(2)}" cru`);
+  assert.match(source, /import \{ formatCurrency \} from "@\/lib\/product-pricing";/, `${name}: precisa importar formatCurrency`);
+}
+// billings.tsx exporta CSV com o valor numérico cru (b.amount) — não deve passar por formatCurrency,
+// que formataria para exibição humana (vírgula/símbolo) e quebraria o CSV como dado de máquina.
+assert.match(billingsPage, /toCsvRow\(\[format\(parseISO\(b\.dueDate\), "dd\/MM\/yyyy"\), getRecordClient\(b as InstallmentWithClientSnapshot\)\?\.name \|\| "N\/A", b\.amount, b\.status\]\)/, "exportação CSV precisa continuar usando o número cru, não formatCurrency");
 
 assert.match(paginatedClientsHook, /const CLIENTS_PAGE_SIZE = 30/);
 assert.match(paginatedClientsHook, /orderBy\("name"\)/);

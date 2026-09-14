@@ -4,6 +4,7 @@ import { getStored, STORAGE_KEYS, Installment, Client, initialClients } from "@/
 import { format, isToday, isTomorrow, isBefore, isAfter, parseISO, startOfDay, addDays, ptBR } from "@/lib/date-utils";
 import { Calendar as CalendarIcon, ChevronRight, AlertCircle, CheckCircle, Clock } from "lucide-react";
 import { useLocation } from "wouter";
+import { formatCurrency } from "@/lib/product-pricing";
 
 export default function BillingCalendar() {
   const [billings] = useState<Installment[]>(() => getStored(STORAGE_KEYS.INSTALLMENTS, []));
@@ -84,7 +85,7 @@ export default function BillingCalendar() {
                   </p>
                 </div>
                 <div className="text-right">
-                  <p className="text-sm font-black text-foreground">R$ {(item.amount - item.paidAmount).toFixed(2)}</p>
+                  <p className="text-sm font-black text-foreground">{formatCurrency(item.amount - item.paidAmount)}</p>
                   {item.status === 'partial' && <p className="text-[9px] text-blue-500 font-bold uppercase">Parcial</p>}
                 </div>
                 <ChevronRight className="w-4 h-4 text-muted-foreground/30" />

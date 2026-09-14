@@ -25,6 +25,7 @@ import { resolveProductGender } from "@/lib/product-gender";
 import { isProductAvailable, resolveProductStock } from "@/lib/product-availability";
 import { useDismissibleOnBack } from "@/hooks/useDismissibleOnBack";
 import { PRIORITY_QUERY_PARAM } from "@/lib/home-dashboard-view-model";
+import { formatCurrency } from "@/lib/product-pricing";
 
 const GENDER_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: "todos", label: "Todos" },
@@ -142,7 +143,7 @@ export default function Products() {
       return;
     }
     const catalogUrl = `https://revendasmart.vercel.app/u/${catalogSlug}`;
-    const msg = `Olá! Tenho este produto disponível:\n\n*${product.name}*\nValor: R$ ${product.salePrice.toFixed(2)}\n\nEstoque: ${product.stock} unidade(s)\n\nVeja no catálogo:\n${catalogUrl}`;
+    const msg = `Olá! Tenho este produto disponível:\n\n*${product.name}*\nValor: ${formatCurrency(product.salePrice)}\n\nEstoque: ${product.stock} unidade(s)\n\nVeja no catálogo:\n${catalogUrl}`;
     window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, "_blank");
 
     const user = getFirebaseAuth()?.currentUser;
@@ -309,7 +310,7 @@ export default function Products() {
             <div className="min-h-0 overflow-y-auto overscroll-contain px-6 pb-4 space-y-4">
               {productToDelete && <div className="flex gap-4 rounded-2xl border border-border/50 bg-muted p-4">
                 <div className="h-24 w-24 shrink-0 overflow-hidden rounded-2xl bg-white"><ProductImageCard product={productToDelete} size="full" objectFit="contain" /></div>
-                <div className="min-w-0 flex-1"><p className="line-clamp-2 text-sm font-semibold">{productToDelete.name}</p><dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-[10px]"><div><dt className="text-muted-foreground">Marca</dt><dd className="truncate font-bold">{typeof productToDelete.brand === "string" && productToDelete.brand ? productToDelete.brand : "Sem marca"}</dd></div><div><dt className="text-muted-foreground">Preço</dt><dd className="font-bold text-primary">R$ {Number(productToDelete.salePrice).toFixed(2)}</dd></div><div className="col-span-2"><dt className="text-muted-foreground">Categoria</dt><dd className="font-bold">{typeof productToDelete.category === "string" && productToDelete.category ? normalizeProductCategory(productToDelete.category) : "Sem categoria"}</dd></div></dl></div>
+                <div className="min-w-0 flex-1"><p className="line-clamp-2 text-sm font-semibold">{productToDelete.name}</p><dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-[10px]"><div><dt className="text-muted-foreground">Marca</dt><dd className="truncate font-bold">{typeof productToDelete.brand === "string" && productToDelete.brand ? productToDelete.brand : "Sem marca"}</dd></div><div><dt className="text-muted-foreground">Preço</dt><dd className="font-bold text-primary">{formatCurrency(Number(productToDelete.salePrice))}</dd></div><div className="col-span-2"><dt className="text-muted-foreground">Categoria</dt><dd className="font-bold">{typeof productToDelete.category === "string" && productToDelete.category ? normalizeProductCategory(productToDelete.category) : "Sem categoria"}</dd></div></dl></div>
               </div>}
               <p className="rounded-xl bg-red-50 p-3 text-center text-xs font-bold text-red-700">Ação irreversível.</p>
               {deleteError && <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-center text-xs font-bold text-red-700">{deleteError}</p>}

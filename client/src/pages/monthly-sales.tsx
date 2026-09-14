@@ -6,6 +6,7 @@ import { ChevronLeft, DollarSign, Package, PlusCircle } from "lucide-react";
 import { useProductsData } from "@/hooks/useProductsData";
 import { useMonthlySalesData } from "@/hooks/useMonthlySalesData";
 import { parseISO } from "@/lib/date-utils";
+import { formatCurrency } from "@/lib/product-pricing";
 
 export default function MonthlySales() {
   const [, setLocation] = useLocation();
@@ -78,7 +79,7 @@ export default function MonthlySales() {
           <div className="flex justify-between items-start mb-6">
             <div>
               <p className="text-white/80 text-[10px] font-black uppercase mb-2">Total do Mês</p>
-              <p className="text-4xl font-black">R$ {monthMetrics.revenue.toFixed(2)}</p>
+              <p className="text-4xl font-black">{formatCurrency(monthMetrics.revenue)}</p>
             </div>
             <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center">
               <DollarSign className="w-7 h-7" />
@@ -123,7 +124,7 @@ export default function MonthlySales() {
                   </div>
                   <div className="text-right">
                     <p className="text-lg font-bold text-primary" data-testid={`text-total-${sale.id}`}>
-                      R$ {sale.totalPrice.toFixed(2)}
+                      {formatCurrency(sale.totalPrice)}
                     </p>
                   </div>
                 </div>
@@ -141,11 +142,11 @@ export default function MonthlySales() {
                             {getProductName(sp.productId)}
                           </p>
                           <p className="text-[12px] text-muted-foreground" data-testid={`text-qty-${sale.id}-${idx}`}>
-                            {sp.quantity}x R$ {(sp.price).toFixed(2)}
+                            {sp.quantity}x {formatCurrency(sp.price)}
                           </p>
                         </div>
                         <p className="font-bold" data-testid={`text-subtotal-${sale.id}-${idx}`}>
-                          R$ {(sp.quantity * sp.price).toFixed(2)}
+                          {formatCurrency(sp.quantity * sp.price)}
                         </p>
                       </div>
                     ))}

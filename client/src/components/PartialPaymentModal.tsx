@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { X } from "lucide-react";
+import { formatCurrency } from "@/lib/product-pricing";
 
 interface PartialPaymentModalProps {
   billingId: string;
@@ -42,7 +43,7 @@ export function PartialPaymentModal({
     }
 
     if (parsedAmount > remainingAmount) {
-      setError(`Valor não pode ser maior que R$ ${remainingAmount.toFixed(2)}`);
+      setError(`Valor não pode ser maior que ${formatCurrency(remainingAmount)}`);
       return;
     }
 
@@ -73,7 +74,7 @@ export function PartialPaymentModal({
             <label className="text-xs font-bold uppercase text-muted-foreground block mb-2">
               Saldo Pendente
             </label>
-            <p className="text-2xl font-black text-primary">R$ {remainingAmount.toFixed(2)}</p>
+            <p className="text-2xl font-black text-primary">{formatCurrency(remainingAmount)}</p>
           </div>
 
           <div>
@@ -97,7 +98,7 @@ export function PartialPaymentModal({
               data-testid="input-partial-payment-amount"
             />
             <p className="text-xs text-muted-foreground mt-2">
-              Máximo: R$ {remainingAmount.toFixed(2)}
+              Máximo: {formatCurrency(remainingAmount)}
             </p>
           </div>
 
