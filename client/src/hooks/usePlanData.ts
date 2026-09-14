@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getFirebaseAuth } from "@/lib/firebase";
+import { waitForAuthReady } from "@/lib/firebase";
 import { apiRequest, buildApiErrorDisplayMessage } from "@/lib/api-client";
 import { isPremiumActive, toEntitlementDate, PLANS, type PlanType, type PlanData as MonetizationPlanData } from "@shared/monetization";
 
@@ -41,8 +41,11 @@ export function usePlanData() {
   async function loadPlanData() {
     try {
       setError(null);
-      const auth = getFirebaseAuth();
-      const user = auth?.currentUser;
+      // RELEASE-AUTOMATION-01 — waits for Firebase Auth's initial state instead of reading
+      // `auth.currentUser` synchronously, which is null on a fresh page load before the persisted
+      // session restores; the old early-return here silently left a genuinely logged-in user with
+      // `data: null` (e.g. subscribe.tsx would show "Assinar agora" for an active subscriber).
+      const user = await waitForAuthReady();
 
       if (!user) {
         setLoading(false);

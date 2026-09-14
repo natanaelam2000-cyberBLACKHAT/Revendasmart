@@ -167,13 +167,27 @@ export function normalizeOrderPhone(value: unknown): string | undefined {
   return undefined;
 }
 
-/** Subtotal de um item. Vive aqui (e não na tela) para que card, detalhes e total usem a mesma conta. */
-export function calculateOrderItemSubtotal(item: OrderItem): number {
-  return Math.max(0, Number(item.unitPrice) || 0) * Math.max(0, Number(item.quantity) || 0);
+/** unitPrice*quantity em CENTS inteiros — nunca reais float (`19.9 * 3` já não bate com `59.70` em ponto
+ * flutuante). Base para calculateOrderItemSubtotal/calculateOrderTotal abaixo; nunca exportada sozinha
+ * porque OrderItem/Order continuam em reais em todo o resto do código (server/routes.ts, payments.ts). */
+function calculateOrderItemSubtotalCents(item: OrderItem): number {
+  const unitPriceCents = Math.round(Math.max(0, Number(item.unitPrice) || 0) * 100);
+  const quantity = Math.max(0, Number(item.quantity) || 0);
+  return unitPriceCents * quantity;
 }
 
+/** Subtotal de um item. Vive aqui (e não na tela) para que card, detalhes e total usem a mesma conta. */
+export function calculateOrderItemSubtotal(item: OrderItem): number {
+  return calculateOrderItemSubtotalCents(item) / 100;
+}
+
+/** Soma em CENTS inteiros antes de converter de volta para reais — nunca soma valores reais já
+ * arredondados em ponto flutuante (o que ainda arriscaria um resíduo de soma binária com itens
+ * suficientes). `order.total` sai daqui para o servidor como o valor real cobrado (server/routes.ts,
+ * depois server/payments.ts `unit_price` na preferência do Mercado Pago) — precisa ser exato em cents. */
 export function calculateOrderTotal(items: readonly OrderItem[]): number {
-  return items.reduce((sum, item) => sum + calculateOrderItemSubtotal(item), 0);
+  const totalCents = items.reduce((sumCents, item) => sumCents + calculateOrderItemSubtotalCents(item), 0);
+  return totalCents / 100;
 }
 
 /**

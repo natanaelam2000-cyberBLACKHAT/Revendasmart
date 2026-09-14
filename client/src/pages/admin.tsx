@@ -1,11 +1,12 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Layout } from "@/components/layout";
-import { 
+import {
   APP_VERSION, getCurrentUserId, getUsers
 } from "@/lib/mock-data";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { useLocation } from "wouter";
-import { getFirebaseAuth, logError } from "@/lib/firebase";
+import { getFirebaseAuth, logError, waitForAuthReady } from "@/lib/firebase";
+import type { User } from "firebase/auth";
 import { 
   ShieldCheck, Package, Users, CircleDollarSign, Receipt, 
   AlertTriangle, Activity, Database, Clock, ChevronRight, ToggleLeft, ToggleRight, Gift
@@ -16,8 +17,24 @@ import { getApiUrl } from "@/lib/api-config";
 export default function AdminMetrics() {
   const [, setLocation] = useLocation();
   const auth = getFirebaseAuth();
-  const user = auth?.currentUser;
-  
+  const [user, setUser] = useState<User | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  // RELEASE-AUTOMATION-01 — reading `auth.currentUser` synchronously on mount (the previous behavior)
+  // is guaranteed null on a fresh full-page load, before the persisted session finishes restoring; the
+  // old redirect below ran inside useMemo (a render-phase side effect, worse than useEffect: it fires
+  // on literally every render with no chance to react once auth resolves) and would bounce a genuinely
+  // logged-in admin straight back to /login every time. Waits for the real initial auth state instead.
+  useEffect(() => {
+    let cancelled = false;
+    void waitForAuthReady().then((resolvedUser) => {
+      if (cancelled) return;
+      setUser(resolvedUser);
+      setAuthChecked(true);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
   // Get dashboard data from Firestore
   const { products, sales, clients, loading: dashboardLoading } = useDashboardData();
   
@@ -69,11 +86,12 @@ export default function AdminMetrics() {
   // NOTE: Admin access is validated server-side via Firebase custom claims.
   // Frontend removes admin UI from view if user lacks claim.
   // No hardcoded email check here—backend is source of truth.
-  useMemo(() => {
+  useEffect(() => {
+    if (!authChecked) return;
     if (!user) {
       setLocation("/login");
     }
-  }, [currentUser, setLocation]);
+  }, [authChecked, user, setLocation]);
 
   const stats = useMemo(() => {
     try {

@@ -17,7 +17,7 @@ const ProductPhotoEnhancementTool = lazy(
 );
 import { Product, defaultSettings } from "@/lib/mock-data";
 import type { PlanType } from "@shared/monetization";
-import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent } from "@/lib/firebase";
+import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, waitForAuthReady } from "@/lib/firebase";
 import { getApiUrl } from "@/lib/api-config";
 import { useAdminAccess } from "@/hooks/useAdminAccess";
 import {
@@ -386,10 +386,16 @@ const [, setLocation] = useLocation();
   // Load existing product for edit
   useEffect(() => {
     if (id) {
-      const auth = getFirebaseAuth();
-      if (auth?.currentUser) {
+      let cancelled = false;
+      // RELEASE-AUTOMATION-01 — waits for Firebase Auth's initial state instead of a synchronous
+      // `auth.currentUser` read, which is null on a fresh page load before the persisted session
+      // restores. The old code silently skipped this whole load with no error and no retry, leaving
+      // the form at its blank defaults — a real data-loss risk, since saving from there would overwrite
+      // the existing product with empty/default values for any field the user didn't manually retype.
+      void waitForAuthReady().then((user) => {
+        if (cancelled || !user) return;
         const firestore = getFirestore();
-        getDoc(doc(firestore, "users", auth.currentUser.uid, "products", id))
+        getDoc(doc(firestore, "users", user.uid, "products", id))
           .then(docSnap => {
             if (docSnap.exists()) {
               const product = docSnap.data() as Product;
@@ -432,7 +438,8 @@ const [, setLocation] = useLocation();
             }
           })
           .catch(() => logTelemetryEvent("add_product_load_failed" as any, { stage: "load" }).catch(() => {}));
-      }
+      });
+      return () => { cancelled = true; };
     }
   }, [id]);
 

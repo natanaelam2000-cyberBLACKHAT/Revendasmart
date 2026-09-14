@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { collection, getCountFromServer, getFirestore, query, where } from "firebase/firestore";
-import { getFirebaseAuth } from "@/lib/firebase";
+import { waitForAuthReady } from "@/lib/firebase";
 import { usePlanData } from "@/hooks/usePlanData";
 import { buildPlanUsageSnapshot, type PlanUsageSnapshot } from "@shared/monetization";
 import { getCurrentMonthBookingUsage } from "@/lib/booking-quota";
@@ -31,7 +31,9 @@ export function usePlanUsageSnapshot() {
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
-    const uid = getFirebaseAuth()?.currentUser?.uid;
+    // RELEASE-AUTOMATION-01 — waits for Firebase Auth's initial state instead of a synchronous
+    // `currentUser` read, which is null on a fresh page load before the persisted session restores.
+    const uid = (await waitForAuthReady())?.uid;
     if (!uid) {
       setLoading(false);
       return;

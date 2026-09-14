@@ -16,6 +16,9 @@ import {
   ORDER_PAYMENT_STATUS_IDS,
   resolveOrderPaymentMethod,
   resolveOrderPaymentStatus,
+  calculateOrderItemSubtotal,
+  calculateOrderTotal,
+  type OrderItem,
 } from "../client/src/lib/orders";
 import {
   computeOrderVisualSummaryLayout,
@@ -84,6 +87,30 @@ function run(): void {
   // diretamente (ver mark-paid-by-customer, que só permite customer_reported_paid).
   assert.ok(ORDER_PAYMENT_STATUS_IDS.includes("customer_reported_paid"));
   assert.ok(ORDER_PAYMENT_STATUS_IDS.includes("paid"));
+
+  // RELEASE-AUTOMATION-01 — calculateOrderItemSubtotal/calculateOrderTotal precisam somar em CENTS
+  // inteiros por baixo dos panos, nunca reais em ponto flutuante: `19.9 * 3` sozinho já não bate com
+  // `59.70` em JS puro (dá 59.699999999999996). order.total sai direto como o valor cobrado de verdade
+  // (server/routes.ts -> server/payments.ts `unit_price` na preferência do Mercado Pago), então um
+  // resíduo de ponto flutuante aqui vazaria para uma cobrança real.
+  {
+    const threeAt1990: OrderItem[] = [{ name: "Item", quantity: 3, unitPrice: 19.9 }];
+    assert.equal(calculateOrderItemSubtotal(threeAt1990[0]), 59.7, "3 × R$19,90 precisa dar exatamente 59.7, nunca 59.699999999999996");
+    assert.equal(calculateOrderTotal(threeAt1990), 59.7);
+
+    // Vários itens cujo próprio subtotal já é exato, mas cuja SOMA em ponto flutuante poderia derivar
+    // (0.1 + 0.2 = 0.30000000000000004 em JS puro) — a soma em cents inteiros elimina a classe inteira.
+    const manySmallItems: OrderItem[] = [
+      { name: "A", quantity: 1, unitPrice: 0.10 },
+      { name: "B", quantity: 1, unitPrice: 0.20 },
+      { name: "C", quantity: 3, unitPrice: 33.33 },
+    ];
+    assert.equal(calculateOrderTotal(manySmallItems), 100.29, "soma de vários itens precisa ser exata em cents, nunca um resíduo de soma binária");
+
+    // Defesas existentes (negativo/NaN -> 0) continuam intactas com a nova implementação.
+    assert.equal(calculateOrderItemSubtotal({ name: "X", quantity: -5, unitPrice: 10 }), 0, "quantidade negativa continua sendo tratada como 0");
+    assert.equal(calculateOrderItemSubtotal({ name: "Y", quantity: 2, unitPrice: NaN }), 0, "unitPrice inválido continua sendo tratado como 0");
+  }
 
   // ===== Servidor: preço/estoque nunca vêm do cliente; idempotência; nunca marca "paid" no auto-relato =====
 

@@ -5781,9 +5781,15 @@ assert.match(orderDetailsSheet, /\{formatCurrency\(calculateOrderItemSubtotal\(i
 assert.match(orderDetailsSheet, /\{formatCurrency\(order\.total\)\}/);
 assert.match(orderDetailsSheet, /\{item\.quantity\} × \{formatCurrency\(item\.unitPrice\)\}/);
 assert.match(orderDetailsSheet, /\{order\.notes && \(/);
-// Subtotal mora no contrato e o total continua derivando dele — uma única regra de soma.
+// Subtotal mora no contrato e o total continua derivando da MESMA regra — agora em cents inteiros
+// (RELEASE-AUTOMATION-01), nunca somando reais em ponto flutuante (comportamento real testado em
+// script/checkout-payment-tests.ts). calculateOrderItemSubtotal/calculateOrderTotal precisam
+// compartilhar o mesmo helper interno de cents, nunca duas contas divergentes.
 assert.match(ordersLib, /export function calculateOrderItemSubtotal\(item: OrderItem\): number \{/);
-assert.match(ordersLib, /return items\.reduce\(\(sum, item\) => sum \+ calculateOrderItemSubtotal\(item\), 0\);/);
+assert.match(ordersLib, /function calculateOrderItemSubtotalCents\(item: OrderItem\): number \{/, "o helper de cents compartilhado precisa existir");
+assert.match(ordersLib, /return calculateOrderItemSubtotalCents\(item\) \/ 100;/, "calculateOrderItemSubtotal precisa vir do helper de cents, nunca de reais float direto");
+assert.match(ordersLib, /return totalCents \/ 100;/, "calculateOrderTotal precisa somar em cents e converter uma única vez no final");
+assert.doesNotMatch(ordersLib, /Math\.max\(0, Number\(item\.unitPrice\) \|\| 0\) \* Math\.max\(0, Number\(item\.quantity\) \|\| 0\)/, "a multiplicação antiga em reais float não pode voltar a existir fora do helper de cents");
 assert.doesNotMatch(orderDetailsSheet, /unitPrice \* |\* item\.quantity/, "o sheet não pode recalcular subtotal por conta própria");
 // Sheets abertos acompanham o listener (guardam id, não um snapshot congelado do pedido).
 assert.match(ordersPage, /const detailOrder = detailOrderId \? orders\.find\(\(order\) => order\.id === detailOrderId\) \?\? null : null;/);
