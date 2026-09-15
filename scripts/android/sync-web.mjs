@@ -74,6 +74,15 @@ const FORBIDDEN_BUNDLE_MARKERS = [
   "Imagem omitida; arte gerada sem ela",
   "Pe\u00e7a pelo WhatsApp",
   "REVENDA SMART",
+  // RELEASE-CANDIDATE-01 \u2014 VITE_API_BASE_URL/VITE_PUBLIC_APP_URL j\u00e1 s\u00e3o validados acima, mas a config do
+  // Firebase (assertAndroidFirebaseConfig) s\u00f3 checa PRESEN\u00c7A das 6 chaves, nunca se s\u00e3o valores reais:
+  // loadEnv("production", ...) inclui client/.env.local mesmo em modo produ\u00e7\u00e3o (comportamento padr\u00e3o do
+  // Vite), ent\u00e3o um client/.env.local de emulador local (sem um client/.env.production.local com config
+  // real por cima) vaza silenciosamente para o bundle Android sem que nenhuma verifica\u00e7\u00e3o acima notasse
+  // \u2014 as 6 chaves continuam "presentes", s\u00f3 que com o valor de demo. Estas duas strings s\u00e3o exatamente
+  // os valores fixos que o emulador Firebase usa por conven\u00e7\u00e3o (nunca aparecem numa config real).
+  "demo-api-key",
+  "demo-revendasmart",
 ];
 
 function fail(message) {
