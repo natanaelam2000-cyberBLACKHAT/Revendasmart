@@ -69,6 +69,10 @@ import type { Firestore as AdminFirestore } from "firebase-admin/firestore";
  * /api/opportunities, e que marcar/dispensar/repetir atualiza a métrica por tipo corretamente). Nenhuma
  * lógica reimplementada em teste — tudo prova as funções REAIS de shared/opportunity-rules.ts e
  * server/opportunity-engine.ts.
+ *
+ * PRODUCT-GROWTH-11A — mesmo arquivo de novo, com SU (os 3 estados de apresentação de effectiveness:
+ * zero/baixa/elegível — só client/src/pages/opportunities.tsx, texto-fonte, nenhuma regra/ordenação
+ * tocada — SU-D reconfirma isso e o OT-series inteiro acima continua a prova real de que nada mudou).
  */
 
 process.env.FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "demo-revendasmart";
@@ -647,6 +651,50 @@ function runOrderingTieBreakerTests(): void {
   // inalterado) nunca quebra o cálculo de efetividade — oportunidades continuam totalmente utilizáveis.
   assert.doesNotThrow(() => summarizeOpportunityEffectivenessByType(Object.values({})), "OT-Q: um action-state vazio/de falha nunca lança exceção");
   console.log("PASS OT-Q a failed/empty action-state load degrades safely — opportunities remain fully usable, never an exception");
+}
+
+// ===================================================================================================
+// SU1-SU4 — PRODUCT-GROWTH-11A: os 3 estados de apresentação de effectiveness (§ITENS A-D do ticket).
+// Só UI/JSX (opportunities.tsx importa firebase.ts, não executável direto em Node — mesma limitação e
+// mesma técnica de texto-fonte já usada por UI7-UI10 acima para este mesmo arquivo); a matemática em si
+// (resolved/eligible/conversionRate) já é EM-series, inalterada por esta ticket.
+// ===================================================================================================
+function runEffectivenessSampleUxTests(): void {
+  const pageSrc = sourceOf("client/src/pages/opportunities.tsx");
+
+  // SU-A (item A do ticket) — resolved === 0: nunca uma fração/0%, só o fato honesto.
+  assert.match(pageSrc, /effectiveness\.resolved === 0[\s\S]{0,250}Ainda sem resultados registrados/, "SU-A: resolved=0 mostra exatamente 'Ainda sem resultados registrados', nunca uma fração/percentual fabricado");
+  // A mensagem antiga (que cobria tanto resolved=0 quanto amostra baixa com o MESMO texto genérico,
+  // escondendo a diferença) nunca mais existe — prova de que os dois casos agora são distintos de verdade.
+  assert.doesNotMatch(pageSrc, /Ainda sem dados suficientes/, "SU-A2: o texto genérico antigo (que não distinguia 'zero' de 'pouco') foi substituído, nunca deixado como um segundo caminho morto");
+  console.log("PASS SU-A resolved=0 always renders the honest zero-history message, never a fabricated fraction/percentage, and the old two-state message is fully retired");
+
+  // SU-B (item B) — resolved 1-9 (não elegível): a fração/% real continua aparecendo (nunca escondida —
+  // já era a garantia de GROWTH-11), E a legenda curta de amostra insuficiente aparece JUNTO, na mesma
+  // ramificação (nunca como uma UI alternativa que troca uma coisa pela outra).
+  assert.match(
+    pageSrc,
+    /\{effectiveness\.converted\} de \{effectiveness\.resolved\} geraram resultado[\s\S]{0,800}!effectiveness\.eligible[\s\S]{0,300}Amostra ainda insuficiente para influenciar a ordem/,
+    "SU-B: quando resolved>0, a fração/% real e a legenda de amostra insuficiente (só quando !eligible) convivem no mesmo bloco — nenhuma esconde a outra",
+  );
+  console.log("PASS SU-B resolved 1-9 (ineligible) shows the real fraction/percentage AND an explicit insufficient-sample notice together, never one replacing the other");
+
+  // SU-C (item C) — eligible===true: métrica normal, SEM a legenda de amostra insuficiente (o próprio
+  // guard `!effectiveness.eligible` já garante isto estruturalmente — nenhum texto redundante poluindo
+  // a UI quando a amostra já é confiável, §3 do ticket: "sem poluir a UI").
+  assert.match(pageSrc, /\{!effectiveness\.eligible && \(/, "SU-C: a legenda de amostra insuficiente é estruturalmente condicionada a !eligible — nunca renderizada quando a amostra já é suficiente");
+  console.log("PASS SU-C an eligible type's row shows only the real metric — no redundant 'sample' notice cluttering the UI once the sample is already reliable");
+
+  // SU-D (item D) — ordenação permanece IDÊNTICA: esta ticket nunca tocou compareOpportunities,
+  // MIN_RESOLVED_SAMPLE, summarizeOpportunityEffectivenessByType ou server/opportunity-engine.ts — só
+  // apresentação. A prova real é que o OT-series inteiro (acima, GROWTH-11) continua passando sem
+  // nenhuma mudança — aqui só reconfirmamos por texto-fonte que os arquivos de regra/ordenação em si
+  // não ganharam nenhuma linha nova nesta ticket.
+  const rulesSrcForOrdering = sourceOf("shared/opportunity-rules.ts");
+  assert.match(rulesSrcForOrdering, /export const MIN_RESOLVED_SAMPLE = 10;/, "SU-D: MIN_RESOLVED_SAMPLE continua exatamente 10, nunca alterado por uma ticket de UX");
+  const engineSrcForOrdering = sourceOf("server/opportunity-engine.ts");
+  assert.match(engineSrcForOrdering, /active\.sort\(\(a, b\) => compareOpportunities\(a, b, effectivenessByType\)\);/, "SU-D: o comparador e sua chamada em computeOpportunities continuam byte-idênticos — esta ticket é só apresentação (ver também o OT-series completo acima, inalterado)");
+  console.log("PASS SU-D ordering is untouched by this ticket — same MIN_RESOLVED_SAMPLE, same compareOpportunities call site, same full OT-series passing unchanged");
 }
 
 // ===================================================================================================
@@ -1607,6 +1655,7 @@ async function run(): Promise<void> {
   runMessageBuilderTests();
   runEffectivenessMetricsTests();
   runOrderingTieBreakerTests();
+  runEffectivenessSampleUxTests();
 
   requireEmulatorEnv();
   initializeFirebaseAdmin();
@@ -1628,7 +1677,7 @@ async function run(): Promise<void> {
   await runRepeatPurchaseTests(db);
   await runStockRiskTests(db);
 
-  console.log(`\nPLAN-IMPL-07A + PRODUCT-GROWTH-04 + PRODUCT-GROWTH-05 + PRODUCT-GROWTH-06 + PRODUCT-GROWTH-11 opportunity engine — all E/IC/SP/IS/RC/H/PG/A/CS/UI/CA/BACKFILL/FP/MB/LC/RA/OL/GT/EM/OT/EL assertions passed (OPPORTUNITY_RESPONSE_LIMIT=${OPPORTUNITY_RESPONSE_LIMIT}, IDLE_SCHEDULE_WINDOW_DAYS=${IDLE_SCHEDULE_WINDOW_DAYS}, MIN_RESOLVED_SAMPLE=${MIN_RESOLVED_SAMPLE}). B1-B11 (browser) status: see final report.`);
+  console.log(`\nPLAN-IMPL-07A + PRODUCT-GROWTH-04 + PRODUCT-GROWTH-05 + PRODUCT-GROWTH-06 + PRODUCT-GROWTH-11 + PRODUCT-GROWTH-11A opportunity engine — all E/IC/SP/IS/RC/H/PG/A/CS/UI/CA/BACKFILL/FP/MB/LC/RA/OL/GT/EM/OT/SU/EL assertions passed (OPPORTUNITY_RESPONSE_LIMIT=${OPPORTUNITY_RESPONSE_LIMIT}, IDLE_SCHEDULE_WINDOW_DAYS=${IDLE_SCHEDULE_WINDOW_DAYS}, MIN_RESOLVED_SAMPLE=${MIN_RESOLVED_SAMPLE}). B1-B11 (browser) status: see final report.`);
 }
 
 run().catch((error) => {

@@ -41,6 +41,12 @@ import type { Opportunity, OpportunityActionRecord, OpportunityActionStatus } fr
  * precisão"); dentro de um tipo exibido, a fração/porcentagem real aparece sempre que resolved > 0 —
  * "amostra insuficiente" (shared/opportunity-rules.ts's MIN_RESOLVED_SAMPLE) só governa se aquele tipo
  * pode servir de desempate de ordenação (server/opportunity-engine.ts), nunca se o número é mostrado.
+ *
+ * PRODUCT-GROWTH-11A — três estados agora, nunca só dois: resolved=0 nunca mostra "0%"/fração (só o
+ * fato honesto, "ainda sem resultados"); resolved 1-9 continua mostrando a fração/% real (nunca escondida
+ * — GROWTH-11 já garantia isso) mas agora com uma legenda curta explícita de que essa amostra ainda não
+ * pesa na ordenação; resolved>=10 (eligible) mostra só a métrica, sem legenda extra — nunca um terceiro
+ * texto redundante quando a amostra já é a autoridade.
  */
 
 const CLIENT_PHONE_LOOKUP_BATCH_SIZE = 10;
@@ -336,13 +342,23 @@ export default function Opportunities() {
                   {effectivenessRows.map(([type, effectiveness]) => (
                     <div key={type} className="rounded-xl border p-3 min-w-0" data-testid={`row-effectiveness-${type}`}>
                       <p className="text-xs font-bold text-foreground">{TYPE_LABEL[type as keyof typeof TYPE_LABEL]}</p>
-                      {effectiveness.resolved > 0 ? (
+                      {effectiveness.resolved === 0 ? (
+                        // PRODUCT-GROWTH-11A — nenhum outcome resolvido ainda: nunca mostra 0%/fração, só o fato.
+                        <p className="text-xs text-muted-foreground mt-0.5">Ainda sem resultados registrados</p>
+                      ) : (
                         <>
                           <p className="text-xs text-muted-foreground mt-0.5">{effectiveness.converted} de {effectiveness.resolved} geraram resultado</p>
                           <p className="text-lg font-bold">{effectiveness.conversionRate.toFixed(0)}%</p>
+                          {/* PRODUCT-GROWTH-11A — a fração/% já é honesta com pouca amostra (nunca escondida), mas
+                              sem MIN_RESOLVED_SAMPLE (shared/opportunity-rules.ts) ela ainda não pode ter influenciado
+                              a ordenação — deixa isso explícito, nunca implícito. Nenhum texto extra quando já elegível
+                              (§3 do ticket: "sem poluir a UI"). */}
+                          {!effectiveness.eligible && (
+                            <p className="text-[10px] text-muted-foreground/70 mt-0.5" data-testid={`text-effectiveness-insufficient-${type}`}>
+                              Amostra ainda insuficiente para influenciar a ordem
+                            </p>
+                          )}
                         </>
-                      ) : (
-                        <p className="text-xs text-muted-foreground mt-0.5">Ainda sem dados suficientes</p>
                       )}
                     </div>
                   ))}
