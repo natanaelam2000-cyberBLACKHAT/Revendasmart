@@ -33,6 +33,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 import {
   summarizeOpportunityOutcomes,
+  summarizeOpportunityEffectivenessByType,
   type Opportunity,
   type OpportunityActionRecord,
   type OpportunityActionStatus,
@@ -420,7 +421,13 @@ export async function computeOpportunities(db: Firestore, uid: string, nowMs: nu
   // §4 — Ativa = sem ação terminal registrada para este fingerprint específico (não para o type/entidade
   // em geral — um ciclo novo, com um fingerprint novo, nunca fica preso por uma ação de um ciclo antigo).
   const active = all.filter((opportunity) => !actionState[opportunity.fingerprint]);
-  active.sort((a, b) => compareOpportunities(a, b));
+  // PRODUCT-GROWTH-11 §4/§16 — reaproveita o MESMO actionState já lido acima (bounded por
+  // OPPORTUNITY_ACTION_STATE_QUERY_LIMIT, updatedAt desc) para o desempate por efetividade — nenhuma
+  // query extra, nenhum full scan. §10 — este é o ÚNICO comparador usado tanto por /api/opportunities
+  // (esta função) quanto pelo card "Prioridades de hoje" do dashboard (que só consome esta MESMA resposta
+  // já ordenada, client/src/components/opportunities/TodayPriorities.tsx) — nunca uma segunda ordenação.
+  const effectivenessByType = summarizeOpportunityEffectivenessByType(Object.values(actionState));
+  active.sort((a, b) => compareOpportunities(a, b, effectivenessByType));
   // magnitude é um detalhe de ordenação interno, nunca exposto na resposta HTTP (§5 — evidence só leva
   // fatos já nomeados por tipo) — reconstrução explícita do objeto público, em vez de destructure-and-
   // discard, para nunca vazar um campo interno por engano se o shape mudar no futuro.

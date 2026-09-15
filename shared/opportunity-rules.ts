@@ -196,19 +196,36 @@ export interface OpportunitySummary {
 const PRIORITY_RANK: Record<OpportunityPriority, number> = { high: 0, medium: 1, low: 2 };
 
 /**
- * §25 — ordenação estável: 1) prioridade (high antes de medium antes de low); 2) `magnitude` (o quanto
- * a condição está "além" do limiar — dias adicionais de inatividade/parada, ou o quanto abaixo do ratio
- * de ociosidade — maior primeiro, mais urgente primeiro); 3) `id` como desempate final ESTÁVEL (nunca
- * a ordem de inserção do array, que pode variar entre chamadas da mesma query). Chamador passa
- * `magnitude` já calculada por oportunidade (nunca recalculada aqui, para o comparador continuar puro
- * e sem acoplamento ao shape de evidence de cada tipo).
+ * §25 — ordenação estável: 1) prioridade (high antes de medium antes de low); 2) PRODUCT-GROWTH-11 §1/§6
+ * — desempate por efetividade histórica do TIPO (nunca da oportunidade individual), só entre dois tipos
+ * DIFERENTES que já tenham amostra suficiente (`eligible`, ambos os lados — §6: "se apenas um dos dois
+ * tipos possuir amostra suficiente, NÃO assumir automaticamente que ele é melhor") e só quando as taxas
+ * realmente diferem; 3) `magnitude` (o quanto a condição está "além" do limiar — dias adicionais de
+ * inatividade/parada, ou o quanto abaixo do ratio de ociosidade — maior primeiro, mais urgente primeiro);
+ * 4) `id` como desempate final ESTÁVEL (nunca a ordem de inserção do array, que pode variar entre
+ * chamadas da mesma query). Chamador passa `magnitude` já calculada por oportunidade (nunca recalculada
+ * aqui, para o comparador continuar puro e sem acoplamento ao shape de evidence de cada tipo).
+ *
+ * `effectivenessByType` é opcional e, quando omitido (chamador antigo, ou nenhum histórico disponível
+ * ainda), o comparador se comporta EXATAMENTE como antes desta ticket — nunca uma segunda função de
+ * ordenação paralela (§10 do ticket: dashboard e /opportunities usam este MESMO comparador, nunca um
+ * próprio). Nenhum peso escondido/multiplicador: o desempate é só "taxa de conversão maior primeiro",
+ * nada além disso.
  */
 export function compareOpportunities(
-  a: { readonly id: string; readonly priority: OpportunityPriority; readonly magnitude: number },
-  b: { readonly id: string; readonly priority: OpportunityPriority; readonly magnitude: number },
+  a: { readonly id: string; readonly type: OpportunityType; readonly priority: OpportunityPriority; readonly magnitude: number },
+  b: { readonly id: string; readonly type: OpportunityType; readonly priority: OpportunityPriority; readonly magnitude: number },
+  effectivenessByType?: Readonly<Record<OpportunityType, OpportunityTypeEffectiveness>>,
 ): number {
   const priorityDelta = PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
   if (priorityDelta !== 0) return priorityDelta;
+  if (effectivenessByType && a.type !== b.type) {
+    const aEffectiveness = effectivenessByType[a.type];
+    const bEffectiveness = effectivenessByType[b.type];
+    if (aEffectiveness.eligible && bEffectiveness.eligible && aEffectiveness.conversionRate !== bEffectiveness.conversionRate) {
+      return bEffectiveness.conversionRate - aEffectiveness.conversionRate;
+    }
+  }
   const magnitudeDelta = b.magnitude - a.magnitude;
   if (magnitudeDelta !== 0) return magnitudeDelta;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
@@ -237,4 +254,63 @@ export function summarizeOpportunityOutcomes(items: readonly OpportunityActionRe
   return { actions: actions.length, converted, no_result: noResult,
     awaiting: actions.length - converted - noResult,
     conversionRate: converted + noResult ? 100 * converted / (converted + noResult) : 0 };
+}
+
+// ===================================================================================================
+// PRODUCT-GROWTH-11 — aprendizado determinístico por tipo, a partir só dos outcomes reais já
+// persistidos em users/{uid}/opportunity_actions (nunca IA/ML/score oculto, §22 do ticket). `resolved`
+// é sempre converted+noResult (nunca inclui dismissed/awaiting no denominador, §12 — dispensar uma
+// oportunidade nunca reduz artificialmente a taxa de conversão de um tipo). `eligible` é o único portão
+// usado tanto para decidir se a taxa entra como desempate em compareOpportunities quanto (na UI) se ela
+// é confiável o bastante pra exibir uma porcentagem — nunca dois limiares divergentes para a mesma ideia.
+// ===================================================================================================
+
+/** §5 do ticket — amostra mínima de outcomes RESOLVIDOS (converted+no_result) por tipo antes de deixar a
+ * taxa de conversão influenciar a ordenação entre tipos de mesma prioridade. Não afeta o que é EXIBIDO
+ * (a UI mostra a fração real sempre que resolved > 0, nunca esconde um dado real) — só o que é usado como
+ * desempate, para nunca deixar 1-2 outcomes reordenarem oportunidades de negócio. */
+export const MIN_RESOLVED_SAMPLE = 10;
+
+export interface OpportunityTypeEffectiveness {
+  readonly actionsTaken: number;
+  readonly converted: number;
+  readonly noResult: number;
+  readonly awaitingResult: number;
+  readonly dismissed: number;
+  readonly resolved: number;
+  readonly conversionRate: number;
+  readonly eligible: boolean;
+}
+
+const ALL_OPPORTUNITY_TYPES: readonly OpportunityType[] =
+  ["inactive_client", "stalled_product", "idle_schedule", "overdue_receivable", "repeat_purchase", "stock_risk"];
+
+/** Groups the SAME bounded opportunity_actions read already loaded for lifecycle filtering (nunca uma
+ * segunda query) by type, and reduces each group with the same converted/no_result/resolved semantics
+ * as summarizeOpportunityOutcomes above — só por tipo, em vez de global. Sempre devolve as 6 chaves
+ * (mesmo padrão de countsByType em summarizeOpportunities/server/opportunity-engine.ts), mesmo para um
+ * tipo sem nenhum registro ainda (actionsTaken=0, eligible=false) — nunca uma chave ausente que
+ * obrigaria todo consumidor a tratar undefined. */
+export function summarizeOpportunityEffectivenessByType(
+  items: readonly OpportunityActionRecord[],
+): Record<OpportunityType, OpportunityTypeEffectiveness> {
+  const result = {} as Record<OpportunityType, OpportunityTypeEffectiveness>;
+  for (const type of ALL_OPPORTUNITY_TYPES) {
+    const forType = items.filter(item => item.opportunityType === type);
+    const actions = forType.filter(item => item.status === "acted");
+    const converted = actions.filter(item => item.outcome === "converted").length;
+    const noResult = actions.filter(item => item.outcome === "no_result").length;
+    const resolved = converted + noResult;
+    result[type] = {
+      actionsTaken: actions.length,
+      converted,
+      noResult,
+      awaitingResult: actions.length - resolved,
+      dismissed: forType.filter(item => item.status === "dismissed").length,
+      resolved,
+      conversionRate: resolved ? 100 * converted / resolved : 0,
+      eligible: resolved >= MIN_RESOLVED_SAMPLE,
+    };
+  }
+  return result;
 }

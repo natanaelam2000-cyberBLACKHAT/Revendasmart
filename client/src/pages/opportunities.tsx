@@ -11,7 +11,7 @@ import { OpportunityCard, TYPE_ICON, TYPE_LABEL } from "@/components/opportuniti
 import { trackAnalyticsEvent, waitForAuthReady } from "@/lib/firebase";
 import { notifyError, notifySuccess } from "@/lib/notify";
 import type { PlanType } from "@shared/monetization";
-import { opportunityResultState, summarizeOpportunityOutcomes } from "@shared/opportunity-rules";
+import { opportunityResultState, summarizeOpportunityOutcomes, summarizeOpportunityEffectivenessByType } from "@shared/opportunity-rules";
 import type { Opportunity, OpportunityActionRecord, OpportunityActionStatus } from "@shared/opportunity-rules";
 
 /**
@@ -34,6 +34,13 @@ import type { Opportunity, OpportunityActionRecord, OpportunityActionStatus } fr
  * aparecem na lista. Abrir WhatsApp/copiar/abrir a rota de domínio NUNCA marca como feito sozinho (§8/§12
  * — inalterado); opcionalmente destaca visualmente "Marcar como feito" depois de qualquer uma dessas
  * ações nesta sessão (nunca persistido, §12 — "não grave uma ação falsa automaticamente").
+ *
+ * PRODUCT-GROWTH-11 §8/§9 — seção "Resultados das oportunidades": desempenho por tipo, calculado aqui
+ * client-side a partir do MESMO `history` já buscado para a aba Histórico (nenhuma leitura nova, §16).
+ * Um tipo só aparece quando já existe pelo menos uma ação real registrada (§7: "não mostrar falsa
+ * precisão"); dentro de um tipo exibido, a fração/porcentagem real aparece sempre que resolved > 0 —
+ * "amostra insuficiente" (shared/opportunity-rules.ts's MIN_RESOLVED_SAMPLE) só governa se aquele tipo
+ * pode servir de desempate de ordenação (server/opportunity-engine.ts), nunca se o número é mostrado.
  */
 
 const CLIENT_PHONE_LOOKUP_BATCH_SIZE = 10;
@@ -264,6 +271,11 @@ export default function Opportunities() {
   const handleDismiss = useCallback((opportunity: Opportunity) => handleLifecycleAction(opportunity, "dismissed"), [handleLifecycleAction]);
 
   const metrics = history ? summarizeOpportunityOutcomes(history) : null;
+  // PRODUCT-GROWTH-11 §8 — só os tipos com pelo menos uma ação real registrada (nunca uma linha vazia
+  // para um tipo que este negócio nunca usou, ex. agenda ociosa pra quem só vende produto).
+  const effectivenessRows = history
+    ? Object.entries(summarizeOpportunityEffectivenessByType(history)).filter(([, effectiveness]) => effectiveness.actionsTaken > 0)
+    : [];
 
   const activeTabButton = (
     <button
@@ -314,6 +326,29 @@ export default function Opportunities() {
                   <div key={label} className="rounded-xl border p-3 min-w-0"><p className="text-xs text-muted-foreground">{label}</p><p className="text-xl font-bold">{value}</p></div>)}
               </div>
             </section>}
+            {effectivenessRows.length > 0 && !historyError && (
+              <section aria-label="Resultados das oportunidades" className="space-y-2" data-testid="section-opportunity-effectiveness">
+                <div>
+                  <p className="text-sm font-black text-foreground">Resultados das oportunidades</p>
+                  <p className="text-xs text-muted-foreground">O RevendaSmart usa os resultados que você registra para organizar melhor oportunidades de mesma prioridade.</p>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {effectivenessRows.map(([type, effectiveness]) => (
+                    <div key={type} className="rounded-xl border p-3 min-w-0" data-testid={`row-effectiveness-${type}`}>
+                      <p className="text-xs font-bold text-foreground">{TYPE_LABEL[type as keyof typeof TYPE_LABEL]}</p>
+                      {effectiveness.resolved > 0 ? (
+                        <>
+                          <p className="text-xs text-muted-foreground mt-0.5">{effectiveness.converted} de {effectiveness.resolved} geraram resultado</p>
+                          <p className="text-lg font-bold">{effectiveness.conversionRate.toFixed(0)}%</p>
+                        </>
+                      ) : (
+                        <p className="text-xs text-muted-foreground mt-0.5">Ainda sem dados suficientes</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
             <div className="flex gap-2">
               {activeTabButton}
               {historyTabButton}

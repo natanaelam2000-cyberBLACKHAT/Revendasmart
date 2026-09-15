@@ -12,6 +12,8 @@ import { resolveServerPlan } from "../server/plan-authoritative-mutations";
 import {
   opportunityResultState,
   summarizeOpportunityOutcomes,
+  summarizeOpportunityEffectivenessByType,
+  MIN_RESOLVED_SAMPLE,
   INACTIVE_CLIENT_THRESHOLD_DAYS,
   STALLED_PRODUCT_THRESHOLD_DAYS,
   IDLE_SCHEDULE_WINDOW_DAYS,
@@ -21,6 +23,8 @@ import {
   compareOpportunities,
   hasAdvancedOpportunityAccess,
   type Opportunity,
+  type OpportunityActionRecord,
+  type OpportunityType,
 } from "../shared/opportunity-rules";
 import { buildOpportunityMessage, buildWhatsAppUrl } from "../client/src/lib/opportunity-messages";
 import type { Firestore as AdminFirestore } from "firebase-admin/firestore";
@@ -58,6 +62,13 @@ import type { Firestore as AdminFirestore } from "firebase-admin/firestore";
  * firebase.ts, mesma técnica já usada por script/smoke-tests.ts para normalizeWhatsappPhone) + CA (ação
  * comercial, prova por texto-fonte de que abrir WhatsApp/copiar/CTA de domínio nunca marcam como feito
  * sozinhos, e que telefone nunca é lido/exposto pelo engine server-side, §15).
+ *
+ * PRODUCT-GROWTH-11 — mesmo arquivo de novo, com EM (métricas de efetividade por tipo, puro,
+ * summarizeOpportunityEffectivenessByType) + OT (desempate de ordenação, puro, compareOpportunities com
+ * o 3º argumento novo) + EL (fim-a-fim contra o emulador: isolamento de tenant na ordenação real de
+ * /api/opportunities, e que marcar/dispensar/repetir atualiza a métrica por tipo corretamente). Nenhuma
+ * lógica reimplementada em teste — tudo prova as funções REAIS de shared/opportunity-rules.ts e
+ * server/opportunity-engine.ts.
  */
 
 process.env.FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "demo-revendasmart";
@@ -497,6 +508,145 @@ function runMessageBuilderTests(): void {
   assert.doesNotMatch(url, / /, "MB7b: nenhum espaço cru na URL (tudo passou por encodeURIComponent)");
   assert.equal(decodeURIComponent(url.split("?text=")[1]), inactive, "MB7c: a URL decodifica de volta para o texto exato — round-trip sem perda/corrupção");
   console.log("PASS MB7 buildWhatsAppUrl always safely encodes the message text (no raw spaces/accents/emoji in the URL) and round-trips back to the exact original text");
+}
+
+function fixtureActionRecord(overrides: Partial<OpportunityActionRecord> & { opportunityType: OpportunityType }): OpportunityActionRecord {
+  const nowIso = new Date().toISOString();
+  return {
+    fingerprint: `${overrides.opportunityType}:fixture:${Math.random().toString(36).slice(2)}`,
+    status: "acted",
+    title: "Fixture",
+    reasonSnapshot: "",
+    actedAt: nowIso,
+    dismissedAt: null,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    ...overrides,
+  };
+}
+
+// ===================================================================================================
+// EM1-EM8 — PRODUCT-GROWTH-11 §2/§4/§5/§12/§16/§18: summarizeOpportunityEffectivenessByType é pura
+// (sem I/O) — testada direto, sem emulador, mesma técnica de MB acima.
+// ===================================================================================================
+function runEffectivenessMetricsTests(): void {
+  const records: OpportunityActionRecord[] = [
+    fixtureActionRecord({ opportunityType: "inactive_client", status: "acted", outcome: "converted" }),
+    fixtureActionRecord({ opportunityType: "inactive_client", status: "acted", outcome: "converted" }),
+    fixtureActionRecord({ opportunityType: "inactive_client", status: "acted", outcome: "no_result" }),
+    // EM-B — acted sem outcome (awaiting_result) nunca entra no denominador de conversão.
+    fixtureActionRecord({ opportunityType: "inactive_client", status: "acted" }),
+    // EM-C — dismissed é contado separadamente, nunca somado ao denominador de conversão (§12 do ticket:
+    // 20 dispensadas nunca viram "4/(4+20)" — resolved continua só converted+noResult).
+    ...Array.from({ length: 20 }, () => fixtureActionRecord({ opportunityType: "inactive_client", status: "dismissed", actedAt: null, dismissedAt: new Date().toISOString() })),
+    fixtureActionRecord({ opportunityType: "stalled_product", status: "acted", outcome: "converted" }),
+  ];
+  const byType = summarizeOpportunityEffectivenessByType(records);
+  assert.deepEqual(
+    { actionsTaken: byType.inactive_client.actionsTaken, converted: byType.inactive_client.converted, noResult: byType.inactive_client.noResult, resolved: byType.inactive_client.resolved, awaitingResult: byType.inactive_client.awaitingResult, dismissed: byType.inactive_client.dismissed },
+    { actionsTaken: 4, converted: 2, noResult: 1, resolved: 3, awaitingResult: 1, dismissed: 20 },
+    "EM-A/B/C/E: contagens corretas por tipo — awaiting e dismissed nunca entram em resolved, mesmo com 20 dispensadas",
+  );
+  assert.equal(byType.inactive_client.conversionRate, 100 * 2 / 3, "EM-A: conversionRate = 100*converted/resolved (nunca dividido por actionsTaken+dismissed)");
+  assert.equal(byType.stalled_product.actionsTaken, 1, "EM-A: tipos nunca se misturam — stalled_product não herda a contagem de inactive_client");
+  console.log("PASS EM-A/B/C/E per-type converted/no_result/resolved counts are correct, and awaiting/dismissed never enter the conversion denominator");
+
+  // EM-D — tipo sem NENHUM registro ainda: 0%, sempre um number finito, nunca NaN/undefined.
+  const empty = summarizeOpportunityEffectivenessByType([]);
+  for (const type of ["inactive_client", "stalled_product", "idle_schedule", "overdue_receivable", "repeat_purchase", "stock_risk"] as const) {
+    assert.equal(empty[type].resolved, 0);
+    assert.equal(empty[type].conversionRate, 0, `EM-D: ${type} com histórico vazio nunca produz NaN/undefined, sempre 0%`);
+    assert.equal(empty[type].eligible, false);
+    assert.ok(Number.isFinite(empty[type].conversionRate), `EM-D: ${type}'s conversionRate é sempre finito`);
+  }
+  console.log("PASS EM-D zero denominator always yields exactly 0%, never NaN/undefined, for every known type");
+
+  // EM-sample — MIN_RESOLVED_SAMPLE é o limiar EXATO documentado, nunca um número diferente escondido.
+  const justBelow = Array.from({ length: MIN_RESOLVED_SAMPLE - 1 }, () => fixtureActionRecord({ opportunityType: "overdue_receivable", status: "acted", outcome: "converted" }));
+  assert.equal(summarizeOpportunityEffectivenessByType(justBelow).overdue_receivable.eligible, false, `EM-sample: ${MIN_RESOLVED_SAMPLE - 1} resolvidos ainda não é elegível`);
+  const atThreshold = [...justBelow, fixtureActionRecord({ opportunityType: "overdue_receivable", status: "acted", outcome: "no_result" })];
+  assert.equal(summarizeOpportunityEffectivenessByType(atThreshold).overdue_receivable.eligible, true, `EM-sample: exatamente ${MIN_RESOLVED_SAMPLE} resolvidos já é elegível`);
+  console.log(`PASS EM-sample MIN_RESOLVED_SAMPLE (${MIN_RESOLVED_SAMPLE}) is the exact, documented boundary for a type becoming eligible`);
+
+  // EM-G — §4/§16: reaproveita o MESMO actionState já bounded (OPPORTUNITY_ACTION_STATE_QUERY_LIMIT,
+  // updatedAt desc) — nenhuma query nova só para efetividade. Prova por texto-fonte.
+  const engineSrc = sourceOf("server/opportunity-engine.ts");
+  assert.match(engineSrc, /summarizeOpportunityEffectivenessByType\(Object\.values\(actionState\)\)/, "EM-G: computeOpportunities reaproveita o MESMO actionState já bounded, nenhuma leitura nova");
+  console.log("PASS EM-G effectiveness-by-type reuses the same already-bounded opportunity_actions read used for active filtering — no new query");
+
+  // EM-H — cálculo é sempre só-leitura: puro em memória, nunca escreve no Firestore.
+  const rulesSrc = sourceOf("shared/opportunity-rules.ts");
+  assert.doesNotMatch(rulesSrc, /\.set\(|\.update\(|\.delete\(/, "EM-H: shared/opportunity-rules.ts nunca escreve no Firestore — puro cálculo em memória");
+  console.log("PASS EM-H computing effectiveness never writes — pure in-memory aggregation only");
+}
+
+// ===================================================================================================
+// OT1-OT9 — PRODUCT-GROWTH-11 §1/§6/§7: compareOpportunities com o desempate de efetividade, puro.
+// ===================================================================================================
+function runOrderingTieBreakerTests(): void {
+  const fixture = (overrides: { id: string; type: OpportunityType; priority: "high" | "medium" | "low"; magnitude: number }) => overrides;
+  const effTable = (partial: Partial<Record<OpportunityType, { resolved: number; converted: number }>>) => {
+    const table = summarizeOpportunityEffectivenessByType([]);
+    for (const [type, stats] of Object.entries(partial) as [OpportunityType, { resolved: number; converted: number }][]) {
+      const conversionRate = stats.resolved ? 100 * stats.converted / stats.resolved : 0;
+      table[type] = { actionsTaken: stats.resolved, converted: stats.converted, noResult: stats.resolved - stats.converted, awaitingResult: 0, dismissed: 0, resolved: stats.resolved, conversionRate, eligible: stats.resolved >= MIN_RESOLVED_SAMPLE };
+    }
+    return table;
+  };
+
+  // OT-I/J — §1: prioridade-base continua sendo autoridade máxima, mesmo com uma taxa histórica melhor.
+  const high = fixture({ id: "h", type: "overdue_receivable", priority: "high", magnitude: 0 });
+  const mediumBetterRate = fixture({ id: "m", type: "repeat_purchase", priority: "medium", magnitude: 1000 });
+  const eff1 = effTable({ overdue_receivable: { resolved: 10, converted: 1 }, repeat_purchase: { resolved: 10, converted: 10 } });
+  assert.ok(compareOpportunities(high, mediumBetterRate, eff1) < 0, "OT-I: high vem antes de medium mesmo quando medium tem taxa/magnitude muito melhores");
+  const low = fixture({ id: "l", type: "idle_schedule", priority: "low", magnitude: 1000 });
+  assert.ok(compareOpportunities(mediumBetterRate, low, eff1) < 0, "OT-J: medium continua antes de low");
+  console.log("PASS OT-I/J base priority always wins, regardless of historical effectiveness or magnitude");
+
+  // OT-K/L — dois tipos de MESMA prioridade, ambos elegíveis: maior conversionRate primeiro, mesmo
+  // quando a magnitude isoladamente favoreceria o outro lado (prova que o desempate de fato atua).
+  const highGoodRate = fixture({ id: "a", type: "overdue_receivable", priority: "high", magnitude: 1 });
+  const highBadRate = fixture({ id: "b", type: "inactive_client", priority: "high", magnitude: 500 });
+  const effK = effTable({ overdue_receivable: { resolved: 10, converted: 9 }, inactive_client: { resolved: 10, converted: 1 } });
+  assert.ok(compareOpportunities(highGoodRate, highBadRate, effK) < 0, "OT-K: entre dois HIGH elegíveis, maior conversionRate vem primeiro mesmo com magnitude bem menor");
+  const mediumGoodRate = fixture({ id: "c", type: "repeat_purchase", priority: "medium", magnitude: 1 });
+  const mediumBadRate = fixture({ id: "d", type: "stock_risk", priority: "medium", magnitude: 500 });
+  const effL = effTable({ repeat_purchase: { resolved: 10, converted: 9 }, stock_risk: { resolved: 10, converted: 1 } });
+  assert.ok(compareOpportunities(mediumGoodRate, mediumBadRate, effL) < 0, "OT-L: mesmo desempate entre dois MEDIUM");
+  console.log("PASS OT-K/L two same-priority types with sufficient sample: the higher conversion rate sorts first, overriding magnitude");
+
+  // OT-M/N — amostra insuficiente em QUALQUER um dos dois lados nunca ativa o desempate: resultado
+  // idêntico a não ter passado nenhum histórico. O lado elegível também não ganha vantagem artificial
+  // só por estar elegível — quem decide é a queda para magnitude, igual sempre foi.
+  const eligibleWorseMagnitude = fixture({ id: "e", type: "overdue_receivable", priority: "high", magnitude: 1 });
+  const ineligibleBetterRateOnPaper = fixture({ id: "f", type: "inactive_client", priority: "high", magnitude: 500 });
+  const effM = effTable({ overdue_receivable: { resolved: 10, converted: 9 }, inactive_client: { resolved: 3, converted: 3 } });
+  assert.equal(
+    compareOpportunities(eligibleWorseMagnitude, ineligibleBetterRateOnPaper, effM),
+    compareOpportunities(eligibleWorseMagnitude, ineligibleBetterRateOnPaper),
+    "OT-M: um lado sem amostra suficiente (mesmo com 100% de taxa) nunca ativa o desempate",
+  );
+  assert.ok(compareOpportunities(eligibleWorseMagnitude, ineligibleBetterRateOnPaper, effM) > 0, "OT-N: o tipo elegível não ganha vantagem artificial por estar elegível sozinho — aqui f vence por magnitude, não por sua taxa não confiável");
+  console.log("PASS OT-M/N insufficient sample on either side never influences ordering — no artificial advantage for the eligible type either");
+
+  // OT-O — taxas iguais entre dois tipos elegíveis: cai no desempate determinístico existente (magnitude).
+  const equalRateA = fixture({ id: "g", type: "overdue_receivable", priority: "high", magnitude: 5 });
+  const equalRateB = fixture({ id: "h2", type: "inactive_client", priority: "high", magnitude: 9 });
+  const effO = effTable({ overdue_receivable: { resolved: 10, converted: 5 }, inactive_client: { resolved: 20, converted: 10 } });
+  assert.equal(compareOpportunities(equalRateA, equalRateB, effO), compareOpportunities(equalRateA, equalRateB), "OT-O: taxas iguais nunca disparam o desempate — mesmo resultado que sem histórico");
+  console.log("PASS OT-O equal conversion rates fall through to the existing magnitude/id ordering, unchanged");
+
+  // OT-P — sem histórico algum (tenant novo): ordenação idêntica a nunca ter passado o 3º argumento.
+  const noHistoryTable = summarizeOpportunityEffectivenessByType([]);
+  const anyA = fixture({ id: "x", type: "overdue_receivable", priority: "high", magnitude: 3 });
+  const anyB = fixture({ id: "y", type: "inactive_client", priority: "high", magnitude: 7 });
+  assert.equal(compareOpportunities(anyA, anyB, noHistoryTable), compareOpportunities(anyA, anyB), "OT-P: tenant sem histórico nenhum ordena exatamente como antes desta ticket");
+  console.log("PASS OT-P no history at all orders exactly as before this ticket");
+
+  // OT-Q — o mesmo shape de fallback vazio que loadOpportunityActionState já produz numa falha (§42,
+  // inalterado) nunca quebra o cálculo de efetividade — oportunidades continuam totalmente utilizáveis.
+  assert.doesNotThrow(() => summarizeOpportunityEffectivenessByType(Object.values({})), "OT-Q: um action-state vazio/de falha nunca lança exceção");
+  console.log("PASS OT-Q a failed/empty action-state load degrades safely — opportunities remain fully usable, never an exception");
 }
 
 // ===================================================================================================
@@ -1164,6 +1314,96 @@ async function runOutcomeTests(db: AdminFirestore): Promise<void> {
   } finally { await close(); }
 }
 
+// ===================================================================================================
+// EL1-EL9 — PRODUCT-GROWTH-11 §13/§20/§21(automated proxy): efetividade fim-a-fim contra rotas HTTP
+// reais — isolamento de tenant na ORDENAÇÃO de verdade (não só na leitura de dados) e que marcar/
+// dispensar/repetir atualiza a métrica por tipo corretamente.
+// ===================================================================================================
+async function runEffectivenessLifecycleAndIsolationTests(db: AdminFirestore): Promise<void> {
+  const { baseUrl, close } = await startTestOpportunityServer();
+  try {
+    const uid = tenantUid("eff-a"), other = tenantUid("eff-b");
+    for (const id of [uid, other]) await createAuthUser(id);
+    for (const id of [uid, other]) await grantPremium(db, id);
+
+    // Seed direto de opportunity_actions RESOLVIDAS (mesma shape que a rota real grava) — técnica
+    // análoga a seedInstallment/seedHistoricalSale acima: monta histórico em volume sem 20 round-trips
+    // HTTP reais, que já são provados individualmente por runOutcomeTests.
+    const seedResolvedAction = async (tenant: string, type: OpportunityType, index: number, outcome: "converted" | "no_result") => {
+      const fingerprint = `${type}:seed-${index}`;
+      const nowIso = new Date().toISOString();
+      await db.collection("users").doc(tenant).collection("opportunity_actions").doc(fingerprint).set({
+        fingerprint, opportunityType: type, status: "acted", title: "Seed", reasonSnapshot: "",
+        outcome, outcomeAt: nowIso, actedAt: nowIso, dismissedAt: null, createdAt: nowIso, updatedAt: nowIso,
+      });
+    };
+    for (let index = 0; index < MIN_RESOLVED_SAMPLE; index++) await seedResolvedAction(uid, "overdue_receivable", index, index < 9 ? "converted" : "no_result");
+    for (let index = 0; index < MIN_RESOLVED_SAMPLE; index++) await seedResolvedAction(uid, "inactive_client", index, index < 1 ? "converted" : "no_result");
+
+    // Cenário real: dois tipos HIGH ativos no tenant A, com magnitude que FAVORECERIA inactive_client (a
+    // pior taxa) se o desempate de efetividade não existisse de verdade.
+    await seedClient(db, uid, "iso-client", { lastPurchaseAt: isoDaysAgo(200) });
+    await seedInstallment(db, uid, "iso-installment", { clientId: "iso-client", dueDate: isoDaysAgo(1), amount: 50 });
+    const listA = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    const orderA = listA.body.opportunities.filter((item: any) => item.type === "overdue_receivable" || item.type === "inactive_client").map((item: any) => item.type);
+    assert.deepEqual(orderA, ["overdue_receivable", "inactive_client"], "integration: overdue_receivable (90% convertido, elegível) vem antes de inactive_client (10%, também elegível) apesar de magnitude bem menor — a resposta REAL da API reflete o desempate");
+
+    // §13 — tenant B recebe o MESMO cenário de dados de negócio, mas nenhum histórico próprio. Sem
+    // amostra, a ordenação de B cai no comportamento padrão — provando que o histórico de A nunca vaza.
+    await seedClient(db, other, "iso-client", { lastPurchaseAt: isoDaysAgo(200) });
+    await seedInstallment(db, other, "iso-installment", { clientId: "iso-client", dueDate: isoDaysAgo(1), amount: 50 });
+    const listB = await callOpportunityApi(baseUrl, other, "/api/opportunities");
+    const orderB = listB.body.opportunities.filter((item: any) => item.type === "overdue_receivable" || item.type === "inactive_client").map((item: any) => item.type);
+    assert.deepEqual(orderB, ["inactive_client", "overdue_receivable"], "§13: tenant B nunca herda o histórico/desempate de A — sem amostra própria, decide por magnitude pura (inactive_client, mais inativo, vem primeiro)");
+    console.log("PASS EL-integration/§13 the real /api/opportunities response reorders by type effectiveness, and one tenant's history never influences another tenant's ordering");
+
+    // §20 R/S/V — acted sem outcome fica awaiting; marcar converted atualiza a métrica; retry concorrente
+    // idempotente nunca duplica a contagem.
+    await seedProduct(db, uid, "stalled-1", { stock: 5, lastSoldDate: isoDaysAgo(90) });
+    const stalled = (await callOpportunityApi(baseUrl, uid, "/api/opportunities")).body.opportunities.find((item: any) => item.type === "stalled_product" && item.entityReference.id === "stalled-1");
+    const actResponse = await callOpportunityApi(baseUrl, uid, `/api/opportunities/${encodeURIComponent(stalled.fingerprint)}/action`, { method: "POST", body: { type: "stalled_product", status: "acted" } });
+    assert.equal(opportunityResultState(actResponse.body.action), "awaiting_result", "§20R: acted sem outcome é sempre awaiting_result");
+    const historyBefore = (await callOpportunityApi(baseUrl, uid, "/api/opportunities/history")).body.items;
+    assert.equal(summarizeOpportunityEffectivenessByType(historyBefore).stalled_product.resolved, 0, "antes do outcome: ainda não conta como resolvido");
+    const outcomePath = `/api/opportunities/${encodeURIComponent(stalled.fingerprint)}/outcome`;
+    const [firstPost, retryPost] = await Promise.all([
+      callOpportunityApi(baseUrl, uid, outcomePath, { method: "POST", body: { outcome: "converted" } }),
+      callOpportunityApi(baseUrl, uid, outcomePath, { method: "POST", body: { outcome: "converted" } }),
+    ]);
+    assert.equal(firstPost.status, 200); assert.equal(retryPost.status, 200);
+    const historyAfter = (await callOpportunityApi(baseUrl, uid, "/api/opportunities/history")).body.items;
+    const afterOutcome = summarizeOpportunityEffectivenessByType(historyAfter);
+    assert.equal(afterOutcome.stalled_product.resolved, 1, "§20S/V: marcar converted soma exatamente 1 — o retry concorrente/idempotente nunca duplica a contagem");
+    assert.equal(afterOutcome.stalled_product.converted, 1);
+
+    // §20 U — dispensar nunca soma em resolved/converted; é contado separadamente.
+    await seedProduct(db, uid, "stalled-2", { stock: 5, lastSoldDate: isoDaysAgo(90) });
+    const stalled2 = (await callOpportunityApi(baseUrl, uid, "/api/opportunities")).body.opportunities.find((item: any) => item.type === "stalled_product" && item.entityReference.id === "stalled-2");
+    await callOpportunityApi(baseUrl, uid, `/api/opportunities/${encodeURIComponent(stalled2.fingerprint)}/action`, { method: "POST", body: { type: "stalled_product", status: "dismissed" } });
+    const afterDismiss = summarizeOpportunityEffectivenessByType((await callOpportunityApi(baseUrl, uid, "/api/opportunities/history")).body.items);
+    assert.equal(afterDismiss.stalled_product.resolved, 1, "§20U: dispensar não altera resolved");
+    assert.equal(afterDismiss.stalled_product.dismissed, 1, "§20U: dispensada é contada separadamente, nunca somada a converted/no_result");
+    console.log("PASS EL-lifecycle §20R/S/U/V acted-without-outcome, marking an outcome, idempotent retries and dismissals all update per-type metrics correctly");
+
+    // §20 W — um ciclo NOVO (fingerprint novo, RA já provado para o filtro de ativas) só conta na métrica
+    // quando REALMENTE acted — nunca herda/duplica a contagem do ciclo antigo só por ser computado.
+    await seedProduct(db, uid, "stalled-3", { stock: 5, lastSoldDate: isoDaysAgo(90) });
+    const cycle1 = (await callOpportunityApi(baseUrl, uid, "/api/opportunities")).body.opportunities.find((item: any) => item.entityReference.id === "stalled-3");
+    await callOpportunityApi(baseUrl, uid, `/api/opportunities/${encodeURIComponent(cycle1.fingerprint)}/action`, { method: "POST", body: { type: "stalled_product", status: "acted" } });
+    await callOpportunityApi(baseUrl, uid, `/api/opportunities/${encodeURIComponent(cycle1.fingerprint)}/outcome`, { method: "POST", body: { outcome: "converted" } });
+    const beforeNewCycle = summarizeOpportunityEffectivenessByType((await callOpportunityApi(baseUrl, uid, "/api/opportunities/history")).body.items).stalled_product.actionsTaken;
+    await seedProduct(db, uid, "stalled-3", { stock: 5, lastSoldDate: isoDaysAgo(65) });
+    const cycle2 = (await callOpportunityApi(baseUrl, uid, "/api/opportunities")).body.opportunities.find((item: any) => item.entityReference.id === "stalled-3");
+    assert.notEqual(cycle2.fingerprint, cycle1.fingerprint, "§20W pré-condição: um novo ciclo produz um fingerprint novo (mesma garantia RA)");
+    const stillBeforeAct = summarizeOpportunityEffectivenessByType((await callOpportunityApi(baseUrl, uid, "/api/opportunities/history")).body.items).stalled_product.actionsTaken;
+    assert.equal(stillBeforeAct, beforeNewCycle, "§20W: um ciclo novo SÓ ATIVO (ainda não acted) nunca soma na contagem — nenhuma conta fantasma só por ser computado");
+    await callOpportunityApi(baseUrl, uid, `/api/opportunities/${encodeURIComponent(cycle2.fingerprint)}/action`, { method: "POST", body: { type: "stalled_product", status: "acted" } });
+    const afterCycle2Acted = summarizeOpportunityEffectivenessByType((await callOpportunityApi(baseUrl, uid, "/api/opportunities/history")).body.items).stalled_product.actionsTaken;
+    assert.equal(afterCycle2Acted, beforeNewCycle + 1, "§20W: só depois de agir de verdade no ciclo novo a contagem sobe — +1 exato, nunca herdado do ciclo antigo");
+    console.log("PASS EL-cycle §20W a new cycle only counts as a new action once genuinely acted — never inherits or double-counts the prior cycle's outcome");
+  } finally { await close(); }
+}
+
 function runRepeatPurchaseRuleTests(): void {
   const now = Date.parse("2026-09-15T12:00:00.000Z");
   const sale = (days: number, extra: Record<string, unknown> = {}) => ({ clientId: "client", date: new Date(now-days*DAY_MS).toISOString(), totalPrice: 50, products: [{ productId: "product", quantity: 1 }], ...extra });
@@ -1365,6 +1605,8 @@ async function run(): Promise<void> {
   runPrivacyAndAnalyticsTests();
   runFingerprintTests();
   runMessageBuilderTests();
+  runEffectivenessMetricsTests();
+  runOrderingTieBreakerTests();
 
   requireEmulatorEnv();
   initializeFirebaseAdmin();
@@ -1378,6 +1620,7 @@ async function run(): Promise<void> {
   await runBackfillVerificationTests(db);
   await runLifecycleCoreTests(db);
   await runOutcomeTests(db);
+  await runEffectivenessLifecycleAndIsolationTests(db);
   await runReappearanceTests(db);
   await runOverdueLifecycleTests(db);
   await runGenericLifecycleSupportTests(db);
@@ -1385,7 +1628,7 @@ async function run(): Promise<void> {
   await runRepeatPurchaseTests(db);
   await runStockRiskTests(db);
 
-  console.log(`\nPLAN-IMPL-07A + PRODUCT-GROWTH-04 + PRODUCT-GROWTH-05 + PRODUCT-GROWTH-06 opportunity engine — all E/IC/SP/IS/RC/H/PG/A/CS/UI/CA/BACKFILL/FP/MB/LC/RA/OL/GT assertions passed (OPPORTUNITY_RESPONSE_LIMIT=${OPPORTUNITY_RESPONSE_LIMIT}, IDLE_SCHEDULE_WINDOW_DAYS=${IDLE_SCHEDULE_WINDOW_DAYS}). B1-B11 (browser) status: see final report.`);
+  console.log(`\nPLAN-IMPL-07A + PRODUCT-GROWTH-04 + PRODUCT-GROWTH-05 + PRODUCT-GROWTH-06 + PRODUCT-GROWTH-11 opportunity engine — all E/IC/SP/IS/RC/H/PG/A/CS/UI/CA/BACKFILL/FP/MB/LC/RA/OL/GT/EM/OT/EL assertions passed (OPPORTUNITY_RESPONSE_LIMIT=${OPPORTUNITY_RESPONSE_LIMIT}, IDLE_SCHEDULE_WINDOW_DAYS=${IDLE_SCHEDULE_WINDOW_DAYS}, MIN_RESOLVED_SAMPLE=${MIN_RESOLVED_SAMPLE}). B1-B11 (browser) status: see final report.`);
 }
 
 run().catch((error) => {
