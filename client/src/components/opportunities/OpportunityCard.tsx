@@ -10,6 +10,7 @@ import type { Opportunity, OpportunityType } from "@shared/opportunity-rules";
 export const TYPE_ICON: Record<OpportunityType, typeof Users> = {
   inactive_client: Users,
   repeat_purchase: Users,
+  stock_risk: Package,
   stalled_product: Package,
   idle_schedule: CalendarClock,
   overdue_receivable: Receipt,
@@ -18,6 +19,7 @@ export const TYPE_ICON: Record<OpportunityType, typeof Users> = {
 export const TYPE_LABEL: Record<OpportunityType, string> = {
   inactive_client: "Cliente inativo",
   repeat_purchase: "Hora de recompra",
+  stock_risk: "Risco de estoque",
   stalled_product: "Produto parado",
   idle_schedule: "Agenda ociosa",
   overdue_receivable: "Parcela em atraso",
@@ -170,4 +172,3 @@ export function OpportunityCard({ compact = false, opportunity, pending, engaged
     </div>
   );
 }
-

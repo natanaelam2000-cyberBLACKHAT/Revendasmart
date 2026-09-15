@@ -58,6 +58,7 @@ import { getFirebaseAdmin } from "./firebase-admin-init";
 import { isAdminUid } from "./admin-auth";
 import { logError, logWarn } from "./logger";
 import { detectRepeatPurchaseOpportunities } from "./repeat-purchase-detector";
+import { detectStockRiskOpportunities } from "./stock-risk-detector";
 
 const DAY_MS = 86_400_000;
 /** Mesmo convencional já usado independentemente por client/src/pages/service-agenda.tsx e
@@ -381,7 +382,7 @@ async function loadOpportunityActionState(db: Firestore, uid: string): Promise<R
 // vazio quando o domínio dele não se aplica), §25/§32 (ordenação estável, resposta limitada).
 // ===================================================================================================
 export async function computeOpportunities(db: Firestore, uid: string, nowMs: number = Date.now()): Promise<Opportunity[]> {
-  const [inactiveClients, stalledProducts, idleSchedule, overdueReceivables, repeatPurchases, actionState] = await Promise.all([
+  const [inactiveClients, stalledProducts, idleSchedule, overdueReceivables, repeatPurchases, stockRisks, actionState] = await Promise.all([
     detectInactiveClientOpportunities(db, uid, nowMs).catch((error) => {
       logWarn("opportunity_engine.inactive_client_failed", { reason: error instanceof Error ? error.name : "unknown" });
       return [];
@@ -402,6 +403,10 @@ export async function computeOpportunities(db: Firestore, uid: string, nowMs: nu
       logWarn("opportunity_engine.repeat_purchase_failed", { reason: error instanceof Error ? error.name : "unknown" });
       return [];
     }),
+    detectStockRiskOpportunities(db, uid, nowMs).catch(error => {
+      logWarn("opportunity_engine.stock_risk_failed", { reason: error instanceof Error ? error.name : "unknown" });
+      return [];
+    }),
     loadOpportunityActionState(db, uid).catch((error) => {
       logWarn("opportunity_engine.action_state_failed", { reason: error instanceof Error ? error.name : "unknown" });
       // §4/§42 — falha ao carregar o estado de ação nunca deve mostrar de volta algo que o usuário já
@@ -411,7 +416,7 @@ export async function computeOpportunities(db: Firestore, uid: string, nowMs: nu
     }),
   ]);
 
-  const all = [...inactiveClients, ...stalledProducts, ...idleSchedule, ...overdueReceivables, ...repeatPurchases] as (Opportunity & { magnitude: number })[];
+  const all = [...inactiveClients, ...stalledProducts, ...idleSchedule, ...overdueReceivables, ...repeatPurchases, ...stockRisks] as (Opportunity & { magnitude: number })[];
   // §4 — Ativa = sem ação terminal registrada para este fingerprint específico (não para o type/entidade
   // em geral — um ciclo novo, com um fingerprint novo, nunca fica preso por uma ação de um ciclo antigo).
   const active = all.filter((opportunity) => !actionState[opportunity.fingerprint]);
@@ -441,7 +446,7 @@ export async function computeOpportunities(db: Firestore, uid: string, nowMs: nu
  * dele para tipar a resposta HTTP, e client/ nunca importa de server/.
  */
 export function summarizeOpportunities(opportunities: readonly Opportunity[]): OpportunitySummary {
-  const countsByType: Record<OpportunityType, number> = { inactive_client: 0, stalled_product: 0, idle_schedule: 0, overdue_receivable: 0, repeat_purchase: 0 };
+  const countsByType: Record<OpportunityType, number> = { inactive_client: 0, stalled_product: 0, idle_schedule: 0, overdue_receivable: 0, repeat_purchase: 0, stock_risk: 0 };
   for (const opportunity of opportunities) {
     countsByType[opportunity.type] += 1;
   }
@@ -461,7 +466,7 @@ export function summarizeOpportunities(opportunities: readonly Opportunity[]): O
  * já que esta é uma superfície só-leitura, nenhuma mutação em jogo.
  */
 function isValidOpportunityType(value: unknown): value is OpportunityType {
-  return value === "inactive_client" || value === "stalled_product" || value === "idle_schedule" || value === "overdue_receivable" || value === "repeat_purchase";
+  return value === "inactive_client" || value === "stalled_product" || value === "idle_schedule" || value === "overdue_receivable" || value === "repeat_purchase" || value === "stock_risk";
 }
 
 function isValidActionStatus(value: unknown): value is OpportunityActionStatus {

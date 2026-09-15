@@ -63,8 +63,8 @@ export const OPPORTUNITY_ACTION_STATE_QUERY_LIMIT = 500;
 // Shape canônico — §5 do ticket, adaptado às necessidades reais do domínio.
 // ===================================================================================================
 
-/** Deterministic opportunity kinds; repeat_purchase uses observed sale-item cadence. */
-export type OpportunityType = "inactive_client" | "stalled_product" | "idle_schedule" | "overdue_receivable" | "repeat_purchase";
+/** Deterministic opportunity kinds; repeat_purchase uses cadence and stock_risk uses recent sell-through coverage. */
+export type OpportunityType = "inactive_client" | "stalled_product" | "idle_schedule" | "overdue_receivable" | "repeat_purchase" | "stock_risk";
 
 /** §8/§25 — só 3 buckets fechados, nunca um score/porcentagem fabricado. */
 export type OpportunityPriority = "high" | "medium" | "low";

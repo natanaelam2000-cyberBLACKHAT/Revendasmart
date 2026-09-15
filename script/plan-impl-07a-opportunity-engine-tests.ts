@@ -1,4 +1,5 @@
 import { repeatPurchaseCandidates } from "../shared/repeat-purchase";
+import { stockRiskCandidates, STOCK_RISK_SALES_WINDOW_DAYS } from "../shared/stock-risk";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import type { AddressInfo } from "node:net";
@@ -1258,7 +1259,102 @@ async function runRepeatPurchaseTests(db: AdminFirestore): Promise<void> {
   } finally { await close(); }
 }
 
+function runStockRiskRuleTests(): void {
+  const now = Date.parse("2026-09-15T12:00:00.000Z");
+  const date = (days: number) => new Date(now - days * DAY_MS).toISOString();
+  const sale = (id: string, days: number, quantity: number, extra: Record<string, unknown> = {}) => ({
+    id, clientId: "client", date: date(days), totalPrice: 20 * quantity,
+    products: [{ productId: "fast", quantity, price: 20 }], ...extra,
+  });
+  const product = (stock: unknown, extra: Record<string, unknown> = {}) => [{ productId: "fast", stock, name: "Creme", ...extra }];
+  assert.equal(stockRiskCandidates([], product(2), now).length, 0, "SR A: sem vendas nunca gera");
+  assert.equal(stockRiskCandidates([sale("one", 3, 4)], product(2), now).length, 0, "SR B: venda isolada em um dia nunca gera");
+  assert.equal(stockRiskCandidates([sale("one", 3, 2), sale("two", 1, 2)], product(20), now).length, 0, "SR C: estoque confortável nunca gera");
+  const [risk] = stockRiskCandidates([sale("one", 3, 6), sale("two", 1, 6)], product(3), now);
+  assert.ok(risk, "SR D: giro suficiente + baixa cobertura gera");
+  assert.equal(risk.daysOfCover, 7.5, "SR E: daysOfCover = stock / (units/windowDays)");
+  assert.equal(risk.roundedDaysOfCover, 8);
+  assert.equal(risk.priority, "medium");
+  assert.equal(stockRiskCandidates([sale("one", 3, 0), sale("two", 1, 0)], product(3), now).length, 0, "SR F: velocidade zero segura");
+  assert.equal(stockRiskCandidates([sale("one", 3, 6), sale("two", 1, 6)], product(0), now).length, 0, "SR G: estoque zero seguro");
+  assert.equal(stockRiskCandidates([sale("one", 3, 6), sale("two", 1, 6)], product("bad"), now).length, 0, "SR H: estoque inválido seguro");
+  for (const invalid of [{ status: "cancelled" }, { status: "refunded" }, { status: "pending" }, { cancelled: true }, { refundedAt: date(1) }, { refundAmount: 1 }, { date: "invalid" }, { date: new Date(now + DAY_MS).toISOString() }, { totalPrice: 0 }]) {
+    assert.equal(stockRiskCandidates([sale("one", 3, 6), sale("two", 1, 6, invalid)], product(3), now).length, 0, `SR I: venda inválida ignorada ${JSON.stringify(invalid)}`);
+  }
+  assert.equal(stockRiskCandidates([sale("one", 3, 6), sale("two", 1, 6)], product(3, { active: false }), now).length, 0, "SR J: produto inativo ignorado");
+  const [high] = stockRiskCandidates([sale("one", 3, 15), sale("two", 1, 15)], product(3), now);
+  assert.equal(high.priority, "high", "SR K: prioridade high para cobertura ate 7 dias");
+  assert.deepEqual(stockRiskCandidates([sale("b", 1, 8, { products: [{ productId: "b", quantity: 8 }] }), sale("a", 1, 8, { products: [{ productId: "a", quantity: 8 }] }), sale("b2", 2, 8, { products: [{ productId: "b", quantity: 8 }] }), sale("a2", 2, 8, { products: [{ productId: "a", quantity: 8 }] })],
+    [{ productId: "b", stock: 2 }, { productId: "a", stock: 2 }], now).map(item => item.productId), ["a", "b"], "SR K: desempate determinístico por produto");
+  assert.equal(stockRiskCandidates([sale("old", 40, 20)], product(1), now).length, 0, "SR: janela recente limitada");
+  console.log("PASS SR pure: minimum evidence, coverage math, invalid/cancelled/refunded/future guards, stock/product guards, priority and deterministic order");
+}
+
+async function runStockRiskTests(db: AdminFirestore): Promise<void> {
+  const now = Date.now();
+  const uid = tenantUid("stock"), foreign = tenantUid("stock-foreign"), free = tenantUid("stock-free");
+  for (const id of [uid, foreign, free]) await createAuthUser(id);
+  for (const id of [uid, foreign]) await grantPremium(db, id);
+  const owner = db.collection("users").doc(uid);
+  const date = (days: number) => new Date(now - days * DAY_MS).toISOString();
+  const seedSale = async (saleId: string, productId: string, days: number, quantity: number, who = uid) => {
+    await db.collection("users").doc(who).collection("sales").doc(saleId).set({
+      id: saleId, clientId: "client", date: date(days), totalPrice: quantity * 20,
+      products: [{ productId, quantity, price: 20 }],
+    });
+  };
+  await seedProduct(db, uid, "fast", { name: "Creme rapido", stock: 3, lastSoldDate: date(1), tenantUid: uid });
+  await seedSale("fast-one", "fast", 3, 6);
+  await seedSale("fast-two", "fast", 1, 6);
+  const [first] = (await computeOpportunities(db, uid, now)).filter(item => item.type === "stock_risk");
+  assert.ok(first);
+  assert.equal(first.priority, "medium");
+  assert.equal(first.action.type, "open_product");
+  assert.equal(first.action.label, "Repor estoque");
+  assert.match(first.reason, /Creme rapido vendeu 12 unidade\(s\) nos últimos 30 dias.*8 dia\(s\)/);
+  assert.equal(first.evidence.daysOfCover, 8);
+  assert.deepEqual(await computeOpportunities(db, uid, now).then(items => items.filter(item => item.type === "stock_risk")), [first], "SR M: mesmo ciclo estável não reaparece diferente");
+  await seedProduct(db, uid, "cancelled", { stock: 1 });
+  await seedSale("cancelled-one", "cancelled", 2, 10);
+  await seedSale("cancelled-two", "cancelled", 1, 10);
+  await owner.collection("sales").doc("cancelled-two").update({ status: "cancelled" });
+  assert.equal((await computeOpportunities(db, uid, now)).some(item => item.entityReference.id === "cancelled"), false);
+  await seedProduct(db, uid, "inactive", { stock: 1, active: false });
+  await seedSale("inactive-one", "inactive", 2, 10);
+  await seedSale("inactive-two", "inactive", 1, 10);
+  assert.equal((await computeOpportunities(db, uid, now)).some(item => item.entityReference.id === "inactive"), false);
+  await seedProduct(db, uid, "foreign-product", { stock: 1, tenantUid: foreign });
+  await seedSale("foreign-product-one", "foreign-product", 2, 10);
+  await seedSale("foreign-product-two", "foreign-product", 1, 10);
+  assert.equal((await computeOpportunities(db, uid, now)).some(item => item.entityReference.id === "foreign-product"), false);
+  await seedProduct(db, foreign, "fast", { stock: 1 });
+  await seedSale("foreign-one", "fast", 2, 10, foreign);
+  await seedSale("foreign-two", "fast", 1, 10, foreign);
+  assert.equal((await computeOpportunities(db, uid, now)).filter(item => item.type === "stock_risk").length, 1, "SR T: venda tenant B não mistura com produto tenant A");
+  const { baseUrl, close } = await startTestOpportunityServer();
+  try {
+    const path = `/api/opportunities/${encodeURIComponent(first.fingerprint)}/action`;
+    assert.equal((await callOpportunityApi(baseUrl, free, "/api/opportunities")).status, 403, "SR Q/R: Free sem lista real");
+    assert.equal((await callOpportunityApi(baseUrl, uid, path, { method: "POST", body: { type: first.type, status: "dismissed" } })).status, 200);
+    assert.equal((await computeOpportunities(db, uid, now)).some(item => item.fingerprint === first.fingerprint), false, "SR N: dismissed não reaparece no mesmo ciclo");
+    await owner.collection("products").doc("fast").update({ stock: 20 });
+    assert.equal((await computeOpportunities(db, uid, now)).filter(item => item.type === "stock_risk").length, 0);
+    await owner.collection("products").doc("fast").update({ stock: 4 });
+    await seedSale("fast-three", "fast", 0, 6);
+    const [next] = (await computeOpportunities(db, uid, now)).filter(item => item.type === "stock_risk");
+    assert.ok(next);
+    assert.notEqual(next.fingerprint, first.fingerprint, "SR P: reposicao/mudanca material + nova venda cria ciclo novo");
+    assert.equal((await callOpportunityApi(baseUrl, uid, `/api/opportunities/${encodeURIComponent(next.fingerprint)}/action`, { method: "POST", body: { type: next.type, status: "acted" } })).status, 200);
+    assert.equal((await computeOpportunities(db, uid, now)).some(item => item.fingerprint === next.fingerprint), false, "SR O: acted não reaparece no mesmo ciclo");
+  } finally { await close(); }
+  const src = sourceOf("server/stock-risk-detector.ts");
+  assert.match(src, /collection\("sales"\)[\s\S]*\.where\("date", ">="[\s\S]*\.limit\(STOCK_RISK_SALE_LIMIT\)/, "SR query bounded por janela e limite");
+  assert.match(src, /db\.getAll/, "SR produtos por batch, sem query por oportunidade");
+  console.log(`PASS SR engine/lifecycle: real products.stock, sales products[].quantity, ${STOCK_RISK_SALES_WINDOW_DAYS}d window, Premium gate, tenant rejection, lifecycle and query bounds`);
+}
+
 async function run(): Promise<void> {
+  runStockRiskRuleTests();
   runRepeatPurchaseRuleTests();
   runEngineConsolidationTests();
   runPlanGatingTests();
@@ -1287,6 +1383,7 @@ async function run(): Promise<void> {
   await runGenericLifecycleSupportTests(db);
 
   await runRepeatPurchaseTests(db);
+  await runStockRiskTests(db);
 
   console.log(`\nPLAN-IMPL-07A + PRODUCT-GROWTH-04 + PRODUCT-GROWTH-05 + PRODUCT-GROWTH-06 opportunity engine — all E/IC/SP/IS/RC/H/PG/A/CS/UI/CA/BACKFILL/FP/MB/LC/RA/OL/GT assertions passed (OPPORTUNITY_RESPONSE_LIMIT=${OPPORTUNITY_RESPONSE_LIMIT}, IDLE_SCHEDULE_WINDOW_DAYS=${IDLE_SCHEDULE_WINDOW_DAYS}). B1-B11 (browser) status: see final report.`);
 }

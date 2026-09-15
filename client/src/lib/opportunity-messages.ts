@@ -52,6 +52,7 @@ export function buildOpportunityMessage(opportunity: OpportunityMessageInput): s
       // já usado no `reason`); nunca expõe installmentId/status interno, nunca inventa Pix/dados de
       // pagamento.
       return `${greetingFor(opportunity.entityReference.name)} Identificamos uma parcela em aberto no valor de ${formatCurrency(safeEvidenceAmount(opportunity.evidence))}. Se precisar confirmar os dados ou combinar o pagamento, estou à disposição.`;
+    case "stock_risk":
     case "stalled_product":
     case "idle_schedule":
       return null;
