@@ -1,3 +1,4 @@
+import { repeatPurchaseCandidates } from "../shared/repeat-purchase";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import type { AddressInfo } from "node:net";
@@ -1162,7 +1163,103 @@ async function runOutcomeTests(db: AdminFirestore): Promise<void> {
   } finally { await close(); }
 }
 
+function runRepeatPurchaseRuleTests(): void {
+  const now = Date.parse("2026-09-15T12:00:00.000Z");
+  const sale = (days: number, extra: Record<string, unknown> = {}) => ({ clientId: "client", date: new Date(now-days*DAY_MS).toISOString(), totalPrice: 50, products: [{ productId: "product", quantity: 1 }], ...extra });
+  const regular = [90,60,30].map(days => sale(days));
+  const detect = (rows: Record<string, unknown>[], at = now) => repeatPurchaseCandidates(rows, at);
+  assert.equal(detect(regular.slice(0,1)).length, 0);
+  assert.equal(detect(regular.slice(0,2)).length, 0);
+  assert.equal(detect(regular).length, 1);
+  assert.equal(detect(regular)[0].medianIntervalDays, 30);
+  assert.equal(detect(regular, now-1).length, 0, "never approach before due time");
+  assert.equal(detect([180,145,0].map(days => sale(days))).length, 0);
+  assert.equal(detect([90,60,30,30].map(days => sale(days)))[0].purchaseCount, 3);
+  assert.equal(detect([30,30,30].map(days => sale(days))).length, 0);
+  assert.equal(detect([90,60,30].map((days,index) => sale(days, {clientId: `client-${index}`}))).length, 0);
+  assert.equal(detect([90,60,30].map((days,index) => sale(days, {products:[{productId:`product-${index}`,quantity:1}]}))).length, 0);
+  for (const invalid of [{status:"cancelled"}, {status:"refunded"}, {status:"pending"}, {cancelled:true}, {refundedAt:"2026-09-01"}, {refundAmount:1}, {date:"invalid"}, {date:new Date(now+DAY_MS).toISOString()}, {totalPrice:0}, {products:[{productId:"product",quantity:0}]}, {products:[]}, {clientId:"../foreign"}]) {
+    assert.equal(detect([regular[0],regular[1],sale(30,invalid)]).length, 0, JSON.stringify(invalid));
+  }
+  assert.equal(detect([90,60,30,0].map(days => sale(days))).length, 0, "new purchase postpones next opportunity");
+  const next = detect([90,60,30,0].map(days => sale(days)),now+30*DAY_MS)[0];
+  assert.notEqual(next.lastPurchaseAt, detect(regular)[0].lastPurchaseAt);
+  assert.equal(detect(regular,now+8*DAY_MS).length, 0, "missed old cycles expire");
+  assert.equal(detect([15,10,5].map(days=>sale(days))).length,0,"short bursts are not replenishment cadence");
+  assert.equal(detect([93,62,30].map(days=>sale(days))).length,0,"not due yet despite calendar variation");
+  assert.equal(detect([92,61,30].map(days=>sale(days)),now+DAY_MS).length,1,"month-length variation accepted");
+  assert.equal(detect([...Array.from({length:500},()=>sale(30)),...regular]).length,0,"hard input cap");
+  console.log("PASS RP pure: minimum history, pair identity, calendar cadence, due boundary, duplicates, invalid/cancelled/refunded, bounded history and new cycles");
+}
+
+async function runRepeatPurchaseTests(db: AdminFirestore): Promise<void> {
+  const now = Date.now();
+  const uid = tenantUid("repeat"), foreign = tenantUid("repeat-foreign"), free = tenantUid("repeat-free");
+  for (const id of [uid,foreign,free]) await createAuthUser(id);
+  for (const id of [uid,foreign]) await grantPremium(db,id);
+  const owner = db.collection("users").doc(uid);
+  const seed = async (who: string, clientId: string, productId: string) => {
+    const base = db.collection("users").doc(who);
+    for (const days of [90,60,30]) await base.collection("sales").doc(`${clientId}-${productId}-${days}`).set({id:`${clientId}-${productId}-${days}`,clientId,date:new Date(now-days*DAY_MS).toISOString(),totalPrice:50,products:[{productId,quantity:1,price:50}]});
+  };
+  await seedClient(db,uid,"client",{name:"Ana",lastPurchaseAt:new Date(now-30*DAY_MS).toISOString()});
+  await seedProduct(db,uid,"product",{name:"Creme",stock:5,lastSoldDate:new Date(now-30*DAY_MS).toISOString()});
+  await seed(uid,"client","product");
+  const repeats = async (at=now) => (await computeOpportunities(db,uid,at)).filter(item=>item.type==="repeat_purchase");
+  const [first] = await repeats();
+  assert.ok(first); assert.equal(first.priority,"medium");
+  assert.equal(first.evidence.purchaseCount,3); assert.equal(first.evidence.medianIntervalDays,30);
+  assert.match(first.reason,/Ana.*Creme.*30 dias/);
+  assert.match(buildOpportunityMessage(first)!,/Ana.*Creme/);
+  assert.equal(first.action.type,"contact_client");
+  assert.deepEqual(await repeats(),[first],"stable reads and fingerprint");
+  await seed(uid,"missing-client","product"); await seed(uid,"client","missing-product");
+  await seedClient(db,foreign,"missing-client",{}); await seedProduct(db,foreign,"missing-product",{stock:5});
+  await seed(foreign,"client","product");
+  assert.deepEqual(await repeats(),[first],"foreign client/product cannot satisfy current tenant sales");
+  const isolated = tenantUid("repeat-isolated");
+  await seedClient(db,isolated,"client",{}); await seedProduct(db,isolated,"product",{stock:5});
+  assert.equal((await computeOpportunities(db,isolated,now)).filter(item=>item.type==="repeat_purchase").length,0,"foreign sales cannot supply local cadence");
+  await owner.collection("products").doc("product").update({stock:0});
+  assert.equal((await repeats()).length,0);
+  await owner.collection("products").doc("product").update({stock:5,tenantUid:foreign});
+  assert.equal((await repeats()).length,0);
+  await owner.collection("products").doc("product").update({tenantUid:uid});
+  await owner.collection("clients").doc("client").update({planAccessState:"preserved"});
+  assert.equal((await repeats()).length,0);
+  await owner.collection("clients").doc("client").update({planAccessState:"active"});
+  const {baseUrl,close} = await startTestOpportunityServer();
+  try {
+    const actionPath = (item:Opportunity) => `/api/opportunities/${encodeURIComponent(item.fingerprint)}/action`;
+    const action = (who:string,item:Opportunity,status:string) => callOpportunityApi(baseUrl,who,actionPath(item),{method:"POST",body:{type:item.type,status}});
+    assert.equal((await callOpportunityApi(baseUrl,free,"/api/opportunities")).status,403);
+    assert.equal((await action(free,first,"acted")).status,403);
+    assert.equal((await action(foreign,first,"acted")).status,404);
+    const acted = await action(uid,first,"acted");
+    assert.equal(acted.status,200); assert.equal(opportunityResultState(acted.body.action),"awaiting_result");
+    assert.deepEqual((await action(uid,first,"acted")).body,acted.body);
+    assert.equal((await repeats()).length,0,"acted cycle does not reappear");
+    await owner.collection("sales").doc("new-purchase").set({id:"new-purchase",clientId:"client",date:new Date(now).toISOString(),totalPrice:50,products:[{productId:"product",quantity:1,price:50}]});
+    assert.equal((await repeats()).length,0);
+    const [next] = await repeats(now+30*DAY_MS);
+    assert.ok(next); assert.notEqual(next.fingerprint,first.fingerprint);
+    assert.equal((await owner.collection("opportunity_actions").doc(first.fingerprint).get()).data()!.outcome,undefined,"new purchase never auto-attributes conversion");
+    assert.equal((await callOpportunityApi(baseUrl,uid,actionPath(first).replace(/action$/,"outcome"),{method:"POST",body:{outcome:"converted",resultReference:{type:"sale",id:"new-purchase"}}})).status,200);
+    // A second eligible pair exercises dismissed through the real endpoint at wall-clock time.
+    await seedProduct(db,uid,"second",{name:"Sabonete",stock:5}); await seed(uid,"client","second");
+    const second = (await repeats()).find(item=>item.evidence.productId==="second")!;
+    assert.ok(second); assert.equal((await action(uid,second,"dismissed")).status,200);
+    assert.equal((await repeats()).length,0,"dismissed cycle does not reappear");
+    const history = await callOpportunityApi(baseUrl,uid,"/api/opportunities/history");
+    assert.equal(history.body.items.length,2);
+    assert.ok(history.body.items.some((item:any)=>item.opportunityType==="repeat_purchase" && item.outcome==="converted"));
+    assert.ok(history.body.items.some((item:any)=>item.status==="dismissed"));
+    console.log("PASS RP engine/lifecycle: real sales, missing entities, tenant mixing, stock/preserved guards, Premium/Free, acted/dismissed deduplication, manual outcome and future cycle");
+  } finally { await close(); }
+}
+
 async function run(): Promise<void> {
+  runRepeatPurchaseRuleTests();
   runEngineConsolidationTests();
   runPlanGatingTests();
   runActionTests();
@@ -1189,10 +1286,7 @@ async function run(): Promise<void> {
   await runOverdueLifecycleTests(db);
   await runGenericLifecycleSupportTests(db);
 
-  // RP1-RP6 — deferido (zero dado de cadência de recompra hoje, ver relatório final). Reportado
-  // honestamente, nunca implementado com uma regra fabricada. Reconfirmado sem mudança por
-  // PRODUCT-GROWTH-04/05 — nenhum novo dado de cadência de recompra foi introduzido por nenhuma das duas.
-  console.log("N/A RP1-RP6 repurchase_candidate is REPURCHASE_RUNTIME = DEFERRED_SCHEMA_PREREQUISITE this round (zero prior art, zero purchase-cadence data — see final report) — no fabricated rule was built to fill this gap");
+  await runRepeatPurchaseTests(db);
 
   console.log(`\nPLAN-IMPL-07A + PRODUCT-GROWTH-04 + PRODUCT-GROWTH-05 + PRODUCT-GROWTH-06 opportunity engine — all E/IC/SP/IS/RC/H/PG/A/CS/UI/CA/BACKFILL/FP/MB/LC/RA/OL/GT assertions passed (OPPORTUNITY_RESPONSE_LIMIT=${OPPORTUNITY_RESPONSE_LIMIT}, IDLE_SCHEDULE_WINDOW_DAYS=${IDLE_SCHEDULE_WINDOW_DAYS}). B1-B11 (browser) status: see final report.`);
 }

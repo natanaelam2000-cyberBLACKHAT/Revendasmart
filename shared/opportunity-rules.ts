@@ -63,13 +63,8 @@ export const OPPORTUNITY_ACTION_STATE_QUERY_LIMIT = 500;
 // Shape canônico — §5 do ticket, adaptado às necessidades reais do domínio.
 // ===================================================================================================
 
-/** §65/§20 — só os tipos com suporte de dados eficiente confirmado (auditoria PLAN-IMPL-07A + a
- * extensão PRODUCT-GROWTH-04, que adicionou "overdue_receivable" reaproveitando o índice composto
- * status+dueDate de installments já existente — nenhum índice novo, nenhum N+1). "repurchase_candidate"
- * continua deliberadamente ausente — ver REPURCHASE_RUNTIME no relatório final de PLAN-IMPL-07A (zero
- * dado de cadência de recompra, reconfirmado sem mudança nesta ticket); nenhuma dessas strings pode ser
- * confundida com um tipo inventado. */
-export type OpportunityType = "inactive_client" | "stalled_product" | "idle_schedule" | "overdue_receivable";
+/** Deterministic opportunity kinds; repeat_purchase uses observed sale-item cadence. */
+export type OpportunityType = "inactive_client" | "stalled_product" | "idle_schedule" | "overdue_receivable" | "repeat_purchase";
 
 /** §8/§25 — só 3 buckets fechados, nunca um score/porcentagem fabricado. */
 export type OpportunityPriority = "high" | "medium" | "low";

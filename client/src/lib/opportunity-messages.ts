@@ -40,6 +40,8 @@ export type OpportunityMessageInput = Pick<Opportunity, "type" | "evidence" | "e
  */
 export function buildOpportunityMessage(opportunity: OpportunityMessageInput): string | null {
   switch (opportunity.type) {
+    case "repeat_purchase":
+      return `${greetingFor(opportunity.entityReference.name)} Passando para saber se você está precisando de ${opportunity.evidence.productName || "seu produto"} novamente. Se quiser, posso te ajudar 😊`;
     case "inactive_client":
       // §3 — nunca cita produto específico comprado, nunca promete um benefício comercial inexistente:
       // só oferece ajuda genérica, igual ao próprio exemplo do pedido.
