@@ -8,6 +8,8 @@ import { backfillClientLastPurchase } from "../server/backfill-client-last-purch
 import { finalizeSaleTransaction } from "../server/sale-finalize-transaction";
 import { resolveServerPlan } from "../server/plan-authoritative-mutations";
 import {
+  opportunityResultState,
+  summarizeOpportunityOutcomes,
   INACTIVE_CLIENT_THRESHOLD_DAYS,
   STALLED_PRODUCT_THRESHOLD_DAYS,
   IDLE_SCHEDULE_WINDOW_DAYS,
@@ -564,7 +566,7 @@ async function runLifecycleCoreTests(db: AdminFirestore): Promise<void> {
     const crossTenantAttempt = await callOpportunityApi(baseUrl, uidOther, `/api/opportunities/${encodeURIComponent(mariaFingerprint)}/action`, {
       method: "POST", body: { status: "dismissed", type: "inactive_client", title: "x", reason: "x" },
     });
-    assert.equal(crossTenantAttempt.status, 200, "LC6: a chamada em si é aceita (fingerprint é só uma string, sem verificação cross-tenant no valor)");
+    assert.equal(crossTenantAttempt.status, 404, "LC6: fingerprint de outro ciclo/tenant não pode criar ação sem oportunidade autoritativa correspondente");
     const originalTenantList = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
     assert.equal(originalTenantList.body.opportunities.some((o: any) => o.entityReference.id === "maria"), false, "LC6: mesmo com uma tentativa de escrever o MESMO texto de fingerprint como outro uid, o tenant ORIGINAL nunca é afetado — cada write vai para users/{SEU PRÓPRIO uid}/opportunity_actions/..., nunca um caminho compartilhado");
     const unauthenticated = await callOpportunityApi(baseUrl, null, "/api/opportunities");
@@ -932,8 +934,10 @@ function runActionTests(): void {
   assert.doesNotMatch(detectionAndReadOnlySrc, /\.set\(|\.update\(|\.create\(|\.delete\(|db\.batch\(|db\.runTransaction\(/, "A6: todo o código ANTES da rota de ação (os 4 detectores, computeOpportunities, loadOpportunityActionState, GET /api/opportunities, GET /api/opportunities/history) nunca muta NADA — só leitura; a única exceção real do arquivo é a própria rota de ação, abaixo desta fatia");
   const actionRouteSrc = engineSrc.slice(actionRouteStart);
   const actionRouteSetCalls = actionRouteSrc.match(/\.set\(/g) ?? [];
-  assert.equal(actionRouteSetCalls.length, 1, "A6/PRODUCT-GROWTH-05: exatamente UMA escrita em todo o arquivo (ref.set(record), dentro da rota de ação) — nunca um segundo caminho de mutação escondido em outro lugar");
-  console.log("PASS A6 (updated for PRODUCT-GROWTH-05) every detector, computeOpportunities, loadOpportunityActionState, and both read-only routes (list + history) remain strictly read-only; the file's only write is the single ref.set(record) inside the explicit user-triggered mark-acted/dismiss route — listing or evaluating opportunities never mutates anything by itself, and the (still-separate, still-never-imported) backfill script remains the only other historical exception");
+  assert.equal(actionRouteSetCalls.length, 2, "A6: duas escritas transacionais explícitas, action e outcome");
+  const historySrc = engineSrc.slice(engineSrc.indexOf('app.get("/api/opportunities/history"'));
+  assert.doesNotMatch(historySrc, /\.set\(|\.update\(|\.create\(|\.delete\(|db\.runTransaction\(/, "Histórico e métricas nunca escrevem");
+  console.log("PASS A6 detection/list/history stay read-only; only explicit action and outcome POSTs write transactionally");
 }
 
 // ===================================================================================================
@@ -1098,6 +1102,66 @@ function runPrivacyAndAnalyticsTests(): void {
   console.log("PASS §40 the engine never reads or exposes client notes/email/phone — evidence stays bounded to id/name/dates/counts");
 }
 
+
+async function runOutcomeTests(db: AdminFirestore): Promise<void> {
+  const { baseUrl, close } = await startTestOpportunityServer();
+  try {
+    const uid = tenantUid("outcomes"), foreign = tenantUid("foreign"), free = tenantUid("free-outcomes");
+    for (const id of [uid, foreign, free]) await createAuthUser(id);
+    for (const id of [uid, foreign]) await grantPremium(db, id);
+    for (const id of ["one", "two", "three", "dismissed"]) await seedClient(db, uid, id, { lastPurchaseAt: isoDaysAgo(100) });
+    const list = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    const records: any[] = [];
+    for (const item of list.body.opportunities) {
+      const response = await callOpportunityApi(baseUrl, uid, "/api/opportunities/" + encodeURIComponent(item.fingerprint) + "/action", {
+        method: "POST", body: { type: item.type, status: item.entityReference.id === "dismissed" ? "dismissed" : "acted" },
+      });
+      assert.equal(response.status, 200); records.push(response.body.action);
+    }
+    const acted = records.filter(item => item.status === "acted");
+    const dismissed = records.find(item => item.status === "dismissed");
+    assert.equal(opportunityResultState(acted[0]), "awaiting_result");
+    assert.equal(summarizeOpportunityOutcomes([]).conversionRate, 0);
+    const path = (item: any) => "/api/opportunities/" + encodeURIComponent(item.fingerprint) + "/outcome";
+    const post = (who: string | null, item: any, body: any) => callOpportunityApi(baseUrl, who, path(item), { method: "POST", body });
+    assert.equal((await post(null, acted[0], { outcome: "converted" })).status, 401);
+    assert.equal((await post(foreign, acted[0], { outcome: "converted" })).status, 404);
+    assert.equal((await post(free, acted[0], { outcome: "converted" })).status, 403);
+    assert.equal((await post(uid, dismissed, { outcome: "converted" })).status, 409);
+    await seedHistoricalSale(db, foreign, "foreign-sale", "one", isoDaysAgo(0));
+    await seedHistoricalSale(db, uid, "own-sale", "one", isoDaysAgo(0));
+    for (const reference of [{ type: "sale", id: "foreign-sale" }, { type: "sale", id: "missing" },
+      { type: "work", id: "own-sale" }, { type: "sale", id: "../foreign" }, { type: "sale", id: "own-sale", uid: foreign }]) {
+      assert.equal((await post(uid, acted[0], { outcome: "converted", resultReference: reference })).status, 400);
+    }
+    const payload = { outcome: "converted", resultReference: { type: "sale", id: "own-sale" } };
+    const [converted, duplicate] = await Promise.all([post(uid, acted[0], payload), post(uid, acted[0], payload)]);
+    assert.equal(converted.status, 200); assert.equal(duplicate.status, 200);
+    assert.deepEqual(converted.body.action, duplicate.body.action);
+    assert.equal((await post(uid, acted[0], { outcome: "converted", resultReference: { id: "own-sale", type: "sale" } })).status, 200, "reference property order does not change idempotency");
+    const resultPath = path(acted[0]).replace(/outcome$/, "result");
+    assert.equal((await callOpportunityApi(baseUrl, uid, resultPath)).body.result.id, "own-sale");
+    assert.equal((await callOpportunityApi(baseUrl, foreign, resultPath)).status, 404);
+    assert.equal((await callOpportunityApi(baseUrl, free, resultPath)).status, 403);
+    await db.collection("users").doc(uid).collection("sales").doc("own-sale").delete();
+    assert.equal((await callOpportunityApi(baseUrl, uid, resultPath)).status, 404, "removed source does not serve a stale business copy");
+    assert.equal(converted.body.action.actedAt, acted[0].actedAt);
+    assert.equal(converted.body.action.reasonSnapshot, acted[0].reasonSnapshot);
+    assert.equal((await post(uid, acted[0], { outcome: "no_result" })).status, 409);
+    assert.equal((await post(uid, acted[1], { outcome: "no_result" })).status, 200);
+    const reload = await callOpportunityApi(baseUrl, uid, "/api/opportunities/history");
+    assert.deepEqual(reload.body.metrics, { actions: 3, converted: 1, no_result: 1, awaiting: 1, conversionRate: 50 });
+    assert.equal(opportunityResultState(reload.body.items.find((item: any) => item.fingerprint === dismissed.fingerprint)), "dismissed");
+    assert.equal(opportunityResultState(reload.body.items.find((item: any) => item.fingerprint === acted[1].fingerprint)), "no_result");
+    assert.deepEqual((await callOpportunityApi(baseUrl, uid, "/api/opportunities/history")).body, reload.body, "GET does not write or inflate metrics");
+    const entityId = acted[0].fingerprint.split(":")[1];
+    await seedClient(db, uid, entityId, { lastPurchaseAt: isoDaysAgo(80) });
+    const next = await callOpportunityApi(baseUrl, uid, "/api/opportunities");
+    assert.ok(next.body.opportunities.some((item: any) => item.entityReference.id === entityId && item.fingerprint !== acted[0].fingerprint));
+    console.log("PASS Outcomes A-L/N: explicit outcomes, reload, concurrent idempotency, entitlement, tenant/reference rejection, independent cycles and persisted metrics");
+  } finally { await close(); }
+}
+
 async function run(): Promise<void> {
   runEngineConsolidationTests();
   runPlanGatingTests();
@@ -1120,6 +1184,7 @@ async function run(): Promise<void> {
   await runHybridTests(db);
   await runBackfillVerificationTests(db);
   await runLifecycleCoreTests(db);
+  await runOutcomeTests(db);
   await runReappearanceTests(db);
   await runOverdueLifecycleTests(db);
   await runGenericLifecycleSupportTests(db);

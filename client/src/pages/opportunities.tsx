@@ -6,13 +6,14 @@ import { Layout } from "@/components/layout";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { EmptyState } from "@/components/EmptyState";
 import { usePlan } from "@/providers/PlanProvider";
-import { fetchOpportunities, fetchOpportunityHistory, markOpportunityAction } from "@/lib/opportunities-client";
+import { fetchOpportunities, fetchOpportunityHistory, markOpportunityAction, markOpportunityOutcome, fetchOpportunityResult, type OpportunityLinkedResult } from "@/lib/opportunities-client";
 import { resolveOpportunityActionRoute } from "@/lib/opportunity-actions";
 import { buildOpportunityMessage, buildWhatsAppUrl } from "@/lib/opportunity-messages";
 import { normalizeWhatsappPhone } from "@/lib/whatsapp-phone";
 import { trackAnalyticsEvent, waitForAuthReady } from "@/lib/firebase";
 import { notifyError, notifySuccess } from "@/lib/notify";
 import type { PlanType } from "@shared/monetization";
+import { opportunityResultState, summarizeOpportunityOutcomes } from "@shared/opportunity-rules";
 import type { Opportunity, OpportunityActionRecord, OpportunityActionStatus, OpportunityType } from "@shared/opportunity-rules";
 
 /**
@@ -225,7 +226,23 @@ function OpportunityCard({ opportunity, pending, engaged, clientPhone, onAct, on
   );
 }
 
-function HistoryItemCard({ item }: { item: OpportunityActionRecord }) {
+function HistoryItemCard({ item, onUpdated }: { item: OpportunityActionRecord; onUpdated: () => void }) {
+  const [pending, setPending] = useState(false);
+  const [result, setResult] = useState<OpportunityLinkedResult | null>(null);
+  const [linkResult, setLinkResult] = useState(false);
+  const [referenceId, setReferenceId] = useState("");
+  const resultType = item.opportunityType === "overdue_receivable" ? "installment" : item.opportunityType === "idle_schedule" ? "work" : "sale";
+  const labels = { awaiting_result: "Feito — aguardando resultado", converted: "Gerou resultado", no_result: "Sem resultado", dismissed: "Dispensada" };
+  const save = async (outcome: "converted" | "no_result") => {
+    if (pending) return;
+    setPending(true);
+    try {
+      await markOpportunityOutcome(item.fingerprint, outcome, outcome === "converted" && linkResult && referenceId.trim() ? { type: resultType, id: referenceId.trim() } : undefined);
+      notifySuccess("Resultado registrado.");
+      onUpdated();
+    } catch { notifyError("Não foi possível registrar. Confira a referência e tente novamente."); }
+    finally { setPending(false); }
+  };
   const Icon = TYPE_ICON[item.opportunityType] ?? Sparkles;
   const isActed = item.status === "acted";
   const dateIso = isActed ? item.actedAt : item.dismissedAt;
@@ -236,17 +253,48 @@ function HistoryItemCard({ item }: { item: OpportunityActionRecord }) {
           <Icon className="w-5 h-5" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">{TYPE_LABEL[item.opportunityType] ?? item.opportunityType}</p>
             <span className={`text-[9px] font-black uppercase tracking-wide px-1.5 py-0.5 rounded-full ${isActed ? "text-emerald-700 bg-emerald-50" : "text-muted-foreground bg-secondary"}`}>
-              {isActed ? "Feito" : "Dispensada"}
+              {labels[opportunityResultState(item)]}
             </span>
           </div>
           <p className="font-bold text-foreground truncate">{item.title}</p>
           {item.reasonSnapshot && <p className="text-xs text-muted-foreground mt-0.5">{item.reasonSnapshot}</p>}
-          {dateIso && <p className="text-[10px] text-muted-foreground/70 mt-1">{formatHistoryDate(dateIso)}</p>}
+          {dateIso && <p className="text-[10px] text-muted-foreground/70 mt-1">Ação: {formatHistoryDate(dateIso)}</p>}
         </div>
       </div>
+      {item.resultReference && <button type="button" disabled={pending} className="mt-3 min-h-11 text-xs font-bold text-primary"
+        onClick={async () => { setPending(true); try { setResult((await fetchOpportunityResult(item.fingerprint)).result); }
+          catch { notifyError("Registro não disponível. Ele pode ter sido removido."); } finally { setPending(false); } }}>Abrir resultado associado</button>}
+      {result && <section aria-label="Resultado associado" className="rounded-xl border p-3 mt-2 text-xs space-y-2 break-words">
+        <p className="font-bold">{result.type === "sale" ? "Venda" : result.type === "installment" ? "Parcela" : "Atendimento"} · {result.id}</p>
+        {result.date && <p>Data: {formatHistoryDate(result.date)}</p>}
+        {result.status && <p>Status: {({ paid: "Pago", pending: "Pendente", partial: "Parcial", completed: "Concluído", cancelled: "Cancelado" } as Record<string, string>)[result.status] ?? result.status}</p>}
+        {result.amount !== null && <p>Valor: {result.amount.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</p>}
+        <p className="text-muted-foreground">Dados consultados no registro original.</p>
+        {result.href && <a className="block min-h-11 text-primary" href={result.href}>Ver atendimento</a>}
+        <button type="button" className="min-h-11 font-bold" onClick={() => setResult(null)}>Fechar resultado</button>
+      </section>}
+      {item.outcomeAt && <p className="text-xs text-muted-foreground mt-2">Resultado: {formatHistoryDate(item.outcomeAt)}</p>}
+      {isActed && !item.outcome && (
+        <div className="mt-3 space-y-3">
+          <label className="flex items-center gap-2 text-xs min-h-11">
+            <input type="checkbox" checked={linkResult} disabled={pending} onChange={event => setLinkResult(event.target.checked)} />
+            Associar {resultType === "sale" ? "venda" : resultType === "work" ? "atendimento" : "parcela"} existente (opcional)
+          </label>
+          {linkResult && <label className="block text-xs">Identificador do registro
+            <input className="mt-1 w-full min-w-0 rounded-lg border p-3" value={referenceId} maxLength={128} disabled={pending}
+              onChange={event => setReferenceId(event.target.value)} placeholder="ID do registro existente" />
+          </label>}
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" disabled={pending || (linkResult && !referenceId.trim())} onClick={() => save("converted")}
+              className="min-h-11 rounded-xl bg-emerald-50 text-emerald-700 text-xs font-bold px-2 disabled:opacity-50">Gerou resultado</button>
+            <button type="button" disabled={pending} onClick={() => save("no_result")}
+              className="min-h-11 rounded-xl bg-secondary text-xs font-bold px-2 disabled:opacity-50">Não gerou resultado</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -317,7 +365,7 @@ export default function Opportunities() {
   }, [planLoading, hasPremiumAccess, reloadToken]);
 
   useEffect(() => {
-    if (tab !== "history" || planLoading || !hasPremiumAccess) return;
+    if (planLoading || !hasPremiumAccess) return;
     let cancelled = false;
     setHistoryLoading(true);
     setHistoryError(false);
@@ -326,7 +374,7 @@ export default function Opportunities() {
       .catch(() => { if (!cancelled) setHistoryError(true); })
       .finally(() => { if (!cancelled) setHistoryLoading(false); });
     return () => { cancelled = true; };
-  }, [tab, planLoading, hasPremiumAccess, historyReloadToken]);
+  }, [planLoading, hasPremiumAccess, historyReloadToken]);
 
   // PRODUCT-GROWTH-06 §15 — leitura em lote de telefone, só para os clientIds já presentes na lista
   // ativa; falha aqui nunca quebra a página — o card correspondente só cai no fallback de "sem telefone".
@@ -360,7 +408,7 @@ export default function Opportunities() {
         // §9 — atualiza a lista sem recarregar a página inteira; a próxima visita ao Histórico busca de
         // novo do zero (historyReloadToken), nunca reaproveita um cache potencialmente desatualizado.
         setOpportunities((prev) => (prev ? prev.filter((item) => item.fingerprint !== opportunity.fingerprint) : prev));
-        setHistory(null);
+        setHistoryReloadToken(n => n + 1);
         notifySuccess(status === "acted" ? "Marcado como feito." : "Oportunidade dispensada.");
       })
       .catch((err) => {
@@ -377,6 +425,8 @@ export default function Opportunities() {
 
   const handleAct = useCallback((opportunity: Opportunity) => handleLifecycleAction(opportunity, "acted"), [handleLifecycleAction]);
   const handleDismiss = useCallback((opportunity: Opportunity) => handleLifecycleAction(opportunity, "dismissed"), [handleLifecycleAction]);
+
+  const metrics = history ? summarizeOpportunityOutcomes(history) : null;
 
   const activeTabButton = (
     <button
@@ -416,6 +466,17 @@ export default function Opportunities() {
           <PremiumUpsell currentPlan={activePlan} />
         ) : (
           <>
+            {metrics && !historyError && <section aria-label="Métricas de resultados" className="space-y-2">
+              <p className="text-xs text-muted-foreground">Resultados dos últimos 500 registros do histórico</p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {Object.entries({ "Ações realizadas": metrics.actions,
+                  "Convertidas": metrics.converted,
+                  "Sem resultado": metrics.no_result,
+                  "Aguardando resultado": metrics.awaiting,
+                  "Taxa de conversão": metrics.conversionRate.toFixed(0) + "%" }).map(([label, value]) =>
+                  <div key={label} className="rounded-xl border p-3 min-w-0"><p className="text-xs text-muted-foreground">{label}</p><p className="text-xl font-bold">{value}</p></div>)}
+              </div>
+            </section>}
             <div className="flex gap-2">
               {activeTabButton}
               {historyTabButton}
@@ -478,7 +539,7 @@ export default function Opportunities() {
             ) : (
               <div className="space-y-3">
                 {history.map((item) => (
-                  <HistoryItemCard key={item.fingerprint} item={item} />
+                  <HistoryItemCard key={item.fingerprint} item={item} onUpdated={() => setHistoryReloadToken(n => n + 1)} />
                 ))}
               </div>
             )}

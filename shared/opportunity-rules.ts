@@ -168,6 +168,9 @@ export interface OpportunityActionRecord {
   readonly status: OpportunityActionStatus;
   readonly title: string;
   readonly reasonSnapshot: string;
+  readonly outcome?: "converted" | "no_result";
+  readonly outcomeAt?: string;
+  readonly resultReference?: { type: "sale" | "installment" | "work"; id: string };
   readonly actedAt: string | null;
   readonly dismissedAt: string | null;
   readonly createdAt: string;
@@ -225,4 +228,18 @@ export function compareOpportunities(
  * como premium via effectivePlan, autoridade existente de ensurePlanLifecycleCurrent). */
 export function hasAdvancedOpportunityAccess(effectivePlan: PlanType): boolean {
   return effectivePlan === "premium";
+}
+
+/** Outcomes describe explicit attribution; authoritative business data stays in its own record. */
+export function opportunityResultState(item: OpportunityActionRecord) {
+  return item.status === "dismissed" ? "dismissed" : item.outcome ?? "awaiting_result";
+}
+
+export function summarizeOpportunityOutcomes(items: readonly OpportunityActionRecord[]) {
+  const actions = items.filter(item => item.status === "acted");
+  const converted = actions.filter(item => item.outcome === "converted").length;
+  const noResult = actions.filter(item => item.outcome === "no_result").length;
+  return { actions: actions.length, converted, no_result: noResult,
+    awaiting: actions.length - converted - noResult,
+    conversionRate: converted + noResult ? 100 * converted / (converted + noResult) : 0 };
 }

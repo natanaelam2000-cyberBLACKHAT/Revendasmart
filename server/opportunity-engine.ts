@@ -32,6 +32,7 @@
 import type { Express, NextFunction, Request, Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 import {
+  summarizeOpportunityOutcomes,
   type Opportunity,
   type OpportunityActionRecord,
   type OpportunityActionStatus,
@@ -359,6 +360,8 @@ async function loadOpportunityActionState(db: Firestore, uid: string): Promise<R
       fingerprint: doc.id,
       opportunityType: data.opportunityType,
       status: data.status,
+      ...(data.status === "acted" && (data.outcome === "converted" || data.outcome === "no_result") ? { outcome: data.outcome, outcomeAt: data.outcomeAt } : {}),
+      ...(data.resultReference ? { resultReference: data.resultReference } : {}),
       title: typeof data.title === "string" ? data.title : "",
       reasonSnapshot: typeof data.reasonSnapshot === "string" ? data.reasonSnapshot : "",
       actedAt: typeof data.actedAt === "string" ? data.actedAt : null,
@@ -493,23 +496,14 @@ export function registerOpportunityRoutes(
     }
   });
 
-  /**
-   * PRODUCT-GROWTH-05 §2/§3/§8 — marca uma oportunidade como "acted" ou "dismissed". `fingerprint` vem
-   * da URL (nunca do body — evita um segundo caminho para o mesmo valor divergir); uid SEMPRE de
-   * `req.firebaseUid` (verificado por requireAuth, nunca aceito do client, §3 — cross-tenant é P0).
-   * Idempotente por construção: a escrita sempre substitui o documento inteiro cuja chave já é o
-   * fingerprint (nunca uma criação que falharia se o documento já existisse) — chamar duas vezes com o
-   * mesmo status produz o mesmo resultado, nunca um erro de duplicidade (§9/§14 "double action").
-   * `type`/`title`/`reason` vêm do client (o MESMO payload que
-   * /api/opportunities acabou de servir para esta mesma oportunidade) — texto de exibição inerte só
-   * (§2: nunca usado em autorização/valor financeiro; a query real em computeOpportunities continua
-   * sendo a única autoridade sobre o que está ativo), sanitizado/limitado antes de persistir.
-   */
+  /** Lifecycle creation validates the server-computed opportunity in the caller's tenant.
+   * The transaction preserves the first action, timestamps and any subsequent outcome on retries.
+   * Title and reason snapshots come from the server; client text is never authoritative. */
   app.post("/api/opportunities/:fingerprint/action", requireAuth, async (req: Request, res: Response) => {
     const uid = (req as Request & { firebaseUid?: string }).firebaseUid;
     if (!uid) return res.status(401).json({ code: "UNAUTHORIZED", message: "Sessão inválida. Faça login novamente." });
     const fingerprint = String(req.params.fingerprint || "");
-    if (!fingerprint || fingerprint.length > 300) {
+    if (!fingerprint || fingerprint.length > 300 || fingerprint.includes("/")) {
       return res.status(400).json({ code: "INVALID_FINGERPRINT", message: "Identificador de oportunidade inválido." });
     }
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -530,25 +524,82 @@ export function registerOpportunityRoutes(
       }
       const ref = db.collection("users").doc(uid).collection("opportunity_actions").doc(fingerprint);
       const existing = await ref.get();
-      const nowIso = new Date().toISOString();
-      const existingCreatedAt = existing.exists && typeof existing.data()?.createdAt === "string" ? String(existing.data()!.createdAt) : nowIso;
-      const status = body.status;
-      const record: OpportunityActionRecord = {
-        fingerprint,
-        opportunityType: body.type,
-        status,
-        title: sanitizeSnapshotText(body.title, "Oportunidade"),
-        reasonSnapshot: sanitizeSnapshotText(body.reason, ""),
-        actedAt: status === "acted" ? nowIso : null,
-        dismissedAt: status === "dismissed" ? nowIso : null,
-        createdAt: existingCreatedAt,
-        updatedAt: nowIso,
-      };
-      await ref.set(record);
+      if (existing.exists) return res.status(200).json({ action: existing.data() });
+      // Only a server-computed opportunity belonging to this tenant may start a lifecycle.
+      const opportunity = (await computeOpportunities(db, uid)).find(item => item.fingerprint === fingerprint && item.type === body.type);
+      if (!opportunity) return res.status(404).json({ code: "OPPORTUNITY_NOT_FOUND" });
+      const record = await db.runTransaction(async transaction => {
+        const current = await transaction.get(ref);
+        if (current.exists) return current.data() as OpportunityActionRecord;
+        const nowIso = new Date().toISOString();
+        const action: OpportunityActionRecord = {
+          fingerprint, opportunityType: opportunity.type, status: body.status as OpportunityActionStatus,
+          title: sanitizeSnapshotText(opportunity.entityReference.name, "Oportunidade"),
+          reasonSnapshot: sanitizeSnapshotText(opportunity.reason, ""),
+          actedAt: body.status === "acted" ? nowIso : null,
+          dismissedAt: body.status === "dismissed" ? nowIso : null,
+          createdAt: nowIso, updatedAt: nowIso,
+        };
+        transaction.set(ref, action);
+        return action;
+      });
       return res.status(200).json({ action: record });
     } catch (error) {
       logError("opportunity_engine.action_route_failed", error, { requestId: req.requestId });
       return res.status(503).json({ code: "OPPORTUNITY_ACTION_UNAVAILABLE", message: "Não foi possível registrar a ação agora. Tente novamente." });
+    }
+  });
+
+  app.post("/api/opportunities/:fingerprint/outcome", requireAuth, async (req: Request, res: Response) => {
+    const uid = (req as Request & { firebaseUid?: string }).firebaseUid;
+    if (!uid) return res.status(401).json({ code: "UNAUTHORIZED" });
+    const fingerprint = String(req.params.fingerprint || "");
+    const { outcome, resultReference } = req.body ?? {};
+    if (!fingerprint || fingerprint.length > 300 || fingerprint.includes("/") || !["converted", "no_result"].includes(outcome)) {
+      return res.status(400).json({ code: "INVALID_OUTCOME" });
+    }
+    const collections = { sale: "sales", installment: "installments", work: "serviceWorks" } as const;
+    if (resultReference !== undefined && (outcome !== "converted" || !resultReference ||
+      !Object.hasOwn(collections, resultReference.type) || typeof resultReference.id !== "string" ||
+      !/^[A-Za-z0-9_-]{1,128}$/.test(resultReference.id) || Object.keys(resultReference).some(key => key !== "type" && key !== "id"))) {
+      return res.status(400).json({ code: "INVALID_RESULT_REFERENCE" });
+    }
+    try {
+      const db = getFirebaseAdmin().firestore();
+      if (!await isAdminUid(uid) && !hasAdvancedOpportunityAccess(await resolveServerPlan(db, uid))) {
+        return res.status(403).json({ code: "OPPORTUNITIES_PLAN_REQUIRED" });
+      }
+      const ref = db.collection("users").doc(uid).collection("opportunity_actions").doc(fingerprint);
+      const result = await db.runTransaction(async transaction => {
+        const snap = await transaction.get(ref);
+        if (!snap.exists) return { error: 404, code: "OPPORTUNITY_NOT_FOUND" };
+        const action = snap.data() as OpportunityActionRecord;
+        if (action.status !== "acted") return { error: 409, code: "ACTION_NOT_ACTED" };
+        if (resultReference) {
+          const allowed = action.opportunityType === "overdue_receivable" ? ["installment"] :
+            action.opportunityType === "idle_schedule" ? ["work"] : ["sale"];
+          if (!allowed.includes(resultReference.type)) return { error: 400, code: "INCOMPATIBLE_RESULT_TYPE" };
+          const collection = collections[resultReference.type as keyof typeof collections];
+          const target = await transaction.get(db.collection("users").doc(uid).collection(collection).doc(resultReference.id));
+          if (!target.exists || (action.opportunityType === "overdue_receivable" && fingerprint !== buildOpportunityFingerprint("overdue_receivable", resultReference.id))) {
+            return { error: 400, code: "INVALID_RESULT_REFERENCE" };
+          }
+        }
+        if (action.outcome) {
+          if (action.outcome === outcome && (action.resultReference?.type === resultReference?.type && action.resultReference?.id === resultReference?.id)) return { action };
+          return { error: 409, code: "OUTCOME_ALREADY_RECORDED" };
+        }
+        const nowIso = new Date().toISOString();
+        const updated: OpportunityActionRecord = { ...action, outcome, outcomeAt: nowIso, updatedAt: nowIso,
+          ...(resultReference ? { resultReference: { type: resultReference.type, id: resultReference.id } } : {}) };
+        transaction.set(ref, updated);
+        return { action: updated };
+      });
+      if (result.error) return res.status(result.error).json({ code: result.code });
+      return res.status(200).json({ action: result.action });
+    } catch (error) {
+      logError("opportunity_engine.outcome_failed", error, { requestId: req.requestId });
+      return res.status(503).json({ code: "OPPORTUNITY_OUTCOME_UNAVAILABLE" });
     }
   });
 
@@ -557,6 +608,34 @@ export function registerOpportunityRoutes(
    * lista ativa (loadOpportunityActionState, nenhuma segunda leitura/lógica), já ordenada por
    * updatedAt desc pela própria query — mais recente primeiro, nenhum sort adicional necessário.
    */
+  // Read-through result viewer: one owned document on explicit click, never a copied business record.
+  app.get("/api/opportunities/:fingerprint/result", requireAuth, async (req: Request, res: Response) => {
+    const uid = (req as Request & { firebaseUid?: string }).firebaseUid;
+    if (!uid) return res.status(401).json({ code: "UNAUTHORIZED" });
+    const fingerprint = String(req.params.fingerprint || "");
+    if (!fingerprint || fingerprint.length > 300 || fingerprint.includes("/")) return res.status(400).json({ code: "INVALID_FINGERPRINT" });
+    try {
+      const db = getFirebaseAdmin().firestore();
+      if (!await isAdminUid(uid) && !hasAdvancedOpportunityAccess(await resolveServerPlan(db, uid))) return res.status(403).json({ code: "OPPORTUNITIES_PLAN_REQUIRED" });
+      const owner = db.collection("users").doc(uid);
+      const action = (await owner.collection("opportunity_actions").doc(fingerprint).get()).data() as OpportunityActionRecord | undefined;
+      const reference = action?.resultReference;
+      const collections = { sale: "sales", installment: "installments", work: "serviceWorks" } as const;
+      if (action?.outcome !== "converted" || !reference || !Object.hasOwn(collections, reference.type) || !/^[A-Za-z0-9_-]{1,128}$/.test(reference.id)) return res.status(404).json({ code: "RESULT_NOT_FOUND" });
+      const source = (await owner.collection(collections[reference.type]).doc(reference.id).get()).data();
+      if (!source) return res.status(404).json({ code: "RESULT_NOT_FOUND" });
+      return res.json({ result: { type: reference.type, id: reference.id,
+        date: typeof source.date === "string" ? source.date : typeof source.dueDate === "string" ? source.dueDate : null,
+        status: typeof source.status === "string" ? source.status : null,
+        amount: typeof source.totalPrice === "number" ? source.totalPrice : typeof source.amount === "number" ? source.amount : null,
+        href: reference.type === "work" ? "/servicos/atendimentos/" + encodeURIComponent(reference.id) : null,
+      } });
+    } catch (error) {
+      logError("opportunity_engine.result_failed", error, { requestId: req.requestId });
+      return res.status(503).json({ code: "RESULT_UNAVAILABLE" });
+    }
+  });
+
   app.get("/api/opportunities/history", requireAuth, async (req: Request, res: Response) => {
     const uid = (req as Request & { firebaseUid?: string }).firebaseUid;
     if (!uid) return res.status(401).json({ code: "UNAUTHORIZED", message: "Sessão inválida. Faça login novamente." });
@@ -570,7 +649,7 @@ export function registerOpportunityRoutes(
         }
       }
       const actionState = await loadOpportunityActionState(db, uid);
-      return res.status(200).json({ items: Object.values(actionState) });
+      return res.status(200).json({ items: Object.values(actionState), metrics: summarizeOpportunityOutcomes(Object.values(actionState)), limit: OPPORTUNITY_ACTION_STATE_QUERY_LIMIT });
     } catch (error) {
       logError("opportunity_engine.history_route_failed", error, { requestId: req.requestId });
       return res.status(503).json({ code: "OPPORTUNITY_HISTORY_UNAVAILABLE", message: "Não foi possível carregar o histórico agora. Tente novamente." });

@@ -31,10 +31,23 @@ export interface OpportunityHistoryResponse {
   readonly items: OpportunityActionRecord[];
 }
 
-/** PRODUCT-GROWTH-05 §5 — só chamado quando a aba Histórico é aberta (nunca junto com a lista ativa por
- * padrão), mesmo espírito de §22 do 07A: nenhuma chamada previsível a mais no caminho comum. */
+/** Shared history and metrics read, gated by Premium in the caller and on the server. */
 export async function fetchOpportunityHistory(): Promise<OpportunityHistoryResponse> {
   return apiRequest<OpportunityHistoryResponse>("/api/opportunities/history", { auth: true });
 }
 
 export type { OpportunityActionRecord, OpportunityActionStatus, OpportunityType };
+
+export async function markOpportunityOutcome(fingerprint: string, outcome: "converted" | "no_result",
+  resultReference?: OpportunityActionRecord["resultReference"]): Promise<{ action: OpportunityActionRecord }> {
+  return apiRequest("/api/opportunities/" + encodeURIComponent(fingerprint) + "/outcome", {
+    auth: true, method: "POST", body: { outcome, ...(resultReference ? { resultReference } : {}) },
+  });
+}
+
+export interface OpportunityLinkedResult {
+  type: "sale" | "installment" | "work"; id: string; date: string | null; status: string | null; amount: number | null; href: string | null;
+}
+export async function fetchOpportunityResult(fingerprint: string): Promise<{ result: OpportunityLinkedResult }> {
+  return apiRequest("/api/opportunities/" + encodeURIComponent(fingerprint) + "/result", { auth: true });
+}
