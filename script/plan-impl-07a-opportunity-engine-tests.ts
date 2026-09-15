@@ -964,7 +964,7 @@ function runCostScaleTests(): void {
 // UI1-UI10 — texto-fonte da página.
 // ===================================================================================================
 function runUiTests(): void {
-  const pageSrc = sourceOf("client/src/pages/opportunities.tsx");
+  const pageSrc = sourceOf("client/src/components/opportunities/OpportunityCard.tsx") + "\n" + sourceOf("client/src/pages/opportunities.tsx");
   assert.match(pageSrc, /opportunities\.map\(\(opportunity\) =>/, "UI1: Premium vê a lista real de oportunidades");
   assert.match(pageSrc, /\{opportunity\.reason\}/, "UI2: a explicação (WHY) é sempre exibida");
   assert.match(pageSrc, /\{opportunity\.action\.label\}/, "UI3: a ação é sempre exibida quando real");
@@ -993,7 +993,7 @@ function runUiTests(): void {
 // vaza telefone via /api/opportunities.
 // ===================================================================================================
 function runCommercialActionTests(): void {
-  const pageSrc = sourceOf("client/src/pages/opportunities.tsx");
+  const pageSrc = sourceOf("client/src/components/opportunities/OpportunityCard.tsx") + "\n" + sourceOf("client/src/pages/opportunities.tsx");
   const messagesSrc = sourceOf("client/src/lib/opportunity-messages.ts");
   const engineSrc = sourceOf("server/opportunity-engine.ts");
 
