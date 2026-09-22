@@ -249,7 +249,7 @@ service cloud.firestore {
 
     function serviceWorkAllowedFields() {
       return [
-        'id', 'tenantUid', 'status', 'origin', 'customerId',
+        'id', 'tenantUid', 'status', 'origin', 'customerId', 'customerContactSnapshot',
         'sourceQuoteId', 'sourceQuoteVersionId', 'quoteId',
         'items', 'totals', 'financialSummary', 'cost', 'createdAt', 'updatedAt',
         'startedAt', 'completedAt', 'cancelledAt'
@@ -496,6 +496,13 @@ service cloud.firestore {
         && isValidServiceShape(uid, serviceId, request.resource.data);
     }
 
+    function isValidBookingContactSnapshot(data) {
+      return data is map && data.keys().hasOnly(['name', 'phone'])
+        && data.keys().hasAll(['name', 'phone'])
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 140
+        && data.phone is string && data.phone.size() > 0 && data.phone.size() <= 40;
+    }
+
     function isValidServiceWorkShape(uid, workId, data) {
       return data.keys().hasOnly(serviceWorkAllowedFields())
         && data.keys().hasAll([
@@ -505,6 +512,7 @@ service cloud.firestore {
         && data.tenantUid == uid
         && data.status in ['planned', 'in_progress', 'completed', 'cancelled']
         && data.origin in ['manual', 'booking', 'quote', 'request']
+        && (!data.keys().hasAny(['customerContactSnapshot']) || isValidBookingContactSnapshot(data.customerContactSnapshot))
         && data.get('customerId', '') is string
         && data.get('sourceQuoteId', '') is string
         && data.get('sourceQuoteId', '').size() <= 120
@@ -542,6 +550,7 @@ service cloud.firestore {
       let data = request.resource.data;
       return isValidServiceWorkShape(uid, workId, data)
         && data.origin == 'manual'
+        && !data.keys().hasAny(['customerContactSnapshot'])
         && data.status == 'planned'
         && data.keys().hasAll(['financialSummary'])
         && isZeroServiceWorkFinancialSummary(data.financialSummary)

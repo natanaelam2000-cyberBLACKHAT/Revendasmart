@@ -378,6 +378,14 @@ async function run() {
     // The booking transaction itself must NEVER fail because of the Client-quota race — only the
     // Client-creation portion inside it may be silently skipped.
     assert.equal(bookingResult.status, "fulfilled", "D7: the public booking must always succeed, win or lose the Client-quota race");
+    const booking = (await db.doc(`users/${uid}/bookings/booking-${holdId}`).get()).data();
+    const work = (await db.doc(`users/${uid}/serviceWorks/booking-work-${holdId}`).get()).data();
+    const expectedContact = { name: "Cliente Corrida", phone: "+55 11 96666-0000" };
+    assert.deepEqual(booking?.customerContactSnapshot, expectedContact);
+    assert.deepEqual(work?.customerContactSnapshot, expectedContact);
+    const associated = (await db.doc(`users/${uid}/clients/${raceClientId}`).get()).exists;
+    assert.equal(booking?.customerId, associated ? raceClientId : undefined);
+    assert.equal(work?.customerId, booking?.customerId);
     const finalDocCount = await countClientDocs(db, uid);
     assert.equal(finalDocCount, 50, "D7: at most one new Client document may be created — final count must be exactly 50, never 51");
     const usage = await readUsage(db, uid);

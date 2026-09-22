@@ -1,3 +1,4 @@
+import { assertValidBookingContactSnapshot, type BookingContactSnapshot } from "./service-contact";
 /**
  * SERV-BOOK-01 — núcleo transacional da Agenda V1: BookingHold (reserva temporária), Booking (confirmado)
  * e ScheduleLock (autoridade de concorrência por segmento). Fronteira própria (não espalhado em
@@ -79,6 +80,7 @@ export type BookingStatus = "confirmed" | "cancelled";
 export type BookingSource = "manual" | "public";
 
 export type Booking = {
+  readonly customerContactSnapshot?: BookingContactSnapshot;
   readonly id: EntityId;
   readonly tenantUid: Uid;
   readonly serviceId: EntityId;
@@ -212,6 +214,7 @@ export function assertValidBookingHold(hold: BookingHold): BookingHold {
 }
 
 export function assertValidBooking(booking: Booking): Booking {
+  if (booking.customerContactSnapshot !== undefined) assertValidBookingContactSnapshot(booking.customerContactSnapshot);
   assertEntityId(booking.id, "booking.id");
   assertUid(booking.tenantUid, "booking.tenantUid");
   assertEntityId(booking.serviceId, "booking.serviceId");

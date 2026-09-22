@@ -1,3 +1,4 @@
+import { assertValidBookingContactSnapshot, type BookingContactSnapshot } from "../shared/service-contact";
 /**
  * SERV-PUBLIC-01 — superfície pública mínima do módulo Serviços: identifica o estabelecimento pelo mesmo
  * slug já usado pelo catálogo público (server/public-catalog-ownership.ts), lista só os Services realmente
@@ -361,6 +362,7 @@ export async function confirmPublicServiceBookingHoldCommand(
 // Gerenciamento público (SERV-PUBLIC-02) — ler/cancelar/reagendar o PRÓPRIO Booking via token opaco.
 // ====================================================================================================
 type PublicBookingRecord = {
+  readonly customerContactSnapshot?: BookingContactSnapshot;
   readonly id: string;
   readonly serviceId: string;
   readonly resourceId: string;
@@ -393,6 +395,7 @@ async function findBookingByManageToken(db: Firestore, storeUid: string, rawToke
     resourceId: data.resourceId as string,
     workId: data.workId as string,
     customerId: typeof data.customerId === "string" ? data.customerId : undefined,
+    customerContactSnapshot: data.customerContactSnapshot === undefined ? undefined : assertValidBookingContactSnapshot(data.customerContactSnapshot),
     startAt: data.startAt as string,
     endAt: data.endAt as string,
     status: data.status as "confirmed" | "cancelled",
@@ -440,7 +443,7 @@ export async function getPublicManagedBookingCommand(
   const timezone = typeof scheduleSnap.data()?.timezone === "string" ? (scheduleSnap.data()!.timezone as string) : "UTC";
   const workStatus = workSnap.data()?.status;
   const canManage = record.status === "confirmed" && workStatus === "planned";
-  const customerFirstName = firstNameOf(clientSnap?.data()?.name);
+  const customerFirstName = firstNameOf(record.customerContactSnapshot?.name ?? clientSnap?.data()?.name);
 
   return {
     serviceName,

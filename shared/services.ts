@@ -1,3 +1,4 @@
+import { assertValidBookingContactSnapshot, type BookingContactSnapshot } from "./service-contact";
 import type { PlanAccessSelectionSource, PlanAccessState } from "./monetization";
 
 export type EntityId = string;
@@ -143,6 +144,7 @@ export type ServiceWorkFinancialSummary = {
 };
 
 export type ServiceWork = {
+  readonly customerContactSnapshot?: BookingContactSnapshot;
   readonly id: EntityId;
   readonly tenantUid: Uid;
   readonly status: ServiceWorkStatus;
@@ -588,6 +590,7 @@ export function normalizeServiceWorkDocument(serviceWork: ServiceWorkDocument): 
 }
 
 export function assertValidServiceWork(serviceWork: ServiceWork): ServiceWork {
+  if (serviceWork.customerContactSnapshot !== undefined) assertValidBookingContactSnapshot(serviceWork.customerContactSnapshot);
   assertEntityId(serviceWork.id, "serviceWork.id");
   assertUid(serviceWork.tenantUid, "serviceWork.tenantUid");
   if (!["planned", "in_progress", "completed", "cancelled"].includes(serviceWork.status)) {

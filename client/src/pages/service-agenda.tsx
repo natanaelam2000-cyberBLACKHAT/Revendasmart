@@ -1,3 +1,4 @@
+import { bookingContactName } from "@shared/service-contact";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Ban, CalendarClock, ChevronLeft, ChevronRight, Copy, Plus, Settings } from "lucide-react";
 import { Layout } from "@/components/layout";
@@ -372,7 +373,7 @@ export default function ServiceAgenda() {
               if (segment.status === "booked" && segment.booking) {
                 const booking = segment.booking;
                 const service = services.get(booking.serviceId);
-                const clientName = booking.customerId ? clientNameById.get(booking.customerId) : undefined;
+                const clientName = bookingContactName(booking, clientNameById);
                 return (
                   <li key={key}>
                     <button
@@ -434,8 +435,10 @@ export default function ServiceAgenda() {
               </SheetHeader>
               <div className="mt-4 space-y-2 text-sm">
                 <p><span className="font-bold">Status:</span> {selectedBooking.status === "confirmed" ? "Confirmado" : "Cancelado"}</p>
-                {selectedBooking.customerId && (
-                  <p><span className="font-bold">Cliente:</span> {clientNameById.get(selectedBooking.customerId) || selectedBooking.customerId}</p>
+                {(selectedBooking.customerContactSnapshot || selectedBooking.customerId) && (
+                  <div><p><span className="font-bold">Cliente:</span> {bookingContactName(selectedBooking, clientNameById)}</p>
+                    {selectedBooking.customerContactSnapshot && <p>Telefone: {selectedBooking.customerContactSnapshot.phone}</p>}
+                  </div>
                 )}
                 <p><span className="font-bold">Recurso:</span> {selectedBooking.resourceId}</p>
                 {workLoading ? (

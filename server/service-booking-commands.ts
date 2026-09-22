@@ -1,3 +1,4 @@
+import { assertValidBookingContactSnapshot } from "../shared/service-contact";
 /**
  * SERV-BOOK-01 — núcleo transacional da Agenda V1: BookingHold (reserva temporária), locks por segmento
  * de 5 minutos, expiração lógica (nunca física), confirmação atômica que cria Booking + ServiceWork.
@@ -590,15 +591,30 @@ export async function confirmServiceBookingHoldCommand(
     const workId = buildBookingWorkId(holdId);
     const lineItem = buildServiceLineItem(service, serverNowIso);
     const items = [lineItem];
-    // SERV-PUBLIC-01 — o contato público vira a fonte do customerId quando presente; hold.customerId
-    // continua a única fonte para o fluxo interno (publicCustomerContact nunca é passado por ele).
-    const customerId = options.publicCustomerContact?.clientId ?? hold.customerId;
+    // D1: declared contact survives independently of CRM quota; IDs only reference real Clients.
+    const contact = options.publicCustomerContact;
+    if (options.source === "public" && !contact) throw new Error("PUBLIC_BOOKING_CONTACT_REQUIRED");
+    const customerContactSnapshot = contact
+      ? assertValidBookingContactSnapshot({ name: contact.name, phone: contact.phone })
+      : undefined;
+    let customerId = contact ? (clientSnap?.exists ? contact.clientId : undefined) : hold.customerId;
+    if (contact && clientDocRef && clientSnap && !clientSnap.exists) {
+      try {
+        await createClientInTransaction(tx, db, uid, contact.clientId, {
+          id: contact.clientId, name: contact.name, phone: contact.phone,
+        }, plan);
+        customerId = contact.clientId;
+      } catch (error) {
+        if (!(error instanceof PlanMutationError) || error.code !== "PLAN_LIMIT_REACHED") throw error;
+      }
+    }
     const work: ServiceWork = assertValidServiceWork({
       id: workId,
       tenantUid: uid,
       status: "planned",
       origin: "booking",
       customerId,
+      customerContactSnapshot,
       items,
       totals: calculateCommercialTotals(items),
       financialSummary: createZeroServiceWorkFinancialSummary(),
@@ -612,6 +628,7 @@ export async function confirmServiceBookingHoldCommand(
       serviceId: hold.serviceId,
       resourceId: hold.resourceId,
       customerId,
+      customerContactSnapshot,
       workId,
       startAt: hold.startAt,
       endAt: hold.endAt,
@@ -634,27 +651,6 @@ export async function confirmServiceBookingHoldCommand(
       ...(options.publicManageToken ? { publicManageToken: options.publicManageToken.rawToken } : {}),
     };
 
-    // SERV-PUBLIC-01 — o Client de contato entra na MESMA transaction do Booking/Work (atomicidade real:
-    // nunca um Client órfão sem Booking, nunca um Booking sem o contato do cliente). Só cria se ainda não
-    // existir (clientSnap lido acima, antes de qualquer escrita) — protege contra um clientId reaproveitado
-    // de uma tentativa anterior que falhou depois deste ponto.
-    // RC-P0-CLIENT-LIMIT-01 §8/§9 — createClientInTransaction é a MESMA autoridade canônica usada por
-    // POST /api/clients (lê/inicializa planUsage/summary.clientsCount de forma resource-specific e
-    // concurrency-safe, e incrementa atomicamente). Se a cota estiver cheia, ela lança PlanMutationError
-    // "PLAN_LIMIT_REACHED" — aqui isso é capturado e tratado como "não cria o Client desta vez", nunca
-    // como falha do agendamento: o Booking/Work seguem normalmente com o snapshot de contato já presente
-    // em customerId (linha acima), mesmo sem um documento Client correspondente.
-    if (options.publicCustomerContact && clientDocRef && clientSnap && !clientSnap.exists) {
-      try {
-        await createClientInTransaction(tx, db, uid, options.publicCustomerContact.clientId, {
-          id: options.publicCustomerContact.clientId,
-          name: options.publicCustomerContact.name,
-          phone: options.publicCustomerContact.phone,
-        }, plan);
-      } catch (error) {
-        if (!(error instanceof PlanMutationError) || error.code !== "PLAN_LIMIT_REACHED") throw error;
-      }
-    }
     tx.create(serviceWorkRef(db, uid, workId), omitUndefined(work as unknown as Record<string, unknown>));
     tx.create(bookingRef(db, uid, bookingId), omitUndefined(booking as unknown as Record<string, unknown>));
     tx.set(holdDocRef, omitUndefined(confirmedHold as unknown as Record<string, unknown>));

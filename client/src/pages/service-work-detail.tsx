@@ -1,3 +1,4 @@
+import { bookingContactName } from "@shared/service-contact";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "wouter";
 import { CalendarClock, Receipt, Wallet } from "lucide-react";
@@ -197,7 +198,7 @@ export default function ServiceWorkDetail() {
 
   const serviceName = work?.items.find((item) => item.kind === "service")?.snapshot.name
     ?? (work?.origin === "manual" ? "Atendimento avulso" : "Atendimento");
-  const customerName = work?.customerId ? clientNameById.get(work.customerId) ?? work.customerId : null;
+  const customerName = work ? bookingContactName(work, clientNameById) : null;
   // §10/UI8 — espelha a mesma regra do servidor (WORK_NOT_ELIGIBLE_FOR_QUOTE): completed/cancelled não
   // oferece a ação de criar um novo orçamento, evitando uma tentativa fadada a ser rejeitada.
   const workCanReceiveQuote = work?.status === "planned" || work?.status === "in_progress";
@@ -382,6 +383,7 @@ export default function ServiceWorkDetail() {
         <div className="space-y-2 rounded-3xl bg-white p-4 shadow-sm">
           <p className="text-lg font-black text-foreground" data-testid="text-work-service-name">{serviceName}</p>
           {customerName && <p className="text-sm text-muted-foreground" data-testid="text-work-customer">{customerName}</p>}
+          {work.customerContactSnapshot && <p className="text-sm text-muted-foreground">Telefone: {work.customerContactSnapshot.phone}</p>}
           {booking && (
             <p className="text-sm text-muted-foreground" data-testid="text-work-schedule">
               {formatLocalDate(new Date(booking.startAt), "dd 'de' MMMM 'de' yyyy", { locale: ptBR })} · {formatTimeInTimezone(booking.startAt, bookingTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone)} - {formatTimeInTimezone(booking.endAt, bookingTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone)}

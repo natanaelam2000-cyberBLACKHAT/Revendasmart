@@ -1,3 +1,4 @@
+import { bookingContactName } from "@shared/service-contact";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { AlertTriangle, ClipboardList, Search } from "lucide-react";
@@ -70,7 +71,7 @@ export default function ServiceWorksList() {
 
   const filteredWorks = useMemo(() => {
     return works.filter((work) => {
-      const clientName = (work.customerId && clientNameById.get(work.customerId)) || "";
+      const clientName = bookingContactName(work, clientNameById);
       const matchesSearch = !normalizedSearch || clientName.toLowerCase().includes(normalizedSearch) || work.id.toLowerCase().includes(normalizedSearch);
       const matchesStatus = statusFilter === "todos" || work.status === statusFilter;
       return matchesSearch && matchesStatus;
@@ -139,7 +140,7 @@ export default function ServiceWorksList() {
             <div className="space-y-2.5">
               {filteredWorks.map((work) => {
                 const financials = deriveServiceWorkFinancials(work);
-                const clientName = (work.customerId && clientNameById.get(work.customerId)) || "Cliente não identificado";
+                const clientName = bookingContactName(work, clientNameById);
                 return (
                   <Link key={work.id} href={`/servicos/atendimentos/${work.id}`}>
                     <a className="rs-card-interactive flex items-center justify-between gap-3 rounded-2xl border border-border/60 bg-white p-4 shadow-sm" data-testid={`card-service-work-${work.id}`}>
