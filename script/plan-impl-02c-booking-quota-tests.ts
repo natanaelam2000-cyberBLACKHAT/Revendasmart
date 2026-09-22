@@ -110,6 +110,16 @@ function hoursAfter(baseIso: string, hours: number): string {
   return new Date(Date.parse(baseIso) + hours * 3_600_000).toISOString();
 }
 
+function futureBusinessMonthBaseIso(monthOffset: number): string {
+  const now = new Date();
+  for (let day = 10; day <= 14; day += 1) {
+    const candidate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + monthOffset, day, 13, 0, 0, 0));
+    const weekday = candidate.getUTCDay();
+    if (weekday >= 1 && weekday <= 5) return candidate.toISOString();
+  }
+  throw new Error("Unable to build a weekday fixture date.");
+}
+
 async function run(): Promise<void> {
   runPureTests();
 
@@ -117,8 +127,8 @@ async function run(): Promise<void> {
   initializeFirebaseAdmin();
   const db = initializeFirebaseAdmin().firestore();
 
-  const SEPT_BASE = "2026-09-10T13:00:00.000Z"; // bem dentro de setembro em qualquer timezone razoável
-  const OCT_BASE = "2026-10-10T13:00:00.000Z";
+  const SEPT_BASE = futureBusinessMonthBaseIso(2); // mês-base futuro, bem dentro do mês em qualquer timezone razoável
+  const OCT_BASE = futureBusinessMonthBaseIso(3);
 
   // ===== TZ1/TZ7 — bootstrap da timezone para um tenant totalmente novo (sem planData, sem schedules,
   // sem user_settings): default_brazil, nunca UTC. =====
@@ -561,7 +571,7 @@ async function run(): Promise<void> {
   {
     const uid = tenantUid("recount");
     const serviceId = "svc-recount";
-    const monthKey = "2026-09";
+    const monthKey = resolveBookingQuotaMonthKey(SEPT_BASE, DEFAULT_BUSINESS_TIMEZONE);
     const docs = [
       { id: "r1", status: "confirmed" }, { id: "r2", status: "confirmed" }, { id: "r3", status: "cancelled" },
     ];
