@@ -393,7 +393,7 @@ export default function Onboarding() {
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const responseData = await response.json();
-      patchUserSettingsOptimistic(payload);
+      patchUserSettingsOptimistic(payload, uid);
       invalidateUserSettings();
       if (nextCompleted) void syncReferralCompletion(responseData);
       return responseData;

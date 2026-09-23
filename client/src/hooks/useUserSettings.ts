@@ -3,13 +3,15 @@ import { defaultSettings, AppSettings } from "@/lib/mock-data";
 import { getFirebaseAuth } from "@/lib/firebase";
 import { onAuthStateChanged, User } from "firebase/auth";
 import { getApiUrl } from "@/lib/api-config";
+import { resolveBusinessModeBootstrap, type BusinessModeResolution } from "@shared/business-mode";
 
 // ============================================================
 // Module-level shared state for cross-instance coordination
 // ============================================================
 
 /** All active hook instances register a setter here */
-const patchListeners = new Set<(patch: Partial<AppSettings>) => void>();
+type SettingsPatchListener = (patch: Partial<AppSettings>) => void;
+const patchListeners = new Map<string, Set<SettingsPatchListener>>();
 /** All active hook instances register a refetch trigger here */
 const refetchListeners = new Set<() => void>();
 
@@ -18,8 +20,9 @@ const refetchListeners = new Set<() => void>();
  * Use this for immediate UI update after a confirmed backend write.
  * Does NOT make a network request — just updates in-memory state.
  */
-export function patchUserSettingsOptimistic(patch: Partial<AppSettings>) {
-  patchListeners.forEach(fn => fn(patch));
+export function patchUserSettingsOptimistic(patch: Partial<AppSettings>, targetUid: string | null) {
+  if (!targetUid) return;
+  patchListeners.get(targetUid)?.forEach(fn => fn(patch));
 }
 
 /**
@@ -32,10 +35,16 @@ export function invalidateUserSettings() {
 
 // ============================================================
 
+export type UserSettingsLoadStatus = "loading" | "loaded" | "error";
+
 interface UseUserSettingsResult {
   settings: AppSettings;
   loading: boolean;
+  loaded: boolean;
+  loadStatus: UserSettingsLoadStatus;
   error?: string;
+  userId: string | null;
+  businessModeResolution: BusinessModeResolution;
   onboarding_completed: boolean;
 }
 
@@ -51,6 +60,7 @@ interface UseUserSettingsResult {
 export function useUserSettings(): UseUserSettingsResult {
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string>();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
@@ -58,12 +68,19 @@ export function useUserSettings(): UseUserSettingsResult {
 
   // Register this instance for optimistic patches
   useEffect(() => {
+    const uid = currentUser?.uid;
+    if (!uid) return;
     const patchListener = (patch: Partial<AppSettings>) => {
       setSettings(prev => ({ ...prev, ...patch }));
     };
-    patchListeners.add(patchListener);
-    return () => { patchListeners.delete(patchListener); };
-  }, []);
+    const listeners = patchListeners.get(uid) ?? new Set<SettingsPatchListener>();
+    listeners.add(patchListener);
+    patchListeners.set(uid, listeners);
+    return () => {
+      listeners.delete(patchListener);
+      if (listeners.size === 0) patchListeners.delete(uid);
+    };
+  }, [currentUser?.uid]);
 
   // Register this instance for full refetch signals
   useEffect(() => {
@@ -78,6 +95,7 @@ export function useUserSettings(): UseUserSettingsResult {
     if (!auth) {
       setAuthReady(true);
       setCurrentUser(null);
+      setLoaded(false);
       setLoading(false);
       return;
     }
@@ -93,13 +111,18 @@ export function useUserSettings(): UseUserSettingsResult {
     if (!authReady) return;
 
     if (!currentUser) {
-      setLoading(false);
+      setLoaded(false);
+      setError(undefined);
       setSettings(defaultSettings);
+      setLoading(false);
       return;
     }
 
     let isMounted = true;
     setLoading(true);
+    setLoaded(false);
+    setError(undefined);
+    setSettings(defaultSettings);
 
     (async () => {
       try {
@@ -124,12 +147,14 @@ export function useUserSettings(): UseUserSettingsResult {
           const mergedSettings = { ...defaultSettings, ...data.settings };
           setSettings(mergedSettings);
           setError(undefined);
+          setLoaded(true);
         }
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         console.error("[useUserSettings] Failed to fetch settings:", errorMsg);
         if (isMounted) {
           setError(errorMsg);
+          setLoaded(false);
           setSettings(defaultSettings);
         }
       } finally {
@@ -142,10 +167,22 @@ export function useUserSettings(): UseUserSettingsResult {
     return () => { isMounted = false; };
   }, [authReady, currentUser, refetchSignal]);
 
+  const businessModeResolution = resolveBusinessModeBootstrap({
+    businessMode: settings.businessMode,
+    loading,
+    loaded,
+    error,
+  });
+  const loadStatus: UserSettingsLoadStatus = error ? "error" : loading || !loaded ? "loading" : "loaded";
+
   return {
     settings,
     loading,
+    loaded,
+    loadStatus,
     error,
+    userId: currentUser?.uid ?? null,
+    businessModeResolution,
     onboarding_completed: settings.onboarding_completed === true
   };
 }

@@ -6,6 +6,34 @@
  * exatamente uma única fonte, usada por toda tela que precisa adaptar navegação/dashboard/catálogo.
  */
 export type BusinessMode = "products" | "services" | "both";
+export type BusinessModeResolutionStatus = "loading" | "known" | "legacy-missing" | "error";
+
+export interface BusinessModeResolution {
+  readonly status: BusinessModeResolutionStatus;
+  readonly mode: BusinessMode | null;
+  readonly resolved: boolean;
+}
+
+export function isBusinessMode(value: unknown): value is BusinessMode {
+  return value === "products" || value === "services" || value === "both";
+}
+
+/**
+ * PRE-PUBLICATION-F1 — resolver de bootstrap: separa "ainda não carregou" de "legado carregado sem
+ * businessMode". `resolveBusinessMode()` continua existindo para consumidores legados/servidor, mas UI
+ * que decide navegação durante bootstrap deve usar esta API para nunca transformar loading/erro em Products.
+ */
+export function resolveBusinessModeBootstrap(input: {
+  readonly businessMode: unknown;
+  readonly loading?: boolean;
+  readonly error?: unknown;
+  readonly loaded?: boolean;
+}): BusinessModeResolution {
+  if (input.error) return { status: "error", mode: null, resolved: false };
+  if (input.loading || !input.loaded) return { status: "loading", mode: null, resolved: false };
+  if (isBusinessMode(input.businessMode)) return { status: "known", mode: input.businessMode, resolved: true };
+  return { status: "legacy-missing", mode: "products", resolved: true };
+}
 
 /**
  * Requisito estrutural #3 — um valor ausente (conta nova/pré-onboarding, ver defaultSettings em

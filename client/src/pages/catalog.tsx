@@ -13,7 +13,6 @@ import { notifyInfo, notifyWarning } from "@/lib/notify";
 import { formatCurrency, getPromotionalPrice } from "@/lib/product-pricing";
 import { buildPublicCatalogUrl } from "@/lib/public-url";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
-import { resolveBusinessMode } from "@shared/business-mode";
 
 type CatalogStoreSettings = AppSettings & {
   storeBannerUrl?: string;
@@ -40,7 +39,7 @@ interface CartItem {
 }
 
 export default function Catalog() {
-  const { settings } = useUserSettings();
+  const { settings, businessModeResolution, refresh: refreshSettings } = useUserSettings();
   const [search, setSearch] = useState("");
   const [genderFilter, setGenderFilter] = useState("todos");
   const [categoryFilter, setCategoryFilter] = useState("todos");
@@ -201,8 +200,20 @@ export default function Catalog() {
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, "_blank");
   };
 
-  if (loading || salesLoading) {
+  if (businessModeResolution.status === "loading" || loading || salesLoading) {
     return <Layout title="Catálogo"><PageSkeleton variant="cards" /></Layout>;
+  }
+
+  if (businessModeResolution.status === "error") {
+    return (
+      <Layout title="Catálogo">
+        <div className="mx-auto max-w-3xl px-4 py-8 text-center">
+          <p className="mb-2 font-bold text-destructive">Não foi possível carregar as configurações do negócio.</p>
+          <p className="mb-4 text-sm text-muted-foreground">Verifique sua conexão e tente novamente para abrir a experiência correta.</p>
+          <button type="button" onClick={refreshSettings} className="rounded-xl bg-primary px-5 py-3 text-sm font-bold text-white">Tentar novamente</button>
+        </div>
+      </Layout>
+    );
   }
 
   const blockingError = salesError || (products.length === 0 ? productsError : "");
@@ -229,7 +240,7 @@ export default function Catalog() {
   // aba (que tem carrinho/WhatsApp/QR/etc próprios) é um trabalho real, não algo que cabe com segurança
   // dentro deste hotfix — ver relatório final, riscos restantes. Direciona para os destinos reais de
   // serviço em vez de mostrar algo que não se aplica ao negócio do dono.
-  if (resolveBusinessMode(settings.businessMode) === "services") {
+  if (businessModeResolution.mode === "services") {
     return (
       <Layout title="Catálogo">
         <div className="mx-auto flex max-w-md flex-col items-center px-6 py-16 text-center">

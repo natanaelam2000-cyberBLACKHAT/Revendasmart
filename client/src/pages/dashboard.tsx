@@ -64,7 +64,7 @@ function TrialBanner({ trial }: { trial: { status: "active" | "expired" | "conve
 
 export default function Dashboard() {
   const [, setLocation] = useLocation();
-  const { onboarding_completed, loading: settingsLoading, settings, refresh: refreshSettings } = useUserSettings();
+  const { onboarding_completed, loading: settingsLoading, settings, businessModeResolution, refresh: refreshSettings } = useUserSettings();
   const { trial, hasPremiumAccess, loading: planLoading, planResolved } = usePlan();
   const { products, loading: productsLoading, error: productsError } = useProductsData();
   const { sales, loading: salesLoading, error: salesError } = useSalesData();
@@ -76,7 +76,8 @@ export default function Dashboard() {
 
   // PLAN-IMPL-09-FINAL §31/§32 — só busca serviços quando o modo do negócio realmente usa esse dado
   // (evita uma leitura Firestore extra, sempre vazia, para a maioria dos donos que vende só produto).
-  const needsServicesCount = settings.businessMode === "services" || settings.businessMode === "both";
+  const resolvedBusinessMode = businessModeResolution.resolved ? businessModeResolution.mode : null;
+  const needsServicesCount = resolvedBusinessMode === "services" || resolvedBusinessMode === "both";
   const [servicesCount, setServicesCount] = useState(0);
   const [servicesLoading, setServicesLoading] = useState(needsServicesCount);
   useEffect(() => {
@@ -162,8 +163,20 @@ export default function Dashboard() {
     }
   };
 
-  if (settingsLoading || dataLoading) {
+  if (settingsLoading || businessModeResolution.status === "loading" || dataLoading) {
     return <Layout><PageSkeleton variant="dashboard" /></Layout>;
+  }
+
+  if (businessModeResolution.status === "error") {
+    return (
+      <Layout>
+        <div className="p-6 text-center">
+          <p className="font-bold text-destructive mb-2">Não foi possível carregar as configurações do negócio.</p>
+          <p className="text-sm text-muted-foreground mb-4">Verifique sua conexão e tente novamente para abrir a experiência correta.</p>
+          <button type="button" onClick={refreshSettings} className="rounded-xl bg-primary px-5 py-3 text-xs font-semibold text-white">Tentar novamente</button>
+        </div>
+      </Layout>
+    );
   }
 
   if (dataError) {

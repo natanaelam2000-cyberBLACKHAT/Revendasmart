@@ -361,7 +361,7 @@ export default function Settings() {
         setSaveMessage("Configurações salvas.");
         notifySuccess("Configurações salvas.");
         setFormSettings(confirmedSettings);
-        patchUserSettingsOptimistic(confirmedSettings);
+        patchUserSettingsOptimistic(confirmedSettings, firebaseUid);
         // PLAN-IMPL-06 §12 — dispara só na transição real "slug provisionado agora pela primeira vez"
         // (sinal do servidor, ensurePublicCatalogSlug's `created`), nunca a cada salvamento de config.
         if (result.catalogSlugJustCreated) trackAnalyticsEvent("catalog_published");
@@ -428,7 +428,7 @@ export default function Settings() {
         enablePublicCatalog: true,
       };
       setFormSettings(confirmedSettings);
-      patchUserSettingsOptimistic(confirmedSettings);
+      patchUserSettingsOptimistic(confirmedSettings, firebaseUid);
       setGeneratedUrl(buildPublicAppUrl(`/u/${encodeURIComponent(slug)}`));
     } catch {
       notifyError("Erro ao gerar link.");
@@ -485,7 +485,7 @@ export default function Settings() {
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       setFormSettings(nextSettings);
-      patchUserSettingsOptimistic(nextSettings);
+      patchUserSettingsOptimistic(nextSettings, firebaseUid);
       setSaveMessage("Logo atualizado.");
       notifySuccess("Logo atualizado.");
     } catch (error) {

@@ -3,7 +3,7 @@ import { Link, useLocation } from "wouter";
 import { getCurrentFirebaseUser } from "@/lib/firebase";
 import { Home, Package, BookOpen, Megaphone, User, ShoppingCart, CalendarClock, Users, ClipboardList, MoreHorizontal } from "lucide-react";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
-import { resolveBusinessMode, type BusinessMode } from "@shared/business-mode";
+import type { BusinessMode } from "@shared/business-mode";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
 interface LayoutProps {
@@ -47,8 +47,9 @@ function navForBusinessMode(mode: BusinessMode): { primary: NavItem[]; overflow:
 
 export function Layout({ children, title, hideBottomNav = false }: LayoutProps) {
   const [location] = useLocation();
-  const { settings } = useUserSettings();
-  const { primary, overflow } = useMemo(() => navForBusinessMode(resolveBusinessMode(settings.businessMode)), [settings.businessMode]);
+  const { businessModeResolution } = useUserSettings();
+  const navMode = businessModeResolution.resolved ? businessModeResolution.mode : null;
+  const { primary, overflow } = useMemo(() => navMode ? navForBusinessMode(navMode) : { primary: [], overflow: [] }, [navMode]);
   const [moreOpen, setMoreOpen] = useState(false);
   const email = useMemo(() => {
     try {
@@ -63,11 +64,12 @@ export function Layout({ children, title, hideBottomNav = false }: LayoutProps) 
     : location.startsWith(href) || (href === "/settings" && location === "/subscribe");
 
   const isOverflowActive = overflow.some((item) => active(item.href));
+  const navResolved = navMode !== null;
   const bottomNavColumns = primary.length + (overflow.length > 0 ? 1 : 0);
 
   return (
     <div className="rs-app-shell bg-background text-foreground">
-      {!hideBottomNav && (
+      {!hideBottomNav && navResolved && (
         <aside className="rs-sidebar-safe hidden lg:flex fixed inset-y-0 left-0 z-50 w-64 flex-col bg-white border-r border-border/60 px-5 py-7">
           <Link href="/">
             <div className="flex items-center gap-3 px-2 mb-9 cursor-pointer">
@@ -114,7 +116,7 @@ export function Layout({ children, title, hideBottomNav = false }: LayoutProps) 
         </div>
       </div>
 
-      {!hideBottomNav && (
+      {!hideBottomNav && navResolved && (
         <nav
           className="rs-bottom-nav-edge lg:hidden fixed bottom-0 left-0 right-0 z-50 border-t border-border/70 bg-white/95 shadow-[0_-10px_34px_rgba(15,23,42,0.10)] backdrop-blur-xl"
           aria-label="Navegação principal"
@@ -139,7 +141,7 @@ export function Layout({ children, title, hideBottomNav = false }: LayoutProps) 
                 </Link>
               );
             })}
-            {overflow.length > 0 && (
+            {navResolved && overflow.length > 0 && (
               <button
                 type="button"
                 onClick={() => setMoreOpen(true)}
@@ -160,7 +162,7 @@ export function Layout({ children, title, hideBottomNav = false }: LayoutProps) 
         </nav>
       )}
 
-      {overflow.length > 0 && (
+      {navResolved && overflow.length > 0 && (
         <Sheet open={moreOpen} onOpenChange={setMoreOpen}>
           <SheetContent side="bottom" className="rounded-t-[2rem] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
             <SheetHeader>
