@@ -4629,6 +4629,7 @@ const publicStoreFixture = buildPublicCatalogStore({
 assert.deepEqual(Object.keys(publicStoreFixture).sort(), [
   "allowWhatsappOrders",
   "bannerUrl",
+  "businessMode",
   "cardAvailable",
   "description",
   "logoUrl",
