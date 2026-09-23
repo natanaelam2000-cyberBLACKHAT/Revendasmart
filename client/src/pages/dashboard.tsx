@@ -1,13 +1,14 @@
-import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { ArrowRight, CheckCircle2, Edit3, LineChart, Sparkles, Target, X } from "lucide-react";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Layout } from "@/components/layout";
+import { SectionCard, SummaryTile, EmptyState, shortNumber } from "@/components/dashboard/dashboard-ui";
 import { useClientsLiteData } from "@/hooks/useClientsLiteData";
 import { useProductsData } from "@/hooks/useProductsData";
 import { useSalesData } from "@/hooks/useSalesData";
 import { getApiUrl } from "@/lib/api-config";
-import { getFirebaseAuth } from "@/lib/firebase";
+import { getFirebaseAuth, waitForAuthReady } from "@/lib/firebase";
 import { listServices } from "@/lib/services-persistence";
 import { buildHomeDashboardViewModel, formatHomeCurrency } from "@/lib/home-dashboard-view-model";
 import { notifyError, notifySuccess } from "@/lib/notify";
@@ -16,6 +17,11 @@ import { usePlan } from "@/providers/PlanProvider";
 import { formatTrialDaysRemaining } from "@/lib/plan-helpers";
 
 const TodayPriorities = lazy(() => import("@/components/opportunities/TodayPriorities"));
+// HOTFIX-P0-D (rodada 2, code-split) — ver client/src/components/dashboard/ServicesOverviewSection.tsx:
+// extraído para um arquivo próprio, carregado sob demanda, porque o tamanho desta página passou do teto
+// de performance definido em scripts/performance. Quem vende só produto (a maioria) nunca baixa esse
+// código, já que o <Suspense> abaixo só monta com needsServicesCount.
+const ServicesOverviewSection = lazy(() => import("@/components/dashboard/ServicesOverviewSection"));
 
 const HOME_ONBOARDING_STRIP_STORAGE_KEY = "revendasmart:home:onboarding-strip:v1";
 
@@ -37,10 +43,6 @@ function writeOnboardingStripDismissed() {
   }
 }
 
-function shortNumber(value: number): string {
-  return value.toLocaleString("pt-BR", { maximumFractionDigits: 0 });
-}
-
 /** PLAN-IMPL-03 §43/§44 — banner discreto, nunca redesenha subscribe.tsx. `trial.endsAt` já vem do
  * servidor (ensurePlanLifecycleCurrent); a contagem de dias em si é só apresentação client-side (§44
  * permite isso explicitamente) — o acesso real nunca depende deste cálculo, só de `effectivePlan`. */
@@ -59,36 +61,6 @@ function TrialBanner({ trial }: { trial: { status: "active" | "expired" | "conve
     </section>
   );
 }
-
-function SectionCard({ title, eyebrow, children, action }: { title: string; eyebrow?: string; children: ReactNode; action?: ReactNode }) {
-  return (
-    <section className="rounded-[1.5rem] border border-border/50 bg-white p-4 shadow-sm sm:p-5">
-      <div className="mb-4 flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          {eyebrow && <p className="text-[10px] font-black uppercase tracking-[0.16em] text-primary">{eyebrow}</p>}
-          <h2 className="mt-1 text-base font-black text-foreground">{title}</h2>
-        </div>
-        {action}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function SummaryTile({ label, value, detail }: { label: string; value: string; detail?: string }) {
-  return (
-    <div className="rounded-2xl bg-secondary/35 p-3">
-      <p className="text-[10px] font-black uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className="mt-1 text-lg font-black text-foreground">{value}</p>
-      {detail && <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{detail}</p>}
-    </div>
-  );
-}
-
-function EmptyState({ children }: { children: ReactNode }) {
-  return <div className="rounded-2xl border border-dashed border-border/70 bg-secondary/20 px-4 py-5 text-sm font-semibold text-muted-foreground">{children}</div>;
-}
-
 
 export default function Dashboard() {
   const [, setLocation] = useLocation();
@@ -111,8 +83,14 @@ export default function Dashboard() {
     if (!needsServicesCount) return;
     let cancelled = false;
     setServicesLoading(true);
-    listServices()
-      .then((list) => { if (!cancelled) setServicesCount(list.length); })
+    // PRODUCT-QA-02 — mesmo motivo de service-agenda.tsx: sem esperar o Firebase Auth confirmar a sessão
+    // restaurada primeiro, uma carga completa da página (não só troca de rota via SPA) podia disparar
+    // listServices() antes do uid existir e lançar UNAUTHENTICATED, sem nenhum tratamento aqui além do
+    // catch silencioso — nunca reproduzido antes porque o dashboard normalmente só é alcançado após um
+    // login recém-concluído (uid já em memória), não numa carga fria direta.
+    waitForAuthReady()
+      .then(() => { if (cancelled) return null; return listServices(); })
+      .then((list) => { if (!cancelled && list) setServicesCount(list.length); })
       .catch(() => {})
       .finally(() => { if (!cancelled) setServicesLoading(false); });
     return () => { cancelled = true; };
@@ -270,6 +248,12 @@ export default function Dashboard() {
           </SectionCard>
 
 
+
+          {needsServicesCount && (
+            <Suspense fallback={<div className="h-40 animate-pulse rounded-[1.5rem] bg-secondary/30" />}>
+              <ServicesOverviewSection clients={clients} />
+            </Suspense>
+          )}
 
           <SectionCard title="O que precisa da sua atenção" eyebrow="Organização da loja">
             {home.priorities.length > 0 ? (
