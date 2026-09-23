@@ -34,6 +34,7 @@ const Admin = lazy(() => import("@/pages/admin"));
 const SorteiosAdmin = lazy(() => import("@/pages/sorteios-admin"));
 const Subscribe = lazy(() => import("@/pages/subscribe"));
 const ServiceAgenda = lazy(() => import("@/pages/service-agenda"));
+const ServicesList = lazy(() => import("@/pages/services-list"));
 const ServicesNew = lazy(() => import("@/pages/services-new"));
 const ServiceAvailabilitySettings = lazy(() => import("@/pages/service-availability-settings"));
 const ServiceWorkDetail = lazy(() => import("@/pages/service-work-detail"));
@@ -152,6 +153,7 @@ function PrivateRoutes() {
         <Route path="/plans" component={Plans} />
         <Route path="/opportunities" component={Opportunities} />
         <Route path="/subscribe" component={Subscribe} />
+        <Route path="/servicos" component={ServicesList} />
         <Route path="/servicos/agenda" component={ServiceAgenda} />
         <Route path="/servicos/novo" component={ServicesNew} />
         <Route path="/servicos/disponibilidade" component={ServiceAvailabilitySettings} />
