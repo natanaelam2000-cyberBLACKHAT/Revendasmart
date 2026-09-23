@@ -49,6 +49,7 @@ interface CartItem {
  */
 type PublicCatalogFailureReason =
   | "store_not_found"
+  | "store_deactivated"
   | "api_route_missing"
   | "permission_denied"
   | "network"
@@ -161,6 +162,9 @@ export default function PublicCatalog() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState("");
   const [loadFailed, setLoadFailed] = useState(false);
+  // HOTFIX-P0-B req.7 — "Tentar novamente" em falhas recuperáveis: incrementar reexecuta o mesmo
+  // efeito de carga (dependência abaixo), sem duplicar a lógica de fetch/retry que já existe nele.
+  const [retryToken, setRetryToken] = useState(0);
   // Diagnóstico interno: a tela mostra uma única mensagem amigável, mas o motivo real precisa ser
   // distinguível nos logs. Sem isso, "rota de API inexistente no backend" e "loja não encontrada"
   // ficam indistinguíveis — foi exatamente o que mascarou o 404 de backend errado no Preview.
@@ -223,11 +227,18 @@ export default function PublicCatalog() {
         try {
           const response = await fetch(getApiUrl(`/api/public/catalog/${encodeURIComponent(storeSlug || "")}`), { signal: controller.signal });
           if (response.status === 404) {
-            // Um 404 tem DOIS significados muito diferentes: a API respondeu que a loja não existe
-            // (JSON), ou a própria rota não existe no backend atingido (HTML "Cannot GET"). O segundo
-            // é erro de configuração/deploy, não de dados, e precisa aparecer diferente no log.
+            // Um 404 tem significados diferentes: a API respondeu que a loja realmente não existe, que
+            // o dono desativou o catálogo (HOTFIX-P0-B — antes indistinguível da anterior, ambas viravam
+            // a mesma mensagem "não encontrado ou desativado" mesmo quando a loja nunca foi desativada),
+            // ou a própria rota não existe no backend atingido (HTML "Cannot GET", erro de
+            // configuração/deploy, não de dados — precisa aparecer diferente no log).
             const contentType = response.headers.get("content-type") || "";
-            reason = contentType.includes("application/json") ? "store_not_found" : "api_route_missing";
+            if (!contentType.includes("application/json")) {
+              reason = "api_route_missing";
+            } else {
+              const body = await response.json().catch(() => null) as { error?: string } | null;
+              reason = body?.error === "CATALOG_DEACTIVATED" ? "store_deactivated" : "store_not_found";
+            }
             break;
           }
           if (response.status === 401 || response.status === 403) {
@@ -287,7 +298,7 @@ export default function PublicCatalog() {
     }
     loadCatalog();
     return () => { cancelled = true; activeController?.abort(); };
-  }, [storeSlug]);
+  }, [storeSlug, retryToken]);
 
   // CATÁLOGO-PÚBLICO-POR-MODO — a seção Serviços do HYBRID reaproveita 100% o mesmo endpoint público já
   // usado por /agendar/:slug (server/service-public-booking.ts) — nenhum endpoint novo, nenhuma segunda
@@ -742,15 +753,27 @@ export default function PublicCatalog() {
       <div className="flex min-h-screen flex-col items-center justify-center bg-background p-6 text-center">
         <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-secondary"><Store className="h-10 w-10 text-muted-foreground" /></div>
         <h1 className="mb-2 text-xl font-bold">Catálogo Indisponível</h1>
-        {/* Duas mensagens só: "essa loja não existe" é acionável pelo visitante, o resto é problema
-            nosso e vira "tente de novo". A causa técnica exata fica no console, não na tela. */}
+        {/* HOTFIX-P0-B — três mensagens, não duas: "não existe" e "foi desativado pelo consultor" agora
+            só aparecem quando o servidor de fato confirmou qual das duas é (server/routes.ts distingue
+            CATALOG_DEACTIVATED de CATALOG_NOT_FOUND desde este hotfix); qualquer outro motivo (rede,
+            rota de API ausente, resposta inválida, erro inesperado) é sempre "problema nosso, tente de
+            novo" — nunca mais cai por padrão em "desativado pelo consultor" só por não ser store_not_found. */}
         <p className="text-sm text-muted-foreground" data-failure-reason={failureReason ?? undefined}>
           {failureReason === "store_not_found"
-            ? "Este catálogo não foi encontrado ou está desativado pelo consultor."
-            : loadFailed
-              ? "Não foi possível carregar agora. Tente novamente em instantes."
-              : "Este catálogo não foi encontrado ou está desativado pelo consultor."}
+            ? "Este catálogo não foi encontrado. Confira o link com o consultor."
+            : failureReason === "store_deactivated"
+              ? "Este catálogo foi desativado pelo consultor."
+              : "Não foi possível carregar agora. Tente novamente em instantes."}
         </p>
+        {loadFailed && (
+          <button
+            type="button"
+            onClick={() => setRetryToken((token) => token + 1)}
+            className="mt-4 rounded-xl bg-primary px-5 py-2.5 text-xs font-black uppercase text-white"
+          >
+            Tentar novamente
+          </button>
+        )}
       </div>
     );
   }
