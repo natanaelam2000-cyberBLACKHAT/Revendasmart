@@ -9,6 +9,9 @@ import { getFirebaseAuth, logTelemetryEvent } from "@/lib/firebase";
 import { isReferralCodeFormat } from "@shared/monetization";
 import { PlanProvider } from "@/providers/PlanProvider";
 import { UserSettingsProvider } from "@/providers/UserSettingsProvider";
+import { useUserSettings } from "@/providers/UserSettingsProvider";
+import { resolveBusinessRouteGate } from "@/lib/business-route-gate";
+import { PageSkeleton } from "@/components/PageSkeleton";
 
 const Dashboard = lazy(() => import("@/pages/dashboard"));
 const AddProduct = lazy(() => import("@/pages/add-product"));
@@ -53,7 +56,10 @@ function LegacyMarketingRedirect() {
 
 function PrivateRoutes() {
   const [, setLocation] = useLocation();
+  const [location] = useLocation();
+  const { businessModeResolution } = useUserSettings();
   const [authState, setAuthState] = useState<{ uid: string | null; loading: boolean }>({ uid: null, loading: true });
+  const routeGate = resolveBusinessRouteGate(location, businessModeResolution);
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
@@ -122,6 +128,15 @@ function PrivateRoutes() {
       setLocation("/login");
     }
   }, [authState.loading, authState.uid, setLocation]);
+
+  useEffect(() => {
+    if (authState.loading || routeGate.kind !== "redirect") return;
+    setLocation(routeGate.to, { replace: true });
+  }, [authState.loading, routeGate.kind, setLocation]);
+
+  if (authState.loading || routeGate.kind === "unresolved" || routeGate.kind === "redirect") {
+    return <PageSkeleton variant="dashboard" />;
+  }
 
   return (
     <>
