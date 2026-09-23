@@ -124,7 +124,6 @@ async function run() {
   // ===== E2E5-E2E13 — fluxo público real: store -> services -> availability -> Hold -> confirm =====
   let mainBookingId = "";
   let mainWorkId = "";
-  let mainCustomerId = "";
   {
     const store = await resolvePublicBookingStore(db, slug);
     assert.ok(store, "seed: loja pública deve resolver");
@@ -149,19 +148,19 @@ async function run() {
     const booking = assertValidBooking(bookingDoc.data() as Booking);
     mainBookingId = bookingDoc.id;
     mainWorkId = booking.workId;
-    mainCustomerId = booking.customerId as string;
 
     assert.equal(booking.tenantUid, uid, "E2E8: Booking pertence ao tenant certo");
-    assert.ok(mainCustomerId, "E2E5: Booking referencia um Client real (criado atomicamente na confirmação)");
-    const clientDoc = await db.doc(`users/${uid}/clients/${mainCustomerId}`).get();
-    assert.equal(clientDoc.exists, true, "E2E5: o Client foi realmente criado no Firestore");
-    assert.equal(clientDoc.data()?.name, "Cliente E2E");
+    assert.deepEqual(booking.customerContactSnapshot, { name: "Cliente E2E", phone: "+55 11 90000-1111" }, "E2E5/D2: Booking preserva o contato histórico declarado");
+    assert.equal(booking.customerId, undefined, "E2E5/D2: confirmação pública não cria nem associa Client");
+    assert.equal((await db.collection(`users/${uid}/clients`).count().get()).data().count, 0, "E2E5/D2: nenhum Client automático foi criado");
 
     const workSnap = await db.doc(`users/${uid}/serviceWorks/${mainWorkId}`).get();
     assert.equal(workSnap.exists, true, "E2E7: Work criado");
     const work = normalizeServiceWorkDocument(workSnap.data() as ServiceWork);
     assert.equal(work.tenantUid, uid, "E2E8: Work pertence ao mesmo tenant do Booking");
     assert.equal(work.origin, "booking", "E2E9: Work.origin = booking");
+    assert.deepEqual(work.customerContactSnapshot, { name: "Cliente E2E", phone: "+55 11 90000-1111" }, "E2E5/D2: Work preserva o mesmo contato histórico");
+    assert.equal(work.customerId, undefined, "E2E5/D2: Work também não é associado automaticamente");
     assert.deepEqual(work.financialSummary, { grossReceivedCents: 0, refundedTotalCents: 0, netReceivedCents: 0 }, "E2E10: financialSummary inicia zerado");
     assert.equal(work.totals.contractedTotalCents, 10000, "seed: contractedTotalCents vem do preço real do Service (R$100)");
 
@@ -207,7 +206,8 @@ async function run() {
     const workAfter = normalizeServiceWorkDocument((await db.doc(`users/${uid}/serviceWorks/${mainWorkId}`).get()).data() as ServiceWork);
     assert.equal(workAfter.status, "in_progress", "E2E18: start real transiciona planned -> in_progress");
     assert.ok(workAfter.startedAt);
-    assert.equal(workAfter.customerId, mainCustomerId, "E2E19: mantém o mesmo cliente");
+    assert.equal(workAfter.customerId, undefined, "E2E19/D2: transição preserva a ausência de associação automática");
+    assert.deepEqual(workAfter.customerContactSnapshot, { name: "Cliente E2E", phone: "+55 11 90000-1111" }, "E2E19/D2: transição preserva o snapshot histórico");
     assert.equal(workAfter.items[0]?.kind, "service");
     assert.equal(workAfter.totals.contractedTotalCents, 10000, "E2E19: mantém o valor contratado");
   }
@@ -467,7 +467,7 @@ async function run() {
     assert.ok(!agendaB.docs.some((d) => d.data().tenantUid === uid), "E2E55: nenhum Booking de A aparece na query da Agenda de B");
   }
 
-  console.log("Services E2E acceptance tests passed — full MVP cycle proven with real commands end-to-end: E2E1-4 availability respects weeklyHours/blocks/timezone with the exact expected UTC instants, E2E5-13 a real public booking creates exactly one Client+Booking+Work in the correct tenant with zero Payment/Refund/Quote and origin=booking, E2E14-17 the owner Agenda's exact query surfaces it with correct time/resource/workId, E2E18-19 Work lifecycle (start) preserves customer/service/contracted-total, E2E20-25 Quote-for-Work links exactly once, survives draft edits and versioning, and never silently changes the contracted total, E2E26-29 Payment/Refund/repay-after-refund all derive correctly from NET (never gross), E2E30-33 completing a Work preserves every Payment/Quote/Booking record, E2E34-39 a public reschedule preserves the same Booking/Work id, correctly swaps locks, is visible in the owner Agenda immediately, and keeps the same token valid, E2E40-45 a public cancel releases locks, restores the slot to availability, cancels the Work consistently, creates no Refund, and leaves the token read-only, E2E46-51 an anonymous client can read none of Bookings/Works/Clients/Payments/Quotes even with a fresh query in the same integrated tenant, and E2E52-55 a second real tenant proves slug/token/availability/Agenda isolation end-to-end.");
+  console.log("Services E2E acceptance tests passed — full MVP cycle proven with real commands end-to-end: E2E1-4 availability respects weeklyHours/blocks/timezone with the exact expected UTC instants, E2E5-13 a real public booking creates Booking+Work with contact snapshots in the correct tenant without automatic Client creation, zero Payment/Refund/Quote and origin=booking, E2E14-17 the owner Agenda's exact query surfaces it with correct time/resource/workId, E2E18-19 Work lifecycle (start) preserves snapshot/service/contracted-total, E2E20-25 Quote-for-Work links exactly once, survives draft edits and versioning, and never silently changes the contracted total, E2E26-29 Payment/Refund/repay-after-refund all derive correctly from NET (never gross), E2E30-33 completing a Work preserves every Payment/Quote/Booking record, E2E34-39 a public reschedule preserves the same Booking/Work id, correctly swaps locks, is visible in the owner Agenda immediately, and keeps the same token valid, E2E40-45 a public cancel releases locks, restores the slot to availability, cancels the Work consistently, creates no Refund, and leaves the token read-only, E2E46-51 an anonymous client can read none of Bookings/Works/Clients/Payments/Quotes even with a fresh query in the same integrated tenant, and E2E52-55 a second real tenant proves slug/token/availability/Agenda isolation end-to-end.");
 }
 
 run().catch((error) => {

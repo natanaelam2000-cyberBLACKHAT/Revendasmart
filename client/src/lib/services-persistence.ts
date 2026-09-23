@@ -66,7 +66,6 @@ export type CreateManualServiceWorkInput = {
 };
 
 export type UpdateServiceWorkCommercialInput = {
-  customerId?: string;
   items: readonly CommercialItem[];
   cost: OptionalCost;
 };
@@ -233,12 +232,16 @@ export async function updateServiceWorkCommercial(
   if (!current) throw new Error("SERVICE_WORK_NOT_FOUND");
   const nextWork = assertValidServiceWork({
     ...current,
-    customerId: input.customerId,
     items: input.items,
     totals: calculateCommercialTotals(input.items),
     cost: input.cost,
     updatedAt: nowIso(),
   });
-  await updateDoc(doc(serviceWorksCollection(current.tenantUid), workId), nextWork);
+  await updateDoc(doc(serviceWorksCollection(current.tenantUid), workId), {
+    items: nextWork.items,
+    totals: nextWork.totals,
+    cost: nextWork.cost,
+    updatedAt: nextWork.updatedAt,
+  });
   return nextWork;
 }

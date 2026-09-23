@@ -16,7 +16,7 @@ import { waitForAuthReady } from "@/lib/firebase";
 import { getServiceWork } from "@/lib/services-persistence";
 import { startServiceWork, completeServiceWork, cancelServiceWork } from "@/lib/service-work-commands";
 import { listServiceBookingsForWork } from "@/lib/service-bookings-persistence";
-import { cancelServiceBooking } from "@/lib/service-booking-commands";
+import { associateServiceBookingCustomer, cancelServiceBooking, createClientFromServiceBooking } from "@/lib/service-booking-commands";
 import { getServiceResourceSchedule } from "@/lib/service-availability-persistence";
 import { getQuote, updateQuoteDraft } from "@/lib/service-quotes-persistence";
 import { createServiceQuoteForWork } from "@/lib/service-quote-commands";
@@ -68,6 +68,9 @@ export default function ServiceWorkDetail() {
   const refresh = useCallback(() => setReloadToken((token) => token + 1), []);
 
   const [transitioning, setTransitioning] = useState(false);
+  const [associationDialogOpen, setAssociationDialogOpen] = useState(false);
+  const [associationClientId, setAssociationClientId] = useState("");
+  const [associatingCustomer, setAssociatingCustomer] = useState(false);
 
   // SERV-QUOTE-LINK-01 — agora que ServiceWork.quoteId formaliza o vínculo (server-authoritative), criar/
   // editar orçamento voltou a ser suportado: criar usa createServiceQuoteForWorkCommand (transaction que
@@ -233,6 +236,44 @@ export default function ServiceWorkDetail() {
 
   // §9 — Work com Booking confirmado cancela via fluxo de Booking (libera locks corretamente); Work manual
   // (ou cujo Booking já não está confirmado) cancela diretamente. Nunca deixa um Booking ativo órfão.
+  const openAssociationDialog = useCallback(() => {
+    setAssociationClientId("");
+    setAssociationDialogOpen(true);
+  }, []);
+
+  const handleAssociateCustomer = useCallback(async () => {
+    if (!booking || !associationClientId) return;
+    setAssociatingCustomer(true);
+    try {
+      const result = await associateServiceBookingCustomer(booking.id, { customerId: associationClientId, expectedCurrentCustomerId: booking.customerId ?? null });
+      notifySuccess("Cliente associado ao atendimento.");
+      setBooking({ ...booking, customerId: result.customerId });
+      setWork((current) => current && result.customerId ? { ...current, customerId: result.customerId } : current);
+      setAssociationDialogOpen(false);
+      refresh();
+    } catch (error) {
+      notifyError(serviceWorkErrorMessage(error));
+    } finally {
+      setAssociatingCustomer(false);
+    }
+  }, [booking, associationClientId, refresh]);
+
+  const handleCreateCustomerFromBooking = useCallback(async () => {
+    if (!booking) return;
+    setAssociatingCustomer(true);
+    try {
+      const result = await createClientFromServiceBooking(booking.id, { expectedCurrentCustomerId: booking.customerId ?? null });
+      notifySuccess("Cliente criado a partir do contato histórico.");
+      setBooking({ ...booking, customerId: result.customerId });
+      setWork((current) => current ? { ...current, customerId: result.customerId } : current);
+      refresh();
+    } catch (error) {
+      notifyError(serviceWorkErrorMessage(error));
+    } finally {
+      setAssociatingCustomer(false);
+    }
+  }, [booking, refresh]);
+
   const handleCancel = useCallback(async () => {
     if (!work) return;
     setTransitioning(true);
@@ -384,6 +425,13 @@ export default function ServiceWorkDetail() {
           <p className="text-lg font-black text-foreground" data-testid="text-work-service-name">{serviceName}</p>
           {customerName && <p className="text-sm text-muted-foreground" data-testid="text-work-customer">{customerName}</p>}
           {work.customerContactSnapshot && <p className="text-sm text-muted-foreground">Telefone: {work.customerContactSnapshot.phone}</p>}
+          <p className="text-xs text-muted-foreground">{work.customerId ? "Cliente associado" : "Não associado ao cadastro"}</p>
+          {booking && !work.customerId && (
+            <div className="grid gap-2 pt-1 sm:grid-cols-2">
+              <Button type="button" variant="outline" onClick={openAssociationDialog} disabled={associatingCustomer || clients.length === 0} data-testid="button-work-associate-client" className="rounded-full">Associar cliente existente</Button>
+              <Button type="button" variant="outline" onClick={handleCreateCustomerFromBooking} disabled={associatingCustomer || !work.customerContactSnapshot} data-testid="button-work-create-client" className="rounded-full">Criar cliente</Button>
+            </div>
+          )}
           {booking && (
             <p className="text-sm text-muted-foreground" data-testid="text-work-schedule">
               {formatLocalDate(new Date(booking.startAt), "dd 'de' MMMM 'de' yyyy", { locale: ptBR })} · {formatTimeInTimezone(booking.startAt, bookingTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone)} - {formatTimeInTimezone(booking.endAt, bookingTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone)}
@@ -528,6 +576,27 @@ export default function ServiceWorkDetail() {
           </div>
         </div>
       </div>
+
+      <Dialog open={associationDialogOpen} onOpenChange={setAssociationDialogOpen}>
+        <DialogContent className="max-w-sm rounded-[2rem]" data-testid="dialog-work-associate-client">
+          <DialogHeader>
+            <DialogTitle>Associar cliente existente</DialogTitle>
+            <DialogDescription>Escolha manualmente o cadastro. O telefone do atendimento não é usado para associar automaticamente.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="work-association-client">Cliente</Label>
+            <select id="work-association-client" value={associationClientId} onChange={(event) => setAssociationClientId(event.target.value)} className="rs-input w-full rounded-xl border border-border bg-white px-3 py-2 text-sm" data-testid="select-work-association-client">
+              <option value="">Selecione um cliente</option>
+              {clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}
+            </select>
+          </div>
+          <DialogFooter>
+            <Button type="button" onClick={handleAssociateCustomer} disabled={associatingCustomer || !associationClientId} className="w-full rounded-full" data-testid="button-confirm-work-association">
+              {associatingCustomer ? "Associando…" : "Associar cliente"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Criar/editar orçamento */}
       <Dialog open={quoteDialogOpen} onOpenChange={setQuoteDialogOpen}>

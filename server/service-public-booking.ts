@@ -325,14 +325,10 @@ export type PublicConfirmResult = {
   readonly manageToken?: string;
 };
 
-function buildPublicClientId(holdId: string): string {
-  return `public-${holdId}`;
-}
-
-/** §15-19 — coleta só nome+telefone (V1), cria o Client de contato ATOMICAMENTE com o Booking/Work (dentro
- * de confirmServiceBookingHoldCommand, nunca uma segunda escrita separada) e devolve um payload de sucesso
- * já sanitizado para exibição pública (§21 — nenhum id interno, nenhum campo técnico). SERV-PUBLIC-02:
- * também gera o token de gerenciamento público (só no confirm público, nunca no fluxo interno, §4). */
+/** §15-19 — coleta só nome+telefone (V1), persiste snapshot histórico no Booking/Work sem criar ou associar
+ * Client automaticamente, e devolve um payload de sucesso já sanitizado para exibição pública (§21 — nenhum
+ * id interno, nenhum campo técnico). SERV-PUBLIC-02: também gera o token de gerenciamento público (só no
+ * confirm público, nunca no fluxo interno, §4). */
 export async function confirmPublicServiceBookingHoldCommand(
   db: Firestore,
   storeUid: string,
@@ -345,7 +341,7 @@ export async function confirmPublicServiceBookingHoldCommand(
     const candidateToken = generateManageToken();
     const result = await confirmServiceBookingHoldCommand(db, storeUid, holdId, idempotencyKey, {
       source: "public",
-      publicCustomerContact: { clientId: buildPublicClientId(holdId), name: customerName, phone: customerPhone },
+      publicCustomerContact: { name: customerName, phone: customerPhone },
       publicManageToken: candidateToken,
     });
     // MG4 — replay da MESMA key: result.publicManageToken já vem do idempotency record original (o

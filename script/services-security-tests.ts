@@ -274,9 +274,9 @@ async function run() {
         },
         updatedAt: LATER,
       }));
-    await expectSucceeds("owner altera campo seguro do Work", () =>
+    await expectFails("owner não altera customerId do Work diretamente", () => updateDoc(workARef, { customerId: "client-1", updatedAt: LATER }));
+    await expectSucceeds("owner altera campo comercial seguro do Work", () =>
       updateDoc(workARef, {
-        customerId: "client-1",
         items: [],
         totals: {
           serviceRevenueCents: 6000,
@@ -461,7 +461,7 @@ async function run() {
     }));
     await expectSucceeds("legacy Work sem summary continua editável com net zero", () =>
       updateDoc(doc(tenantA.db, "users", uidA, "serviceWorks", "work-legacy"), {
-        customerId: "client-legacy",
+        cost: { kind: "known", amountCents: 0 },
         updatedAt: "2026-08-27T06:00:00.000Z",
       }));
     await expectFails("client não adiciona summary arbitrariamente a legacy Work", () =>

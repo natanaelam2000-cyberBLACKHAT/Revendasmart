@@ -299,11 +299,13 @@ async function run() {
       const quotesSnap = await db.collection(`users/${uid}/quotes`).get();
       assert.equal(quotesSnap.size, 0, "PUBL24: nenhum Quote criado pelo agendamento público");
 
-      // Um Client de contato foi criado com o nome/telefone informados.
-      const clientDoc = await db.doc(`users/${uid}/clients/${booking.customerId}`).get();
-      assert.equal(clientDoc.exists, true);
-      assert.equal(clientDoc.data()?.name, "Maria Cliente");
-      assert.equal(clientDoc.data()?.phone, "+55 11 99999-0000");
+      // D2 — o contato informado vira snapshot histórico; o fluxo público não cria nem associa Client.
+      const expectedContact = { name: "Maria Cliente", phone: "+55 11 99999-0000" };
+      assert.deepEqual(booking.customerContactSnapshot, expectedContact);
+      assert.deepEqual(work.customerContactSnapshot, expectedContact);
+      assert.equal(booking.customerId, undefined);
+      assert.equal(work.customerId, undefined);
+      assert.equal((await db.collection(`users/${uid}/clients`).count().get()).data().count, 0);
 
       // PUBL25 — replay idempotente: mesma key não cria um segundo Booking/Work.
       const replay = await postJson(harness.baseUrl, `/api/public/services/${slug}/bookings/holds/${hold.body.holdId}/confirm`, {
@@ -405,7 +407,7 @@ async function run() {
       }
     }
 
-    console.log("Public service booking tests passed: store resolution never leaks internal ids (PUBL1/2), only real active/published/bookable Services are listed with server-derived price/duration (PUBL3-5), public availability correctly reflects weeklyHours/block/Booking/active-Hold/expired-Hold/minAdvance/maxAdvance/timezone through the real engine with zero customer-identity leakage (PUBL6-13/32), public Hold creation always derives duration from the real Service and rejects unknown Services (PUBL14-16), tenant-mismatch confirmation is rejected as not-found (PUBL18), same-slot concurrency yields exactly one winner (PUBL19), confirmation creates exactly one Booking+Work with zero financialSummary/no Payment/no Quote regardless of injected financial fields in the body (PUBL20-24/33), a real Client contact is created atomically, idempotent replay never duplicates (PUBL25), the public Booking is visible through the exact same query the owner's Agenda already uses, expired holds are rejected at confirm (PUBL26), a tenant at the Client limit confirms with matching Booking/Work contact snapshots and no additional Client (D1), and an anonymous visitor cannot read any private collection directly (PUBL28-31).");
+    console.log("Public service booking tests passed: store resolution never leaks internal ids (PUBL1/2), only real active/published/bookable Services are listed with server-derived price/duration (PUBL3-5), public availability correctly reflects weeklyHours/block/Booking/active-Hold/expired-Hold/minAdvance/maxAdvance/timezone through the real engine with zero customer-identity leakage (PUBL6-13/32), public Hold creation always derives duration from the real Service and rejects unknown Services (PUBL14-16), tenant-mismatch confirmation is rejected as not-found (PUBL18), same-slot concurrency yields exactly one winner (PUBL19), confirmation creates exactly one Booking+Work with zero financialSummary/no Payment/no Quote regardless of injected financial fields in the body (PUBL20-24/33), the declared contact is persisted as Booking/Work snapshots without automatic Client creation, idempotent replay never duplicates (PUBL25), the public Booking is visible through the exact same query the owner's Agenda already uses, expired holds are rejected at confirm (PUBL26), a tenant at the Client limit confirms with matching Booking/Work contact snapshots and no additional Client (D1), and an anonymous visitor cannot read any private collection directly (PUBL28-31).");
   } finally {
     await harness.close();
   }

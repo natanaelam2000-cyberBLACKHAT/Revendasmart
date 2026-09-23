@@ -1,4 +1,4 @@
-import { assertValidBookingContactSnapshot } from "../shared/service-contact";
+import { assertValidBookingContactSnapshot, type BookingContactSnapshot } from "../shared/service-contact";
 /**
  * SERV-BOOK-01 — núcleo transacional da Agenda V1: BookingHold (reserva temporária), locks por segmento
  * de 5 minutos, expiração lógica (nunca física), confirmação atômica que cria Booking + ServiceWork.
@@ -101,7 +101,30 @@ type RescheduleBookingResult = {
   idempotentReplay: boolean;
 };
 
-export type ServiceBookingCommandResult = CreateHoldResult | ConfirmHoldResult | ReleaseHoldResult | CancelBookingResult | RescheduleBookingResult;
+type AssociateBookingCustomerResult = {
+  action: "associate_booking_customer";
+  bookingId: string;
+  workId?: string;
+  customerId?: string;
+  idempotentReplay: boolean;
+};
+
+type CreateClientFromBookingResult = {
+  action: "create_client_from_booking";
+  bookingId: string;
+  workId?: string;
+  customerId: string;
+  idempotentReplay: boolean;
+};
+
+export type ServiceBookingCommandResult =
+  | CreateHoldResult
+  | ConfirmHoldResult
+  | ReleaseHoldResult
+  | CancelBookingResult
+  | RescheduleBookingResult
+  | AssociateBookingCustomerResult
+  | CreateClientFromBookingResult;
 type ServiceBookingCommandAction = ServiceBookingCommandResult["action"];
 
 /** Resultado interno da transaction de createHold — "conflict" nunca escapa para o chamador HTTP como um
@@ -124,6 +147,9 @@ type BookingIdempotencyRecord = {
   bookingId?: string;
   workId?: string;
   cancelledAt?: IsoUtcString;
+  customerId?: string | null;
+  expectedCustomerId?: string | null;
+  createdClientId?: string;
   createdAt: string;
   /** SERV-PUBLIC-02 — raw token de gerenciamento público, só para action="confirm_hold" quando o fluxo
    * público gerou um. Vive SÓ aqui (coleção serviceBookingCommandIdempotency, allow read/write: if false nas
@@ -154,7 +180,12 @@ export class ServiceBookingCommandError extends Error {
     | "MIN_ADVANCE_VIOLATION"
     | "MAX_ADVANCE_VIOLATION"
     | "CLIENT_LIMIT_REACHED"
-    | "PLAN_BOOKING_LIMIT_REACHED";
+    | "PLAN_BOOKING_LIMIT_REACHED"
+    | "CLIENT_NOT_FOUND"
+    | "ASSOCIATION_CONFLICT"
+    | "BOOKING_WORK_INCONSISTENT"
+    | "BOOKING_NOT_ASSOCIABLE"
+    | "BOOKING_CONTACT_SNAPSHOT_REQUIRED";
 
   constructor(code: ServiceBookingCommandError["code"], message: string) {
     super(message);
@@ -182,6 +213,11 @@ const COMMAND_ERROR_MESSAGES = {
   MIN_ADVANCE_VIOLATION: "Este horário está muito próximo do momento atual.",
   MAX_ADVANCE_VIOLATION: "Este horário está além da janela de antecedência permitida.",
   CLIENT_LIMIT_REACHED: "O limite de clientes do plano atual foi atingido. Não foi possível cadastrar este novo cliente.",
+  CLIENT_NOT_FOUND: "Cliente não encontrado.",
+  ASSOCIATION_CONFLICT: "A associação do cliente foi alterada. Atualize a tela e tente novamente.",
+  BOOKING_WORK_INCONSISTENT: "Agendamento e atendimento estão inconsistentes.",
+  BOOKING_NOT_ASSOCIABLE: "Este agendamento não permite alterar a associação de cliente.",
+  BOOKING_CONTACT_SNAPSHOT_REQUIRED: "Esta reserva não possui contato histórico suficiente para criar um cliente.",
   // PLAN-IMPL-02C §23 — mensagem do DONO (owner-facing); o público nunca vê esta string — ver
   // translateInternalError em server/service-public-booking.ts, que mapeia este código para o mesmo
   // vocabulário genérico já usado por SERVICE_NOT_AVAILABLE.
@@ -222,6 +258,9 @@ function buildBookingId(holdId: string): string {
 }
 function buildBookingWorkId(holdId: string): string {
   return `booking-work-${holdId}`;
+}
+function buildClientIdFromBooking(bookingId: string): string {
+  return `booking-client-${bookingId}`;
 }
 function generateHoldId(): string {
   return `hold-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -275,6 +314,10 @@ function validateRouteEntityId(value: unknown, fieldName: string): string {
 }
 function validateOptionalEntityId(value: unknown, fieldName: string): string | undefined {
   if (typeof value === "undefined" || value === null) return undefined;
+  return validateRouteEntityId(value, fieldName);
+}
+function validateNullableEntityId(value: unknown, fieldName: string): string | null {
+  if (value === null) return null;
   return validateRouteEntityId(value, fieldName);
 }
 function validateStartAt(value: unknown): string {
@@ -453,11 +496,10 @@ export type ConfirmServiceBookingHoldOptions = {
    * Booking resultante. O fluxo interno do dono nunca passa isto — default "manual", igual ao comportamento
    * anterior a este ticket. */
   readonly source?: Booking["source"];
-  /** SERV-PUBLIC-01 — cria (uma única vez, tx.create — a idempotência do próprio confirm já garante que
-   * este código só roda na primeira confirmação bem-sucedida deste holdId) um Client de contato ATOMICAMENTE
-   * com o Booking/Work, e usa seu id como customerId. hold.customerId (já opcional hoje) continua a única
-   * fonte quando isto não é informado — nenhuma mudança de comportamento para o fluxo interno existente. */
-  readonly publicCustomerContact?: { readonly clientId: string; readonly name: string; readonly phone: string };
+  /** D2 — contato declarado pelo público vira somente snapshot histórico. Não cria Client, não associa por
+   * telefone, não consulta CRM e não consome cota de Clientes. Associações de CRM são comandos explícitos
+   * autenticados, separados da confirmação pública. */
+  readonly publicCustomerContact?: { readonly name: string; readonly phone: string };
   /** SERV-PUBLIC-02 — quando presente, ativa o token de gerenciamento público: o hash vai para o Booking
    * (server-authoritative, nunca escrito pelo client), o raw token nunca é persistido lá — só devolvido
    * nesta resposta e guardado no idempotency record desta MESMA key para replay seguro (MG4). */
@@ -529,20 +571,12 @@ export async function confirmServiceBookingHoldCommand(
     const segments = computeScheduleSegments(hold.startAt, hold.endAt);
     const lockRefs = segments.map((segmentStartAt) => scheduleLockRef(db, uid, hold.resourceId, segmentStartAt));
     const serviceSnapRef = serviceRef(db, uid, hold.serviceId);
-    const clientDocRef = options.publicCustomerContact
-      ? db.collection("users").doc(uid).collection("clients").doc(options.publicCustomerContact.clientId)
-      : undefined;
-    // PLAN-IMPL-02C — planSnap is now read UNCONDITIONALLY (every confirmation, public or owner, needs
-    // the resolved plan for the booking-quota check below, not just the public-client-creation path).
-    // RC-P0-CLIENT-LIMIT-01 §8/§9 — o próprio contador canônico (planUsage/summary.clientsCount) é lido
-    // dentro de createClientInTransaction mais abaixo, na MESMA transaction, antes de qualquer escrita —
-    // a antiga leitura de agregação independente da coleção clients foi removida: booking e criação
-    // normal de cliente agora compartilham a única autoridade de quota, com a mesma garantia de
-    // concorrência otimista do Firestore.
-    const [lockSnaps, serviceSnap, clientSnap, planSnap] = await Promise.all([
+    // PLAN-IMPL-02C — planSnap is now read UNCONDITIONALLY because every confirmation, public or owner,
+    // needs the resolved plan for the booking-quota check below. D2 keeps public confirmation independent
+    // from CRM client creation: no Client quota/counter is read or mutated in this path.
+    const [lockSnaps, serviceSnap, planSnap] = await Promise.all([
       lockRefs.length ? tx.getAll(...lockRefs) : Promise.resolve([]),
       tx.get(serviceSnapRef),
-      clientDocRef ? tx.get(clientDocRef) : Promise.resolve(undefined),
       tx.get(planDataRef(db, uid)),
     ]);
 
@@ -564,15 +598,13 @@ export async function confirmServiceBookingHoldCommand(
       throw new ServiceBookingCommandError("SERVICE_NOT_BOOKABLE", "Este serviço não pode ser reservado no momento.");
     }
 
-    // PLAN-IMPL-02C — resolvido uma única vez, reusado tanto pelo client-limit check (§6, PLAN-IMPL-02A)
-    // quanto pelo booking-quota check abaixo (novo neste ticket) — nunca duas resoluções de plano
-    // divergentes dentro da mesma transação.
+    // PLAN-IMPL-02C — resolved once for the booking-quota check below, with no CRM Client side effect in
+    // public confirmation.
     const plan: PlanType = resolveCommercialPlan(planSnap.exists ? (planSnap.data() as PlanData) : null);
 
-    // RC-P0-CLIENT-LIMIT-01 §8 — decisão de produto: um agendamento público válido NUNCA falha só porque
-    // a cota de Clientes (CRM) do tenant está cheia. Se houver vaga, o Client de contato é criado (mais
-    // abaixo, via createClientInTransaction, mesma autoridade canônica de POST /api/clients); se não
-    // houver, o agendamento segue em frente sem criar um novo Client — nunca mais um throw aqui.
+    // D2 — decisão de produto: confirmação pública não cria nem associa Client automaticamente. O contato
+    // declarado fica somente no snapshot histórico; criar/associar um Cliente é uma ação autenticada e
+    // explícita posterior.
 
     // PLAN-IMPL-02C §20/§24 — cota mensal de agendamentos: aplicada a QUALQUER confirmação (pública ou do
     // dono, §24 — nenhum caminho de UI é bypass) que efetivamente materializa um Booking real. A timezone
@@ -597,17 +629,7 @@ export async function confirmServiceBookingHoldCommand(
     const customerContactSnapshot = contact
       ? assertValidBookingContactSnapshot({ name: contact.name, phone: contact.phone })
       : undefined;
-    let customerId = contact ? (clientSnap?.exists ? contact.clientId : undefined) : hold.customerId;
-    if (contact && clientDocRef && clientSnap && !clientSnap.exists) {
-      try {
-        await createClientInTransaction(tx, db, uid, contact.clientId, {
-          id: contact.clientId, name: contact.name, phone: contact.phone,
-        }, plan);
-        customerId = contact.clientId;
-      } catch (error) {
-        if (!(error instanceof PlanMutationError) || error.code !== "PLAN_LIMIT_REACHED") throw error;
-      }
-    }
+    const customerId = contact ? undefined : hold.customerId;
     const work: ServiceWork = assertValidServiceWork({
       id: workId,
       tenantUid: uid,
@@ -1001,12 +1023,232 @@ export async function rescheduleServiceBookingCommand(
   });
 }
 
+
+type AssociableBookingDocument = Pick<Booking, "id" | "tenantUid" | "workId" | "status" | "customerId" | "customerContactSnapshot">;
+
+function parseAssociableBookingDocument(value: unknown, bookingId: string): AssociableBookingDocument {
+  try {
+    const booking = parseBooking(value);
+    if (booking.id !== bookingId) {
+      throw new ServiceBookingCommandError("BOOKING_WORK_INCONSISTENT", "Documento de agendamento não corresponde ao id solicitado.");
+    }
+    return {
+      id: booking.id,
+      tenantUid: booking.tenantUid,
+      workId: booking.workId,
+      status: booking.status,
+      customerId: booking.customerId,
+      customerContactSnapshot: booking.customerContactSnapshot,
+    };
+  } catch (error) {
+    if (error instanceof ServiceBookingCommandError) throw error;
+    throw new ServiceBookingCommandError("BOOKING_WORK_INCONSISTENT", "Reserva sem workId válido não é associável por este comando.");
+  }
+}
+
+function assertBookingCustomerAssociationAllowed(booking: AssociableBookingDocument, work: ServiceWork): void {
+  if (booking.status !== "confirmed" || work.status === "completed" || work.status === "cancelled") {
+    throw new ServiceBookingCommandError("BOOKING_NOT_ASSOCIABLE", "Associação de cliente só é permitida em agendamentos confirmados e atendimentos abertos.");
+  }
+}
+
+function assertExpectedCustomerMatches(current: string | undefined, expected: string | null): void {
+  if ((current ?? null) !== expected) {
+    throw new ServiceBookingCommandError("ASSOCIATION_CONFLICT", "customerId atual diverge do esperado.");
+  }
+}
+
+function associationPatch(customerId: string | null, updatedAt: string): Record<string, FirebaseFirestore.FieldValue | string> {
+  return customerId === null
+    ? { customerId: getFirebaseAdmin().firestore.FieldValue.delete(), updatedAt }
+    : { customerId, updatedAt };
+}
+
+function ensureAssociationReplayCompatible(
+  existing: Partial<BookingIdempotencyRecord>,
+  expected: Omit<BookingIdempotencyRecord, "createdAt" | "workId">,
+): AssociateBookingCustomerResult {
+  if (
+    existing.key !== expected.key
+    || existing.tenantUid !== expected.tenantUid
+    || existing.action !== expected.action
+    || existing.bookingId !== expected.bookingId
+    || (existing.customerId ?? null) !== (expected.customerId ?? null)
+    || (existing.expectedCustomerId ?? null) !== (expected.expectedCustomerId ?? null)
+  ) {
+    throw new ServiceBookingCommandError("IDEMPOTENCY_CONFLICT", "idempotencyKey já usada com outros dados.");
+  }
+  return {
+    action: "associate_booking_customer",
+    bookingId: expected.bookingId ?? "",
+    ...(typeof existing.workId === "string" ? { workId: existing.workId } : {}),
+    ...(typeof existing.customerId === "string" ? { customerId: existing.customerId } : {}),
+    idempotentReplay: true,
+  };
+}
+
+function ensureCreateClientFromBookingReplayCompatible(
+  existing: Partial<BookingIdempotencyRecord>,
+  expected: Omit<BookingIdempotencyRecord, "createdAt" | "workId" | "createdClientId">,
+): CreateClientFromBookingResult {
+  if (
+    existing.key !== expected.key
+    || existing.tenantUid !== expected.tenantUid
+    || existing.action !== expected.action
+    || existing.bookingId !== expected.bookingId
+    || (existing.expectedCustomerId ?? null) !== (expected.expectedCustomerId ?? null)
+  ) {
+    throw new ServiceBookingCommandError("IDEMPOTENCY_CONFLICT", "idempotencyKey já usada com outros dados.");
+  }
+  if (typeof existing.createdClientId !== "string") {
+    throw new ServiceBookingCommandError("IDEMPOTENCY_CONFLICT", "Registro de idempotência incompleto.");
+  }
+  return {
+    action: "create_client_from_booking",
+    bookingId: expected.bookingId ?? "",
+    ...(typeof existing.workId === "string" ? { workId: existing.workId } : {}),
+    customerId: existing.createdClientId,
+    idempotentReplay: true,
+  };
+}
+
+export async function associateServiceBookingCustomerCommand(
+  db: Firestore,
+  uid: string,
+  bookingId: string,
+  customerId: string | null,
+  expectedCurrentCustomerId: string | null,
+  idempotencyKey: string,
+): Promise<AssociateBookingCustomerResult> {
+  return await db.runTransaction(async (tx: Transaction) => {
+    const idemRef = bookingIdempotencyRef(db, uid, idempotencyKey);
+    const idemSnap = await tx.get(idemRef);
+    if (idemSnap.exists) {
+      return ensureAssociationReplayCompatible(idemSnap.data() as Partial<BookingIdempotencyRecord>, {
+        key: idempotencyKey, tenantUid: uid, action: "associate_booking_customer", bookingId, customerId, expectedCustomerId: expectedCurrentCustomerId,
+      });
+    }
+
+    const bookingDocRef = bookingRef(db, uid, bookingId);
+    const bookingSnap = await tx.get(bookingDocRef);
+    if (!bookingSnap.exists) throw new ServiceBookingCommandError("NOT_FOUND", "Agendamento não encontrado.");
+    const associableBooking = parseAssociableBookingDocument(bookingSnap.data(), bookingId);
+    if (associableBooking.tenantUid !== uid) throw new ServiceBookingCommandError("NOT_FOUND", "Agendamento não encontrado.");
+
+    const workDocRef = serviceWorkRef(db, uid, associableBooking.workId);
+    const [workSnap, clientSnap] = await Promise.all([
+      tx.get(workDocRef),
+      customerId ? tx.get(db.collection("users").doc(uid).collection("clients").doc(customerId)) : Promise.resolve(undefined),
+    ]);
+
+    if (!workSnap.exists) throw new ServiceBookingCommandError("BOOKING_WORK_INCONSISTENT", "Atendimento vinculado não encontrado.");
+    const work = parseServiceWorkDoc(workSnap.data());
+    if (work.tenantUid !== uid || work.id !== associableBooking.workId || work.origin !== "booking") {
+      throw new ServiceBookingCommandError("BOOKING_WORK_INCONSISTENT", "Atendimento não pertence a esta reserva.");
+    }
+    if ((work.customerId ?? null) !== (associableBooking.customerId ?? null)) {
+      throw new ServiceBookingCommandError("BOOKING_WORK_INCONSISTENT", "Booking e Work têm customerId divergente.");
+    }
+    assertBookingCustomerAssociationAllowed(associableBooking, work);
+    const currentCustomerId = work.customerId;
+    const workId = work.id;
+
+    assertExpectedCustomerMatches(currentCustomerId, expectedCurrentCustomerId);
+    if (customerId && !clientSnap?.exists) throw new ServiceBookingCommandError("CLIENT_NOT_FOUND", "Cliente não encontrado.");
+
+    const serverNowIso = new Date().toISOString();
+    const patch = associationPatch(customerId, serverNowIso);
+    tx.update(bookingDocRef, patch);
+    tx.update(workDocRef, patch);
+    tx.create(idemRef, {
+      key: idempotencyKey, tenantUid: uid, action: "associate_booking_customer", bookingId, workId, customerId, expectedCustomerId: expectedCurrentCustomerId, createdAt: serverNowIso,
+    } satisfies BookingIdempotencyRecord);
+
+    return { action: "associate_booking_customer", bookingId, ...(workId ? { workId } : {}), ...(customerId ? { customerId } : {}), idempotentReplay: false };
+  });
+}
+
+export async function createClientFromServiceBookingCommand(
+  db: Firestore,
+  uid: string,
+  bookingId: string,
+  expectedCurrentCustomerId: string | null,
+  idempotencyKey: string,
+): Promise<CreateClientFromBookingResult> {
+  return await db.runTransaction(async (tx: Transaction) => {
+    const idemRef = bookingIdempotencyRef(db, uid, idempotencyKey);
+    const idemSnap = await tx.get(idemRef);
+    if (idemSnap.exists) {
+      return ensureCreateClientFromBookingReplayCompatible(idemSnap.data() as Partial<BookingIdempotencyRecord>, {
+        key: idempotencyKey, tenantUid: uid, action: "create_client_from_booking", bookingId, expectedCustomerId: expectedCurrentCustomerId,
+      });
+    }
+
+    const bookingDocRef = bookingRef(db, uid, bookingId);
+    const bookingSnap = await tx.get(bookingDocRef);
+    if (!bookingSnap.exists) throw new ServiceBookingCommandError("NOT_FOUND", "Agendamento não encontrado.");
+    const associableBooking = parseAssociableBookingDocument(bookingSnap.data(), bookingId);
+    if (associableBooking.tenantUid !== uid) throw new ServiceBookingCommandError("NOT_FOUND", "Agendamento não encontrado.");
+    if (!associableBooking.customerContactSnapshot) {
+      throw new ServiceBookingCommandError("BOOKING_CONTACT_SNAPSHOT_REQUIRED", "Reserva sem snapshot de contato.");
+    }
+
+    const workDocRef = serviceWorkRef(db, uid, associableBooking.workId);
+    const [workSnap, planSnap] = await Promise.all([
+      tx.get(workDocRef),
+      tx.get(planDataRef(db, uid)),
+    ]);
+
+    if (!workSnap.exists) throw new ServiceBookingCommandError("BOOKING_WORK_INCONSISTENT", "Atendimento vinculado não encontrado.");
+    const work = parseServiceWorkDoc(workSnap.data());
+    if (work.tenantUid !== uid || work.id !== associableBooking.workId || work.origin !== "booking") {
+      throw new ServiceBookingCommandError("BOOKING_WORK_INCONSISTENT", "Atendimento não pertence a esta reserva.");
+    }
+    if ((work.customerId ?? null) !== (associableBooking.customerId ?? null)) {
+      throw new ServiceBookingCommandError("BOOKING_WORK_INCONSISTENT", "Booking e Work têm customerId divergente.");
+    }
+    assertBookingCustomerAssociationAllowed(associableBooking, work);
+    const currentCustomerId = work.customerId;
+    const workId = work.id;
+
+    assertExpectedCustomerMatches(currentCustomerId, expectedCurrentCustomerId);
+    const customerId = buildClientIdFromBooking(bookingId);
+    const clientDocRef = db.collection("users").doc(uid).collection("clients").doc(customerId);
+    const existingClientSnap = await tx.get(clientDocRef);
+    if (existingClientSnap.exists) throw new ServiceBookingCommandError("ASSOCIATION_CONFLICT", "Cliente desta reserva já existe.");
+
+    const serverNowIso = new Date().toISOString();
+    const plan: PlanType = resolveCommercialPlan(planSnap.exists ? (planSnap.data() as PlanData) : null);
+    try {
+      await createClientInTransaction(tx, db, uid, customerId, {
+        id: customerId,
+        name: associableBooking.customerContactSnapshot.name,
+        phone: associableBooking.customerContactSnapshot.phone,
+      }, plan);
+    } catch (error) {
+      if (error instanceof PlanMutationError && error.code === "PLAN_LIMIT_REACHED") {
+        throw new ServiceBookingCommandError("CLIENT_LIMIT_REACHED", COMMAND_ERROR_MESSAGES.CLIENT_LIMIT_REACHED);
+      }
+      throw error;
+    }
+
+    const patch = associationPatch(customerId, serverNowIso);
+    tx.update(bookingDocRef, patch);
+    tx.update(workDocRef, patch);
+    tx.create(idemRef, {
+      key: idempotencyKey, tenantUid: uid, action: "create_client_from_booking", bookingId, workId, expectedCustomerId: expectedCurrentCustomerId, createdClientId: customerId, createdAt: serverNowIso,
+    } satisfies BookingIdempotencyRecord);
+
+    return { action: "create_client_from_booking", bookingId, ...(workId ? { workId } : {}), customerId, idempotentReplay: false };
+  });
+}
+
 function sendServiceBookingCommandError(res: Response, status: number, code: keyof typeof COMMAND_ERROR_MESSAGES): void {
   res.status(status).json({ code, message: COMMAND_ERROR_MESSAGES[code] });
 }
 function statusForError(code: ServiceBookingCommandError["code"]): number {
   if (code === "UNAUTHENTICATED") return 401;
-  if (code === "NOT_FOUND") return 404;
+  if (code === "NOT_FOUND" || code === "CLIENT_NOT_FOUND") return 404;
   if (code === "IDEMPOTENCY_CONFLICT") return 409;
   if (
     code === "SEGMENT_UNAVAILABLE" || code === "HOLD_EXPIRED" || code === "HOLD_RELEASED"
@@ -1014,7 +1256,8 @@ function statusForError(code: ServiceBookingCommandError["code"]): number {
     || code === "WORK_NOT_CANCELABLE" || code === "BOOKING_NOT_RESCHEDULABLE"
     || code === "OUTSIDE_WORKING_HOURS" || code === "BLOCKED_INTERVAL" || code === "MISALIGNED_SLOT"
     || code === "MIN_ADVANCE_VIOLATION" || code === "MAX_ADVANCE_VIOLATION" || code === "CLIENT_LIMIT_REACHED"
-    || code === "PLAN_BOOKING_LIMIT_REACHED"
+    || code === "PLAN_BOOKING_LIMIT_REACHED" || code === "ASSOCIATION_CONFLICT" || code === "BOOKING_WORK_INCONSISTENT"
+    || code === "BOOKING_NOT_ASSOCIABLE" || code === "BOOKING_CONTACT_SNAPSHOT_REQUIRED"
   ) return 409;
   return 400;
 }
@@ -1116,6 +1359,58 @@ export function registerServiceBookingRoutes(
       }
       logError("service_booking.release_failed", error, { requestId: req.requestId, holdId: req.params.holdId });
       res.status(500).json({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível liberar a reserva agora." });
+    }
+  });
+
+
+  app.post("/api/services/bookings/:bookingId/customer-association", requireAuth, async (req, res) => {
+    const uid = (req as Request & { firebaseUid?: string }).firebaseUid;
+    if (!uid) { sendServiceBookingCommandError(res, 401, "UNAUTHENTICATED"); return; }
+    try {
+      const bookingId = validateRouteEntityId(req.params.bookingId, "bookingId");
+      const customerId = validateNullableEntityId(req.body?.customerId, "customerId");
+      const expectedCurrentCustomerId = validateNullableEntityId(req.body?.expectedCurrentCustomerId, "expectedCurrentCustomerId");
+      const idempotencyKey = validateIdempotencyKey(req.body?.idempotencyKey);
+      const result = await associateServiceBookingCustomerCommand(db_(), uid, bookingId, customerId, expectedCurrentCustomerId, idempotencyKey);
+      logInfo("service_booking.customer_associated", { requestId: req.requestId, bookingId, workId: result.workId, hasCustomerId: Boolean(result.customerId), idempotent: result.idempotentReplay });
+      res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof ServiceBookingCommandError) {
+        logWarn("service_booking.customer_association_rejected", { requestId: req.requestId, bookingId: req.params.bookingId, code: error.code });
+        sendServiceBookingCommandError(res, statusForError(error.code), error.code);
+        return;
+      }
+      if (error instanceof ServiceBookingsDomainError) {
+        sendServiceBookingCommandError(res, 400, "INVALID_PAYLOAD");
+        return;
+      }
+      logError("service_booking.customer_association_failed", error, { requestId: req.requestId, bookingId: req.params.bookingId });
+      res.status(500).json({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível associar o cliente agora." });
+    }
+  });
+
+  app.post("/api/services/bookings/:bookingId/create-client", requireAuth, async (req, res) => {
+    const uid = (req as Request & { firebaseUid?: string }).firebaseUid;
+    if (!uid) { sendServiceBookingCommandError(res, 401, "UNAUTHENTICATED"); return; }
+    try {
+      const bookingId = validateRouteEntityId(req.params.bookingId, "bookingId");
+      const expectedCurrentCustomerId = validateNullableEntityId(req.body?.expectedCurrentCustomerId, "expectedCurrentCustomerId");
+      const idempotencyKey = validateIdempotencyKey(req.body?.idempotencyKey);
+      const result = await createClientFromServiceBookingCommand(db_(), uid, bookingId, expectedCurrentCustomerId, idempotencyKey);
+      logInfo("service_booking.client_created_from_booking", { requestId: req.requestId, bookingId, workId: result.workId, idempotent: result.idempotentReplay });
+      res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof ServiceBookingCommandError) {
+        logWarn("service_booking.client_create_from_booking_rejected", { requestId: req.requestId, bookingId: req.params.bookingId, code: error.code });
+        sendServiceBookingCommandError(res, statusForError(error.code), error.code);
+        return;
+      }
+      if (error instanceof ServiceBookingsDomainError) {
+        sendServiceBookingCommandError(res, 400, "INVALID_PAYLOAD");
+        return;
+      }
+      logError("service_booking.client_create_from_booking_failed", error, { requestId: req.requestId, bookingId: req.params.bookingId });
+      res.status(500).json({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o cliente agora." });
     }
   });
 

@@ -321,22 +321,25 @@ async function run() {
     console.log("PASS D11/T8 Service create never aggregates Clients");
   }
 
-  // ===== D6/§8/§9 — public booking with an available Client slot: booking succeeds, Client is created,
-  // canonical counter increments =====
+  // ===== D6/§8/§9 + D2 — public booking with an available Client slot: booking succeeds, but does not
+  // create/associate a Client or touch the canonical Client counter =====
   {
     const uid = uidFor("d6ok");
     await seedPlan(db, uid, "free");
     const holdId = await createHoldForClientContactTest(db, uid, "d6ok", 0);
-    const clientId = `pub-client-${uid}`;
     const result = await confirmServiceBookingHoldCommand(db, uid, holdId, `confirm-${uid}`, {
       source: "public",
-      publicCustomerContact: { clientId, name: "Cliente Público", phone: "+55 11 98888-0000" },
+      publicCustomerContact: { name: "Cliente Público", phone: "+55 11 98888-0000" },
     });
     assert.equal((result as { idempotentReplay: boolean }).idempotentReplay, false, "D6: booking must succeed as a genuinely new confirmation");
-    assert.equal(await countClientDocs(db, uid), 1, "D6: exactly 1 Client doc must be created when quota is available");
+    assert.equal(await countClientDocs(db, uid), 0, "D6/D2: public booking must not create a Client even when quota is available");
     const usage = await readUsage(db, uid);
-    assert.equal(usage?.clientsCount, 1, "D6: clientsCount must increment via the SAME canonical authority as POST /api/clients");
-    console.log("PASS D6 public booking with available slot creates Client via canonical counter");
+    assert.equal(typeof usage?.clientsCount, "undefined", "D6/D2: public booking must not initialize or increment clientsCount");
+    const booking = (await db.doc(`users/${uid}/bookings/booking-${holdId}`).get()).data();
+    const work = (await db.doc(`users/${uid}/serviceWorks/booking-work-${holdId}`).get()).data();
+    assert.equal(booking?.customerId, undefined, "D6/D2: public booking must not auto-associate customerId");
+    assert.equal(work?.customerId, undefined, "D6/D2: Work must not auto-associate customerId");
+    console.log("PASS D6 public booking with available slot does not create Client or counter");
   }
 
   // ===== D6/§8/§9 — public booking at Client quota: booking STILL succeeds, NO new Client is created =====
@@ -345,15 +348,14 @@ async function run() {
     await seedPlan(db, uid, "free");
     await seedLegacyClients(db, uid, 50); // at the Free cap, counter not yet initialized
     const holdId = await createHoldForClientContactTest(db, uid, "d6full", 1);
-    const clientId = `pub-client-full-${uid}`;
     const result = await confirmServiceBookingHoldCommand(db, uid, holdId, `confirm-full-${uid}`, {
       source: "public",
-      publicCustomerContact: { clientId, name: "Cliente Sem Vaga", phone: "+55 11 97777-0000" },
+      publicCustomerContact: { name: "Cliente Sem Vaga", phone: "+55 11 97777-0000" },
     });
     assert.equal((result as { idempotentReplay: boolean }).idempotentReplay, false, "D6-full: the booking itself must still succeed even when Client quota is exhausted");
     assert.equal(await countClientDocs(db, uid), 50, "D6-full: no new Client doc may be created when quota is full — real count stays at 50");
     const usage = await readUsage(db, uid);
-    assert.equal(usage?.clientsCount, 50, "D6-full: clientsCount must reflect the accurate initialized value (50), never incremented past the real cap");
+    assert.equal(typeof usage?.clientsCount, "undefined", "D6-full/D2: public booking must not initialize the unrelated Client counter");
     // Confirm the Booking/Work themselves were genuinely created (booking is never silently dropped).
     const bookingsSnap = await db.collection("users").doc(uid).collection("bookings").get();
     assert.equal(bookingsSnap.size, 1, "D6-full: exactly 1 Booking must exist even though no Client was created");
@@ -367,12 +369,11 @@ async function run() {
     await seedPlan(db, uid, "free");
     await seedLegacyClients(db, uid, 49); // exactly 1 slot remains
     const holdId = await createHoldForClientContactTest(db, uid, "d7", 2);
-    const raceClientId = `race-booking-client-${uid}`;
     const [normalResult, bookingResult] = await Promise.allSettled([
       createClient(db, uid, "race-normal-create"),
       confirmServiceBookingHoldCommand(db, uid, holdId, `confirm-race-${uid}`, {
         source: "public",
-        publicCustomerContact: { clientId: raceClientId, name: "Cliente Corrida", phone: "+55 11 96666-0000" },
+        publicCustomerContact: { name: "Cliente Corrida", phone: "+55 11 96666-0000" },
       }),
     ]);
     // The booking transaction itself must NEVER fail because of the Client-quota race — only the
@@ -383,9 +384,8 @@ async function run() {
     const expectedContact = { name: "Cliente Corrida", phone: "+55 11 96666-0000" };
     assert.deepEqual(booking?.customerContactSnapshot, expectedContact);
     assert.deepEqual(work?.customerContactSnapshot, expectedContact);
-    const associated = (await db.doc(`users/${uid}/clients/${raceClientId}`).get()).exists;
-    assert.equal(booking?.customerId, associated ? raceClientId : undefined);
-    assert.equal(work?.customerId, booking?.customerId);
+    assert.equal(booking?.customerId, undefined, "D7/D2: public booking never consumes the last Client slot");
+    assert.equal(work?.customerId, undefined, "D7/D2: Work remains unassociated until an explicit command");
     const finalDocCount = await countClientDocs(db, uid);
     assert.equal(finalDocCount, 50, "D7: at most one new Client document may be created — final count must be exactly 50, never 51");
     const usage = await readUsage(db, uid);
@@ -402,8 +402,8 @@ async function run() {
     "accurately on first use (never defaults to 0) and existing data is never deleted, missing-counter " +
     "concurrent initialization never over-admits, direct Firestore create/delete are both denied by " +
     "Rules, Product/Service creates never aggregate or initialize the unrelated Client counter, public " +
-    "booking always succeeds and only conditionally creates a Client through the SAME canonical " +
-    "counter authority as POST /api/clients (skipping Client creation, never the booking, when quota is " +
+    "booking always succeeds and no longer creates a Client through the public confirmation path; explicit CRM creation remains under the SAME canonical " +
+    "counter authority as POST /api/clients (leaving public bookings unassociated when quota is " +
     "full), and a normal create racing a public booking for the last slot never over-admits.",
   );
 }

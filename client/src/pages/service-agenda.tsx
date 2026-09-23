@@ -16,7 +16,7 @@ import { buildPublicServiceBookingUrl } from "@/lib/public-url";
 import { getServiceResourceSchedule, listServiceAvailabilityBlocksForResource } from "@/lib/service-availability-persistence";
 import { createServiceAvailabilityBlock, deleteServiceAvailabilityBlock, getServiceAvailability, type ServiceAvailabilityResponse } from "@/lib/service-availability-commands";
 import { listServiceBookingsForResourceAndRange } from "@/lib/service-bookings-persistence";
-import { cancelServiceBooking, rescheduleServiceBooking } from "@/lib/service-booking-commands";
+import { associateServiceBookingCustomer, cancelServiceBooking, createClientFromServiceBooking, rescheduleServiceBooking } from "@/lib/service-booking-commands";
 import { listServices, getServiceWork, countServiceBookings } from "@/lib/services-persistence";
 import { notifyError, notifySuccess } from "@/lib/notify";
 import { getFirebaseAuth, waitForAuthReady } from "@/lib/firebase";
@@ -78,6 +78,9 @@ export default function ServiceAgenda() {
   const [selectedWork, setSelectedWork] = useState<ServiceWork | null>(null);
   const [workLoading, setWorkLoading] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [associationDialogOpen, setAssociationDialogOpen] = useState(false);
+  const [associationClientId, setAssociationClientId] = useState("");
+  const [associatingCustomer, setAssociatingCustomer] = useState(false);
 
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [rescheduleDate, setRescheduleDate] = useState(selectedDate);
@@ -190,6 +193,44 @@ export default function ServiceAgenda() {
       setWorkLoading(false);
     }
   }, []);
+
+  const openAssociationDialog = useCallback(() => {
+    setAssociationClientId("");
+    setAssociationDialogOpen(true);
+  }, []);
+
+  const handleAssociateCustomer = useCallback(async () => {
+    if (!selectedBooking || !associationClientId) return;
+    setAssociatingCustomer(true);
+    try {
+      const result = await associateServiceBookingCustomer(selectedBooking.id, { customerId: associationClientId, expectedCurrentCustomerId: selectedBooking.customerId ?? null });
+      notifySuccess("Cliente associado ao agendamento.");
+      setSelectedBooking({ ...selectedBooking, customerId: result.customerId });
+      setSelectedWork((current) => current ? { ...current, customerId: result.customerId } : current);
+      setAssociationDialogOpen(false);
+      refresh();
+    } catch (error) {
+      notifyError(agendaErrorMessage(error));
+    } finally {
+      setAssociatingCustomer(false);
+    }
+  }, [selectedBooking, associationClientId, refresh]);
+
+  const handleCreateCustomerFromBooking = useCallback(async () => {
+    if (!selectedBooking) return;
+    setAssociatingCustomer(true);
+    try {
+      const result = await createClientFromServiceBooking(selectedBooking.id, { expectedCurrentCustomerId: selectedBooking.customerId ?? null });
+      notifySuccess("Cliente criado a partir do contato histórico.");
+      setSelectedBooking({ ...selectedBooking, customerId: result.customerId });
+      setSelectedWork((current) => current ? { ...current, customerId: result.customerId } : current);
+      refresh();
+    } catch (error) {
+      notifyError(agendaErrorMessage(error));
+    } finally {
+      setAssociatingCustomer(false);
+    }
+  }, [selectedBooking, refresh]);
 
   const handleCancelBooking = useCallback(async () => {
     if (!selectedBooking) return;
@@ -438,6 +479,7 @@ export default function ServiceAgenda() {
                 {(selectedBooking.customerContactSnapshot || selectedBooking.customerId) && (
                   <div><p><span className="font-bold">Cliente:</span> {bookingContactName(selectedBooking, clientNameById)}</p>
                     {selectedBooking.customerContactSnapshot && <p>Telefone: {selectedBooking.customerContactSnapshot.phone}</p>}
+                    <p className="text-xs text-muted-foreground">{selectedBooking.customerId ? "Cliente associado" : "Não associado ao cadastro"}</p>
                   </div>
                 )}
                 <p><span className="font-bold">Recurso:</span> {selectedBooking.resourceId}</p>
@@ -447,7 +489,13 @@ export default function ServiceAgenda() {
                   <p><span className="font-bold">Atendimento:</span> {serviceWorkStatusLabel(selectedWork.status)}</p>
                 ) : null}
               </div>
-              <div className="mt-4">
+              <div className="mt-4 space-y-2">
+                {!selectedBooking.customerId && (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Button type="button" variant="outline" onClick={openAssociationDialog} disabled={associatingCustomer || clients.length === 0} data-testid="button-booking-associate-client" className="rounded-full">Associar cliente existente</Button>
+                    <Button type="button" variant="outline" onClick={handleCreateCustomerFromBooking} disabled={associatingCustomer || !selectedBooking.customerContactSnapshot} data-testid="button-booking-create-client" className="rounded-full">Criar cliente</Button>
+                  </div>
+                )}
                 <Button type="button" variant="outline" asChild className="w-full rounded-full">
                   <a href={`/servicos/atendimentos/${selectedBooking.workId}`} data-testid="link-booking-open-work">Ver atendimento completo</a>
                 </Button>
@@ -502,6 +550,27 @@ export default function ServiceAgenda() {
               <p className="text-sm text-muted-foreground">Nenhum horário disponível nesta data.</p>
             )}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={associationDialogOpen} onOpenChange={setAssociationDialogOpen}>
+        <DialogContent className="max-w-sm rounded-[2rem]" data-testid="dialog-booking-associate-client">
+          <DialogHeader>
+            <DialogTitle>Associar cliente existente</DialogTitle>
+            <DialogDescription>Escolha manualmente o cadastro. O telefone do agendamento não é usado para associar automaticamente.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="booking-association-client">Cliente</Label>
+            <select id="booking-association-client" value={associationClientId} onChange={(event) => setAssociationClientId(event.target.value)} className="rs-input w-full rounded-xl border border-border bg-white px-3 py-2 text-sm" data-testid="select-booking-association-client">
+              <option value="">Selecione um cliente</option>
+              {clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}
+            </select>
+          </div>
+          <DialogFooter>
+            <Button type="button" onClick={handleAssociateCustomer} disabled={associatingCustomer || !associationClientId} className="w-full rounded-full" data-testid="button-confirm-booking-association">
+              {associatingCustomer ? "Associando…" : "Associar cliente"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

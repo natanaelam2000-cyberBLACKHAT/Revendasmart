@@ -574,7 +574,7 @@ service cloud.firestore {
         && request.resource.data.get('sourceQuoteVersionId', '') == resource.data.get('sourceQuoteVersionId', '')
         && request.resource.data.get('quoteId', '') == resource.data.get('quoteId', '')
         && request.resource.data.get('financialSummary', null) == resource.data.get('financialSummary', null)
-        && changed.hasOnly(['customerId', 'items', 'totals', 'cost', 'updatedAt'])
+        && changed.hasOnly(['items', 'totals', 'cost', 'updatedAt'])
         && changed.hasAny(['updatedAt'])
         && request.resource.data.updatedAt != resource.data.updatedAt
         && request.resource.data.totals.contractedTotalCents >= currentServiceWorkNetReceivedCents()

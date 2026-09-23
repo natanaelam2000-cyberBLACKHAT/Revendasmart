@@ -147,6 +147,7 @@ export default function ServiceWorksList() {
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-bold text-foreground">{clientName}</p>
                         <p className="mt-0.5 text-[11px] text-muted-foreground">{serviceWorkStatusLabel(work.status)} · {financialStatusLabel(financials.financialStatus)}</p>
+                        <p className="mt-0.5 text-[10px] font-semibold text-muted-foreground">{work.customerId ? "Cliente associado" : "Não associado ao cadastro"}</p>
                       </div>
                       <div className="shrink-0 text-right">
                         <p className="text-sm font-black text-primary">{formatCentsBRL(financials.netReceivedCents)}</p>
