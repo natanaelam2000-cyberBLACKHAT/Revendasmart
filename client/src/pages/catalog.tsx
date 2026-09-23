@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
-import { Minus, Plus, Send, ShoppingCart, Trash2, X } from "lucide-react";
+import { CalendarClock, Minus, Plus, Send, ShoppingCart, Trash2, X } from "lucide-react";
+import { Link } from "wouter";
 import { CatalogShowcase } from "@/components/catalog/CatalogShowcase";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Layout } from "@/components/layout";
@@ -12,6 +13,7 @@ import { notifyInfo, notifyWarning } from "@/lib/notify";
 import { formatCurrency, getPromotionalPrice } from "@/lib/product-pricing";
 import { buildPublicCatalogUrl } from "@/lib/public-url";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
+import { resolveBusinessMode } from "@shared/business-mode";
 
 type CatalogStoreSettings = AppSettings & {
   storeBannerUrl?: string;
@@ -214,6 +216,34 @@ export default function Catalog() {
           <p className="mb-2 font-bold text-destructive">Ocorreu um erro temporário.</p>
           <p className="mb-4 text-sm text-muted-foreground">Não foi possível carregar o catálogo.</p>
           <button type="button" onClick={refresh} className="rounded-xl bg-primary px-5 py-3 text-sm font-bold text-white">Tentar novamente</button>
+        </div>
+      </Layout>
+    );
+  }
+
+  // HOTFIX-P0-D — esta aba sempre foi inteiramente sobre produto (carrinho de prévia, busca de
+  // produto, "cobrar catálogo de produtos"), sem nenhuma noção de serviço. Para "Somente serviços",
+  // mostrar o grid de produtos vazio (ou pior, produtos de exemplo) contraria diretamente o requisito
+  // de remover "gestão de estoque... e busca de produtos" e "não mostrar cards cobrando catálogo de
+  // produtos". Construir aqui uma experiência de navegação de serviços com a mesma profundidade desta
+  // aba (que tem carrinho/WhatsApp/QR/etc próprios) é um trabalho real, não algo que cabe com segurança
+  // dentro deste hotfix — ver relatório final, riscos restantes. Direciona para os destinos reais de
+  // serviço em vez de mostrar algo que não se aplica ao negócio do dono.
+  if (resolveBusinessMode(settings.businessMode) === "services") {
+    return (
+      <Layout title="Catálogo">
+        <div className="mx-auto flex max-w-md flex-col items-center px-6 py-16 text-center">
+          <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-secondary">
+            <CalendarClock className="h-10 w-10 text-muted-foreground" />
+          </div>
+          <h2 className="mb-2 text-lg font-black">Este catálogo é para produtos</h2>
+          <p className="mb-6 text-sm text-muted-foreground">
+            Seu negócio está configurado para serviços. Gerencie seus serviços e horários pela Agenda —
+            o link de agendamento público fica disponível por lá.
+          </p>
+          <Link href="/servicos/agenda">
+            <div className="rounded-2xl bg-primary px-6 py-3 text-sm font-bold text-white">Ir para Agenda</div>
+          </Link>
         </div>
       </Layout>
     );
