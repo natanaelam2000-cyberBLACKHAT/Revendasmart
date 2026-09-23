@@ -245,7 +245,7 @@ export default function Dashboard() {
           </button>
           ))}
 
-          <SectionCard title="Resumo do período" eyebrow="Visão do negócio">
+          {home.showProductMetrics && <SectionCard title="Resumo do período" eyebrow="Visão do negócio">
             {hasSales ? (
               <div className="grid grid-cols-2 gap-3" data-testid="home-summary-kpis">
                 <SummaryTile label="Faturamento do mês" value={formatHomeCurrency(home.summary.monthlyRevenue)} detail="Total vendido no mês atual" />
@@ -258,7 +258,7 @@ export default function Dashboard() {
                 Ainda não há vendas neste período. Assim que uma venda for registrada, a visão do negócio aparece aqui.
               </EmptyState>
             )}
-          </SectionCard>
+          </SectionCard>}
 
 
 
@@ -299,7 +299,7 @@ export default function Dashboard() {
             )}
           </SectionCard>
 
-          <SectionCard title="Meta mensal" eyebrow="Objetivo" action={<Target className="h-5 w-5 text-primary" aria-hidden="true" />}>
+          {home.showProductMetrics && <SectionCard title="Meta mensal" eyebrow="Objetivo" action={<Target className="h-5 w-5 text-primary" aria-hidden="true" />}>
             {home.goal.hasExplicitGoal ? (
               <div className="space-y-3">
                 <div className="flex items-end justify-between gap-4">
@@ -330,9 +330,9 @@ export default function Dashboard() {
                 <button type="button" onClick={() => void handleSaveMonthlyGoal()} disabled={isSavingGoal} className="rounded-2xl bg-primary px-4 py-3 text-xs font-black text-white disabled:opacity-60">{isSavingGoal ? "Salvando..." : "Salvar"}</button>
               </div>
             )}
-          </SectionCard>
+          </SectionCard>}
 
-          <SectionCard title="Insight principal" eyebrow="Análise automática">
+          {home.showProductMetrics && <SectionCard title="Insight principal" eyebrow="Análise automática">
             {home.mainInsight ? (
               <div className="rounded-2xl bg-primary/5 p-4">
                 <p className="text-xs font-black uppercase tracking-wide text-primary">{home.mainInsight.title}</p>
@@ -343,7 +343,7 @@ export default function Dashboard() {
             ) : (
               <EmptyState>Ainda não há dados suficientes para destacar um insight confiável.</EmptyState>
             )}
-          </SectionCard>
+          </SectionCard>}
         </main>
       </div>
     </Layout>
