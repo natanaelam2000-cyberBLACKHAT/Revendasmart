@@ -130,6 +130,22 @@ export class InvalidCatalogSlugError extends Error {
   }
 }
 
+/**
+ * HOTFIX-P0-B — antes, um slug que resolvia com sucesso mas estava com enablePublicCatalog:false
+ * (ou disablePublicCatalog:true) virava exatamente o mesmo `return null` de "esse slug não resolve
+ * para ninguém", e as duas coisas terminavam na MESMA mensagem "não foi encontrado ou está
+ * desativado pelo consultor" — inclusive para visitantes de lojas que nunca foram desativadas e só
+ * bateram num erro técnico intermediário. Um erro dedicado deixa quem chama (loadPublicCatalog em
+ * server/routes.ts) responder com um código diferente de "não existe", e o cliente (public-catalog.tsx)
+ * finalmente mostrar as duas causas como o que realmente são.
+ */
+export class PublicCatalogDeactivatedError extends Error {
+  constructor() {
+    super("PUBLIC_CATALOG_DEACTIVATED");
+    this.name = "PublicCatalogDeactivatedError";
+  }
+}
+
 async function findLegacyOwners(transaction: any, settingsRef: any, slug: string): Promise<Set<string>> {
   const owners = new Set<string>();
   for (const field of LEGACY_SLUG_FIELDS) {

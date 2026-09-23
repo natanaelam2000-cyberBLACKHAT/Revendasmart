@@ -70,6 +70,7 @@ import { REFERRAL_REWARD_LIMIT, isReferralCodeFormat } from "../shared/monetizat
 import {
   CatalogSlugConflictError,
   InvalidCatalogSlugError,
+  PublicCatalogDeactivatedError,
   ensurePublicCatalogSlug,
   normalizeCatalogSlug,
   persistUserSettingsWithCatalogOwnership,
@@ -482,7 +483,9 @@ export async function loadPublicCatalogSettings(rawSlug: string, db: FirebaseFir
   if (!settingsDoc) return null;
   const settings = settingsDoc.data() ?? {};
   const catalogEnabled = settings.enablePublicCatalog ?? settings.catalogEnabled ?? settings.catalog_enabled ?? true;
-  if (catalogEnabled === false || settings.disablePublicCatalog === true) return null;
+  if (catalogEnabled === false || settings.disablePublicCatalog === true) {
+    throw new PublicCatalogDeactivatedError();
+  }
   const cardAvailable = await hasActiveMercadoPagoConnection(db, settingsDoc.id);
   // PLAN-IMPL-03 §3/§4/F1 — superfície pública é fail-closed: lifecycle/reconciliation precisa terminar
   // antes de qualquer resposta de catálogo, ou o handler externo devolve 503 temporário em vez de
@@ -796,6 +799,7 @@ export async function registerRoutes(
       res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
       return res.json(catalog);
     } catch (error) {
+      if (error instanceof PublicCatalogDeactivatedError) return res.status(404).json({ error: "CATALOG_DEACTIVATED" });
       return errorResponse(res, 503, "CATALOG_TEMPORARILY_UNAVAILABLE", error instanceof Error ? error.message : "Unknown error");
     }
   });
@@ -817,6 +821,7 @@ export async function registerRoutes(
       res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
       return res.json(page);
     } catch (error) {
+      if (error instanceof PublicCatalogDeactivatedError) return res.status(404).json({ error: "CATALOG_NOT_FOUND" });
       return errorResponse(res, 503, "CATALOG_PRODUCTS_TEMPORARILY_UNAVAILABLE", error instanceof Error ? error.message : "Unknown error");
     }
   });
@@ -834,6 +839,7 @@ export async function registerRoutes(
       res.setHeader("Cache-Control", "no-store");
       return res.json({ pixKey });
     } catch (error) {
+      if (error instanceof PublicCatalogDeactivatedError) return res.status(404).json({ error: "CATALOG_NOT_FOUND" });
       return errorResponse(res, 503, "CATALOG_PIX_KEY_TEMPORARILY_UNAVAILABLE", error instanceof Error ? error.message : "Unknown error");
     }
   });
