@@ -1,5 +1,6 @@
 import { resolveCatalogExperience } from "../client/src/lib/catalog-experience";
 import type { Product, Sale } from "../client/src/lib/mock-data";
+import { resolveBusinessMode } from "../shared/business-mode";
 import type {
   PublicCatalogCategorySummary,
   PublicCatalogCollection,
@@ -131,6 +132,11 @@ export function buildPublicCatalogStore(settings: Record<string, unknown>, slug:
   return {
     slug,
     name,
+    // HOTFIX CATÁLOGO-PÚBLICO-POR-MODO — a rota pública (/u/:storeSlug) precisa saber o businessMode
+    // real do dono para decidir o que renderizar (produtos com carrinho, serviços com agendamento, ou
+    // as duas seções lado a lado no HYBRID) — mesma fonte central de sempre (shared/business-mode.ts),
+    // nunca uma segunda heurística client-side.
+    businessMode: resolveBusinessMode(settings.businessMode),
     ...(description ? { description } : {}),
     ...(logoUrl ? { logoUrl } : {}),
     ...(bannerUrl ? { bannerUrl } : {}),
