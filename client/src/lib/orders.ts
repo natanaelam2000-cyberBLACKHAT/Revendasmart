@@ -211,3 +211,205 @@ export function getAllowedOrderTransitions(status: OrderStatus): readonly OrderS
 export function canTransitionOrderStatus(from: OrderStatus, to: OrderStatus): boolean {
   return getAllowedOrderTransitions(from).includes(to);
 }
+
+/**
+ * Status em que os itens do pedido ainda podem ser editados. De `ready` em diante o pedido já foi
+ * preparado, entregue ou encerrado — editar ali desfaria trabalho concluído. Lista fechada.
+ */
+export const ORDER_EDITABLE_STATUS_IDS: readonly OrderStatus[] = ["new", "in_progress"];
+
+/**
+ * Recebe o valor cru de propósito (inclusive direto do documento do Firestore): resolveOrderStatus
+ * converte valor desconhecido em "new", fallback certo para exibir e errado para autorizar edição —
+ * aqui um status desconhecido nunca é editável.
+ */
+export function isOrderEditableStatus(status: unknown): boolean {
+  return (ORDER_EDITABLE_STATUS_IDS as readonly string[]).includes(status as string);
+}
+
+/**
+ * Pedido só é editável antes de qualquer processo de pagamento: com cobrança iniciada, o valor já foi
+ * apresentado ao cliente e mudar os itens deixaria pedido e cobrança divergentes. Ausente é o pedido
+ * manual (Encomenda do lojista), que nunca tem pagamento embutido — ver Order.paymentStatus. Qualquer
+ * outro valor, inclusive desconhecido, bloqueia. O servidor deve passar o valor cru do documento, nunca
+ * o resultado de resolveOrderPaymentStatus (que transforma valor desconhecido em ausente).
+ *
+ * Necessário, não suficiente: se já existe cobrança gerada (orderChargeIdempotency) só o servidor sabe,
+ * e precisa checar no mesmo lugar em que aplicar a edição.
+ */
+export function isOrderPaymentEditable(paymentStatus: unknown): boolean {
+  return paymentStatus === undefined || paymentStatus === "not_started";
+}
+
+/** Mesmo teto de linhas de isValidOrderCreate (firestore.rules: items.size() <= 100). */
+export const ORDER_EDIT_MAX_ITEMS = 100;
+
+/**
+ * Contrato autoritativo do id de produto: createProductCommand valida com este mesmo padrão
+ * (assertEntityId em server/plan-authoritative-mutations.ts), e todo produto real — antes e depois do
+ * comando — nasceu com auto-ID do Firestore gerado em add-product.tsx, que cabe nele.
+ */
+const ORDER_EDIT_PRODUCT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,120}$/;
+
+/**
+ * Linha de produto do catálogo na edição. Sem preço e sem nome de propósito: linha que já existia
+ * mantém o snapshot gravado (withOrderItemQuantity) e linha nova recebe o preço atual do produto no
+ * servidor — preço vindo do cliente nunca vale para produto cadastrado.
+ */
+export interface OrderEditProductItemInput {
+  productId: string;
+  quantity: number;
+}
+
+/** Item manual (sem productId): nome e preço estimado são do próprio lojista, como no NewOrderSheet. */
+export interface OrderEditManualItemInput {
+  name: string;
+  quantity: number;
+  unitPrice: number;
+}
+
+/**
+ * Uma linha do estado FINAL desejado do pedido. Quantidade zero não existe aqui — remover a linha é não
+ * enviá-la (a UI converte zero em remoção). Não há clientId/clientName: o cliente do pedido é imutável na
+ * edição. O total do pedido editado continua saindo de calculateOrderTotal sobre as linhas finais, e o
+ * teto financeiro não é aplicado nesta camada: fica com o comando de edição no servidor (PEDIDOS EDITÁVEIS
+ * Etapa 2), que monta os itens finais e aplica o limite real de Pedidos (hoje, total <= 100000000 em
+ * isValidOrderCreate, firestore.rules).
+ */
+export type OrderEditItemInput = OrderEditProductItemInput | OrderEditManualItemInput;
+
+export type OrderEditItemsErrorCode =
+  | "ORDER_EDIT_INVALID_ITEMS"
+  | "ORDER_EDIT_EMPTY"
+  | "ORDER_EDIT_TOO_MANY_ITEMS"
+  | "ORDER_EDIT_INVALID_ITEM"
+  | "ORDER_EDIT_INVALID_QUANTITY"
+  | "ORDER_EDIT_INVALID_PRODUCT_ID"
+  | "ORDER_EDIT_INVALID_ITEM_NAME"
+  | "ORDER_EDIT_INVALID_ITEM_PRICE";
+
+export type OrderEditItemsValidation =
+  | { ok: true; items: OrderEditItemInput[] }
+  | { ok: false; code: OrderEditItemsErrorCode; index?: number };
+
+function isOrderEditQuantity(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+/**
+ * Valida e normaliza a lista FINAL de itens de uma edição (payload cru, como chega do cliente). Erro
+ * determinístico: o primeiro encontrado, varrendo as linhas em ordem, com o índice da linha para a UI
+ * apontar onde está o problema. A saída só tem os campos do tipo — name, unitPrice e imageUrl enviados
+ * junto de um productId são descartados e nunca viram preço nem snapshot. Linhas repetidas do mesmo
+ * produto não são erro: quem compara quantidades agrega por productId (aggregateOrderItemQuantities).
+ *
+ * Quantidade, nome e preço manual seguem o contrato real de Pedidos, sem teto nesta camada: o NewOrderSheet
+ * grava quantidade fracionária, nome sem limite de tamanho e preço sem teto por item, e isValidOrderCreate
+ * não valida item a item. Limites de Produto e do fluxo independente de Vendas não se aplicam aqui — um
+ * teto novo tornaria pedido legado impossível de editar sem migração.
+ */
+export function validateOrderEditItems(items: unknown): OrderEditItemsValidation {
+  if (!Array.isArray(items)) return { ok: false, code: "ORDER_EDIT_INVALID_ITEMS" };
+  if (items.length === 0) return { ok: false, code: "ORDER_EDIT_EMPTY" };
+  if (items.length > ORDER_EDIT_MAX_ITEMS) return { ok: false, code: "ORDER_EDIT_TOO_MANY_ITEMS" };
+
+  const normalized: OrderEditItemInput[] = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const item: unknown = items[index];
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      return { ok: false, code: "ORDER_EDIT_INVALID_ITEM", index };
+    }
+    const { productId, name, quantity, unitPrice } = item as Record<string, unknown>;
+    if (!isOrderEditQuantity(quantity)) return { ok: false, code: "ORDER_EDIT_INVALID_QUANTITY", index };
+
+    if (productId !== undefined) {
+      if (typeof productId !== "string" || !ORDER_EDIT_PRODUCT_ID_PATTERN.test(productId)) {
+        return { ok: false, code: "ORDER_EDIT_INVALID_PRODUCT_ID", index };
+      }
+      normalized.push({ productId, quantity });
+      continue;
+    }
+
+    const trimmedName = typeof name === "string" ? name.trim() : "";
+    if (!trimmedName) {
+      return { ok: false, code: "ORDER_EDIT_INVALID_ITEM_NAME", index };
+    }
+    // Zero é válido: no NewOrderSheet o preço do item manual é uma estimativa opcional.
+    if (typeof unitPrice !== "number" || !Number.isFinite(unitPrice) || unitPrice < 0) {
+      return { ok: false, code: "ORDER_EDIT_INVALID_ITEM_PRICE", index };
+    }
+    normalized.push({ name: trimmedName, quantity, unitPrice });
+  }
+  return { ok: true, items: normalized };
+}
+
+/**
+ * Soma as quantidades por productId. Pedidos antigos do catálogo público podem ter mais de uma linha do
+ * mesmo produto (a rota pública não junta linhas repetidas) — comparar linha a linha contaria errado.
+ * Item manual (sem productId) fica de fora. A quantidade de cada linha é lida com a mesma regra de
+ * calculateOrderItemSubtotalCents (inválida ou negativa conta 0), e produto que soma 0 não entra no
+ * resultado: quantidade zero equivale a linha removida.
+ *
+ * Agregar serve para comparar quantidades, nunca para fundir linhas: se o pedido gravado tiver linhas do
+ * mesmo productId com unitPrice diferentes, o comando da Etapa 2 não pode fundi-las em silêncio — preserva
+ * as linhas ou rejeita a alteração ambígua. Esse caso não é resolvido nesta camada.
+ */
+export function aggregateOrderItemQuantities(items: readonly Pick<OrderItem, "productId" | "quantity">[]): Map<string, number> {
+  const quantities = new Map<string, number>();
+  for (const item of items) {
+    const quantity = Math.max(0, Number(item.quantity) || 0);
+    if (typeof item.productId !== "string" || !item.productId || quantity === 0) continue;
+    quantities.set(item.productId, (quantities.get(item.productId) ?? 0) + quantity);
+  }
+  return quantities;
+}
+
+export type OrderProductQuantityChangeKind = "added" | "removed" | "increased" | "decreased" | "unchanged";
+
+export interface OrderProductQuantityChange {
+  productId: string;
+  previousQuantity: number;
+  nextQuantity: number;
+  kind: OrderProductQuantityChangeKind;
+}
+
+/**
+ * Compara, por produto, as quantidades do pedido gravado com as da edição (os dois lados agregados). É
+ * a base das decisões do futuro comando de edição no servidor: só `added` e `increased` pedem produto
+ * ainda disponível (produto excluído, arquivado ou preservado pode diminuir ou sair, nunca aumentar) e
+ * só `added` recebe o preço atual — `increased` mantém o snapshot da linha existente (snapshots divergentes
+ * do mesmo produto: ver aggregateOrderItemQuantities). Ordem estável: produtos do pedido gravado na ordem
+ * em que aparecem, depois os novos na ordem da edição.
+ */
+export function compareOrderProductQuantities(
+  previousItems: readonly Pick<OrderItem, "productId" | "quantity">[],
+  nextItems: readonly Pick<OrderItem, "productId" | "quantity">[],
+): OrderProductQuantityChange[] {
+  const previous = aggregateOrderItemQuantities(previousItems);
+  const next = aggregateOrderItemQuantities(nextItems);
+  const productIds = Array.from(previous.keys()).concat(Array.from(next.keys()).filter((productId) => !previous.has(productId)));
+  return productIds.map((productId) => {
+    const previousQuantity = previous.get(productId) ?? 0;
+    const nextQuantity = next.get(productId) ?? 0;
+    const kind: OrderProductQuantityChangeKind = previousQuantity === 0
+      ? "added"
+      : nextQuantity === 0
+        ? "removed"
+        : nextQuantity > previousQuantity
+          ? "increased"
+          : nextQuantity < previousQuantity
+            ? "decreased"
+            : "unchanged";
+    return { productId, previousQuantity, nextQuantity, kind };
+  });
+}
+
+/**
+ * Muda só a quantidade de uma linha já gravada, preservando o snapshot inteiro (unitPrice, name,
+ * imageUrl, productId). Não recebe preço de propósito: 10 → 13 continua no preço do dia do pedido, e o
+ * preço atual do produto nunca substitui o snapshot automaticamente. A quantidade chega já validada
+ * (validateOrderEditItems) — zero nunca chega aqui, é remoção da linha.
+ */
+export function withOrderItemQuantity(item: OrderItem, quantity: number): OrderItem {
+  return { ...item, quantity };
+}
