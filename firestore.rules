@@ -844,6 +844,29 @@ service cloud.firestore {
         && request.resource.data.get('createdAtISO', '') == resource.data.get('createdAtISO', '');
     }
 
+    // ADS-PRO-03C — validação estrita do AdsProCreativeProfileV1.
+    // Apenas schemaVersion (1) e preferredStyles (lista de MarketingProStyle, máx 5 itens sem tipos estranhos).
+    function hasUniqueAdsProStyles(styles) {
+      return styles.size() <= 1
+        || (styles.size() == 2 && styles[0] != styles[1])
+        || (styles.size() == 3 && styles[0] != styles[1] && styles[0] != styles[2] && styles[1] != styles[2])
+        || (styles.size() == 4 && styles[0] != styles[1] && styles[0] != styles[2] && styles[0] != styles[3]
+          && styles[1] != styles[2] && styles[1] != styles[3] && styles[2] != styles[3])
+        || (styles.size() == 5 && styles[0] != styles[1] && styles[0] != styles[2] && styles[0] != styles[3] && styles[0] != styles[4]
+          && styles[1] != styles[2] && styles[1] != styles[3] && styles[1] != styles[4]
+          && styles[2] != styles[3] && styles[2] != styles[4] && styles[3] != styles[4]);
+    }
+
+    function isValidAdsProCreativeProfile(data) {
+      return data is map
+        && data.keys().hasOnly(['schemaVersion', 'preferredStyles'])
+        && data.keys().hasAll(['schemaVersion', 'preferredStyles'])
+        && data.schemaVersion == 1
+        && data.preferredStyles is list
+        && data.preferredStyles.size() <= 5
+        && data.preferredStyles.hasOnly(['luxury', 'editorial', 'modern', 'minimal', 'sensory'])
+        && hasUniqueAdsProStyles(data.preferredStyles);
+    }
     // ===== FIRESTORE SECURITY RULES =====
     
     // ===== ROOT LEVEL: /users/{uid} =====
@@ -988,6 +1011,18 @@ service cloud.firestore {
         allow create: if userOwnsResource(uid) && isValidMarketingHistoryCreate();
         allow update: if userOwnsResource(uid) && isValidMarketingHistoryUpdate();
         allow delete: if userOwnsResource(uid);
+      }
+
+      // SUBCOLLECTION: adsPro
+      // ADS-PRO-03C — Perfil Criativo V1 do Anúncios Pro (AdsProCreativeProfileV1).
+      // Preferências visuais do lojista, tenant-scoped por construção em users/{uid}.
+      // Documento canônico restrito a 'creativeProfile'. Delete permitido para redefinir perfil (clear).
+      match /adsPro/{docId} {
+        allow read: if userOwnsResource(uid);
+        allow create, update: if userOwnsResource(uid)
+          && docId == 'creativeProfile'
+          && isValidAdsProCreativeProfile(request.resource.data);
+        allow delete: if userOwnsResource(uid) && docId == 'creativeProfile';
       }
 
       match /orders/{orderId} {

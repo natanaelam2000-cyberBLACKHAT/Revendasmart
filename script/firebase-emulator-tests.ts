@@ -767,6 +767,68 @@ async function run() {
 
     await expectSucceeds("owner apaga própria entrada de histórico Pro", () => deleteDoc(historyRef(owner, ownerUid, "ad-pro-1")));
 
+    // ===== ADS-PRO-03C — Perfil Criativo V1 do Anúncios Pro (adsPro/creativeProfile) =====
+    const adsProProfileRef = (context: Context, uid: string, docId = "creativeProfile") =>
+      doc(context.db, "users", uid, "adsPro", docId);
+
+    const validCreativeProfileData = (overrides: Record<string, unknown> = {}) => ({
+      schemaVersion: 1,
+      preferredStyles: ["modern", "minimal"],
+      ...overrides,
+    });
+
+    // O-01 / O-02: owner cria e lê próprio perfil
+    await expectSucceeds("owner cria Creative Profile válido", () =>
+      setDoc(adsProProfileRef(owner, ownerUid), validCreativeProfileData()));
+
+    await expectSucceeds("owner lê próprio Creative Profile", async () => {
+      const snap = await getDoc(adsProProfileRef(owner, ownerUid));
+      assert.equal(snap.exists(), true);
+      assert.equal(snap.data()?.schemaVersion, 1);
+      assert.deepEqual(snap.data()?.preferredStyles, ["modern", "minimal"]);
+    });
+
+    // Atualização com preferredStyles vazio
+    await expectSucceeds("owner atualiza Creative Profile com lista vazia", () =>
+      setDoc(adsProProfileRef(owner, ownerUid), validCreativeProfileData({ preferredStyles: [] })));
+
+    // Validações de shape pelas Rules
+    await expectFails("Creative Profile com schemaVersion != 1 é bloqueado pelas rules", () =>
+      setDoc(adsProProfileRef(owner, ownerUid), validCreativeProfileData({ schemaVersion: 2 })));
+
+    await expectFails("Creative Profile com campo extra é bloqueado pelas rules", () =>
+      setDoc(adsProProfileRef(owner, ownerUid), validCreativeProfileData({ extraHacked: "foo" })));
+
+    await expectFails("Creative Profile com style inválido (fresh-commercial) é bloqueado pelas rules", () =>
+      setDoc(adsProProfileRef(owner, ownerUid), validCreativeProfileData({ preferredStyles: ["fresh-commercial"] })));
+
+    await expectFails("Creative Profile com style inexistente é bloqueado pelas rules", () =>
+      setDoc(adsProProfileRef(owner, ownerUid), validCreativeProfileData({ preferredStyles: ["not-a-style"] })));
+
+    await expectFails("Creative Profile em docId diferente de creativeProfile é bloqueado pelas rules", () =>
+      setDoc(adsProProfileRef(owner, ownerUid, "otherDoc"), validCreativeProfileData()));
+
+    // O-03 / O-04: outro usuário não lê nem grava perfil do owner
+    await expectFails("outro usuário não lê Creative Profile do owner", () =>
+      getDoc(adsProProfileRef(intruder, ownerUid)));
+
+    await expectFails("outro usuário não grava Creative Profile no espaço do owner", () =>
+      setDoc(adsProProfileRef(intruder, ownerUid), validCreativeProfileData()));
+
+    await expectFails("outro usuário não apaga Creative Profile do owner", () =>
+      deleteDoc(adsProProfileRef(intruder, ownerUid)));
+
+    // O-05: anônimo bloqueado
+    await expectFails("usuário anônimo não lê Creative Profile", () =>
+      getDoc(adsProProfileRef(anonymous, ownerUid)));
+
+    await expectFails("usuário anônimo não grava Creative Profile", () =>
+      setDoc(adsProProfileRef(anonymous, ownerUid), validCreativeProfileData()));
+
+    // Clear (delete) permitido pelo owner
+    await expectSucceeds("owner apaga próprio Creative Profile", () =>
+      deleteDoc(adsProProfileRef(owner, ownerUid)));
+
     // RELEASE-CHECKOUT-02 §1/§9-A/§9-B — idempotência atômica do pedido do catálogo público, contra o
     // emulador REAL (não mocada): duas reservas concorrentes com o MESMO clientOrderId só podem
     // produzir UM vencedor (Firestore optimistic concurrency control na transaction), nunca dois
