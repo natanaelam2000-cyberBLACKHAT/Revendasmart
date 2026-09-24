@@ -6076,11 +6076,14 @@ assert.match(settings, /featureLabels: normalizedFeatureLabels,\s*\n\s*\};/);
 // curta). Causa real desta rodada: 404 de ROTA inexistente no backend atingido ficava indistinguível
 // de "loja não encontrada", mascarando um erro de configuração como se fosse dado ausente.
 assert.match(publicCatalog, /type PublicCatalogFailureReason =/);
-for (const reason of ["store_not_found", "api_route_missing", "permission_denied", "network", "invalid_response", "unexpected"]) {
+for (const reason of ["store_not_found", "store_deactivated", "api_route_missing", "permission_denied", "network", "invalid_response", "unexpected"]) {
   assert.match(publicCatalog, new RegExp(`"${reason}"`), `motivo de falha ${reason} precisa existir no diagnóstico do catálogo público`);
 }
-// 404 JSON (loja não existe) x 404 HTML (rota ausente no backend) são separados pelo content-type.
-assert.match(publicCatalog, /reason = contentType\.includes\("application\/json"\) \? "store_not_found" : "api_route_missing";/);
+// 404 JSON (loja não existe OU desativada pelo dono, distinguidas pelo body) x 404 HTML (rota ausente
+// no backend) são separados pelo content-type; dentro do JSON, HOTFIX-P0-B separa as duas causas em vez
+// de tratar ambas como "store_not_found".
+assert.match(publicCatalog, /reason = "api_route_missing";/);
+assert.match(publicCatalog, /body\?\.error === "CATALOG_DEACTIVATED" \? "store_deactivated" : "store_not_found"/);
 // 401/403 num catálogo PÚBLICO é regressão, nunca "visitante sem permissão" — precisa ser sinalizado.
 assert.match(publicCatalog, /reason = "permission_denied";/);
 // O diagnóstico registra slug e base de API efetiva — sem isso não dá para saber qual backend respondeu.
