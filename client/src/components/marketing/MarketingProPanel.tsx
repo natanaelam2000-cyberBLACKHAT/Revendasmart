@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Eraser, ImagePlus, Layers, Sparkles, Wand2 } from "lucide-react";
 import { useLocation } from "wouter";
 import { canUseFeature } from "@shared/monetization";
@@ -25,6 +25,9 @@ import {
   canvasToPngBlob,
 } from "@/lib/marketing-pro-real-background-composer";
 import { CreativeProfileOnboarding } from "./CreativeProfileOnboarding";
+const AdsProProfileCard = lazy(() =>
+  import("@/components/marketing/AdsProProfileCard").then((m) => ({ default: m.AdsProProfileCard }))
+);
 import {
   getCreativeProfile,
   saveCreativeProfile,
@@ -486,6 +489,12 @@ export function MarketingProPanel({ products = [], storeName = "Minha loja", sto
           </button>
         )}
       </div>
+
+      {proAdsEnabled && (
+        <Suspense fallback={null}>
+          <AdsProProfileCard className="mb-1" />
+        </Suspense>
+      )}
 
       {proAdsEnabled && creativeProfileState.status !== "loading" && (
         <div className="min-w-0 rounded-2xl border border-primary/20 bg-primary/[0.04] p-3.5" data-testid="marketing-pro-creative-profile-entry">
