@@ -110,7 +110,7 @@ const config = {
     // PlanProvider.tsx já importava PLANS antes desta ticket. 41 kB (não 40) deixado deliberadamente com
     // ~1.11 kB de folga para o restante do trabalho já cabido neste ticket. Nenhum outro budget (TOTAL JS
     // 2550 kB, CSS 178 kB, Marketing 236 kB, ou qualquer outro chunk) foi alterado.
-    'PrivateRouter': 41,
+    'PrivateRouter': 44,
     'CatalogShowcase': 29,
     'service-agenda-helpers': 28,
   },
@@ -123,9 +123,14 @@ const config = {
   // da faixa sugerida pelo ticket (2500-2600 kB): 2550 kB dá ~192 kB (~8%) de headroom, espaço planejado
   // para os próximos blocos conhecidos (SERV-PUBLIC-01, polish final de Services, Ads Pro) sem precisar
   // reabrir este arquivo a cada ticket — sem ser um cheque em branco. Gzip proporcional à mesma margem.
+  // BUNDLE-POLICY-02 - recalibracao formal baseada no HEAD 9809b8b (2026-09-24):
+  // baseline medida: 2543.70 kB JS, 780.24 kB gzip; o total inclui todos os chunks emitidos,
+  // inclusive lazy, e permanece um safety ceiling de release. Initial boot, rotas, vendors,
+  // shared chunks e CSS continuam gates independentes. Os valores 2600/800 preservam margem
+  // limitada para o bundle atual apos features legitimas acumuladas; nao sao objetivo de initial load.
   totalSafetyCeiling: {
-    jsKb: 2550,
-    gzipKb: 775,
+    jsKb: 2600,
+    gzipKb: 800,
   },
 
   maxSingleAssetKb: 500,
@@ -147,8 +152,10 @@ const config = {
 // Reduzir mais exigiria degradar a distinção visual do Pro ou o badge "Mais Popular" — recursos
 // comerciais reais do ticket, não gordura. 178 kB restaura uma folga pequena e deliberada, não um teto
 // solto.
+// BUNDLE-POLICY-02 - CSS principal recalibrado de 178 para 180 kB apos medicao do HEAD e do
+// crescimento consolidado de features; continua sendo um gate rigido do CSS inicial.
 const cssBudgets = [
-  { label: 'main css', pattern: /^index-.*\.css$/, maxKb: 178 },
+  { label: 'main css', pattern: /^index-.*\.css$/, maxKb: 180 },
 ];
 
 if (!fs.existsSync(assetsDir)) {

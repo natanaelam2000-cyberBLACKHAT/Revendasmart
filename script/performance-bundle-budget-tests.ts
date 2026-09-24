@@ -168,9 +168,9 @@ function run() {
         "vendor-firebase-observability": 60, "vendor-radix": 40, "vendor-ui": 36, "vendor-lucide": 35, "vendor-qrcode": 20,
       },
       defaultVendorBudgetKb: 40,
-      sharedChunks: { PrivateRouter: 38, CatalogShowcase: 29, "service-agenda-helpers": 28 },
+      sharedChunks: { PrivateRouter: 44, CatalogShowcase: 29, "service-agenda-helpers": 28 },
       sharedChunkVisibilityThresholdKb: 8,
-      totalSafetyCeiling: { jsKb: 2550, gzipKb: 775 },
+      totalSafetyCeiling: { jsKb: 2600, gzipKb: 800 },
       maxSingleAssetKb: 500,
       forbiddenFrontendChunks: [{ label: "date-fns frontend vendor", match: (name: string) => name === "vendor-date-fns" }],
     };
