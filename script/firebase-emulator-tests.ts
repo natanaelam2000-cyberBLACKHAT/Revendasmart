@@ -813,6 +813,23 @@ async function run() {
     {
       const adminDb = getAdminFirestore(adminApp!);
       const chargeOrderId = `order-for-charge-${Date.now()}`;
+      // PEDIDOS EDITÁVEIS Etapa 2B: a reserva lê o pedido na MESMA transação e congela nela o total — o
+      // pedido precisa existir (antes a reserva nem olhava o pedido).
+      const seedChargeableOrder = (orderId: string) => adminDb.collection("users").doc(ownerUid).collection("orders").doc(orderId).set({
+        id: orderId,
+        clientId: "public-catalog",
+        clientName: "Cliente do catálogo",
+        status: "new",
+        items: [{ productId: "p1", name: "Produto", quantity: 1, unitPrice: 10 }],
+        total: 10,
+        createdAt: "2026-09-23T00:00:00.000Z",
+        updatedAt: "2026-09-23T00:00:00.000Z",
+        paymentMethod: "card",
+        paymentProvider: "mercadopago",
+        paymentStatus: "awaiting_customer_payment",
+        clientOrderId: `client-${orderId}`,
+      });
+      await seedChargeableOrder(chargeOrderId);
 
       const [first, second] = await Promise.all([
         reserveOrderCharge(adminDb, ownerUid, chargeOrderId),
@@ -823,18 +840,20 @@ async function run() {
       assert.equal(chargeWinners.length, 1, "F: exatamente UMA das duas tentativas simultâneas de pagar o mesmo pedido deve vencer a reserva de cobrança");
       assert.equal(chargeLosers.length, 1, "F: a outra tentativa precisa ver a reserva já existente, nunca criar uma segunda cobrança");
       assert.equal(chargeWinners[0].chargeId, chargeLosers[0].chargeId, "F: as duas tentativas concorrentes precisam apontar para o MESMO chargeId — nunca duas cobranças para o mesmo pedido");
+      assert.equal(chargeWinners[0].amount, 10, "F: a reserva vencedora congela o total lido do pedido na própria transação");
 
       await finalizeOrderChargeReservation(adminDb, ownerUid, chargeOrderId, chargeWinners[0].chargeId);
       const chargeReplay = await reserveOrderCharge(adminDb, ownerUid, chargeOrderId);
       assert.equal(chargeReplay.alreadyExisted, true, "F: replay de pagamento do mesmo pedido já finalizado precisa ver a reserva existente");
       assert.equal(chargeReplay.chargeId, chargeWinners[0].chargeId, "F: replay devolve o MESMO chargeId da cobrança original");
 
-      // J: falha do provider (simulada aqui como "nunca chegou a finalizar") libera a reserva — o
-      // pedido pode ser tentado de novo sem ficar travado para sempre em "pending".
+      // J: falha ANTES de chamar o provider (reserva ainda "pending") libera a reserva — o pedido pode ser
+      // tentado de novo. Etapa 2C: resultado ambíguo nunca libera (order-charge-recovery-emulator-tests.ts).
       const failedChargeOrderId = `order-charge-failed-${Date.now()}`;
+      await seedChargeableOrder(failedChargeOrderId);
       const failedAttempt = await reserveOrderCharge(adminDb, ownerUid, failedChargeOrderId);
       assert.equal(failedAttempt.alreadyExisted, false, "J: primeira tentativa de cobrança de um pedido novo sempre vence");
-      await releaseOrderChargeReservation(adminDb, ownerUid, failedChargeOrderId);
+      assert.equal(await releaseOrderChargeReservation(adminDb, ownerUid, failedChargeOrderId, failedAttempt.chargeId, "before_provider"), true, "J: reserva pending desta intenção é liberada");
       const retryAfterProviderFailure = await reserveOrderCharge(adminDb, ownerUid, failedChargeOrderId);
       assert.equal(retryAfterProviderFailure.alreadyExisted, false, "J: depois de uma falha do provider liberar a reserva, o mesmo pedido pode tentar pagar de novo");
 

@@ -806,17 +806,28 @@ async function handleCreateLink(req: Request, res: Response) {
 // resolution, cliente MP, buildExternalReference, persistência de Charge, mapeamento de erro) sem
 // duplicar a lógica de negócio nem criar um segundo sistema de pagamento.
 // ---------------------------------------------------------------------------
+/**
+ * PEDIDOS EDITÁVEIS Etapa 2C — onde a falha aconteceu em relação ao Mercado Pago:
+ * - "not_started": antes de qualquer chamada ao provedor (nada foi criado lá);
+ * - "rejected": o provedor respondeu com recusa definitiva (4xx de validação/autorização/limite) — nada criado;
+ * - "ambiguous": o provedor pode ter criado a preferência (timeout, rede, 5xx, resposta inutilizável ou falha
+ *   local depois do sucesso). Reserva de cobrança NUNCA é liberada nesse caso.
+ */
+export type MercadoPagoProviderCallPhase = "not_started" | "rejected" | "ambiguous";
+
 export class MercadoPagoOrderChargeError extends Error {
   readonly code: string;
   readonly userMessage: string;
   readonly httpStatus: number;
+  readonly providerCall: MercadoPagoProviderCallPhase;
 
-  constructor(code: string, userMessage: string, httpStatus = 502, cause?: unknown) {
+  constructor(code: string, userMessage: string, httpStatus = 502, cause?: unknown, providerCall: MercadoPagoProviderCallPhase = "ambiguous") {
     super(code, { cause });
     this.name = "MercadoPagoOrderChargeError";
     this.code = code;
     this.userMessage = userMessage;
     this.httpStatus = httpStatus;
+    this.providerCall = providerCall;
   }
 }
 
@@ -840,6 +851,40 @@ export interface CreateOrderMercadoPagoChargeParams {
   amount: number;
   title: string;
   storeSlug: string;
+  /** PEDIDOS EDITÁVEIS Etapa 2C — chave estável da intenção (a MESMA em qualquer retry da mesma reserva). */
+  idempotencyKey: string;
+  /** Aguardado imediatamente antes do POST ao provedor; se lançar, o provedor não é chamado. */
+  markProviderCallStarted: () => Promise<void>;
+}
+
+export interface FindOrderMercadoPagoChargeParams {
+  uid: string;
+  chargeId: string;
+  orderId: string;
+  /** Valor congelado na reserva: a preferência encontrada precisa ter exatamente esse valor. */
+  amount: number;
+  title: string;
+}
+
+/**
+ * Depois de `provider_started`, nenhum status HTTP do POST prova sozinho que o provedor
+ * não criou uma preferência. Isso inclui 4xx (em especial 429): a reserva fica fechada e
+ * a intenção só pode avançar por reconciliação explícita.
+ */
+function classifyPreferenceFailure(): MercadoPagoProviderCallPhase {
+  return "ambiguous";
+}
+
+type PreferenceRequestOptions = NonNullable<Parameters<Preference["create"]>[0]["requestOptions"]>;
+
+/**
+ * Uma tentativa só, com a chave estável da intenção. O SDK (3.2.0) reenvia sozinho o POST em timeout/5xx
+ * (`retryWithExponentialBackoff`, DEFAULT_RETRIES = 2) — e o endpoint de preferências não documenta
+ * X-Idempotency-Key, então esse reenvio poderia criar uma SEGUNDA preferência. `retries` não está tipado no
+ * SDK, mas é lido por `RestClient.fetch`.
+ */
+function singleAttemptPreferenceOptions(idempotencyKey: string): PreferenceRequestOptions {
+  return { idempotencyKey, retries: 1 } as PreferenceRequestOptions;
 }
 
 export interface CreateOrderMercadoPagoChargeResult {
@@ -859,6 +904,8 @@ export async function createOrderMercadoPagoCharge(
       "MP_TOKEN_UNAVAILABLE",
       "Pagamento por cartão indisponível no momento. Escolha Pix ou combine pelo WhatsApp.",
       503,
+      undefined,
+      "not_started",
     );
   }
 
@@ -869,6 +916,8 @@ export async function createOrderMercadoPagoCharge(
       appBaseUrlCheck.reason === "missing" ? "APP_BASE_URL_MISSING" : "APP_BASE_URL_INVALID",
       "Pagamento indisponível no momento. Tente novamente em instantes.",
       500,
+      undefined,
+      "not_started",
     );
   }
 
@@ -878,6 +927,8 @@ export async function createOrderMercadoPagoCharge(
   const externalReference = buildExternalReference(params.uid, params.chargeId, { kind: "order", id: params.orderId });
   const backUrls = buildPublicOrderBackUrls(params.storeSlug, params.orderId);
 
+  // PEDIDOS EDITÁVEIS Etapa 2C: a partir daqui o provedor pode receber o pedido — a reserva é marcada antes.
+  await params.markProviderCallStarted();
   let preference: any;
   try {
     preference = await preferenceClient.create({
@@ -903,6 +954,7 @@ export async function createOrderMercadoPagoCharge(
           mpConnectionId: connectionId,
         },
       },
+      requestOptions: singleAttemptPreferenceOptions(params.idempotencyKey),
     });
   } catch (mpError) {
     paymentLogError("[payments/order-charge] Mercado Pago request failed", {
@@ -913,18 +965,70 @@ export async function createOrderMercadoPagoCharge(
       "Não foi possível iniciar o pagamento por cartão agora. Escolha Pix ou combine pelo WhatsApp.",
       502,
       mpError,
+      classifyPreferenceFailure(),
     );
   }
 
+  return await persistOrderMercadoPagoCharge(params, preference, { accessToken, tokenSource, connectionId, externalReference, chargeEnvironment });
+}
+
+/**
+ * PEDIDOS EDITÁVEIS Etapa 2C — reconciliação: procura no Mercado Pago a preferência desta MESMA intenção
+ * (external_reference único por reserva) e, se houver exatamente uma coerente com o valor congelado, grava a
+ * cobrança local igual à criação teria gravado. NUNCA cria preferência. `null` = não encontrada (ou sem como
+ * consultar agora); ambiguidade (mais de uma, valor divergente, sem URL) lança — o chamador fica fechado.
+ */
+export async function findOrderMercadoPagoCharge(params: FindOrderMercadoPagoChargeParams): Promise<CreateOrderMercadoPagoChargeResult | null> {
+  const { accessToken, tokenSource, connectionId } = await getValidMPAccessToken(params.uid, null);
+  if (!accessToken || accessToken.trim().length < 20) return null;
+  const preferenceClient = new Preference(new MercadoPagoConfig({ accessToken, options: { timeout: 10000 } }));
+  const chargeEnvironment = detectEnvironment(accessToken);
+  const externalReference = buildExternalReference(params.uid, params.chargeId, { kind: "order", id: params.orderId });
+
+  const found = await preferenceClient.search({ options: { external_reference: externalReference } });
+  const matches = (found?.elements ?? []).filter((element) => element?.external_reference === externalReference && element?.id);
+  if (matches.length === 0) return null;
+  if (matches.length > 1) {
+    throw new MercadoPagoOrderChargeError("PAYMENT_PREFERENCE_AMBIGUOUS", "Não foi possível confirmar a cobrança deste pedido.", 409);
+  }
+  const preference: any = await preferenceClient.get({ preferenceId: String(matches[0].id) });
+  const unitPrice = Number(preference?.items?.[0]?.unit_price);
+  if (preference?.external_reference !== externalReference || unitPrice !== params.amount) {
+    throw new MercadoPagoOrderChargeError("PAYMENT_PREFERENCE_MISMATCH", "Não foi possível confirmar a cobrança deste pedido.", 409);
+  }
+  return await persistOrderMercadoPagoCharge(params, preference, { accessToken, tokenSource, connectionId, externalReference, chargeEnvironment });
+}
+
+type MPAccessTokenResolution = Awaited<ReturnType<typeof getValidMPAccessToken>>;
+
+interface OrderChargeProviderContext {
+  accessToken: string;
+  tokenSource: MPAccessTokenResolution["tokenSource"];
+  connectionId: MPAccessTokenResolution["connectionId"];
+  externalReference: string;
+  chargeEnvironment: ReturnType<typeof detectEnvironment>;
+}
+
+/** Grava a Charge local a partir da preferência que o Mercado Pago devolveu (criada agora ou reconciliada). */
+async function persistOrderMercadoPagoCharge(
+  params: Pick<CreateOrderMercadoPagoChargeParams, "uid" | "chargeId" | "orderId" | "amount" | "title">,
+  preference: any,
+  context: OrderChargeProviderContext,
+): Promise<CreateOrderMercadoPagoChargeResult> {
+  const { tokenSource, connectionId, externalReference, chargeEnvironment } = context;
   const rawPaymentUrl = preference?.init_point ?? "";
   const sandboxUrl = preference?.sandbox_init_point ?? "";
   const preferenceId = preference?.id ?? "";
   const finalPaymentUrl = chargeEnvironment === "sandbox" ? (sandboxUrl || rawPaymentUrl) : rawPaymentUrl;
   if (!finalPaymentUrl) {
     paymentLogError("[payments/order-charge] No init_point received from MP");
+    // A preferência pode existir no provedor: resultado ambíguo, nunca liberar a reserva por causa disso.
     throw new MercadoPagoOrderChargeError(
       "PAYMENT_URL_MISSING",
       "Não foi possível iniciar o pagamento por cartão agora. Escolha Pix ou combine pelo WhatsApp.",
+      502,
+      undefined,
+      "ambiguous",
     );
   }
 

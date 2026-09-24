@@ -3,9 +3,8 @@ import path from "path";
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import { initializeFirebaseAdmin, getFirebaseAdmin } from "./firebase-admin-init";
-import { registerPaymentRoutes, createOrderMercadoPagoCharge, MercadoPagoOrderChargeError } from "./payments";
-import { reserveOrderCharge, releaseOrderChargeReservation, finalizeOrderChargeReservation } from "./public-catalog-order-payment-idempotency";
-import type { Charge } from "../shared/charges";
+import { registerPaymentRoutes, createOrderMercadoPagoCharge, findOrderMercadoPagoCharge, MercadoPagoOrderChargeError } from "./payments";
+import { OrderChargeReservationError, startOrderMercadoPagoCharge, type StartOrderChargeResult } from "./public-catalog-order-payment-idempotency";
 import { registerConnectionRoutes } from "./mercadopago-connections";
 import { registerUploadRoutes } from "./uploads";
 import { registerGooglePlayBillingRoutes } from "./google-play-billing";
@@ -25,6 +24,7 @@ import { registerServiceWorkRoutes } from "./service-work-commands";
 import { registerServiceBookingRoutes } from "./service-booking-commands";
 import { registerServiceAvailabilityRoutes } from "./service-availability-commands";
 import { registerPublicServiceBookingRoutes } from "./service-public-booking";
+import { registerOrderEditRoutes } from "./order-edit-command";
 import { registerPlanAuthoritativeMutationRoutes, resolveServerPlan } from "./plan-authoritative-mutations";
 import { registerPlanAccessSelectionRoutes } from "./plan-access-selection";
 import { registerBookingQuotaRoutes } from "./booking-quota";
@@ -562,6 +562,8 @@ export async function registerRoutes(
   registerServicePaymentRoutes(app, requireAuth);
   registerServiceBookingRoutes(app, requireAuth);
   registerServiceAvailabilityRoutes(app, requireAuth);
+  // PEDIDOS EDITÁVEIS Etapa 2A — edição de itens sempre pelo servidor (as Rules seguem bloqueando o cliente).
+  registerOrderEditRoutes(app, requireAuth);
   registerPlanAuthoritativeMutationRoutes(app, requireAuth);
   registerPlanAccessSelectionRoutes(app, requireAuth);
   registerBookingQuotaRoutes(app, requireAuth, resolveServerPlan);
@@ -1123,54 +1125,45 @@ export async function registerRoutes(
 
       const uid = catalogSettings.uid;
       const db = getFirebaseAdmin().firestore();
-      const orderRef = db.collection("users").doc(uid).collection("orders").doc(orderId);
-      const orderSnap = await orderRef.get();
-      if (!orderSnap.exists) return errorResponse(res, 404, "ORDER_NOT_FOUND", "Pedido não encontrado.");
-      const order = orderSnap.data() as Order;
 
-      if (order.paymentStatus === "paid") {
-        return errorResponse(res, 409, "ORDER_ALREADY_PAID", "Este pedido já foi pago.");
-      }
-      if (order.paymentStatus === "cancelled" || order.paymentStatus === "failed") {
-        return errorResponse(res, 409, "ORDER_NOT_PAYABLE", "Este pedido não pode mais ser pago.");
-      }
-
-      // Mesma reserva atômica de §1 (RELEASE-CHECKOUT-02), agora chaveada por orderId: garante UMA
-      // cobrança por pedido mesmo sob duplo clique/retry concorrente (§11-F).
-      const reservation = await reserveOrderCharge(db, uid, orderId);
-      if (reservation.alreadyExisted) {
-        if (reservation.status === "pending") {
-          return errorResponse(res, 409, "CHARGE_CREATE_IN_PROGRESS", "Uma cobrança para este pedido já está sendo criada. Tente novamente em instantes.");
-        }
-        const existingCharge = await db.collection("users").doc(uid).collection("charges").doc(reservation.chargeId).get();
-        if (existingCharge.exists) {
-          const data = existingCharge.data() as Charge;
-          return res.status(200).json({ chargeId: data.id, paymentUrl: data.paymentUrl, preferenceId: data.preferenceId ?? "", reused: true });
-        }
-        return errorResponse(res, 500, "CHARGE_STATE_INCONSISTENT", "Não foi possível recuperar a cobrança já criada.");
-      }
-
+      // Mesma reserva atômica de §1 (RELEASE-CHECKOUT-02), chaveada por orderId: UMA cobrança por pedido
+      // mesmo sob duplo clique/retry concorrente (§11-F). PEDIDOS EDITÁVEIS Etapa 2B: o pedido não é mais
+      // lido aqui fora — estado, reserva e o valor cobrado saem da MESMA transação (reserveOrderCharge),
+      // serializada com a edição de itens, e o provedor recebe só o valor congelado nela. Etapa 2C: uma
+      // intenção chama o provedor no máximo uma vez; retry só finaliza a partir da cobrança local ou reconcilia
+      // (busca por external_reference, nunca cria) — sem prova, ORDER_CHARGE_RECONCILIATION_REQUIRED.
+      let started: StartOrderChargeResult;
       try {
-        const itemsSummary = order.items.length === 1 ? order.items[0].name : `${order.items.length} itens`;
-        const result = await createOrderMercadoPagoCharge({
-          uid,
-          chargeId: reservation.chargeId,
-          orderId,
-          amount: order.total,
-          title: `Pedido ${itemsSummary} - ${catalogSettings.store.name}`.slice(0, 250),
-          storeSlug: catalogSettings.slug,
-        });
-        await finalizeOrderChargeReservation(db, uid, orderId, reservation.chargeId);
-        return res.status(201).json({ chargeId: result.chargeId, paymentUrl: result.paymentUrl, preferenceId: result.preferenceId, reused: false });
+        started = await startOrderMercadoPagoCharge(
+          db,
+          { uid, orderId, storeName: catalogSettings.store.name, storeSlug: catalogSettings.slug },
+          { createCharge: createOrderMercadoPagoCharge, findCharge: findOrderMercadoPagoCharge },
+        );
       } catch (error) {
-        // §9: nunca deixa uma reserva travada por causa de uma falha do provider — o pedido continua
-        // criado, o cliente pode tentar de novo ou escolher Pix/WhatsApp.
-        await releaseOrderChargeReservation(db, uid, orderId);
+        if (error instanceof OrderChargeReservationError) {
+          if (error.code === "ORDER_NOT_FOUND") return errorResponse(res, 404, "ORDER_NOT_FOUND", "Pedido não encontrado.");
+          if (error.code === "ORDER_ALREADY_PAID") return errorResponse(res, 409, "ORDER_ALREADY_PAID", "Este pedido já foi pago.");
+          return errorResponse(res, 409, "ORDER_NOT_PAYABLE", "Este pedido não pode mais ser pago.");
+        }
         if (error instanceof MercadoPagoOrderChargeError) {
           return errorResponse(res, error.httpStatus, error.code, error.userMessage);
         }
         throw error;
       }
+
+      if (started.outcome === "in_progress") {
+        return errorResponse(res, 409, "CHARGE_CREATE_IN_PROGRESS", "Uma cobrança para este pedido já está sendo criada. Tente novamente em instantes.");
+      }
+      if (started.outcome === "inconsistent") {
+        return errorResponse(res, 500, "CHARGE_STATE_INCONSISTENT", "Não foi possível recuperar a cobrança já criada.");
+      }
+      if (started.outcome === "reconciliation_required") {
+        return errorResponse(res, 409, "ORDER_CHARGE_RECONCILIATION_REQUIRED", "Estamos confirmando a cobrança deste pedido com o Mercado Pago. Não pague de novo; tente abrir o pagamento em alguns minutos.");
+      }
+      if (started.outcome === "reused") {
+        return res.status(200).json({ chargeId: started.chargeId, paymentUrl: started.paymentUrl, preferenceId: started.preferenceId, reused: true });
+      }
+      return res.status(201).json({ chargeId: started.chargeId, paymentUrl: started.paymentUrl, preferenceId: started.preferenceId, reused: false });
     } catch (error) {
       return errorResponse(res, 500, "ORDER_PAYMENT_FAILED", error instanceof Error ? error.message : "Unknown error");
     }
