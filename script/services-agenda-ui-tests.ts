@@ -152,7 +152,7 @@ function run() {
   const agendaSource = read("client/src/pages/service-agenda.tsx");
 
   // UI4 — cancelar chama o comando real, nunca uma escrita direta.
-  assert.match(agendaSource, /import \{ cancelServiceBooking, rescheduleServiceBooking \} from "@\/lib\/service-booking-commands"/, "UI4/UI5: usa os wrappers de comando reais, não uma nova implementação");
+  assert.match(agendaSource, /import \{[^}]*\bcancelServiceBooking\b[^}]*\brescheduleServiceBooking\b[^}]*\} from "@\/lib\/service-booking-commands"/, "UI4/UI5: usa os wrappers de comando reais, não uma nova implementação");
   assert.match(agendaSource, /await cancelServiceBooking\(selectedBooking\.id\)/, "UI4: cancelamento chama cancelServiceBooking com o id real do Booking");
 
   // UI5 — reagendamento consulta disponibilidade real antes de reagendar.
