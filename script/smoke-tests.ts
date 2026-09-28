@@ -3940,7 +3940,7 @@ assert.match(addProduct, /baseCategorySuggestions/);
 assert.doesNotMatch(dashboard, /OnboardingChecklist/);
 assert.match(dashboard, /home-onboarding-strip/);
 assert.match(dashboard, /Finalize a configura..o da loja/);
-assert.match(dashboard, /products\.length === 0/);
+assert.match(homeDashboardViewModel, /products\.length === 0/);
 assert.match(onboardingChecklist, /local|Primeiros passos|Configure sua loja/);
 assert.match(planProvider, /api\/plan\/data/);
 assert.match(planProvider, /onAuthStateChanged/);
@@ -5818,7 +5818,11 @@ assert.match(ordersPage, /onChangeStatus=\{\(order\) => setStatusOrderId\(order\
 // 4. updateOrderStatus existente é reaproveitado — nenhuma segunda implementação de escrita de status.
 // confirmOrderPayment (CATALOGO-CHECKOUT-01 §5/§6) reaproveita o MESMO hook em vez de um segundo hook
 // paralelo para o fluxo de pagamento do catálogo.
-assert.match(ordersPage, /const \{ orders, loading, error, createOrder, updateOrderStatus, confirmOrderPayment \} = useOrdersData\(\);/);
+const ordersHookMatch = ordersPage.match(/const\s*\{([^}]+)\}\s*=\s*useOrdersData\(\);/s);
+assert.ok(ordersHookMatch, "orders.tsx deve desestruturar useOrdersData()");
+for (const field of ["orders", "loading", "error", "createOrder", "updateOrderStatus", "confirmOrderPayment", "editOrder"]) {
+  assert.match(ordersHookMatch[1], new RegExp(`\\b${field}\\b`), `orders.tsx deve consumir ${field} de useOrdersData()`);
+}
 assert.match(ordersPage, /await updateOrderStatus\(statusOrder\.id, status\);/);
 for (const [name, source] of [["orders.tsx", ordersPage], ["OrderStatusSheet", orderStatusSheet], ["OrderDetailsSheet", orderDetailsSheet]] as const) {
   assert.doesNotMatch(source, /setDoc|updateDoc|getFirestore/, `${name} não pode escrever no Firestore direto — a escrita mora só em useOrdersData`);
@@ -5866,7 +5870,11 @@ assert.match(orderCard, /const createdLabel = formatFullDate\(order\.createdAt\)
 // 7. Detalhes em sheet (não em página nova) e sempre sobre o pedido real, sem recalcular preço.
 assert.doesNotMatch(privateRouter, /order-detail|orders\/:/, "detalhes do pedido é um sheet — nenhuma rota nova foi criada");
 assert.match(orderDetailsSheet, /import \{ formatCurrency \} from "@\/lib\/product-pricing"/);
-assert.match(orderDetailsSheet, /calculateOrderItemSubtotal,\s*getAllowedOrderTransitions,\s*ORDER_PAYMENT_METHOD_LABELS,\s*ORDER_PAYMENT_STATUS_LABELS,\s*ORDER_STATUS_LABELS,\s*type Order,/);
+const orderDetailsOrdersImport = orderDetailsSheet.match(/import \{([\s\S]*?)\} from "@\/lib\/orders";/);
+assert.ok(orderDetailsOrdersImport, "OrderDetailsSheet deve importar o contrato central de pedidos");
+for (const field of ["calculateOrderItemSubtotal", "getAllowedOrderTransitions", "ORDER_PAYMENT_METHOD_LABELS", "ORDER_PAYMENT_STATUS_LABELS", "ORDER_STATUS_LABELS", "type Order"]) {
+  assert.match(orderDetailsOrdersImport[1], new RegExp(`\\b${field.replace("type ", "type\\s+")}\\b`), `OrderDetailsSheet deve importar ${field}`);
+}
 assert.match(orderDetailsSheet, /\{formatCurrency\(calculateOrderItemSubtotal\(item\)\)\}/);
 assert.match(orderDetailsSheet, /\{formatCurrency\(order\.total\)\}/);
 assert.match(orderDetailsSheet, /\{item\.quantity\} × \{formatCurrency\(item\.unitPrice\)\}/);
@@ -6345,7 +6353,7 @@ assert.match(useOrdersData, /\.\.\.\(storeName \? \{ storeName \} : \{\}\)/);
 
 // 5. updateOrderStatus não reenvia nem altera snapshot algum — só status e updatedAt.
 {
-  const updateBody = useOrdersData.slice(useOrdersData.indexOf("const updateOrderStatus"));
+  const updateBody = useOrdersData.match(/const updateOrderStatus = useCallback\([\s\S]*?\n\s{2}\}, \[\]\);/)?.[0] ?? "";
   for (const field of ["clientPhone", "storeName", "clientName", "clientId", "items", "total", "createdAt"]) {
     assert.doesNotMatch(updateBody, new RegExp(`${field}`), `updateOrderStatus não pode tocar em ${field}`);
   }

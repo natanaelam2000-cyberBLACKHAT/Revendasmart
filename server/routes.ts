@@ -24,8 +24,8 @@ import { registerServiceWorkRoutes } from "./service-work-commands";
 import { registerServiceBookingRoutes } from "./service-booking-commands";
 import { registerServiceAvailabilityRoutes } from "./service-availability-commands";
 import { registerPublicServiceBookingRoutes } from "./service-public-booking";
-import { registerOrderEditRoutes } from "./order-edit-command";
 import { registerPlanAuthoritativeMutationRoutes, resolveServerPlan } from "./plan-authoritative-mutations";
+import { registerOrderEditRoutes } from "./order-edit-command";
 import { registerPlanAccessSelectionRoutes } from "./plan-access-selection";
 import { registerBookingQuotaRoutes } from "./booking-quota";
 import { ensurePlanLifecycleCurrent, initializePlanCommand } from "./plan-lifecycle";
@@ -385,6 +385,11 @@ function requireOwnership(req: Request, res: Response, next: NextFunction) {
 
   // If we have a verified token, enforce ownership
   if (firebaseUid && userId && firebaseUid !== userId) {
+    // HOTFIX OBSERVABILIDADE — este bloqueio já existia e já é a defesa real (403); só faltava ficar
+    // visível quando dispara. Os dois campos batem exatamente com IDENTIFIER_KEYS ("firebaseuid"/
+    // "uid"), então server/logger.ts já mascara os dois automaticamente — nunca loga req.path aqui de
+    // propósito, porque para esta rota o valor cru do :userId alvo vem embutido no próprio path.
+    logWarn("tenant_scope_violation", { firebaseUid, uid: userId });
     return res.status(403).json({ error: "Forbidden: you can only access your own data" });
   }
 
@@ -480,10 +485,18 @@ export async function loadPublicCatalogSettings(rawSlug: string, db: FirebaseFir
   const slug = normalizeCatalogSlug(rawSlug);
   if (!slug) return null;
   const settingsDoc = await resolvePublicCatalogSettingsDoc(db, rawSlug);
-  if (!settingsDoc) return null;
+  if (!settingsDoc) {
+    logWarn("catalog_public_resolve_failed", { slug, reason: "not_found" });
+    return null;
+  }
   const settings = settingsDoc.data() ?? {};
   const catalogEnabled = settings.enablePublicCatalog ?? settings.catalogEnabled ?? settings.catalog_enabled ?? true;
   if (catalogEnabled === false || settings.disablePublicCatalog === true) {
+    // HOTFIX-P0-B — antes era `return null`, indistinguível de "esse slug nunca resolveu para
+    // ninguém" para quem chama. Um erro dedicado deixa a rota principal responder com um código
+    // diferente de CATALOG_NOT_FOUND, e o cliente parar de culpar "o consultor desativou" quando a
+    // causa real é outra.
+    logWarn("catalog_public_resolve_failed", { slug, reason: "deactivated" });
     throw new PublicCatalogDeactivatedError();
   }
   const cardAvailable = await hasActiveMercadoPagoConnection(db, settingsDoc.id);
@@ -562,8 +575,6 @@ export async function registerRoutes(
   registerServicePaymentRoutes(app, requireAuth);
   registerServiceBookingRoutes(app, requireAuth);
   registerServiceAvailabilityRoutes(app, requireAuth);
-  // PEDIDOS EDITÁVEIS Etapa 2A — edição de itens sempre pelo servidor (as Rules seguem bloqueando o cliente).
-  registerOrderEditRoutes(app, requireAuth);
   registerPlanAuthoritativeMutationRoutes(app, requireAuth);
   registerPlanAccessSelectionRoutes(app, requireAuth);
   registerBookingQuotaRoutes(app, requireAuth, resolveServerPlan);
@@ -801,6 +812,9 @@ export async function registerRoutes(
       res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
       return res.json(catalog);
     } catch (error) {
+      // HOTFIX-P0-B — distinto de CATALOG_NOT_FOUND: o slug resolveu para uma loja real, só que o
+      // dono desativou o catálogo. O cliente (public-catalog.tsx) usa este código para parar de
+      // mostrar "não foi encontrado ou está desativado" para quem só bateu num erro técnico.
       if (error instanceof PublicCatalogDeactivatedError) return res.status(404).json({ error: "CATALOG_DEACTIVATED" });
       return errorResponse(res, 503, "CATALOG_TEMPORARILY_UNAVAILABLE", error instanceof Error ? error.message : "Unknown error");
     }
@@ -823,6 +837,9 @@ export async function registerRoutes(
       res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
       return res.json(page);
     } catch (error) {
+      // HOTFIX-P0-B — comportamento preservado desta sub-rota: um catálogo desativado continua
+      // respondendo 404 CATALOG_NOT_FOUND aqui (só a rota principal do catálogo diferencia a
+      // mensagem); loadPublicCatalogSettings agora lança em vez de retornar null nesse caso.
       if (error instanceof PublicCatalogDeactivatedError) return res.status(404).json({ error: "CATALOG_NOT_FOUND" });
       return errorResponse(res, 503, "CATALOG_PRODUCTS_TEMPORARILY_UNAVAILABLE", error instanceof Error ? error.message : "Unknown error");
     }
@@ -841,6 +858,8 @@ export async function registerRoutes(
       res.setHeader("Cache-Control", "no-store");
       return res.json({ pixKey });
     } catch (error) {
+      // HOTFIX-P0-B — mesmo motivo da sub-rota de produtos acima: comportamento preservado (404
+      // CATALOG_NOT_FOUND) para esta sub-rota quando o catálogo está desativado.
       if (error instanceof PublicCatalogDeactivatedError) return res.status(404).json({ error: "CATALOG_NOT_FOUND" });
       return errorResponse(res, 503, "CATALOG_PIX_KEY_TEMPORARILY_UNAVAILABLE", error instanceof Error ? error.message : "Unknown error");
     }
@@ -1094,6 +1113,10 @@ export async function registerRoutes(
     }
   });
 
+  // RS-PEDIDOS-01 — POST /api/orders/:orderId/edit: comando autoritativo já existente
+  // (server/order-edit-command.ts) para editar quantidade/itens de um pedido próprio.
+  registerOrderEditRoutes(app, requireAuth);
+
   // POST /api/public/catalog/:storeSlug/orders/:orderId/payment/mercadopago — RELEASE-CHECKOUT-03 §3.
   // Cria (ou devolve, se já existir) uma cobrança Mercado Pago real vinculada ao pedido. Não autenticado
   // (o comprador não tem conta) — toda decisão de segurança é resolvida aqui, nunca aceita do corpo:
@@ -1125,13 +1148,6 @@ export async function registerRoutes(
 
       const uid = catalogSettings.uid;
       const db = getFirebaseAdmin().firestore();
-
-      // Mesma reserva atômica de §1 (RELEASE-CHECKOUT-02), chaveada por orderId: UMA cobrança por pedido
-      // mesmo sob duplo clique/retry concorrente (§11-F). PEDIDOS EDITÁVEIS Etapa 2B: o pedido não é mais
-      // lido aqui fora — estado, reserva e o valor cobrado saem da MESMA transação (reserveOrderCharge),
-      // serializada com a edição de itens, e o provedor recebe só o valor congelado nela. Etapa 2C: uma
-      // intenção chama o provedor no máximo uma vez; retry só finaliza a partir da cobrança local ou reconcilia
-      // (busca por external_reference, nunca cria) — sem prova, ORDER_CHARGE_RECONCILIATION_REQUIRED.
       let started: StartOrderChargeResult;
       try {
         started = await startOrderMercadoPagoCharge(
@@ -1145,24 +1161,13 @@ export async function registerRoutes(
           if (error.code === "ORDER_ALREADY_PAID") return errorResponse(res, 409, "ORDER_ALREADY_PAID", "Este pedido já foi pago.");
           return errorResponse(res, 409, "ORDER_NOT_PAYABLE", "Este pedido não pode mais ser pago.");
         }
-        if (error instanceof MercadoPagoOrderChargeError) {
-          return errorResponse(res, error.httpStatus, error.code, error.userMessage);
-        }
+        if (error instanceof MercadoPagoOrderChargeError) return errorResponse(res, error.httpStatus, error.code, error.userMessage);
         throw error;
       }
-
-      if (started.outcome === "in_progress") {
-        return errorResponse(res, 409, "CHARGE_CREATE_IN_PROGRESS", "Uma cobrança para este pedido já está sendo criada. Tente novamente em instantes.");
-      }
-      if (started.outcome === "inconsistent") {
-        return errorResponse(res, 500, "CHARGE_STATE_INCONSISTENT", "Não foi possível recuperar a cobrança já criada.");
-      }
-      if (started.outcome === "reconciliation_required") {
-        return errorResponse(res, 409, "ORDER_CHARGE_RECONCILIATION_REQUIRED", "Estamos confirmando a cobrança deste pedido com o Mercado Pago. Não pague de novo; tente abrir o pagamento em alguns minutos.");
-      }
-      if (started.outcome === "reused") {
-        return res.status(200).json({ chargeId: started.chargeId, paymentUrl: started.paymentUrl, preferenceId: started.preferenceId, reused: true });
-      }
+      if (started.outcome === "in_progress") return errorResponse(res, 409, "CHARGE_CREATE_IN_PROGRESS", "Uma cobrança para este pedido já está sendo criada. Tente novamente em instantes.");
+      if (started.outcome === "inconsistent") return errorResponse(res, 500, "CHARGE_STATE_INCONSISTENT", "Não foi possível recuperar a cobrança já criada.");
+      if (started.outcome === "reconciliation_required") return errorResponse(res, 409, "ORDER_CHARGE_RECONCILIATION_REQUIRED", "Estamos confirmando a cobrança deste pedido com o Mercado Pago. Não pague de novo; tente abrir o pagamento em alguns minutos.");
+      if (started.outcome === "reused") return res.status(200).json({ chargeId: started.chargeId, paymentUrl: started.paymentUrl, preferenceId: started.preferenceId, reused: true });
       return res.status(201).json({ chargeId: started.chargeId, paymentUrl: started.paymentUrl, preferenceId: started.preferenceId, reused: false });
     } catch (error) {
       return errorResponse(res, 500, "ORDER_PAYMENT_FAILED", error instanceof Error ? error.message : "Unknown error");

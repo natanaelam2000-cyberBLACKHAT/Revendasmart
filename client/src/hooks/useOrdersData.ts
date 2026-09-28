@@ -10,6 +10,7 @@ import {
   resolveOrderPaymentStatus,
   resolveOrderStatus,
   type Order,
+  type OrderEditItemInput,
   type OrderItem,
   type OrderStatus,
 } from "@/lib/orders";
@@ -25,6 +26,22 @@ interface CreateOrderInput {
   storeName?: string;
 }
 
+export interface EditOrderInput {
+  orderId: string;
+  /** order.updatedAt lido pelo caller — o servidor rejeita com STALE_ORDER_VERSION se não bater mais. */
+  expectedUpdatedAt: string;
+  /** Lista FINAL de itens (contrato de client/src/lib/orders.ts) — nunca um diff. */
+  items: OrderEditItemInput[];
+}
+
+export interface EditOrderResult {
+  orderId: string;
+  updatedAt: string;
+  total: number;
+  itemCount: number;
+  idempotentReplay: boolean;
+}
+
 interface OrdersData {
   orders: Order[];
   loading: boolean;
@@ -35,6 +52,10 @@ interface OrdersData {
    * (Admin SDK), nunca por escrita direta do cliente no Firestore (a Rule de orders não permite mexer
    * em paymentStatus — ver `firestore.rules` `isValidOrderUpdate`). */
   confirmOrderPayment: (orderId: string) => Promise<void>;
+  /** RS-PEDIDOS-01 — único caminho para mudar items/total de um pedido: sempre via
+   * server/order-edit-command.ts (comando autoritativo, CAS por expectedUpdatedAt, idempotente).
+   * Nunca setDoc/updateDoc direto — a Rule de orders já bloqueia o client de escrever items/total. */
+  editOrder: (input: EditOrderInput) => Promise<EditOrderResult>;
 }
 
 function mapOrderDoc(id: string, data: Record<string, unknown>): Order {
@@ -169,5 +190,19 @@ export function useOrdersData(): OrdersData {
     await apiRequest(`/api/orders/${encodeURIComponent(orderId)}/confirm-payment`, { method: "POST", auth: true });
   }, []);
 
-  return { orders, loading, error, createOrder, updateOrderStatus, confirmOrderPayment };
+  const editOrder = useCallback(async (input: EditOrderInput): Promise<EditOrderResult> => {
+    // Uma chave nova por chamada: cada chamada é uma intenção nova (o caller garante, com double-submit
+    // guard, que uma única tentativa do usuário nunca gera mais de uma chamada). O listener acima
+    // (onSnapshot) já reflete o resultado gravado — não há necessidade de refetch manual aqui.
+    const idempotencyKey = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `oe_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    return apiRequest<EditOrderResult>(`/api/orders/${encodeURIComponent(input.orderId)}/edit`, {
+      method: "POST",
+      auth: true,
+      body: { expectedUpdatedAt: input.expectedUpdatedAt, idempotencyKey, items: input.items },
+    });
+  }, []);
+
+  return { orders, loading, error, createOrder, updateOrderStatus, confirmOrderPayment, editOrder };
 }
