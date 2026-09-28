@@ -57,6 +57,20 @@ export type CreateServiceInput = Pick<
   activePlan: PlanType;
 };
 
+export async function runWithServiceQuotaPrecheck<T>(
+  activePlan: PlanType,
+  readCount: () => Promise<number>,
+  action: () => Promise<T>,
+): Promise<T> {
+  try {
+    const { allowed } = checkServiceLimit(activePlan, await readCount());
+    if (!allowed) throw new ServiceLimitError(activePlan);
+  } catch (error) {
+    if (error instanceof ServiceLimitError) throw error;
+  }
+  return action();
+}
+
 export type UpdateServiceInput = PartialServiceFields;
 
 export type CreateManualServiceWorkInput = {
@@ -114,42 +128,41 @@ export async function createService(input: CreateServiceInput): Promise<Service 
   const uid = requireCurrentUid();
   // PLAN-IMPL-02A §7/§8 — mirrors add-product.tsx's pattern exactly: a fresh server-side count
   // (getCountFromServer), never a possibly-partial in-memory list, checked before writing.
-  const serviceCountSnapshot = await getCountFromServer(servicesCollection(uid));
-  const { allowed } = checkServiceLimit(input.activePlan, serviceCountSnapshot.data().count);
-  if (!allowed) {
-    throw new ServiceLimitError(input.activePlan);
-  }
-  const serviceId = generateEntityId("service");
-  const timestamp = nowIso();
-  const service: Service = assertValidService({
-    id: serviceId,
-    tenantUid: uid,
-    name: input.name,
-    description: input.description,
-    imageUrl: input.imageUrl,
-    active: input.active,
-    published: input.published,
-    pricing: input.pricing as ServicePricing,
-    durationMinutes: input.durationMinutes,
-    cost: input.cost,
-    bookingMode: input.bookingMode as ServiceBookingMode,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  });
-  const result = await apiRequest<{ service: Service; serviceId: string; idempotentReplay: boolean; isFirstService?: boolean }>("/api/services", {
-    method: "POST",
-    auth: true,
-    body: {
-      serviceId,
-      service,
-      idempotencyKey: `service-create-${serviceId}`,
-    },
-  });
+  // The client-side count is an advisory fast path only.  Firestore reads can fail during
+  // cold-start/offline recovery; the API remains the authority for auth, quota and writes.
+  return runWithServiceQuotaPrecheck(
+    input.activePlan,
+    async () => (await getCountFromServer(servicesCollection(uid))).data().count,
+    async () => {
+      const serviceId = generateEntityId("service");
+      const timestamp = nowIso();
+      const service: Service = assertValidService({
+        id: serviceId,
+        tenantUid: uid,
+        name: input.name,
+        description: input.description,
+        imageUrl: input.imageUrl,
+        active: input.active,
+        published: input.published,
+        pricing: input.pricing as ServicePricing,
+        durationMinutes: input.durationMinutes,
+        cost: input.cost,
+        bookingMode: input.bookingMode as ServiceBookingMode,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      const result = await apiRequest<{ service: Service; serviceId: string; idempotentReplay: boolean; isFirstService?: boolean }>("/api/services", {
+        method: "POST",
+        auth: true,
+        body: { serviceId, service, idempotencyKey: `service-create-${serviceId}` },
+      });
   // SERVICES-CREATE-UI-01 — isFirstService vai como propriedade adicional no MESMO objeto Service: a
   // assinatura widened (Service & { isFirstService?: boolean }) é sempre atribuível a Service puro, então
   // nenhum caller existente (inclusive os scripts de teste, que só leem os campos de Service) precisa
   // mudar; services-new.tsx (único caller que precisa do campo novo) só lê `created.isFirstService`.
-  return Object.assign(parseService(result.service), { isFirstService: result.isFirstService === true });
+      return Object.assign(parseService(result.service), { isFirstService: result.isFirstService === true });
+    },
+  );
 }
 
 export async function getService(serviceId: string): Promise<Service | null> {

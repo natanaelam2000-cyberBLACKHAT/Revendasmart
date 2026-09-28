@@ -16,6 +16,35 @@ import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { usePlan } from "@/providers/PlanProvider";
 import { formatTrialDaysRemaining } from "@/lib/plan-helpers";
 
+export function resolveDashboardDataError(needsProductData: boolean, productsError?: string, salesError?: string, clientsError?: string): string | undefined {
+  return needsProductData ? productsError || salesError || clientsError : clientsError;
+}
+
+export function countDashboardPendingConfigurationSteps(input: {
+  businessMode: "products" | "services" | "both" | null;
+  settings: Record<string, any>;
+  productsCount: number;
+  salesCount: number;
+  servicesCount: number;
+  clientsCount: number;
+}): number {
+  const usesProducts = input.businessMode === "products" || input.businessMode === "both";
+  const usesServices = input.businessMode === "services" || input.businessMode === "both";
+  const catalogReady = input.settings.enablePublicCatalog !== false && Boolean(input.settings.catalogSlug || input.settings.catalog_slug);
+  return [
+    !input.settings.appTheme && !input.settings.onboarding_theme_selected,
+    !input.settings.businessType,
+    !input.settings.storeName || String(input.settings.storeName).trim() === "Minha loja",
+    ...(usesProducts ? [input.productsCount === 0, input.salesCount === 0, !catalogReady] : []),
+    ...(usesServices ? [input.servicesCount === 0] : []),
+    input.clientsCount === 0,
+  ].filter(Boolean).length;
+}
+
+export function dashboardBusinessLabel(mode: "products" | "services" | "both" | null): "seu negócio" | "sua loja" {
+  return mode === "services" ? "seu negócio" : "sua loja";
+}
+
 const TodayPriorities = lazy(() => import("@/components/opportunities/TodayPriorities"));
 // HOTFIX-P0-D (rodada 2, code-split) — ver client/src/components/dashboard/ServicesOverviewSection.tsx:
 // extraído para um arquivo próprio, carregado sob demanda, porque o tamanho desta página passou do teto
@@ -66,8 +95,10 @@ export default function Dashboard() {
   const [, setLocation] = useLocation();
   const { onboarding_completed, loading: settingsLoading, settings, businessModeResolution, refresh: refreshSettings } = useUserSettings();
   const { trial, hasPremiumAccess, loading: planLoading, planResolved } = usePlan();
-  const { products, loading: productsLoading, error: productsError } = useProductsData();
-  const { sales, loading: salesLoading, error: salesError } = useSalesData();
+  const resolvedBusinessMode = businessModeResolution.resolved ? businessModeResolution.mode : null;
+  const needsProductData = resolvedBusinessMode === "products" || resolvedBusinessMode === "both";
+  const { products, loading: productsLoading, error: productsError } = useProductsData({ enabled: needsProductData });
+  const { sales, loading: salesLoading, error: salesError } = useSalesData({ enabled: needsProductData });
   const { clients, loading: clientsLoading, error: clientsError } = useClientsLiteData();
   const [isGoalEditorOpen, setIsGoalEditorOpen] = useState(false);
   const [monthlyGoalInput, setMonthlyGoalInput] = useState("");
@@ -76,7 +107,6 @@ export default function Dashboard() {
 
   // PLAN-IMPL-09-FINAL §31/§32 — só busca serviços quando o modo do negócio realmente usa esse dado
   // (evita uma leitura Firestore extra, sempre vazia, para a maioria dos donos que vende só produto).
-  const resolvedBusinessMode = businessModeResolution.resolved ? businessModeResolution.mode : null;
   const needsServicesCount = resolvedBusinessMode === "services" || resolvedBusinessMode === "both";
   const [servicesCount, setServicesCount] = useState(0);
   const [servicesLoading, setServicesLoading] = useState(needsServicesCount);
@@ -98,7 +128,7 @@ export default function Dashboard() {
   }, [needsServicesCount]);
 
   const dataLoading = productsLoading || salesLoading || clientsLoading || servicesLoading;
-  const dataError = productsError || salesError || clientsError;
+  const dataError = resolveDashboardDataError(needsProductData, productsError, salesError, clientsError);
   const home = useMemo(
     () => buildHomeDashboardViewModel({ products, clients, sales, settings: settings as any, servicesCount }),
     [clients, products, sales, settings, servicesCount],
@@ -110,18 +140,8 @@ export default function Dashboard() {
   }, [home.goal.hasExplicitGoal, home.goal.target]);
 
   const pendingConfigurationSteps = useMemo(() => {
-    const catalogReady = settings.enablePublicCatalog !== false && Boolean(settings.catalogSlug || settings.catalog_slug);
-    return [
-      !settings.businessType,
-      !settings.appTheme && !settings.onboarding_theme_selected,
-      !settings.storeName || String(settings.storeName).trim() === "Minha loja",
-      !settings.storeLogo && !settings.storeIdentity?.logoUrl,
-      products.length === 0,
-      clients.length === 0,
-      sales.length === 0,
-      !catalogReady,
-    ].filter(Boolean).length;
-  }, [clients.length, products.length, sales.length, settings]);
+    return countDashboardPendingConfigurationSteps({ businessMode: resolvedBusinessMode, settings: settings as Record<string, any>, productsCount: products.length, salesCount: sales.length, servicesCount, clientsCount: clients.length });
+  }, [clients.length, products.length, resolvedBusinessMode, sales.length, servicesCount, settings]);
 
   const showOnboardingStrip = !onboarding_completed && pendingConfigurationSteps > 0 && !isOnboardingStripDismissed;
   const hasSales = home.summary.monthlySalesCount > 0;
@@ -213,7 +233,11 @@ export default function Dashboard() {
           {showOnboardingStrip && (
             <section className="flex items-center justify-between gap-3 rounded-2xl border border-primary/10 bg-white px-4 py-3 shadow-sm" data-testid="home-onboarding-strip">
               <button type="button" onClick={() => setLocation("/onboarding")} className="min-w-0 flex-1 text-left">
-                <p className="truncate text-sm font-black text-foreground">Finalize a configuração da loja · Falta {pendingConfigurationSteps} etapa{pendingConfigurationSteps === 1 ? "" : "s"}</p>
+                <p className="truncate text-sm font-black text-foreground">
+                  {resolvedBusinessMode === "services"
+                    ? <>Finalize a configuração do negócio · Falta {pendingConfigurationSteps} etapa{pendingConfigurationSteps === 1 ? "" : "s"}</>
+                    : <>Finalize a configuração da loja · Falta {pendingConfigurationSteps} etapa{pendingConfigurationSteps === 1 ? "" : "s"}</>}
+                </p>
                 <p className="text-xs text-muted-foreground">Continue quando quiser, sem bloquear seu uso.</p>
               </button>
               <button type="button" onClick={() => setLocation("/onboarding")} className="rounded-xl bg-primary px-3 py-2 text-xs font-black text-white">Continuar</button>
@@ -239,7 +263,7 @@ export default function Dashboard() {
             </span>
             <span className="min-w-0 flex-1">
               <span className="block text-sm font-black text-foreground">Oportunidades comerciais</span>
-              <span className="block text-xs text-muted-foreground">O Premium identifica oportunidades comerciais para sua loja.</span>
+              <span className="block text-xs text-muted-foreground">O Premium identifica oportunidades comerciais para {dashboardBusinessLabel(resolvedBusinessMode)}.</span>
             </span>
             <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground" />
           </button>
@@ -268,7 +292,7 @@ export default function Dashboard() {
             </Suspense>
           )}
 
-          <SectionCard title="O que precisa da sua atenção" eyebrow="Organização da loja">
+          <SectionCard title="O que precisa da sua atenção" eyebrow={resolvedBusinessMode === "services" ? "Organização do negócio" : "Organização da loja"}>
             {home.priorities.length > 0 ? (
               <div className="space-y-2">
                 {home.priorities.map((priority) => (

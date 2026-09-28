@@ -10,17 +10,43 @@ interface SalesData {
   error?: string;
 }
 
+export type SalesDataOptions = { enabled?: boolean };
+
+export function salesDataStateForEnabled(enabled: boolean): SalesData {
+  return enabled ? { sales: [], loading: true, error: undefined } : { sales: [], loading: false, error: undefined };
+}
+
+export function shouldSubscribeToSales(enabled: boolean): boolean {
+  return enabled;
+}
+
 function mapSaleDoc(id: string, data: Record<string, unknown>): Sale {
   return { ...data, id } as Sale;
 }
 
 /** RELEASE-QUALITY-02 §1 — ver useProductsData.ts: mesma subscription compartilhada por uid+coleção. */
-export function useSalesData(): SalesData {
+export function useSalesData(options: SalesDataOptions = {}): SalesData {
+  const enabled = options.enabled !== false;
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
 
+  const [previousEnabled, setPreviousEnabled] = useState(enabled);
+  const enabling = enabled && !previousEnabled;
+  if (previousEnabled !== enabled) {
+    setPreviousEnabled(enabled);
+    setSales([]);
+    setLoading(enabled);
+    setError(undefined);
+  }
+
   useEffect(() => {
+    if (!shouldSubscribeToSales(enabled)) {
+      setSales([]);
+      setLoading(false);
+      setError(undefined);
+      return;
+    }
     const auth = getFirebaseAuth();
     if (!auth) {
       setLoading(false);
@@ -51,7 +77,7 @@ export function useSalesData(): SalesData {
       unsubscribeCollection?.();
       unsubscribeAuth();
     };
-  }, []);
+  }, [enabled]);
 
-  return { sales, loading, error };
+  return { sales: enabled && !enabling ? sales : [], loading: enabled && (enabling || loading), error: enabled && !enabling ? error : undefined };
 }

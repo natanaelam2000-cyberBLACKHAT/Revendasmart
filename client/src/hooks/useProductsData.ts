@@ -10,6 +10,16 @@ interface ProductsData {
   error?: string;
 }
 
+export type ProductsDataOptions = { enabled?: boolean };
+
+export function productsDataStateForEnabled(enabled: boolean): ProductsData {
+  return enabled ? { products: [], loading: true, error: undefined } : { products: [], loading: false, error: undefined };
+}
+
+export function shouldSubscribeToProducts(enabled: boolean): boolean {
+  return enabled;
+}
+
 function mapProductDoc(id: string, data: Record<string, unknown>): Product {
   return { ...data, id } as Product;
 }
@@ -20,12 +30,28 @@ function mapProductDoc(id: string, data: Record<string, unknown>): Product {
  * dashboard + catalog + reports) reaproveita o mesmo listener em vez de abrir um novo. A API pública
  * deste hook (shape do retorno, semântica de loading/error) não muda — nenhum consumer precisa mudar.
  */
-export function useProductsData(): ProductsData {
+export function useProductsData(options: ProductsDataOptions = {}): ProductsData {
+  const enabled = options.enabled !== false;
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
 
+  const [previousEnabled, setPreviousEnabled] = useState(enabled);
+  const enabling = enabled && !previousEnabled;
+  if (previousEnabled !== enabled) {
+    setPreviousEnabled(enabled);
+    setProducts([]);
+    setLoading(enabled);
+    setError(undefined);
+  }
+
   useEffect(() => {
+    if (!shouldSubscribeToProducts(enabled)) {
+      setProducts([]);
+      setLoading(false);
+      setError(undefined);
+      return;
+    }
     const auth = getFirebaseAuth();
     if (!auth) {
       setLoading(false);
@@ -57,7 +83,7 @@ export function useProductsData(): ProductsData {
       unsubscribeCollection?.();
       unsubscribeAuth();
     };
-  }, []);
+  }, [enabled]);
 
-  return { products, loading, error };
+  return { products: enabled && !enabling ? products : [], loading: enabled && (enabling || loading), error: enabled && !enabling ? error : undefined };
 }
