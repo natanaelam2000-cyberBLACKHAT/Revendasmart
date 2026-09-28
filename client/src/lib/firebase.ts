@@ -98,6 +98,7 @@ export async function clearFirestoreOfflineCache(): Promise<boolean> {
 }
 
 let lastKnownAuthUid: string | null | undefined;
+let pendingTenantCacheClear: Promise<boolean> | null = null;
 
 /**
  * LGPD §8 (REVENDASMART-LGPD-ANPD-REMEDIATION-01) — fecha o gap "nenhum caminho de expiração de sessão
@@ -113,7 +114,9 @@ function installOfflineCacheTenantIsolation(auth: Auth): void {
     // Primeira chamada (lastKnownAuthUid ainda `undefined`) é só a leitura inicial da sessão — não é
     // uma transição de usuário, nunca deve limpar nada.
     if (lastKnownAuthUid !== undefined && lastKnownAuthUid !== null && lastKnownAuthUid !== currentUid) {
-      void clearFirestoreOfflineCache();
+      pendingTenantCacheClear = clearFirestoreOfflineCache().finally(() => {
+        pendingTenantCacheClear = null;
+      });
       // Import dinâmico: mock-data.ts é um módulo grande e este caminho só roda numa transição real de
       // usuário, não no boot do app.
       void import("./mock-data").then(({ clearAllImagesFromIndexedDb }) => clearAllImagesFromIndexedDb());
@@ -262,9 +265,9 @@ let authReadyPromise: Promise<User | null> | null = null;
  * lança "UNAUTHENTICATED" e mostra "Sessão inválida" para um usuário genuinamente autenticado, reproduzível
  * em qualquer navegação de página cheia (não-SPA) para uma rota que busca dados no mount. Promise única
  * (cacheada) — só se inscreve uma vez, nunca uma por chamador. */
-export function waitForAuthReady(): Promise<User | null> {
+export async function waitForAuthReady(): Promise<User | null> {
   const auth = getFirebaseAuth();
-  if (!auth) return Promise.resolve(null);
+  if (!auth) return null;
   if (!authReadyPromise) {
     authReadyPromise = new Promise((resolve) => {
       const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -273,7 +276,11 @@ export function waitForAuthReady(): Promise<User | null> {
       });
     });
   }
-  return authReadyPromise;
+  const user = await authReadyPromise;
+  if (pendingTenantCacheClear) {
+    await pendingTenantCacheClear;
+  }
+  return user;
 }
 
 // Returns true if Firebase is configured and initialized
