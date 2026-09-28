@@ -2287,7 +2287,10 @@ assert.equal(packageJson.scripts["test:mercado-pago:sandbox"], "tsx script/merca
     assert.notEqual(first.iv, second.iv, "B: cada encrypt usa um IV novo e aleatório");
     assert.notEqual(first.ciphertext, second.ciphertext, "B: mesmo texto claro nunca produz o mesmo ciphertext (IV distinto)");
     // Ciphertext adulterado falha a autenticação GCM em vez de decodificar silenciosamente.
-    assert.throws(() => decryptToken({ ...first, ciphertext: first.ciphertext.slice(0, -2) + "00" }));
+    // Escolha um sufixo sempre diferente para não tornar o teste probabilístico quando o valor original termina em 00.
+    const tamperedCiphertext = first.ciphertext.slice(0, -2) + (first.ciphertext.endsWith("00") ? "01" : "00");
+    assert.notEqual(tamperedCiphertext, first.ciphertext);
+    assert.throws(() => decryptToken({ ...first, ciphertext: tamperedCiphertext }));
 
     // C: chave ausente → fail-closed (nunca cai num valor conhecido/utilizável).
     delete process.env.MERCADOPAGO_TOKEN_ENCRYPTION_KEY;

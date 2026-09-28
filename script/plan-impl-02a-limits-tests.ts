@@ -127,41 +127,36 @@ function run(): void {
   assert.match(useCreateClientSource, /checkClientLimit\(activePlan, clientCountSnapshot\.data\(\)\.count\)/, "useCreateClient.ts (NewOrderSheet's quick-add) must be plan-limited");
 
   const servicesPersistenceSource = readFileSync("client/src/lib/services-persistence.ts", "utf-8");
-  assert.match(servicesPersistenceSource, /checkServiceLimit\(input\.activePlan, serviceCountSnapshot\.data\(\)\.count\)/, "createService() must be plan-limited at its one real creation function");
+  assert.match(
+    servicesPersistenceSource,
+    /runWithServiceQuotaPrecheck\(/,
+    "createService() must use the shared service quota precheck",
+  );
+  assert.match(
+    servicesPersistenceSource,
+    /getCountFromServer\(servicesCollection\(uid\)\)/,
+    "createService() must use a fresh server-side service count",
+  );
 
   const bookingCommandsSource = readFileSync("server/service-booking-commands.ts", "utf-8");
-  // RC-P0-CLIENT-LIMIT-01 §8/§9 — the product decision changed: a valid public booking must NEVER fail
-  // solely because the tenant's CRM Client quota is full. The old `throw new ServiceBookingCommandError(
-  // "CLIENT_LIMIT_REACHED", ...)` was removed; Client creation now reuses the SAME canonical quota
-  // authority as POST /api/clients (createClientInTransaction, resource-specific + concurrency-safe), and
-  // a PLAN_LIMIT_REACHED from it is swallowed — the booking proceeds without creating a new Client record
-  // rather than aborting. This replaces the old L-set assertion that required the opposite behavior.
+  const confirmStart = bookingCommandsSource.indexOf("export async function confirmServiceBookingHoldCommand");
+  const releaseStart = bookingCommandsSource.indexOf("export async function releaseServiceBookingHoldCommand", confirmStart);
+  assert.ok(confirmStart >= 0 && releaseStart > confirmStart, "confirm booking command must remain present");
+  const confirmBookingSource = bookingCommandsSource.slice(confirmStart, releaseStart);
+  const confirmBookingExecutable = confirmBookingSource.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
+  // RC-P0-CLIENT-LIMIT-01 — a valid public booking must not fail solely because the CRM Client quota is full.
+  // The confirm flow preserves the contact snapshot and does not perform CRM client creation; client creation
+  // and its canonical server-side quota authority belong to the explicit association/create-client command.
   assert.doesNotMatch(
-    bookingCommandsSource,
-    /throw new ServiceBookingCommandError\("CLIENT_LIMIT_REACHED"/,
+    confirmBookingExecutable,
+    /CLIENT_LIMIT_REACHED|createClientInTransaction|clientCountSnap/,
     "confirmServiceBookingHoldCommand must never abort a booking solely because the Client quota is full",
   );
-  assert.doesNotMatch(
-    bookingCommandsSource,
-    /clientCountSnap/,
-    "the booking transaction must no longer read its own independent Client-count aggregation — only the canonical planUsage/summary.clientsCount counter (via createClientInTransaction) may decide the quota",
-  );
   assert.match(
-    bookingCommandsSource,
-    /await createClientInTransaction\(tx, db, uid, options\.publicCustomerContact\.clientId/,
-    "public-booking client creation must reuse the same canonical quota authority as POST /api/clients (createClientInTransaction), not an independent check",
+    confirmBookingExecutable,
+    /const contact = options\.publicCustomerContact/,
+    "public booking must preserve its contact snapshot independently of CRM quota",
   );
-  assert.match(
-    bookingCommandsSource,
-    /if \(!\(error instanceof PlanMutationError\) \|\| error\.code !== "PLAN_LIMIT_REACHED"\) throw error;/,
-    "a PLAN_LIMIT_REACHED from createClientInTransaction must be caught and swallowed (booking still succeeds without a new Client); any other error must still propagate and abort the transaction",
-  );
-  // The client-creation attempt must still happen strictly before any of the OTHER writes in this
-  // function (Booking/Work/locks/idempotency) — same all-or-nothing atomicity guarantee as before, just
-  // no longer able to reject the whole transaction on quota alone.
-  const clientCreateAttemptIndex = bookingCommandsSource.indexOf("await createClientInTransaction(tx, db, uid, options.publicCustomerContact.clientId", bookingCommandsSource.indexOf("confirmServiceBookingHoldCommand"));
-  const firstOtherWriteIndex = bookingCommandsSource.indexOf("tx.create(serviceWorkRef", bookingCommandsSource.indexOf("confirmServiceBookingHoldCommand"));
-  assert.ok(clientCreateAttemptIndex > 0 && firstOtherWriteIndex > 0 && clientCreateAttemptIndex < firstOtherWriteIndex, "the public-booking client-creation attempt must happen before the other transaction writes, keeping the whole transaction all-or-nothing");
 
   console.log(
     "PLAN-IMPL-02A limits tests passed: L1-L11 (product/client/service boundaries per tier, over-limit " +
