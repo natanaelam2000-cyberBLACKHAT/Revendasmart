@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { AlertTriangle, ArrowLeft, Check, Loader2, Sparkles, X } from "lucide-react";
 import {
   mapCreativeProfileOnboardingToSellerProfile,
@@ -11,6 +11,7 @@ import {
   type CreativeProfileWizardAnswers,
 } from "@/lib/creative-profile-mapper";
 import type { SellerCreativeProfile } from "@shared/marketing-pro-creative-intelligence";
+import { useDismissibleOnBack } from "@/hooks/useDismissibleOnBack";
 
 /**
  * PRO-10A/PRO-10B — "Vamos descobrir seu estilo": onboarding visual de 5 etapas do Anúncios Pro.
@@ -120,10 +121,57 @@ export interface CreativeProfileOnboardingProps {
 }
 
 export function CreativeProfileOnboarding({ onClose, onSkip, onComplete, initialAnswers }: CreativeProfileOnboardingProps) {
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
   const [answers, setAnswers] = useState<CreativeProfileWizardAnswers>(initialAnswers ?? EMPTY_CREATIVE_PROFILE_ANSWERS);
   const [finished, setFinished] = useState<SellerCreativeProfile | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "error">("idle");
+
+  const handleDismiss = useCallback(() => {
+    if (saveState === "saving") return;
+    onClose();
+  }, [onClose, saveState]);
+
+  useDismissibleOnBack(true, handleDismiss);
+
+  useEffect(() => {
+    previouslyFocusedRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    requestAnimationFrame(() => closeButtonRef.current?.focus());
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      previouslyFocusedRef.current?.focus();
+    };
+  }, []);
+
+  const handleOverlayKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      handleDismiss();
+      return;
+    }
+    if (event.key !== "Tab") return;
+
+    const focusable = Array.from(
+      overlayRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) || [],
+    );
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }, [handleDismiss]);
 
   const canContinue = (
     (stepIndex === 0 && answers.visualStyle !== null)
@@ -159,8 +207,16 @@ export function CreativeProfileOnboarding({ onClose, onSkip, onComplete, initial
   }, []);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/40 p-0 sm:items-center sm:p-4" data-testid="creative-profile-onboarding">
-      <div className="flex w-full max-w-md flex-col overflow-y-auto bg-white sm:max-h-[90vh] sm:rounded-3xl sm:shadow-xl">
+    <div
+      ref={overlayRef}
+      className="fixed inset-0 z-[80] flex items-stretch justify-center overflow-hidden bg-black/70 p-0 sm:items-center sm:p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Perfil criativo"
+      onKeyDown={handleOverlayKeyDown}
+      data-testid="creative-profile-onboarding"
+    >
+      <div className="flex h-full w-full max-w-md flex-col overflow-y-auto overscroll-contain bg-white sm:max-h-[90vh] sm:h-auto sm:rounded-3xl sm:shadow-xl">
         <div className="rs-overlay-safe-top flex items-center justify-between gap-2 border-b border-border/60 px-4 py-3">
           {finished ? (
             <span className="text-xs font-black text-foreground">Pronto</span>
@@ -171,9 +227,11 @@ export function CreativeProfileOnboarding({ onClose, onSkip, onComplete, initial
           )}
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleDismiss}
+            ref={closeButtonRef}
+            disabled={saveState === "saving"}
             aria-label="Fechar"
-            className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            className="flex min-h-11 min-w-11 items-center justify-center rounded-full text-muted-foreground transition hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
             data-testid="button-creative-profile-close"
           >
             <X className="h-4 w-4" />
@@ -356,7 +414,7 @@ export function CreativeProfileOnboarding({ onClose, onSkip, onComplete, initial
           {finished && saveState === "idle" && (
             <button
               type="button"
-              onClick={onClose}
+              onClick={handleDismiss}
               className="min-h-11 flex-1 rounded-xl bg-primary px-4 text-xs font-black text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
               data-testid="button-creative-profile-finish"
             >

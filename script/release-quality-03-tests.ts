@@ -51,10 +51,12 @@ function run(): void {
   assert.match(sheetSource, /useDismissibleOnBack\(true, \(\) => closeRef\.current\?\.click\(\)\);/, "P1-01: SheetContent reaproveita o MESMO X visível");
   assert.match(sheetSource, /SheetPrimitive\.Close ref=\{closeRef\}/, "P1-01: o ref está ligado ao Close real da sheet");
 
-  // Áreas explicitamente fora de escopo desta rodada continuam intocadas (Marketing Pro / Catálogo
-  // comercial / Billing) — a garantia aqui é que a wiring feita nesta tarefa não vazou para lá.
+  // Áreas explicitamente fora de escopo desta rodada continuam intocadas (Catálogo comercial / Billing)
+  // — o onboarding ativo do Ads Pro é exceção: ele precisa registrar o Android Back como parte desta
+  // correção de overlay mobile.
+  const creativeProfileOnboardingSource = read("client/src/components/marketing/CreativeProfileOnboarding.tsx");
+  assert.match(creativeProfileOnboardingSource, /useDismissibleOnBack\(true, handleDismiss\)/, "P1-01: onboarding Ads Pro fecha com o Android Back");
   for (const arquivoExcluido of [
-    "client/src/components/marketing/CreativeProfileOnboarding.tsx",
     "client/src/components/marketing/MarketingHistoryCard.tsx",
     "client/src/components/catalog/CatalogProductDetails.tsx",
     "client/src/components/catalog/ShareCatalogSheet.tsx",

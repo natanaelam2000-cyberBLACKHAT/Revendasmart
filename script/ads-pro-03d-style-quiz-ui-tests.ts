@@ -49,6 +49,10 @@ const panelSource = fs.readFileSync(
   path.resolve("client/src/components/marketing/MarketingProPanel.tsx"),
   "utf8"
 );
+const onboardingSource = fs.readFileSync(
+  path.resolve("client/src/components/marketing/CreativeProfileOnboarding.tsx"),
+  "utf8"
+);
 
 // ============================================================================
 // 1. ESTADOS DA EXPERIÊNCIA E CARD (UI-01 a UI-07)
@@ -539,6 +543,16 @@ assert.doesNotMatch(
   "A11Y-05: Card não utiliza larguras fixas rígidas em pixels"
 );
 console.log("PASS A11Y-05: layout estritamente responsivo sem larguras fixas grandes");
+
+// A11Y-06: o wizard ativo precisa ser uma barreira modal real no Android/mobile.
+assert.match(onboardingSource, /z-\[80\]/, "A11Y-06: overlay ativo fica acima da bottom navigation");
+assert.match(onboardingSource, /role="dialog"/, "A11Y-06: wizard ativo declara semântica de diálogo");
+assert.match(onboardingSource, /aria-modal="true"/, "A11Y-06: wizard ativo bloqueia semanticamente o conteúdo atrás");
+assert.match(onboardingSource, /useDismissibleOnBack\(true, handleDismiss\)/, "A11Y-06: Android Back fecha o wizard ativo");
+assert.match(onboardingSource, /document\.body\.style\.overflow = "hidden"/, "A11Y-06: scroll da página fica bloqueado enquanto o wizard está aberto");
+assert.match(onboardingSource, /event\.key !== "Tab"/, "A11Y-06: foco fica confinado ao overlay ativo");
+assert.match(onboardingSource, /min-h-11 min-w-11/, "A11Y-06: fechar do wizard mantém alvo de toque de 44px");
+console.log("PASS A11Y-06: overlay ativo cobre a navegação, bloqueia scroll/foco e trata Android Back");
 
 console.log("\n==================================================");
 console.log("TODOS OS TESTES ADS-PRO-03D PASSARAM COM SUCESSO!");

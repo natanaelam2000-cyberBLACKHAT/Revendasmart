@@ -236,7 +236,6 @@ export function MarketingProPanel({ products = [], storeName = "Minha loja", sto
   }, []);
   const previewProducts = useMemo(
     () => [...products]
-      .filter((product) => Boolean(getProductImage(product)))
       .sort((first, second) => Number(second.stock > 0) - Number(first.stock > 0)),
     [products],
   );
@@ -639,7 +638,9 @@ export function MarketingProPanel({ products = [], storeName = "Minha loja", sto
             </>
           ) : (
             <p className="mt-3 rounded-xl border border-border/60 bg-background px-3 py-2 text-xs font-semibold text-muted-foreground" role="status">
-              Selecione um produto com imagem para visualizar a composição local.
+              {products.length === 0
+                ? "Cadastre um produto para começar um anúncio."
+                : "Este produto ainda não tem foto para a prévia. Você pode criar conceitos e adicionar a foto depois."}
             </p>
           )}
         </div>
