@@ -1,4 +1,5 @@
 import { Check, Copy, Instagram, Megaphone, Send, Share2, X } from "lucide-react";
+import { useDismissibleOnBack } from "@/hooks/useDismissibleOnBack";
 
 interface ShareCatalogSheetProps {
   open: boolean;
@@ -12,6 +13,8 @@ interface ShareCatalogSheetProps {
 }
 
 export function ShareCatalogSheet({ open, onClose, catalogUrl, hasCatalogSlug, copied, onCopyLink, onShareWhatsApp, onShareInstagram }: ShareCatalogSheetProps) {
+  useDismissibleOnBack(open, onClose);
+
   if (!open) return null;
 
   const options = [

@@ -51,15 +51,22 @@ function run(): void {
   assert.match(sheetSource, /useDismissibleOnBack\(true, \(\) => closeRef\.current\?\.click\(\)\);/, "P1-01: SheetContent reaproveita o MESMO X visível");
   assert.match(sheetSource, /SheetPrimitive\.Close ref=\{closeRef\}/, "P1-01: o ref está ligado ao Close real da sheet");
 
-  // Áreas explicitamente fora de escopo desta rodada continuam intocadas (Catálogo comercial / Billing)
-  // — o onboarding ativo do Ads Pro é exceção: ele precisa registrar o Android Back como parte desta
-  // correção de overlay mobile.
+  const catalogProductDetailsSource = read("client/src/components/catalog/CatalogProductDetails.tsx");
+  assert.match(catalogProductDetailsSource, /import \{ useDismissibleOnBack \} from "@\/hooks\/useDismissibleOnBack";/, "P1-01: CatalogProductDetails usa a pilha canônica de Android Back");
+  assert.match(catalogProductDetailsSource, /useDismissibleOnBack\(true, onClose\);/, "P1-01: CatalogProductDetails fecha com o mesmo onClose do X/click");
+  assert.doesNotMatch(catalogProductDetailsSource, /addListener|popstate|history\.back/, "P1-01: CatalogProductDetails não cria um segundo sistema de Android Back");
+
+  const shareCatalogSheetSource = read("client/src/components/catalog/ShareCatalogSheet.tsx");
+  assert.match(shareCatalogSheetSource, /import \{ useDismissibleOnBack \} from "@\/hooks\/useDismissibleOnBack";/, "P1-01: ShareCatalogSheet usa a pilha canônica de Android Back");
+  assert.match(shareCatalogSheetSource, /useDismissibleOnBack\(open, onClose\);/, "P1-01: ShareCatalogSheet registra somente quando aberto e usa o mesmo onClose");
+  assert.doesNotMatch(shareCatalogSheetSource, /addListener|popstate|history\.back/, "P1-01: ShareCatalogSheet não cria um segundo sistema de Android Back");
+
+  // O onboarding ativo do Ads Pro também precisa registrar o Android Back como parte desta correção
+  // de overlay mobile.
   const creativeProfileOnboardingSource = read("client/src/components/marketing/CreativeProfileOnboarding.tsx");
   assert.match(creativeProfileOnboardingSource, /useDismissibleOnBack\(true, handleDismiss\)/, "P1-01: onboarding Ads Pro fecha com o Android Back");
   for (const arquivoExcluido of [
     "client/src/components/marketing/MarketingHistoryCard.tsx",
-    "client/src/components/catalog/CatalogProductDetails.tsx",
-    "client/src/components/catalog/ShareCatalogSheet.tsx",
     "client/src/components/PartialPaymentModal.tsx",
     "client/src/components/PaymentLinkModal.tsx",
   ]) {

@@ -3,6 +3,7 @@ import { Minus, Plus, X } from "lucide-react";
 import { ProductImageCard } from "@/components/ProductImageCard";
 import { formatCurrency, getPromotionalPrice } from "@/lib/product-pricing";
 import type { Product } from "@/lib/mock-data";
+import { useDismissibleOnBack } from "@/hooks/useDismissibleOnBack";
 
 function CatalogQuantityAction({
   product,
@@ -63,6 +64,8 @@ interface CatalogProductDetailsProps {
 }
 
 export function CatalogProductDetails({ product, showPrice, quantity, onAddToCart, onUpdateQuantity, onClose }: CatalogProductDetailsProps) {
+  useDismissibleOnBack(true, onClose);
+
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
