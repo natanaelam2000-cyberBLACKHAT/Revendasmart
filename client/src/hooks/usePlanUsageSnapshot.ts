@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { collection, getCountFromServer, getFirestore, query, where } from "firebase/firestore";
 import { waitForAuthReady } from "@/lib/firebase";
-import { usePlanData } from "@/hooks/usePlanData";
+import { usePlan } from "@/providers/PlanProvider";
 import { buildPlanUsageSnapshot, type PlanUsageSnapshot } from "@shared/monetization";
 import { getCurrentMonthBookingUsage } from "@/lib/booking-quota";
 import { getCurrentMonthPreparationUsage } from "@/lib/ads-pro-preparation-quota";
@@ -25,7 +25,7 @@ async function fetchDomainAccessCounts(uid: string, domain: "products" | "servic
 }
 
 export function usePlanUsageSnapshot() {
-  const { activePlan, basePlan, trial, loading: planLoading } = usePlanData();
+  const { activePlan, basePlan, trial, loading: planLoading } = usePlan();
   const [snapshot, setSnapshot] = useState<PlanUsageSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");

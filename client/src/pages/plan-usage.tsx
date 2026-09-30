@@ -16,6 +16,7 @@ import { PLAN_CONFIG, UNLIMITED, isNearPlanLimit, resolvePlanAccessState, type A
 import { getPlanName } from "@/lib/plan-helpers";
 import { buildLimitReachedCopy, buildNearLimitCopy } from "@/lib/plan-paywall-copy";
 import { usePlanUsageSnapshot } from "@/hooks/usePlanUsageSnapshot";
+import { usePlan } from "@/providers/PlanProvider";
 import { useProductAccessList } from "@/hooks/useProductAccessList";
 import { useServiceAccessList } from "@/hooks/useServiceAccessList";
 import { setActiveProductSelection, setActiveServiceSelection } from "@/lib/plan-access-selection";
@@ -622,7 +623,7 @@ export default function PlanUsage() {
 
   const [productsLimit, setProductsLimit] = useState<number>(PLAN_CONFIG.free.limits.products);
   const [servicesLimit, setServicesLimit] = useState<number>(PLAN_CONFIG.free.limits.services);
-  const { activePlan } = usePlanUsageSnapshot();
+  const { activePlan } = usePlan();
   useEffect(() => {
     setProductsLimit(PLAN_CONFIG[activePlan as PlanType].limits.products);
     setServicesLimit(PLAN_CONFIG[activePlan as PlanType].limits.services);
