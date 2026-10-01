@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { collection, getCountFromServer, getFirestore, query, where } from "firebase/firestore";
-import { waitForAuthReady } from "@/lib/firebase";
+import { getCurrentFirebaseUser, waitForAuthReady } from "@/lib/firebase";
 import { usePlan } from "@/providers/PlanProvider";
 import { buildPlanUsageSnapshot, type PlanUsageSnapshot } from "@shared/monetization";
 import { getCurrentMonthBookingUsage } from "@/lib/booking-quota";
@@ -27,14 +27,17 @@ async function fetchDomainAccessCounts(uid: string, domain: "products" | "servic
 export function usePlanUsageSnapshot() {
   const { activePlan, basePlan, trial, loading: planLoading } = usePlan();
   const [snapshot, setSnapshot] = useState<PlanUsageSnapshot | null>(null);
+  const [snapshotUid, setSnapshotUid] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
+    setSnapshot(null);
     // RELEASE-AUTOMATION-01 — waits for Firebase Auth's initial state instead of a synchronous
     // `currentUser` read, which is null on a fresh page load before the persisted session restores.
     const uid = (await waitForAuthReady())?.uid;
     if (!uid) {
+      setSnapshot(null);
       setLoading(false);
       return;
     }
@@ -51,6 +54,11 @@ export function usePlanUsageSnapshot() {
         // PLAN-IMPL-05 §31 — mesmo motivo: server/ads-pro-preparation-quota.ts, server-only.
         getCurrentMonthPreparationUsage(),
       ]);
+      if (getCurrentFirebaseUser()?.uid !== uid) {
+        setSnapshot(null);
+        return;
+      }
+      setSnapshotUid(uid);
       setSnapshot(buildPlanUsageSnapshot(activePlan, {
         products, clients: clientsSnap.data().count, services,
         bookingsCurrentMonth: { used: bookingsCurrentMonth.used, monthKey: bookingsCurrentMonth.monthKey },
@@ -69,5 +77,6 @@ export function usePlanUsageSnapshot() {
     load();
   }, [planLoading, load]);
 
-  return { snapshot, loading: loading || planLoading, error, refresh: load, activePlan, basePlan, trial };
+  const currentSnapshot = snapshotUid === getCurrentFirebaseUser()?.uid ? snapshot : null;
+  return { snapshot: currentSnapshot, loading: loading || planLoading, error, refresh: load, activePlan, basePlan, trial };
 }

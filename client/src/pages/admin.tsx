@@ -1,11 +1,9 @@
 import { useState, useMemo, useEffect } from "react";
 import { Layout } from "@/components/layout";
-import {
-  APP_VERSION, getCurrentUserId, getUsers
-} from "@/lib/mock-data";
+import { APP_VERSION } from "@/lib/mock-data";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { useLocation } from "wouter";
-import { getFirebaseAuth, logError, waitForAuthReady } from "@/lib/firebase";
+import { getFirebaseAuth, waitForAuthReady } from "@/lib/firebase";
 import type { User } from "firebase/auth";
 import { 
   ShieldCheck, Package, Users, CircleDollarSign, Receipt, 
@@ -71,17 +69,7 @@ export default function AdminMetrics() {
 
   const currentUser = useMemo(() => {
     if (!user) return null;
-    try {
-      const id = getCurrentUserId();
-      return getUsers().find(u => u.id === id);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Unknown error";
-      logError("admin_current_user_load_failed", msg, {
-        userId: user.uid,
-        severity: "warning",
-      });
-      return null;
-    }
+    return { email: user.email, storeName: user.displayName || "" };
   }, [user]);
 
   // NOTE: Admin access is validated server-side via Firebase custom claims.

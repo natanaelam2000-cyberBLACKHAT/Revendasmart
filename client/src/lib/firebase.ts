@@ -254,7 +254,7 @@ export function getCurrentFirebaseUser(): User | null {
   return auth?.currentUser ?? null;
 }
 
-let authReadyPromise: Promise<User | null> | null = null;
+let authReadyPromise: Promise<void> | null = null;
 
 /**
  * PRODUCT-QA-02 — resolve com o usuário atual (ou null) assim que o Firebase Auth confirmar o estado
@@ -263,24 +263,25 @@ let authReadyPromise: Promise<User | null> | null = null;
  * uma sessão persistida válida (localStorage/IndexedDB ainda sendo restaurada) — um efeito de carregamento
  * que chama uma função dependente de uid nesse momento (ex.: requireCurrentUid() em services-persistence.ts)
  * lança "UNAUTHENTICATED" e mostra "Sessão inválida" para um usuário genuinamente autenticado, reproduzível
- * em qualquer navegação de página cheia (não-SPA) para uma rota que busca dados no mount. Promise única
- * (cacheada) — só se inscreve uma vez, nunca uma por chamador. */
+ * em qualquer navegação de página cheia (não-SPA) para uma rota que busca dados no mount. A promise única
+ * (cacheada) é somente uma barreira de bootstrap — só se inscreve uma vez, nunca uma por chamador. Depois
+ * da barreira, o retorno sempre vem de `auth.currentUser`, que representa a sessão atual da SPA. */
 export async function waitForAuthReady(): Promise<User | null> {
   const auth = getFirebaseAuth();
   if (!auth) return null;
   if (!authReadyPromise) {
     authReadyPromise = new Promise((resolve) => {
-      const unsubscribe = onAuthStateChanged(auth, (user) => {
+      const unsubscribe = onAuthStateChanged(auth, () => {
         unsubscribe();
-        resolve(user);
+        resolve();
       });
     });
   }
-  const user = await authReadyPromise;
+  await authReadyPromise;
   if (pendingTenantCacheClear) {
     await pendingTenantCacheClear;
   }
-  return user;
+  return auth.currentUser;
 }
 
 // Returns true if Firebase is configured and initialized

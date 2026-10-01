@@ -394,9 +394,11 @@ const [, setLocation] = useLocation();
       // the existing product with empty/default values for any field the user didn't manually retype.
       void waitForAuthReady().then((user) => {
         if (cancelled || !user) return;
+        if (getFirebaseAuth()?.currentUser?.uid !== user.uid) return;
         const firestore = getFirestore();
         getDoc(doc(firestore, "users", user.uid, "products", id))
           .then(docSnap => {
+            if (cancelled || getFirebaseAuth()?.currentUser?.uid !== user.uid) return;
             if (docSnap.exists()) {
               const product = docSnap.data() as Product;
               const inferredNicho = (product.productType as NichoId) ||
