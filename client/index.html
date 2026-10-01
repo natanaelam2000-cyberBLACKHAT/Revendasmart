@@ -26,6 +26,24 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+      /* MOTION-SYSTEM-01 — bootstrap do Motion System. Só em app instalado (WebView/PWA/TWA) ou com
+         ?launch-motion=1, e nunca em catálogo/sorteio públicos: carrega o motor versionado (fora do
+         bundle Vite) de forma SÍNCRONA para a motion pintar antes do React montar. Deixa um stub
+         { ready, play }: se o React reportar ready antes do motor carregar, o flag `r` é lido pelo
+         motor. Falha aberta: sem motor (onerror/exceção) o app carrega normalmente.
+         Lógica e contrato: docs/REVENDASMART-MOTION-SYSTEM.md */
+      (function (w, d) {
+        try {
+          var p = w.location.pathname, q = w.location.search, c = w.Capacitor;
+          if (p.indexOf("/u/") === 0 || p.indexOf("/sorteio/") === 0 || /[?&]launch-motion=0(&|$)/.test(q)) return;
+          var shell = (c && c.isNativePlatform && c.isNativePlatform()) || /; wv\)/.test(w.navigator.userAgent) || (w.matchMedia && w.matchMedia("(display-mode: standalone)").matches);
+          if (!shell && !/[?&]launch-motion=1(&|$)/.test(q)) return;
+          var m = (w.rsMotion = { ready: function () { m.r = 1; }, play: function () {} });
+          d.write('<script src="/motion/revendasmart-motion.v1.js" onerror="window.rsMotion=void 0"><\/script>');
+        } catch (e) { /* motion é opcional */ }
+      })(window, document);
+    </script>
   </head>
   <body>
     <div id="root"></div>

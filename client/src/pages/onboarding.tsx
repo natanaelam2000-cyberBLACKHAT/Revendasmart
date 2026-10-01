@@ -47,6 +47,7 @@ import { getFirebaseAuth, logError } from "@/lib/firebase";
 import { useFeatureEnabled } from "@/lib/remote-config-context";
 import { NICHO_CONFIG, NICHO_IDS, ONBOARDING_NICHO_IDS, getProductCategoriesForNicho, type NichoId } from "@/lib/nicho-config";
 import { patchUserSettingsOptimistic, invalidateUserSettings } from "@/hooks/useUserSettings";
+import { playOnboardingCompletionMotion } from "@/lib/motion-bridge";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
 
 const NICHO_ICONS: Record<string, ComponentType<{ className?: string }>> = {
@@ -377,6 +378,9 @@ export default function Onboarding() {
 
   const handleComplete = (destination = "/") => runSaveAction(async () => {
     await saveProgress({ completed: true });
+    // MOTION-SYSTEM-01: só apresentação, após o save confirmado e sem await — a navegação não espera
+    // por ela. "products" porque o app só tem nichos de produto hoje (não existe businessMode).
+    playOnboardingCompletionMotion("products");
     setLocation(destination);
   });
 

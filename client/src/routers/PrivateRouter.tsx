@@ -4,6 +4,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { MaintenanceBanner } from "@/components/MaintenanceBanner";
 import { UserFeedbackHost } from "@/components/UserFeedbackHost";
 import { ConnectivityIndicator } from "@/components/ConnectivityIndicator";
+import { LaunchReady } from "@/components/LaunchReady";
 import { getApiUrl } from "@/lib/api-config";
 import { getFirebaseAuth, logTelemetryEvent } from "@/lib/firebase";
 import { isReferralCodeFormat } from "@shared/monetization";
@@ -155,6 +156,7 @@ export default function PrivateRouter() {
   return (
     <UserSettingsProvider>
       <PlanProvider>
+        <LaunchReady />
         <PrivateRoutes />
       </PlanProvider>
     </UserSettingsProvider>
