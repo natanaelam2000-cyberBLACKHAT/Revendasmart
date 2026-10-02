@@ -4421,9 +4421,9 @@ assert.match(androidDebugDocs, /configuração remota de servidor do Capacitor/)
   assert.equal(isPremiumActive({ ...cancelledInPeriod, premiumExpiresAt: past }), false,
     "depois do período pago o acesso acaba, mesmo com premiumActive=true no documento");
 
-  // O período manda inclusive sobre um status "authorized" desatualizado.
+  // A expiração paga tem precedência sobre o rótulo autorizado.
   assert.equal(isPremiumActive({ subscriptionStatus: "authorized", premiumActive: true, premiumExpiresAt: past } as any), false,
-    "um período já vencido não pode ser mantido vivo pelo rótulo do status");
+    "subscriptionStatus autorizado não prolonga período pago expirado");
   assert.equal(isPremiumActive({ subscriptionStatus: "authorized", premiumActive: true, premiumExpiresAt: null } as any), true,
     "assinatura renovando (sem data de término) continua Premium");
 
@@ -4555,9 +4555,12 @@ assert.match(validateReferralRoute, /validationDoc\.exists/);
 assert.match(validateReferralRoute, /status\(409\)/);
 assert.match(validateReferralRoute, /DUPLICATE_REFERRAL/);
 assert.match(validateReferralRoute, /transaction\.create\(validationRef/);
+assert.match(validateReferralRoute, /referralRewardLedger/);
+assert.match(validateReferralRoute, /referralLifetimeCount/);
+assert.match(validateReferralRoute, /isPaidEntitlementActive/);
 // Validation, unique marker, counter increment and Premium grant share one transaction.
 assert.match(validateReferralRoute, /runTransaction/);
-assert.match(validateReferralRoute, /const newCount = validatedReferrals.size \+ 1/);
+assert.match(validateReferralRoute, /const newCount = currentLifetimeCount \+ 1/);
 assert.match(validateReferralRoute, /transaction\.set\(planRef, planUpdate/);
 assert.match(validateReferralRoute, /newCount === REFERRAL_REWARD_LIMIT/);
 assert.doesNotMatch(validateReferralRoute, /referralCount\s*=\s*body|body\.referralCount|planDoc\.data\(\)\?\.referralCount/);

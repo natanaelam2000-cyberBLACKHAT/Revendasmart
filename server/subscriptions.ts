@@ -288,21 +288,16 @@ return s === "authorized" || s === "active" || s === "approved" || p === "approv
 // ---------------------------------------------------------------------------
 
 /**
- * Fim do período JÁ PAGO, sempre server-owned. `premiumExpiresAt` é a fonte preferida (é o campo que
- * o cancelamento congela); `nextBillingAt` é o fallback enquanto a assinatura ainda renova — para o
- * Mercado Pago, a próxima cobrança é exatamente onde o período atual termina.
- *
- * Retorna `null` quando nenhuma das duas datas é utilizável. Esse `null` é um fallback deliberadamente
- * CONSERVADOR (§10 legacy): um documento antigo, já cancelado e sem nenhuma data, não ganha Premium
- * retroativo — permanece exatamente como estava antes do RELEASE-09.
+ * End of the already paid period, using the temporal authority of each contract.
+ * V2 uses paidThrough, then MP nextBillingAt (end of the current paid period).
+ * Legacy preserves premiumExpiresAt precedence. Reward expiry never governs V2.
+ * No usable date returns null; cancellation cannot grant an unknown paid period.
  */
-// PLAN-IMPL-04B — `paidThrough` (a carência genérica de Pro/Premium v2, shared/monetization.ts) entra
-// como um fallback NO MEIO, nunca antes de `premiumExpiresAt`: para qualquer documento legado,
-// `premiumExpiresAt` (quando presente) continua decidindo sozinho, exatamente como antes deste ticket —
-// `paidThrough` nunca é escrito em um documento legado, então este fallback só participa de verdade em
-// documentos v2, onde `premiumExpiresAt` nunca existe. Comportamento 100% inalterado para quem já
-// tinha assinatura antes de PLAN-IMPL-04B.
 export function resolvePaidThroughDate(planData: any): Date | null {
+  if (planData?.pricingVersion === "v2") {
+    // MP next billing marks the end of the current paid period; reward expiry is unrelated.
+    return toDateOrNull(planData?.paidThrough) ?? toDateOrNull(planData?.nextBillingAt);
+  }
   return toDateOrNull(planData?.premiumExpiresAt) ?? toDateOrNull(planData?.paidThrough) ?? toDateOrNull(planData?.nextBillingAt);
 }
 
@@ -1164,9 +1159,7 @@ export function registerSubscriptionRoutes(
 
       // RELEASE-09: cancelar = parar de renovar, preservando o período JÁ PAGO. O fim desse período é
       // resolvido ANTES de qualquer escrita, e nunca é encurtado por este endpoint.
-      // PLAN-IMPL-04B — `resolvePaidThroughDate` já foi estendida (aditivamente) para também checar
-      // `paidThrough` (v2) depois de `premiumExpiresAt` (legado) — este cálculo já funciona para os dois
-      // sem nenhuma mudança adicional aqui.
+      // Resolve the paid period using V2 or legacy authority before freezing cancellation.
       const paidThrough = resolvePaidThroughDate(planData);
       const stillWithinPaidPeriod = Boolean(paidThrough && Date.now() < paidThrough.getTime());
       // §8 — qual plano esta assinatura representa: para v2 (Pro ou Premium), o `currentPlan` já

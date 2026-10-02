@@ -67,10 +67,13 @@ import type {
 } from "../shared/public-catalog";
 import { resolveEffectiveProductPrice } from "../shared/product-pricing";
 import { REFERRAL_REWARD_LIMIT, isReferralCodeFormat } from "../shared/monetization";
+import { isPaidEntitlementActive } from "../shared/monetization";
+import { assertReferralProgramEnabledInTransaction, isReferralProgramEnabled, ReferralProgramDisabledError } from "./referral-program";
 import {
   CatalogSlugConflictError,
   InvalidCatalogSlugError,
   PublicCatalogDeactivatedError,
+  ReferralSourceConflictError,
   ensurePublicCatalogSlug,
   normalizeCatalogSlug,
   persistUserSettingsWithCatalogOwnership,
@@ -1331,7 +1334,11 @@ export async function registerRoutes(
       
       // ============ REFERRAL VALIDATION (if present in body) ============
       let referrerExists = false;
-      if (body.referral_source) {
+      const hasReferralSource = Object.prototype.hasOwnProperty.call(body, "referral_source");
+      if (hasReferralSource) {
+        if (!(await isReferralProgramEnabled(db))) {
+          return res.status(403).json({ error: "REFERRAL_PROGRAM_DISABLED" });
+        }
         const referralSourceToken = body.referral_source;
         routeInfo("[/api/user/settings POST] Validating referral_source token");
 
@@ -1353,7 +1360,7 @@ export async function registerRoutes(
           }
         } catch (e) {
           routeWarn("[/api/user/settings POST] Error checking existing referral:", (e as any)?.message);
-          // Don't block on check failure, continue
+          return errorResponse(res, 503, "REFERRAL_IMMUTABILITY_CHECK_FAILED", "Não foi possível validar a indicação.");
         }
 
         const resolution = await resolveReferralSource(db, referralSourceToken, userId);
@@ -1475,6 +1482,15 @@ export async function registerRoutes(
       }
       if (error instanceof InvalidCatalogSlugError) {
         return res.status(400).json({ error: "INVALID_CATALOG_SLUG", message: "O link do catálogo é inválido." });
+      }
+      if (error instanceof ReferralSourceConflictError) {
+        return res.status(409).json({
+          error: "REFERRAL_SOURCE_ALREADY_SET",
+          referralValidation: { result: "already_set" },
+        });
+      }
+      if (error instanceof ReferralProgramDisabledError || (error as { message?: string })?.message === "REFERRAL_PROGRAM_DISABLED") {
+        return res.status(403).json({ error: "REFERRAL_PROGRAM_DISABLED" });
       }
       return errorResponse(
         res,
@@ -1887,13 +1903,16 @@ export async function registerRoutes(
     if (referrerUid === referredUid) {
       return res.status(400).json({ error: "SELF_REFERRAL_NOT_ALLOWED" });
     }
+    const admin = getFirebaseAdmin();
+    const db = admin.firestore();
+    if (!(await isReferralProgramEnabled(db))) {
+      return res.status(403).json({ error: "REFERRAL_PROGRAM_DISABLED" });
+    }
     if (!checkReferralRateLimit(referredUid, "track")) {
       return res.status(429).json({ error: "REFERRAL_RATE_LIMITED" });
     }
 
     try {
-      const admin = getFirebaseAdmin();
-      const db = admin.firestore();
       const [referredUserRecord] = await Promise.all([
         admin.auth().getUser(referredUid),
         admin.auth().getUser(referrerUid),
@@ -1909,10 +1928,14 @@ export async function registerRoutes(
       const referredSettingsRef = db.collection("user_settings").doc(referredUid);
 
       await db.runTransaction(async (transaction) => {
+        await assertReferralProgramEnabledInTransaction(transaction, db);
         const referredSettings = await transaction.get(referredSettingsRef);
         const existingEvent = await transaction.get(eventRef);
         if (!referredSettings.exists || referredSettings.data()?.onboarding_completed !== true) {
           throw new Error("ONBOARDING_NOT_COMPLETED");
+        }
+        if (referredSettings.data()?.referral_source !== referrerUid) {
+          throw new Error("REFERRAL_ATTRIBUTION_MISMATCH");
         }
         if (existingEvent.exists) throw new Error("DUPLICATE_REFERRAL");
 
@@ -1942,6 +1965,12 @@ export async function registerRoutes(
       if (code === "DUPLICATE_REFERRAL") {
         return res.status(409).json({ error: code });
       }
+      if (code === "REFERRAL_ATTRIBUTION_MISMATCH") {
+        return res.status(403).json({ error: code });
+      }
+      if (code === "REFERRAL_PROGRAM_DISABLED") {
+        return res.status(403).json({ error: code });
+      }
       if ((error as { code?: string })?.code === "auth/user-not-found") {
         return res.status(400).json({ error: "REFERRAL_USER_NOT_FOUND" });
       }
@@ -1964,13 +1993,16 @@ export async function registerRoutes(
     if (referrerUid === referredUid) {
       return res.status(400).json({ error: "SELF_REFERRAL_NOT_ALLOWED" });
     }
+    const admin = getFirebaseAdmin();
+    const db = admin.firestore();
+    if (!(await isReferralProgramEnabled(db))) {
+      return res.status(403).json({ error: "REFERRAL_PROGRAM_DISABLED" });
+    }
     if (!checkReferralRateLimit(referredUid, "validate")) {
       return res.status(429).json({ error: "REFERRAL_RATE_LIMITED" });
     }
 
     try {
-      const admin = getFirebaseAdmin();
-      const db = admin.firestore();
       await Promise.all([
         admin.auth().getUser(referredUid),
         admin.auth().getUser(referrerUid),
@@ -1981,12 +2013,15 @@ export async function registerRoutes(
       const referredSettingsRef = db.collection("user_settings").doc(referredUid);
       const planRef = db.collection("users").doc(referrerUid).collection("planData").doc("main");
       const validationRef = planRef.collection("validatedReferrals").doc(referredUid);
+      const rewardLedgerRef = planRef.collection("referralRewardLedger").doc(eventId);
 
       const result = await db.runTransaction(async (transaction) => {
+        await assertReferralProgramEnabledInTransaction(transaction, db);
         const eventDoc = await transaction.get(eventRef);
         const referredSettings = await transaction.get(referredSettingsRef);
         const validationDoc = await transaction.get(validationRef);
-        const validatedReferrals = await transaction.get(planRef.collection("validatedReferrals"));
+        const rewardLedgerDoc = await transaction.get(rewardLedgerRef);
+        const planDoc = await transaction.get(planRef);
 
         if (!eventDoc.exists ||
             eventDoc.data()?.referredUID !== referredUid ||
@@ -1997,13 +2032,26 @@ export async function registerRoutes(
         if (!referredSettings.exists || referredSettings.data()?.onboarding_completed !== true) {
           throw new Error("ONBOARDING_NOT_COMPLETED");
         }
-        if (eventDoc.data()?.status !== "pending" || validationDoc.exists) {
+        if (referredSettings.data()?.referral_source !== referrerUid) {
+          throw new Error("REFERRAL_ATTRIBUTION_MISMATCH");
+        }
+        if (eventDoc.data()?.status !== "pending" || validationDoc.exists || rewardLedgerDoc.exists) {
           throw new Error("DUPLICATE_REFERRAL");
         }
 
-        const newCount = validatedReferrals.size + 1;
+        const planData: Record<string, any> = (planDoc.exists ? planDoc.data() : {}) ?? {};
+        const currentLifetimeCount = Math.max(
+          Number.isInteger(planData.referralLifetimeCount) && planData.referralLifetimeCount >= 0
+            ? planData.referralLifetimeCount
+            : 0,
+          Number.isInteger(planData.referralCount) && planData.referralCount >= 0
+            ? planData.referralCount
+            : 0,
+        );
+        const newCount = currentLifetimeCount + 1;
         const premiumGranted = newCount === REFERRAL_REWARD_LIMIT;
         const now = admin.firestore.Timestamp.now();
+        const paidEntitlementPreserved = premiumGranted && isPaidEntitlementActive(planData as any, now.toDate());
 
         transaction.update(eventRef, {
           status: "valid",
@@ -2016,12 +2064,23 @@ export async function registerRoutes(
           eventId,
           validatedAt: now,
         });
+        transaction.create(rewardLedgerRef, {
+          eventId,
+          milestone: newCount,
+          validatedAt: now,
+          rewardPolicy: "single_lifetime_milestone",
+          outcome: paidEntitlementPreserved ? "product_decision_required" : premiumGranted ? "referral_reward_granted" : "no_reward",
+        });
 
         const planUpdate: Record<string, unknown> = {
           referralCount: newCount,
+          referralLifetimeCount: newCount,
           updatedAt: now,
         };
-        if (premiumGranted) {
+        if (paidEntitlementPreserved) {
+          planUpdate.referralRewardDecision = "PRODUCT_DECISION_REQUIRED";
+          planUpdate.referralRewardDecisionAt = now;
+        } else if (premiumGranted) {
           const premiumExpiresAt = new Date();
           premiumExpiresAt.setDate(premiumExpiresAt.getDate() + 30);
           Object.assign(planUpdate, {
@@ -2034,12 +2093,14 @@ export async function registerRoutes(
         }
         transaction.set(planRef, planUpdate, { merge: true });
 
-        return { newCount, premiumGranted };
+        return { newCount, premiumGranted: premiumGranted && !paidEntitlementPreserved, paidEntitlementPreserved };
       });
 
       return res.status(200).json({
         status: "valid",
         premiumGranted: result.premiumGranted,
+        paidEntitlementPreserved: result.paidEntitlementPreserved,
+        productDecisionRequired: result.paidEntitlementPreserved,
         referralCount: result.newCount,
         remaining: Math.max(0, REFERRAL_REWARD_LIMIT - result.newCount),
       });
@@ -2050,6 +2111,12 @@ export async function registerRoutes(
       }
       if (code === "INVALID_REFERRAL_EVENT" || code === "ONBOARDING_NOT_COMPLETED") {
         return res.status(400).json({ error: code });
+      }
+      if (code === "REFERRAL_ATTRIBUTION_MISMATCH") {
+        return res.status(403).json({ error: code });
+      }
+      if (code === "REFERRAL_PROGRAM_DISABLED") {
+        return res.status(403).json({ error: code });
       }
       if ((error as { code?: string })?.code === "auth/user-not-found") {
         return res.status(400).json({ error: "REFERRAL_USER_NOT_FOUND" });

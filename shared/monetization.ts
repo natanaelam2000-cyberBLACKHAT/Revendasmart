@@ -480,7 +480,7 @@ export function toEntitlementDate(value: unknown): Date | null {
     };
     if (typeof candidate.toDate === 'function') {
       const converted = candidate.toDate();
-      return converted instanceof Date && !Number.isNaN(converted.getTime()) ? converted : null;
+      return converted instanceof Date ? toEntitlementDate(converted) : null;
     }
     const seconds = typeof candidate._seconds === 'number' ? candidate._seconds
       : typeof candidate.seconds === 'number' ? candidate.seconds
@@ -491,22 +491,56 @@ export function toEntitlementDate(value: unknown): Date | null {
       const nanoseconds = typeof candidate._nanoseconds === 'number' ? candidate._nanoseconds
         : typeof candidate.nanoseconds === 'number' ? candidate.nanoseconds
         : 0;
-      const fromSeconds = new Date(seconds * 1000 + Math.floor(nanoseconds / 1_000_000));
-      return Number.isNaN(fromSeconds.getTime()) ? null : fromSeconds;
+      return toEntitlementDate(new Date(seconds * 1000 + Math.floor(nanoseconds / 1_000_000)));
     }
     return null;
   }
 
   if (typeof value === 'string' || typeof value === 'number') {
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
+    return toEntitlementDate(new Date(value));
   }
 
   return null;
 }
 
-export function isPremiumActive(planData: PlanData | null, now: Date = new Date()): boolean {
+const REVOKING_PAYMENT_STATUSES = new Set(["refunded", "charged_back", "chargeback"]);
+
+function normalizePaidStatus(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function isActivePaidStatus(value: unknown): boolean {
+  const status = normalizePaidStatus(value);
+  return status === "authorized" || status === "active" || status === "approved";
+}
+
+function hasRevokedPayment(planData: PlanData | null): boolean {
+  return REVOKING_PAYMENT_STATUSES.has(normalizePaidStatus(planData?.paymentStatus));
+}
+
+/**
+ * Paid entitlement is a stronger authority than a free referral reward, while the paid period
+ * remains authoritative over provider status. V2 payment expiry never comes from reward/legacy expiry.
+ */
+export function isPaidEntitlementActive(planData: PlanData | null, now: Date = new Date()): boolean {
   if (!planData) return false;
+  // V2 has its own paid authority; historical sources and flags cannot revive access.
+  if (planData.pricingVersion === "v2") return resolveGenericPaidPlan(planData, now) !== null;
+
+  if (hasRevokedPayment(planData)) return false;
+  const paidThrough = toEntitlementDate(planData.paidThrough) ?? toEntitlementDate(planData.premiumExpiresAt);
+  if (paidThrough && now.getTime() >= paidThrough.getTime()) return false;
+  if (isActivePaidStatus(planData.subscriptionStatus)) return true;
+
+  return (planData.premiumSource === "subscription" || planData.premiumSource === "direct_purchase") &&
+    (!paidThrough || now.getTime() < paidThrough.getTime());
+}
+
+export function isPremiumActive(planData: PlanData | null, now: Date = new Date()): boolean {
+  if (!planData || hasRevokedPayment(planData)) return false;
+
+  const paidActive = isPaidEntitlementActive(planData, now);
+  if (planData.pricingVersion === "v2" || paidActive) return paidActive;
 
   // RELEASE-09: o período pago manda sobre o status. Uma assinatura `authorized` cujo período já
   // venceu não pode continuar Premium só pelo rótulo do status (antes, este early-return pulava a
@@ -526,11 +560,10 @@ export function isPremiumActive(planData: PlanData | null, now: Date = new Date(
     return false;
   }
 
-  if (planData.subscriptionStatus === 'authorized') {
-    return true;
-  }
+  // Active paid statuses were already handled by isPaidEntitlementActive above.
 
-  const hasDirectPremiumFlag =
+  // Sem data de término conhecida, os flags legados concedem acesso; datas já foram validadas.
+  return (
     planData.premiumActive === true ||
     planData.currentPlan === PLANS.PREMIUM ||
     planData.premiumSource === 'admin' ||
@@ -538,15 +571,8 @@ export function isPremiumActive(planData: PlanData | null, now: Date = new Date(
     planData.premiumSource === 'direct_purchase' ||
     planData.premiumSource === 'subscription' ||
     planData.premiumSource === 'referral_reward' ||
-    planData.premiumSource === 'play_review';
-
-  if (!hasDirectPremiumFlag) {
-    return false;
-  }
-
-  // Sem data de término conhecida, o acesso é aberto (assinatura renovando, concessão de admin,
-  // recompensa por indicação). Quando existe data, ela já foi validada acima.
-  return true;
+    planData.premiumSource === 'play_review'
+  );
 }
 
 /**
@@ -592,16 +618,14 @@ export function isTrialCurrentlyActive(planData: PlanData | null, now: Date = ne
  */
 export function resolveGenericPaidPlan(planData: PlanData | null, now: Date = new Date()): PlanType | null {
   if (!planData || !planData.pricingVersion) return null;
-  const plan = planData.currentPlan === PLANS.PRO || planData.currentPlan === PLANS.PREMIUM ? planData.currentPlan : null;
-  if (!plan) return null;
+  const plan = planData.currentPlan;
+  if (plan !== PLANS.PRO && plan !== PLANS.PREMIUM) return null;
 
+  if (hasRevokedPayment(planData)) return null;
   const paidThrough = toEntitlementDate(planData.paidThrough);
   if (paidThrough && now.getTime() >= paidThrough.getTime()) return null;
-
-  if (planData.subscriptionStatus === 'authorized') return plan;
-  if (paidThrough && now.getTime() < paidThrough.getTime()) return plan;
-
-  return null;
+  return isActivePaidStatus(planData.subscriptionStatus) || (paidThrough && now.getTime() < paidThrough.getTime())
+    ? plan : null;
 }
 
 /**
@@ -617,6 +641,7 @@ export function resolveGenericPaidPlan(planData: PlanData | null, now: Date = ne
  * `null` imediatamente e o resto da função roda exatamente como antes deste ticket.
  */
 export function resolveBaseCommercialPlan(planData: PlanData | null, now: Date = new Date()): PlanType {
+  if (hasRevokedPayment(planData)) return PLANS.FREE;
   const genericPaidPlan = resolveGenericPaidPlan(planData, now);
   if (genericPaidPlan) return genericPaidPlan;
   if (isPremiumActive(planData, now)) return PLANS.PREMIUM;

@@ -1,10 +1,18 @@
 import { FieldValue } from "firebase-admin/firestore";
+import { assertReferralProgramEnabledInTransaction } from "./referral-program";
 
 const PUBLIC_CATALOG_SLUGS_COLLECTION = "public_catalog_slugs";
 const LEGACY_SLUG_FIELDS = ["catalogSlug", "catalog_slug", "userSlug", "slug"] as const;
 const PLACEHOLDER_STORE_NAMES = new Set(["minha-revenda", "minha-loja"]);
 const PLACEHOLDER_CATALOG_SLUGS = new Set(["minha-revenda", "minha-loja"]);
 const MAX_SLUG_COLLISION_ATTEMPTS = 50;
+
+export class ReferralSourceConflictError extends Error {
+  constructor() {
+    super("REFERRAL_SOURCE_ALREADY_SET");
+    this.name = "ReferralSourceConflictError";
+  }
+}
 
 // RELEASE-02: nenhum destes pode chegar ao Firestore vindo do body do cliente — allowlist por exclusão
 // (blocklist), normalizada (case/underscore-insensível) para pegar tanto aliases camelCase quanto
@@ -51,6 +59,9 @@ const SERVER_OWNED_SETTINGS_KEYS = new Set([
   "referralconversions",
   "referredusers",
   "lastreferralconversionat",
+  "referralappliedat",
+  "referralappliedby",
+  "referralimmutable",
 ]);
 
 function normalizeServerOwnedKey(value: string): string {
@@ -167,7 +178,16 @@ export async function persistUserSettingsWithCatalogOwnership(input: {
 
   await db.runTransaction(async (transaction: any) => {
     const currentDoc = await transaction.get(settingsRef);
+    if (typeof safePayload.referral_source === "string" && safePayload.referral_source.length > 0) {
+      await assertReferralProgramEnabledInTransaction(transaction, db);
+    }
     const currentSettings = currentDoc.data() ?? {};
+    const currentReferralSource = currentSettings.referral_source;
+    const requestedReferralSource = safePayload.referral_source;
+    if (typeof currentReferralSource === "string" && currentReferralSource.length > 0 &&
+        typeof requestedReferralSource === "string" && requestedReferralSource !== currentReferralSource) {
+      throw new ReferralSourceConflictError();
+    }
     const previousSlug = storedSlug(currentSettings);
     const effectiveSlug = requested.provided ? requested.slug : previousSlug;
 

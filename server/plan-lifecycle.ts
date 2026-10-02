@@ -106,6 +106,11 @@ export async function initializePlanCommand(
     const existingPlan = await tx.get(planRef);
     if (existingPlan.exists) return;
 
+    const existingReferralCode = await tx.get(referralCodeRef);
+    if (existingReferralCode.exists && existingReferralCode.data()?.uid !== uid) {
+      throw new Error("REFERRAL_CODE_COLLISION");
+    }
+
     const trialFields = computeTrialGrantFields(authUserCreationTimeIso, nowIso, cutoverIso);
     tx.create(planRef, {
       currentPlan: "free",
@@ -118,11 +123,11 @@ export async function initializePlanCommand(
       updatedAt: new Date(nowIso),
       ...trialFields,
     });
-    // RELEASE-28: índice reverso code -> uid — `set` (não `create`) preserva o comportamento original,
-    // tolerante a um doc de índice remanescente de um estado anterior incomum (o próprio planData
-    // deletado manualmente, por exemplo); o hash é determinístico por uid, então reescrevê-lo com os
-    // mesmos dados nunca é destrutivo.
-    tx.set(referralCodeRef, { uid, createdAt: new Date(nowIso) });
+    // RELEASE-28: índice reverso code -> uid. A leitura acima + `create` tornam colisões determinísticas
+    // explícitas e impedem que a inicialização de outra conta sobrescreva o código de um usuário existente.
+    if (!existingReferralCode.exists) {
+      tx.create(referralCodeRef, { uid, createdAt: new Date(nowIso) });
+    }
   });
 
   return { referralCode };

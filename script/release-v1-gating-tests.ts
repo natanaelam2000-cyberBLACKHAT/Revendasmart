@@ -57,12 +57,14 @@ async function run(): Promise<void> {
   assert.match(routesSource, /export const MIN_REFERRAL_ACCOUNT_AGE_MS = 30_000;/);
   assert.match(routesSource, /if \(referrerUid === referredUid\) \{\s*\n\s*return res\.status\(400\)\.json\(\{ error: "SELF_REFERRAL_NOT_ALLOWED" \}\);/, "J: self-referral bloqueado");
   assert.match(routesSource, /if \(existingEvent\.exists\) throw new Error\("DUPLICATE_REFERRAL"\);/, "I: idempotência — evento de indicação duplicado é rejeitado");
-  assert.match(routesSource, /if \(eventDoc\.data\(\)\?\.status !== "pending" \|\| validationDoc\.exists\) \{\s*\n\s*throw new Error\("DUPLICATE_REFERRAL"\);/, "I: validar a MESMA indicação duas vezes nunca soma duas vezes");
-  assert.match(routesSource, /const newCount = validatedReferrals\.size \+ 1;/, "H: contagem real (tamanho da subcoleção), nunca um contador solto que pudesse divergir");
+  assert.match(routesSource, /eventDoc\.data\(\)\?\.status !== "pending" \|\| validationDoc\.exists \|\| rewardLedgerDoc\.exists/, "I: validar a MESMA indicação duas vezes nunca soma duas vezes");
+  assert.match(routesSource, /const newCount = currentLifetimeCount \+ 1;/, "H: contagem server-side monotônica, independente da deleção da subcoleção de indicados");
+  assert.match(routesSource, /referralLifetimeCount: newCount/, "H: o contador vitalício é persistido no documento server-owned");
+  assert.match(routesSource, /referralRewardLedger/, "H/L: ledger server-side sobrevive à deleção da conta indicada");
   assert.match(routesSource, /const premiumGranted = newCount === REFERRAL_REWARD_LIMIT;/, "H: recompensa só na indicação exata do limite (3ª)");
   assert.match(routesSource, /premiumExpiresAt\.setDate\(premiumExpiresAt\.getDate\(\) \+ 30\);/, "H: 30 dias, a regra canônica");
   assert.match(routesSource, /premiumSource: "referral_reward",/, "H: premiumSource correto — nunca uma origem inventada");
-  assert.doesNotMatch(routesSource.slice(routesSource.indexOf("const premiumGranted = newCount"), routesSource.indexOf("return { newCount, premiumGranted };")), /billingProvider|subscriptionId|mercado_pago|google_play/i, "K: a recompensa nunca cria um billingProvider/assinatura fake");
+  assert.doesNotMatch(routesSource.slice(routesSource.indexOf("const premiumGranted = newCount"), routesSource.indexOf("return { newCount, premiumGranted:")), /billingProvider|subscriptionId|mercado_pago|google_play/i, "K: a recompensa nunca cria um billingProvider/assinatura fake");
   assert.match(routesSource, /import \{ REFERRAL_REWARD_LIMIT, isReferralCodeFormat \} from "\.\.\/shared\/monetization";/, "H: o limite vem de shared/monetization.ts, nunca um número solto duplicado em routes.ts");
   assert.match(read("shared/monetization.ts"), /export const REFERRAL_REWARD_LIMIT = 3;/, "H: limite = 3, a regra canônica");
   assert.match(routesSource, /if \(!checkReferralRateLimit\(referredUid, "validate"\)\) \{/, "rate limit server-side presente");

@@ -11,12 +11,13 @@ import express from "express";
 import { initializeApp, deleteApp, type FirebaseApp } from "firebase/app";
 import { connectAuthEmulator, createUserWithEmailAndPassword, getAuth, type User } from "firebase/auth";
 import { connectFirestoreEmulator, getFirestore, type Firestore } from "firebase/firestore";
+import { isPaidEntitlementActive, isPremiumActive } from "../shared/monetization";
 
 const PROJECT_ID = "demo-revendasmart";
 
 function requireLocalEmulators(): void {
-  assert.equal(process.env.FIRESTORE_EMULATOR_HOST, "127.0.0.1:8080");
-  assert.equal(process.env.FIREBASE_AUTH_EMULATOR_HOST, "127.0.0.1:9099");
+  assert.match(process.env.FIRESTORE_EMULATOR_HOST ?? "", /^127\.0\.0\.1:\d+$/);
+  assert.match(process.env.FIREBASE_AUTH_EMULATOR_HOST ?? "", /^127\.0\.0\.1:\d+$/);
   assert.notEqual(process.env.GOOGLE_CLOUD_PROJECT, "revenda-smart");
   process.env.FIREBASE_PROJECT_ID = PROJECT_ID;
 }
@@ -30,8 +31,10 @@ async function createTestUser(label: string): Promise<{ app: FirebaseApp; user: 
   }, `referral-${label}-${Date.now()}-${Math.random()}`);
   const auth = getAuth(app);
   const db = getFirestore(app);
-  connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
-  connectFirestoreEmulator(db, "127.0.0.1", 8080);
+  const authEmulatorHost = process.env.FIREBASE_AUTH_EMULATOR_HOST ?? "127.0.0.1:9099";
+  const [firestoreEmulatorHostname, firestoreEmulatorPort] = (process.env.FIRESTORE_EMULATOR_HOST ?? "127.0.0.1:8080").split(":");
+  connectAuthEmulator(auth, `http://${authEmulatorHost}`, { disableWarnings: true });
+  connectFirestoreEmulator(db, firestoreEmulatorHostname, Number(firestoreEmulatorPort));
   const credential = await createUserWithEmailAndPassword(
     auth,
     `${label}-${Date.now()}-${Math.random().toString(36).slice(2)}@example.test`,
@@ -61,9 +64,10 @@ function sleep(ms: number): Promise<void> {
 async function run(): Promise<void> {
   requireLocalEmulators();
 
-  const [{ registerRoutes, MIN_REFERRAL_ACCOUNT_AGE_MS }, { getFirebaseAdmin }] = await Promise.all([
+  const [{ registerRoutes, MIN_REFERRAL_ACCOUNT_AGE_MS }, { getFirebaseAdmin }, accountDeletion] = await Promise.all([
     import("../server/routes"),
     import("../server/firebase-admin-init"),
+    import("../server/account-deletion"),
   ]);
   const app = express();
   app.use(express.json({ limit: "100kb" }));
@@ -91,7 +95,7 @@ async function run(): Promise<void> {
     });
   };
   const postSettings = (user: User, pathUid: string, body: Record<string, unknown>) => postJson(user, `/api/user/settings/${pathUid}`, body);
-  const trackEvent = (user: User, referrerUID: string) => postJson(user, "/api/referral/track-event", { referrerUID, event: "onboarding_completed" });
+  const trackEvent = (user: User, referrerUID: string, extra: Record<string, unknown> = {}) => postJson(user, "/api/referral/track-event", { referrerUID, event: "onboarding_completed", ...extra });
   const validateReferral = (user: User, referrerUID: string) => postJson(user, "/api/referral/validate-referral", { referrerUID });
   const planData = (uid: string) => db.doc(`users/${uid}/planData/main`).get();
 
@@ -172,9 +176,19 @@ async function run(): Promise<void> {
     // As contas precisam nascer ANTES da espera — criar depois de dormir manteria `creationTime`
     // recente e cairia no mesmo bloqueio testado acima. Usa a MESMA constante que a rota aplica, nunca
     // um valor hardcoded solto.
-    const legitAccounts = await Promise.all([0, 1, 2].map((index) => createTestUser(`legit-${index}`)));
+    const abandoned = await createTestUser("abandoned");
+    createdApps.push(abandoned.app);
+    const paidReferrer = await createTestUser("paid-referrer");
+    const paidReferred = await createTestUser("paid-referred");
+    const replacementReferred = await createTestUser("replacement-referred");
+    createdApps.push(paidReferrer.app, paidReferred.app, replacementReferred.app);
+    const legitAccounts = await Promise.all([0, 1, 2, 3].map((index) => createTestUser(`legit-${index}`)));
     for (const account of legitAccounts) createdApps.push(account.app);
     await sleep(MIN_REFERRAL_ACCOUNT_AGE_MS + 1500);
+
+    const abandonedTrack = await trackEvent(abandoned.user, referrerUid);
+    assert.equal(abandonedTrack.status, 400, "B: conta que abandona sem concluir onboarding não pode gerar indicação");
+    assert.equal((await abandonedTrack.json() as { error?: string }).error, "ONBOARDING_NOT_COMPLETED");
 
     const referredUids: string[] = [];
     for (let index = 0; index < 3; index += 1) {
@@ -218,12 +232,138 @@ async function run(): Promise<void> {
     createdApps.push(otherReferrer.app);
     const otherReferrerPlan = await planData(otherReferrer.user.uid);
     assert.equal(otherReferrerPlan.exists, false);
-    const selfCodeUser = await createTestUser("self-code");
-    createdApps.push(selfCodeUser.app);
-    const selfCodeUid = selfCodeUser.user.uid;
-    const selfCodeInit = await postWithoutBody(selfCodeUser.user, `/api/plan/initialize/${selfCodeUid}`);
-    assert.equal(selfCodeInit.status, 200);
-    const selfCode = String(((await selfCodeInit.json()) as { referralCode?: string }).referralCode ?? "");
+
+    // O indicador não pode ser escolhido pelo frontend: a atribuição canônica do cadastro vence o body
+    // de track/validate, e um UID indicado adulterado é rejeitado antes de qualquer escrita.
+    const wrongAttributionTrack = await trackEvent(legitAccounts[0].user, otherReferrer.user.uid);
+    assert.equal(wrongAttributionTrack.status, 403, "o frontend não pode trocar o indicador de uma conta já atribuída");
+    assert.equal((await wrongAttributionTrack.json() as { error?: string }).error, "REFERRAL_ATTRIBUTION_MISMATCH");
+    const swappedUidTrack = await trackEvent(legitAccounts[0].user, referrerUid, { referredUID: legitAccounts[1].user.uid });
+    assert.equal(swappedUidTrack.status, 403, "UID indicado vindo do cliente deve ser ignorado/rejeitado");
+    assert.equal((await swappedUidTrack.json() as { error?: string }).error, "REFERRAL_OWNERSHIP_MISMATCH");
+
+    // B pode usar dois códigos apenas se um deles vencer a corrida atômica; o segundo nunca sobrescreve
+    // referral_source. Isso cobre duas abas/retries simultâneos no primeiro cadastro.
+    const secondCodeOwner = await createTestUser("second-code-owner");
+    createdApps.push(secondCodeOwner.app);
+    const secondCodeInit = await postWithoutBody(secondCodeOwner.user, `/api/plan/initialize/${secondCodeOwner.user.uid}`);
+    assert.equal(secondCodeInit.status, 200);
+    const secondCode = String(((await secondCodeInit.json()) as { referralCode?: string }).referralCode ?? "");
+    const racingUser = await createTestUser("racing-source");
+    createdApps.push(racingUser.app);
+    const raceResponses = await Promise.all([
+      postSettings(racingUser.user, racingUser.user.uid, { referral_source: referralCode }),
+      postSettings(racingUser.user, racingUser.user.uid, { referral_source: secondCode }),
+    ]);
+    assert.deepEqual(raceResponses.map((response) => response.status).sort((a, b) => a - b), [200, 409],
+      "corrida de dois códigos deve aceitar exatamente uma atribuição");
+    const racingSettings = await db.doc(`user_settings/${racingUser.user.uid}`).get();
+    assert.ok([referrerUid, secondCodeOwner.user.uid].includes(racingSettings.data()?.referral_source),
+      "a atribuição vencedora deve ser um dos códigos resolvidos pelo servidor");
+
+    // A mesma indicação concorrente deve criar um evento e um benefício no máximo uma vez.
+    const concurrentReferred = legitAccounts[3];
+    const concurrentPlanInit = await postWithoutBody(concurrentReferred.user, `/api/plan/initialize/${concurrentReferred.user.uid}`);
+    assert.equal(concurrentPlanInit.status, 200);
+    const concurrentOnboarding = await postSettings(concurrentReferred.user, concurrentReferred.user.uid, {
+      onboarding_completed: true,
+      referral_source: referralCode,
+    });
+    assert.equal(concurrentOnboarding.status, 200);
+    const concurrentTrackResponses = await Promise.all([
+      trackEvent(concurrentReferred.user, referrerUid),
+      trackEvent(concurrentReferred.user, referrerUid),
+    ]);
+    assert.deepEqual(concurrentTrackResponses.map((response) => response.status).sort((a, b) => a - b), [200, 409],
+      "duas criações concorrentes do mesmo referral devem ser idempotentes");
+    const concurrentValidateResponses = await Promise.all([
+      validateReferral(concurrentReferred.user, referrerUid),
+      validateReferral(concurrentReferred.user, referrerUid),
+    ]);
+    assert.deepEqual(concurrentValidateResponses.map((response) => response.status).sort((a, b) => a - b), [200, 409],
+      "duas validações concorrentes devem conceder no máximo um benefício");
+    const referrerPlanAfterConcurrent = await planData(referrerUid);
+    assert.equal(referrerPlanAfterConcurrent.data()?.referralCount, 4);
+    assert.equal(referrerPlanAfterConcurrent.data()?.premiumActive, true);
+
+    // P1: deleting an indicated account removes PII/edges but cannot recycle the lifetime milestone.
+    await accountDeletion.deleteAccountByUid(legitAccounts[0].user.uid, {
+      db,
+      auth: admin.auth(),
+      bucket: { deleteFiles: async () => undefined } as any,
+      now: () => new Date(),
+    });
+    const replacementInit = await postWithoutBody(replacementReferred.user, `/api/plan/initialize/${replacementReferred.user.uid}`);
+    assert.equal(replacementInit.status, 200);
+    const replacementOnboarding = await postSettings(replacementReferred.user, replacementReferred.user.uid, {
+      onboarding_completed: true,
+      referral_source: referralCode,
+    });
+    assert.equal(replacementOnboarding.status, 200);
+    assert.equal((await trackEvent(replacementReferred.user, referrerUid)).status, 200);
+    const replacementValidation = await validateReferral(replacementReferred.user, referrerUid);
+    assert.equal(replacementValidation.status, 200);
+    const replacementValidationBody = await replacementValidation.json() as { referralCount: number; premiumGranted: boolean };
+    assert.equal(replacementValidationBody.referralCount, 5, "deleção não recicla a contagem vitalícia");
+    assert.equal(replacementValidationBody.premiumGranted, false, "a mesma milestone não é concedida novamente após deleção");
+    assert.equal((await planData(referrerUid)).data()?.referralLifetimeCount, 5);
+
+    // P0: entitlement paid wins over a free reward, with an unexpired paid period.
+    const paidInit = await postWithoutBody(paidReferrer.user, `/api/plan/initialize/${paidReferrer.user.uid}`);
+    assert.equal(paidInit.status, 200);
+    const paidExpiry = new Date(Date.now() + 86_400_000);
+    await db.doc(`users/${paidReferrer.user.uid}/planData/main`).set({
+      currentPlan: "premium",
+      premiumActive: true,
+      premiumExpiresAt: paidExpiry,
+      premiumStartedAt: new Date(Date.now() - 86_400_000),
+      premiumSource: "subscription",
+      subscriptionId: "mp-paid-subscription",
+      subscriptionStatus: "authorized",
+      billingProvider: "mercado_pago",
+      referralCount: 2,
+      referralLifetimeCount: 2,
+    }, { merge: true });
+    const paidReferredInit = await postWithoutBody(paidReferred.user, `/api/plan/initialize/${paidReferred.user.uid}`);
+    assert.equal(paidReferredInit.status, 200);
+    assert.equal(isPremiumActive({ premiumActive: true, currentPlan: "premium", premiumExpiresAt: new Date(0), premiumSource: "subscription", subscriptionStatus: "authorized" } as any), false,
+      "subscription authorized cannot override expired premiumExpiresAt");
+    assert.equal(isPremiumActive({ currentPlan: "premium", premiumActive: true, premiumExpiresAt: new Date(Date.now() + 86_400_000), premiumSource: "subscription", subscriptionStatus: "active", billingProvider: "google_play" } as any), true,
+      "Google Play active preserves paid entitlement");
+    assert.equal(isPaidEntitlementActive({ currentPlan: "pro", pricingVersion: "v2", paidThrough: new Date(Date.now() + 86_400_000), premiumSource: null, subscriptionStatus: null } as any), true,
+      "paid Pro entitlement remains stronger than a free reward");
+    assert.equal(isPaidEntitlementActive({ currentPlan: "pro", pricingVersion: "v2", paidThrough: new Date(0), premiumSource: null, subscriptionStatus: "authorized" } as any), false,
+      "authorized paid Pro expires at paidThrough");
+    const paidOnboarding = await postSettings(paidReferred.user, paidReferred.user.uid, { onboarding_completed: true, referral_source: String((await paidInit.json() as { referralCode?: string }).referralCode) });
+    assert.equal(paidOnboarding.status, 200);
+    assert.equal((await trackEvent(paidReferred.user, paidReferrer.user.uid)).status, 200);
+    const paidValidation = await validateReferral(paidReferred.user, paidReferrer.user.uid);
+    assert.equal(paidValidation.status, 200);
+    assert.deepEqual(await paidValidation.json(), {
+      status: "valid",
+      premiumGranted: false,
+      paidEntitlementPreserved: true,
+      productDecisionRequired: true,
+      referralCount: 3,
+      remaining: 0,
+    });
+    const paidPlanAfterReward = (await planData(paidReferrer.user.uid)).data()!;
+    assert.equal(paidPlanAfterReward.currentPlan, "premium");
+    assert.equal(paidPlanAfterReward.premiumActive, true);
+    assert.equal(paidPlanAfterReward.premiumSource, "subscription");
+    assert.equal(paidPlanAfterReward.subscriptionStatus, "authorized");
+    assert.equal((paidPlanAfterReward.premiumExpiresAt.toDate?.() ?? paidPlanAfterReward.premiumExpiresAt).getTime(), paidExpiry.getTime(),
+      "test fixture keeps the paid expiration untouched");
+    assert.equal(paidPlanAfterReward.referralRewardDecision, "PRODUCT_DECISION_REQUIRED");
+
+    // P1: the backend flag is authoritative even if the client Remote Config says otherwise.
+    await db.doc("system/config").set({ referral_program_enabled: false }, { merge: true });
+    const disabledSettings = await postSettings(otherReferrer.user, otherReferrer.user.uid, { referral_source: referralCode });
+    assert.equal(disabledSettings.status, 403);
+    assert.equal((await disabledSettings.json() as { error?: string }).error, "REFERRAL_PROGRAM_DISABLED");
+    assert.equal((await trackEvent(paidReferred.user, referrerUid)).status, 403);
+    assert.equal((await validateReferral(paidReferred.user, referrerUid)).status, 403);
+    await db.doc("system/config").set({ referral_program_enabled: true }, { merge: true });
 
     const invalidCodeSave = await postSettings(otherReferrer.user, otherReferrer.user.uid, {
       referral_source: "USER-INVALID",
@@ -231,8 +371,13 @@ async function run(): Promise<void> {
     });
     assert.equal(invalidCodeSave.status, 400, "D: código inexistente/malformado falha closed");
 
-    const selfCodeSave = await postSettings(selfCodeUser.user, selfCodeUid, {
-      referral_source: selfCode,
+    const emptyCodeSave = await postSettings(otherReferrer.user, otherReferrer.user.uid, { referral_source: "" });
+    assert.equal(emptyCodeSave.status, 400, "código vazio não pode contornar a imutabilidade");
+    const nullCodeSave = await postSettings(otherReferrer.user, otherReferrer.user.uid, { referral_source: null });
+    assert.equal(nullCodeSave.status, 400, "código nulo não pode limpar uma atribuição ou habilitar replay");
+
+    const selfCodeSave = await postSettings(secondCodeOwner.user, secondCodeOwner.user.uid, {
+      referral_source: secondCode,
       storeName: "Self referral",
     });
     assert.equal(selfCodeSave.status, 400, "E: código próprio é bloqueado no backend");
@@ -240,6 +385,7 @@ async function run(): Promise<void> {
 
     console.log("Referral/settings isolation integration tests passed: mass assignment blocked, disposable-account referral farming blocked, legit referral flow idempotent.");
   } finally {
+    await db.doc("system/config").set({ referral_program_enabled: true }, { merge: true }).catch(() => undefined);
     await close(server);
     await Promise.allSettled(createdApps.map((app) => deleteApp(app)));
   }
