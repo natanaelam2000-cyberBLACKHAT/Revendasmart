@@ -52,6 +52,9 @@ export interface PlanLimits {
   proAds: boolean;
 }
 
+import { PLAN_LIMITS } from "./plan-limits";
+export { PLAN_LIMITS };
+
 export interface PlanInfo {
   name: string;
   price: number | null;
@@ -66,21 +69,7 @@ export const PLAN_CONFIG: Record<PlanType, PlanInfo> = {
     name: 'Plano Grátis',
     price: 0,
     currency: 'BRL',
-    limits: {
-      products: 30,
-      clients: 50,
-      services: 5,
-      bookingsMonthly: 20,
-      proAdPreparationsMonthly: 0,
-      niches: 1,
-      categories: false,
-      sales: true,
-      charges: false,
-      productHighlight: false,
-      professionalCatalog: false,
-      noAds: false,
-      proAds: false,
-    },
+    limits: PLAN_LIMITS.free,
     features: [
       'Até 30 produtos',
       'Até 50 clientes',
@@ -102,21 +91,7 @@ export const PLAN_CONFIG: Record<PlanType, PlanInfo> = {
     name: 'Plano Pro',
     price: null,
     currency: 'BRL',
-    limits: {
-      products: 500,
-      clients: 2000,
-      services: 50,
-      bookingsMonthly: UNLIMITED,
-      proAdPreparationsMonthly: 3,
-      niches: UNLIMITED,
-      categories: true,
-      sales: true,
-      charges: true,
-      productHighlight: true,
-      professionalCatalog: true,
-      noAds: true,
-      proAds: true,
-    },
+    limits: PLAN_LIMITS.pro,
     features: [
       'Até 500 produtos',
       'Até 2.000 clientes',
@@ -135,25 +110,7 @@ export const PLAN_CONFIG: Record<PlanType, PlanInfo> = {
     name: 'Plano Premium',
     price: null,
     currency: 'BRL',
-    limits: {
-      // PLAN-IMPL-01 §5 — antes UNLIMITED (-1): a auditoria (PLAN-AUDIT-01/02) confirmou que isso
-      // divergia do contrato comercial (PLAN-DEFINITION-01 §3, tetos generosos mas finitos, para
-      // manter o modelo de custo previsível). Vendas continuam sem limite artificial (`sales: true`,
-      // nunca comparado a uma contagem) — só produtos/clientes/serviços ganham teto.
-      products: 2000,
-      clients: 10000,
-      services: 200,
-      bookingsMonthly: UNLIMITED,
-      proAdPreparationsMonthly: 100,
-      niches: UNLIMITED,
-      categories: true,
-      sales: true,
-      charges: true,
-      productHighlight: true,
-      professionalCatalog: true,
-      noAds: true,
-      proAds: true,
-    },
+    limits: PLAN_LIMITS.premium,
     features: [
       'Até 2.000 produtos',
       'Até 10.000 clientes',
@@ -745,10 +702,7 @@ export const TRIAL_DURATION_DAYS = 7;
  * código novo (resolve via API) ou um link antigo com UID bruto (compatibilidade, nunca gerado de
  * novo). Mudar o formato de geração sem atualizar este regex quebraria a detecção nos dois lados.
  */
-export const REFERRAL_CODE_FORMAT = /^USER-[A-Z0-9]{9}$/;
-export function isReferralCodeFormat(value: unknown): value is string {
-  return typeof value === "string" && REFERRAL_CODE_FORMAT.test(value);
-}
+export { REFERRAL_CODE_FORMAT, isReferralCodeFormat } from "./referral-code";
 // =============================
 // LIMIT HELPERS (FALTANTES)
 // =============================

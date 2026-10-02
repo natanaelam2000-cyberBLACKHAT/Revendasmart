@@ -1,17 +1,18 @@
-import { lazy, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Route, Switch, useLocation } from "wouter";
 import { onAuthStateChanged } from "firebase/auth";
-import { MaintenanceBanner } from "@/components/MaintenanceBanner";
 import { UserFeedbackHost } from "@/components/UserFeedbackHost";
-import { ConnectivityIndicator } from "@/components/ConnectivityIndicator";
 import { getApiUrl } from "@/lib/api-config";
 import { getFirebaseAuth, logTelemetryEvent } from "@/lib/firebase";
-import { isReferralCodeFormat } from "@shared/monetization";
+import { isReferralCodeFormat } from "@shared/referral-code";
 import { PlanProvider } from "@/providers/PlanProvider";
 import { UserSettingsProvider } from "@/providers/UserSettingsProvider";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { resolveBusinessRouteGate } from "@/lib/business-route-gate";
 import { PageSkeleton } from "@/components/PageSkeleton";
+
+const MaintenanceBanner = lazy(() => import("@/components/MaintenanceBanner").then((m) => ({ default: m.MaintenanceBanner })));
+const ConnectivityIndicator = lazy(() => import("@/components/ConnectivityIndicator").then((m) => ({ default: m.ConnectivityIndicator })));
 
 const Dashboard = lazy(() => import("@/pages/dashboard"));
 const AddProduct = lazy(() => import("@/pages/add-product"));
@@ -140,9 +141,13 @@ function PrivateRoutes() {
 
   return (
     <>
-      <MaintenanceBanner />
+      <Suspense fallback={null}>
+        <MaintenanceBanner />
+      </Suspense>
       <UserFeedbackHost />
-      <ConnectivityIndicator />
+      <Suspense fallback={null}>
+        <ConnectivityIndicator />
+      </Suspense>
       <Switch>
         <Route path="/onboarding" component={Onboarding} />
         <Route path="/" component={Dashboard} />
