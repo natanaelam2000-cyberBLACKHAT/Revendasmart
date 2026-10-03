@@ -4,6 +4,7 @@ import { ThemeProvider } from "@/components/ThemeProvider";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { LaunchIntro } from "./components/LaunchIntro";
 
 import "./index.css";
 import { installClientDiagnostics, reportClientDiagnostic } from "./lib/client-diagnostics";
@@ -104,6 +105,7 @@ if (isSafeMode) {
             <ThemeProvider>
               <RemoteConfigProvider>
                 <App />
+                <LaunchIntro />
               </RemoteConfigProvider>
             </ThemeProvider>
           </GlobalErrorBoundary>

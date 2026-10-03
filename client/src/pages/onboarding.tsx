@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { useLocation } from "wouter";
 import { onAuthStateChanged } from "firebase/auth";
 import {
@@ -22,7 +22,9 @@ import {
   Trash2,
   Watch,
 } from "lucide-react";
-import { getApiUrl } from "@/lib/api-config";
+import { readOnboardingDraft } from '@/lib/onboarding-draft';
+import { OnboardingSaveError } from '@/lib/onboarding-error';
+
 import {
   APP_THEMES,
   BUTTON_TONES,
@@ -155,6 +157,7 @@ export default function Onboarding() {
   const [activeCategoryNicho, setActiveCategoryNicho] = useState<NichoId>("Geral");
   const [newCategory, setNewCategory] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const saveActionLock = useRef(false);
   const [error, setError] = useState("");
   const [hydratedFromSettings, setHydratedFromSettings] = useState(false);
 
@@ -204,33 +207,51 @@ export default function Onboarding() {
   }, []);
 
   useEffect(() => {
-    if (hydratedFromSettings || settingsLoading) return;
-    const types = getSafeBusinessTypes(Array.isArray(settings.businessTypes) ? settings.businessTypes : [], settings.businessType);
+    if (hydratedFromSettings || settingsLoading || !uid) return;
+    const pendingDraft = readOnboardingDraft(uid);
+    const savedSettings = { ...settings, ...pendingDraft } as typeof settings;
+    const types = getSafeBusinessTypes(Array.isArray(savedSettings.businessTypes) ? savedSettings.businessTypes : [], savedSettings.businessType);
     setSelectedTypes(types);
     setActiveCategoryNicho(types[0]);
-    setSelectedTheme(resolveAppThemeId(settings.appTheme));
-    setThemeCustomization(buildAppThemeCustomization(settings.appTheme, settings.appThemeCustomization as AppThemeCustomization | undefined));
-    setCategoryDrafts(createCategoryDrafts(settings));
-    setStoreNameDraft(settings.storeName || "");
-    setStoreLogoDraft(settings.storeLogo || "");
+    setSelectedTheme(resolveAppThemeId(savedSettings.appTheme));
+    setThemeCustomization(buildAppThemeCustomization(savedSettings.appTheme, savedSettings.appThemeCustomization as AppThemeCustomization | undefined));
+    setCategoryDrafts(createCategoryDrafts(savedSettings));
+    setStoreNameDraft(savedSettings.storeName || "");
+    setStoreLogoDraft(savedSettings.storeLogo || "");
     // §45 — refresh nunca pode mostrar um passo inválido: businessMode sobrevive (persistido), mas
     // firstStartDomain deliberadamente não (§24 — escolha transitória de UX, não dado permanente) — um
     // "both" retomando um refresh volta a perguntar por onde começar, nunca perde os dados reais já
     // criados. Usa resolveOnboardingSteps com os valores FRESCOS lidos agora (nunca o `steps` do
     // component, que ainda reflete o estado antigo neste mesmo ciclo de render).
-    const hydratedBusinessMode: BusinessMode | null = settings.businessMode === "products" || settings.businessMode === "services" || settings.businessMode === "both" ? settings.businessMode : null;
+    const hydratedBusinessMode: BusinessMode | null = savedSettings.businessMode === "products" || savedSettings.businessMode === "services" || savedSettings.businessMode === "both" ? savedSettings.businessMode : null;
     setBusinessMode(hydratedBusinessMode);
-    if (typeof settings.onboarding_current_step === "number" && settings.onboarding_completed !== true) {
+    if (typeof savedSettings.onboarding_current_step === "number" && (pendingDraft || savedSettings.onboarding_completed !== true)) {
       const hydratedStepIds = resolveOnboardingSteps(hydratedBusinessMode, null);
-      setStep(Math.min(Math.max(settings.onboarding_current_step, 0), hydratedStepIds.length - 1));
+      setStep(Math.min(Math.max(savedSettings.onboarding_current_step, 0), hydratedStepIds.length - 1));
     }
     setHydratedFromSettings(true);
-  }, [hydratedFromSettings, settings, settingsLoading]);
+  }, [hydratedFromSettings, settings, settingsLoading, uid]);
 
   useEffect(() => {
     applyAppTheme({ appTheme: selectedTheme, appThemeCustomization: themeCustomization });
   }, [selectedTheme, themeCustomization]);
 
+  useEffect(() => {
+    if (!uid) return;
+    const resume = () => {
+      if (!navigator.onLine || saveActionLock.current || !readOnboardingDraft(uid)) return;
+      void import('@/lib/onboarding-service').then(({ onboardingPersistence }) => onboardingPersistence.resume(uid)).then((result) => {
+        if (result?.settings) {
+          patchUserSettingsOptimistic(result.settings as Partial<typeof settings>, uid);
+          invalidateUserSettings();
+          setError("");
+        }
+      }).catch(() => { /* Keep draft and visible retry; never navigate on background recovery. */ });
+    };
+    window.addEventListener('online', resume);
+    resume();
+    return () => window.removeEventListener('online', resume);
+  }, [uid]);
   const selectedStoreInitial = (storeNameDraft.trim() || settings.storeName || "R").charAt(0).toLocaleUpperCase("pt-BR");
 
   const toggleType = (id: NichoId) => {
@@ -285,64 +306,8 @@ export default function Onboarding() {
     }));
   };
 
-  const syncReferralCompletion = async (responseData: any) => {
-    const auth = getFirebaseAuth();
-    const currentUser = auth?.currentUser;
-    if (!currentUser || !uid) return;
-
-    const urlParams = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
-    const refCode = urlParams.get("ref");
-    const refUID = sessionStorage.getItem("referrer_uid")
-      || (typeof responseData?.settings?.referral_source === "string" ? responseData.settings.referral_source : null);
-
-    if (!refUID) return;
-
-    try {
-      const referralToken = await currentUser.getIdToken();
-      const referralHeaders = {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${referralToken}`,
-      };
-
-      const trackResponse = await fetch(getApiUrl("/api/referral/track-event"), {
-        method: "POST",
-        headers: referralHeaders,
-        body: JSON.stringify({
-          referrerUID: refUID,
-          event: "onboarding_completed",
-          refCode: refCode || null,
-        }),
-      });
-
-      if (trackResponse.status === 401 || trackResponse.status === 403) return;
-      if (!trackResponse.ok && trackResponse.status !== 409) {
-        console.warn("[onboarding] Não foi possível registrar a indicação.");
-        return;
-      }
-
-      const validateResponse = await fetch(getApiUrl("/api/referral/validate-referral"), {
-        method: "POST",
-        headers: referralHeaders,
-        body: JSON.stringify({ referrerUID: refUID }),
-      });
-
-      if (validateResponse.status === 401 || validateResponse.status === 403) return;
-      if (!validateResponse.ok && validateResponse.status !== 409) {
-        console.warn("[onboarding] Não foi possível validar a indicação.");
-      }
-    } catch {
-      console.warn("[onboarding] A indicação não pôde ser sincronizada agora.");
-    }
-  };
-
   const saveProgress = async ({ completed, skipped = false, stepOverride = step }: { completed: boolean; skipped?: boolean; stepOverride?: number }) => {
     if (!uid) throw new Error("Not authenticated");
-    const auth = getFirebaseAuth();
-    if (!auth || !auth.currentUser) throw new Error("Not authenticated");
-
-    const token = await auth.currentUser.getIdToken();
-    if (!token) throw new Error("Failed to obtain authentication token");
-
     const types = getSafeBusinessTypes(selectedTypes, settings.businessType);
     const now = new Date().toISOString();
     const cleanStoreName = storeNameDraft.trim() || settings.storeName || "Minha Revenda";
@@ -377,47 +342,32 @@ export default function Onboarding() {
       }),
     };
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
-
-    try {
-      const response = await fetch(getApiUrl(`/api/user/settings/${uid}`), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const responseData = await response.json();
-      patchUserSettingsOptimistic(payload, uid);
-      invalidateUserSettings();
-      if (nextCompleted) void syncReferralCompletion(responseData);
-      return responseData;
-    } finally {
-      clearTimeout(timeoutId);
-    }
+    const { onboardingPersistence } = await import('@/lib/onboarding-service');
+    const responseData = await onboardingPersistence.save(uid, payload);
+    patchUserSettingsOptimistic(responseData.settings as Partial<typeof settings>, uid);
+    invalidateUserSettings();
+    if (nextCompleted) void import('@/lib/onboarding-referral').then(({ syncReferralCompletion }) => syncReferralCompletion(responseData, uid)).catch(() => {});
+    return responseData;
   };
-
   const runSaveAction = async (action: () => Promise<void>) => {
+    if (saveActionLock.current) return;
+    saveActionLock.current = true;
     setIsSaving(true);
     setError("");
     try {
       await action();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Erro desconhecido";
-      let friendlyError = "Não foi possível salvar agora. Você pode continuar usando o app.";
-      if (msg.includes("Not authenticated")) friendlyError = "Sessão expirada. Faça login novamente.";
+      let friendlyError = "Não foi possível confirmar o salvamento. Suas escolhas foram mantidas. Tente novamente quando a conexão voltar.";
+      if (msg.includes("Not authenticated") || msg.includes('AUTH_CHANGED')) friendlyError = "Sessão expirada. Faça login novamente. Suas escolhas foram mantidas.";
       else if (msg.includes("AbortError") || msg.includes("abort")) friendlyError = "Conexão demorou muito. Verifique sua internet e tente novamente.";
       setError(friendlyError);
-      logError("onboarding_progress_save_failed", msg, { userId: uid ?? undefined });
+      logError("onboarding_progress_save_failed", msg, { error: err instanceof Error ? err : undefined, context: { authReady: Boolean(uid), uidPresent: Boolean(uid), online: navigator.onLine, documentPath: "user_settings/{uid}", code: err instanceof OnboardingSaveError ? err.code : "UNKNOWN", status: err instanceof OnboardingSaveError ? err.status : undefined, errorId: err instanceof OnboardingSaveError ? err.errorId : undefined } });
       // RELEASE-QUALITY-02 §6: redirecionar aqui escondia o erro (a tela mudava antes do usuário ler o
       // banner) e fingia uma conclusão que não aconteceu. Ficar na mesma etapa preserva as respostas já
       // dadas e deixa o mesmo botão disponível como retry — nenhuma navegação nova é necessária.
     } finally {
+      saveActionLock.current = false;
       setIsSaving(false);
     }
   };

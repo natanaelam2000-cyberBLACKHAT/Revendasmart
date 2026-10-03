@@ -1,0 +1,9 @@
+.rs-launch-intro{position:fixed;inset:0;z-index:10000;background:#fbf9ff;color:#3b225f;display:grid;place-items:center;animation:rs-launch-exit 5s both;pointer-events:none}
+.rs-launch-brand{display:flex;flex-direction:column;align-items:center;gap:24px}
+.rs-launch-brand img{width:148px;height:148px;object-fit:contain;animation:rs-launch-symbol 2.5s cubic-bezier(.2,.8,.2,1) both}
+.rs-launch-brand span{font-size:28px;font-weight:750;letter-spacing:-.04em;animation:rs-launch-name 5s both}
+.rs-launch-intro button{position:absolute;bottom:max(32px,env(safe-area-inset-bottom));border:0;background:transparent;color:inherit;font:inherit;padding:12px;pointer-events:auto}
+@keyframes rs-launch-symbol{0%{opacity:0;transform:scale(.82) translateY(18px)}45%,100%{opacity:1;transform:scale(1) translateY(0)}}
+@keyframes rs-launch-name{0%,38%{opacity:0;transform:translateY(10px)}58%,100%{opacity:1;transform:translateY(0)}}
+@keyframes rs-launch-exit{0%,86%{opacity:1;visibility:visible}100%{opacity:0;visibility:hidden}}
+@media(prefers-reduced-motion:reduce){.rs-launch-intro,.rs-launch-brand img,.rs-launch-brand span{animation:none}}
