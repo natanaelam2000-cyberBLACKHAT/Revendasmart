@@ -84,17 +84,7 @@ export function shouldBypassLimits(globalConfig: GlobalConfig | null, hasPremium
   return hasPremiumAccess || isPremiumOpenAccessActive(globalConfig);
 }
 
-/** PLAN-IMPL-03 §43/§44, extraído de dashboard.tsx's TrialBanner em PLAN-IMPL-04A §21 para
- * plans.tsx reusar o MESMO cálculo/copy (zero mudança de comportamento no dashboard — mesma fórmula,
- * mesmo texto "Restam N dia(s)"/"Último dia"). `endsAt` nulo ou já expirado (trial.status !== "active"
- * é responsabilidade do chamador checar antes) devolve null — apresentação apenas, nunca decide acesso. */
-export function formatTrialDaysRemaining(endsAt: string | null): string | null {
-  if (!endsAt) return null;
-  const endsAtMs = new Date(endsAt).getTime();
-  if (!Number.isFinite(endsAtMs)) return null;
-  const daysRemaining = Math.max(0, Math.ceil((endsAtMs - Date.now()) / (24 * 60 * 60 * 1000)));
-  return daysRemaining <= 0 ? "Último dia" : `Restam ${daysRemaining} dia${daysRemaining === 1 ? "" : "s"}`;
-}
+export { formatTrialDaysRemaining } from './trial-format';
 
 // Mensagens de bloqueio
 export const UPGRADE_MESSAGES = {

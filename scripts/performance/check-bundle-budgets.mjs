@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import process from "node:process";
+import console from "node:console";
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -90,7 +92,7 @@ const config = {
     // compartilhado com o novo tipo/lógica de AdsProPreparationQuotaSnapshot/buildPlanUsageSnapshot e as
     // duas strings de copy comercial exigidas pelo §37 ("3"/"100 novos produtos preparados
     // profissionalmente por mês") — nenhuma delas é código morto ou redundante. Nenhum outro budget
-    // (TOTAL JS 2550 kB, CSS 178 kB, Marketing 236 kB, ou qualquer outro chunk) foi alterado.
+    // (à época TOTAL JS 2550 kB [histórico], CSS 178 kB, Marketing 236 kB, ou qualquer outro chunk) foi alterado.
     //
     // PLAN-IMPL-06 (PERF-GOV-PRIVATE-ROUTER-02) — recalibrado 39 -> 41 kB, autorizado explicitamente pelo
     // usuário após uma tentativa limitada e documentada de otimização (SAFE_BYTES_REMOVED=0,
@@ -108,21 +110,19 @@ const config = {
     // unificá-las exigiria uma nova abstração genérica, não remoção de código redundante; (2) import mais
     // estreito de shared/monetization.ts — o único import de VALOR (PLANS) já é custo marginal zero, pois
     // PlanProvider.tsx já importava PLANS antes desta ticket. 41 kB (não 40) deixado deliberadamente com
-    // ~1.11 kB de folga para o restante do trabalho já cabido neste ticket. Nenhum outro budget (TOTAL JS
-    // 2550 kB, CSS 178 kB, Marketing 236 kB, ou qualquer outro chunk) foi alterado.
+    // ~1.11 kB de folga para o restante do trabalho já cabido neste ticket. Nenhum outro budget (à época
+    // TOTAL JS 2550 kB [histórico], CSS 178 kB, Marketing 236 kB, ou qualquer outro chunk) foi alterado.
     'PrivateRouter': 44,
     'CatalogShowcase': 29,
     'service-agenda-helpers': 28,
   },
   sharedChunkVisibilityThresholdKb: 8,
 
-  // PERF-BUDGET-ARCH-01 — total JS deixa de ser o gate principal (era 2358 kB com só 0,38 kB de margem
+  // PERF-BUDGET-ARCH-01 (histórico) — total JS deixa de ser o gate principal (era 2358 kB com só 0,38 kB de margem
   // real após SERV-UI-03, um teto insustentável para arquitetura lazy). Vira um safety ceiling: detecta
   // crescimento absurdo do artefato inteiro, não bloqueia cada rota lazy legítima (essa proteção já é feita
-  // pelos budgets de rota/vendor acima). Baseline real: 2357.62 kB / 715.32 kB gzip. Teto escolhido dentro
-  // da faixa sugerida pelo ticket (2500-2600 kB): 2550 kB dá ~192 kB (~8%) de headroom, espaço planejado
-  // para os próximos blocos conhecidos (SERV-PUBLIC-01, polish final de Services, Ads Pro) sem precisar
-  // reabrir este arquivo a cada ticket — sem ser um cheque em branco. Gzip proporcional à mesma margem.
+  // pelos budgets de rota/vendor acima). Baseline real da época: 2357.62 kB / 715.32 kB gzip.
+  // [Histórico anterior: 2550 kB / 770 kB gzip. O ceiling canônico vigente é 2600 kB JS / 800 kB gzip conforme BUNDLE-POLICY-02].
   // BUNDLE-POLICY-02 - recalibracao formal baseada no HEAD 9809b8b (2026-09-24):
   // baseline medida: 2543.70 kB JS, 780.24 kB gzip; o total inclui todos os chunks emitidos,
   // inclusive lazy, e permanece um safety ceiling de release. Initial boot, rotas, vendors,

@@ -14,6 +14,7 @@ interface UserSettingsContextValue {
   loaded: boolean;
   loadStatus: "loading" | "loaded" | "error";
   error?: string;
+  userId: string | null;
   businessModeResolution: BusinessModeResolution;
   businessMode: BusinessMode | null;
   onboarding_completed: boolean;
@@ -23,7 +24,7 @@ interface UserSettingsContextValue {
 const UserSettingsContext = createContext<UserSettingsContextValue | null>(null);
 
 export function UserSettingsProvider({ children }: { children: ReactNode }) {
-  const { settings, loading, loaded, loadStatus, error, businessModeResolution, onboarding_completed } = useUserSettingsSource();
+  const { settings, loading, loaded, loadStatus, error, businessModeResolution, onboarding_completed, userId } = useUserSettingsSource();
   const resolvedSettings = settings || defaultSettings;
   // RELEASE-QUALITY-04 §1: applyAppTheme decide o que aplicar olhando pra classe .dark no <html> — mas
   // só reage a ELA sozinha se algo disparar o efeito de novo. `resolvedTheme` do next-themes garante
@@ -45,11 +46,12 @@ export function UserSettingsProvider({ children }: { children: ReactNode }) {
     loaded,
     loadStatus,
     error,
+    userId: userId ?? null,
     businessModeResolution,
     businessMode: businessModeResolution.mode,
     onboarding_completed,
     refresh,
-  }), [businessModeResolution, error, loadStatus, loaded, loading, onboarding_completed, refresh, resolvedSettings]);
+  }), [businessModeResolution, error, loadStatus, loaded, loading, onboarding_completed, refresh, resolvedSettings, userId]);
 
   return (
     <UserSettingsContext.Provider value={value}>

@@ -1,11 +1,5 @@
 import type { ReactNode } from "react";
 
-/**
- * HOTFIX-P0-D (rodada 2, code-split) — extraído de dashboard.tsx para que a seção de serviços
- * (client/src/components/dashboard/ServicesOverviewSection.tsx, lazy) possa reusar os mesmos 3
- * primitivos visuais sem precisar importar a PÁGINA dashboard.tsx inteira (o que anularia o
- * code-split, já que o chunk lazy voltaria a arrastar o chunk eager junto).
- */
 export function SectionCard({ title, eyebrow, children, action }: { title: string; eyebrow?: string; children: ReactNode; action?: ReactNode }) {
   return (
     <section className="rounded-[1.5rem] border border-border/50 bg-white p-4 shadow-sm sm:p-5">

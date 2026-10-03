@@ -17,6 +17,13 @@ const DEFAULT_SERVICE_RESOURCE_ID = "default";
 const UPCOMING_BOOKINGS_WINDOW_DAYS = 14;
 const UPCOMING_BOOKINGS_DISPLAY_LIMIT = 3;
 
+/** Contagem usada pelo dashboard; vive aqui para compartilhar o mesmo chunk lazy da seção (um só download). */
+export async function fetchDashboardServicesCount(): Promise<number> {
+  await waitForAuthReady();
+  const list = await listServices();
+  return list ? list.length : 0;
+}
+
 /**
  * HOTFIX-P0-D (rodada 2, code-split) — extraído de dashboard.tsx (que estourou o orçamento de bundle,
  * 18.06/15 kB) para um chunk lazy próprio: quem vende só produto (a maioria) nunca baixa nada deste
