@@ -1,9 +1,68 @@
-.rs-launch-intro{position:fixed;inset:0;z-index:10000;background:#fbf9ff;color:#3b225f;display:grid;place-items:center;animation:rs-launch-exit 5s both;pointer-events:none}
-.rs-launch-brand{display:flex;flex-direction:column;align-items:center;gap:24px}
-.rs-launch-brand img{width:148px;height:148px;object-fit:contain;animation:rs-launch-symbol 2.5s cubic-bezier(.2,.8,.2,1) both}
-.rs-launch-brand span{font-size:28px;font-weight:750;letter-spacing:-.04em;animation:rs-launch-name 5s both}
-.rs-launch-intro button{position:absolute;bottom:max(32px,env(safe-area-inset-bottom));border:0;background:transparent;color:inherit;font:inherit;padding:12px;pointer-events:auto}
-@keyframes rs-launch-symbol{0%{opacity:0;transform:scale(.82) translateY(18px)}45%,100%{opacity:1;transform:scale(1) translateY(0)}}
-@keyframes rs-launch-name{0%,38%{opacity:0;transform:translateY(10px)}58%,100%{opacity:1;transform:translateY(0)}}
-@keyframes rs-launch-exit{0%,86%{opacity:1;visibility:visible}100%{opacity:0;visibility:hidden}}
-@media(prefers-reduced-motion:reduce){.rs-launch-intro,.rs-launch-brand img,.rs-launch-brand span{animation:none}}
+.rs-launch-intro {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  overflow: hidden;
+  background: radial-gradient(ellipse at 50% 44%, #fff 0%, #fff 38%, #fcfaf7 100%);
+  color: #35124d;
+  isolation: isolate;
+  animation: rs-launch-exit 5s ease-in-out both;
+}
+.rs-launch-brand {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.rs-launch-brand img {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: clamp(112px, 28vw, 136px);
+  height: auto;
+  aspect-ratio: 1;
+  object-fit: contain;
+  border-radius: 50%;
+  animation: rs-launch-symbol 5s cubic-bezier(.22, 1, .36, 1) both;
+  will-change: transform, opacity;
+}
+.rs-launch-brand span {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  text-align: left;
+  font-family: 'Outfit', 'Segoe UI', system-ui, sans-serif;
+  font-size: clamp(22px, 5.8vw, 28px);
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  letter-spacing: -.045em;
+  animation: rs-launch-name 5s cubic-bezier(.22, 1, .36, 1) both;
+  will-change: transform, opacity;
+}
+@keyframes rs-launch-symbol {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(.9); }
+  18%, 40% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  56%, 100% { opacity: 1; transform: translate(calc(-100% - 14px), -50%) scale(1); }
+}
+@keyframes rs-launch-name {
+  0%, 40% { opacity: 0; transform: translate(12px, -50%); }
+  58%, 100% { opacity: 1; transform: translate(0, -50%); }
+}
+@keyframes rs-launch-exit {
+  0%, 88% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rs-launch-brand img { animation-name: rs-launch-symbol-reduced; }
+  .rs-launch-brand span { animation-name: rs-launch-name-reduced; }
+}
+@keyframes rs-launch-symbol-reduced {
+  0%, 40% { opacity: 1; transform: translate(-50%, -50%); }
+  56%, 100% { opacity: 1; transform: translate(calc(-100% - 14px), -50%); }
+}
+@keyframes rs-launch-name-reduced {
+  0%, 40% { opacity: 0; transform: translate(0, -50%); }
+  58%, 100% { opacity: 1; transform: translate(0, -50%); }
+}

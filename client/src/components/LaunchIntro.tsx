@@ -25,18 +25,18 @@ export function LaunchIntro() {
   const [visible, setVisible] = useState(showAtLaunch);
   useEffect(() => {
     if (!visible) return;
-    let reduced = false;
-    try { reduced = Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches); }
-    catch { setVisible(false); return; }
-    const timer = window.setTimeout(() => setVisible(false), reduced ? 800 : 5000);
+    // Independent of CSS/image loading: the intro must always release the app.
+    const timer = window.setTimeout(() => setVisible(false), 5000);
     return () => window.clearTimeout(timer);
   }, [visible]);
   if (!visible) return null;
-  return <div className="rs-launch-intro" role="status" aria-label="Abrindo Revenda Smart" data-testid="launch-intro">
+  return <div className="rs-launch-intro" role="status" aria-label="Abrindo Revenda Smart" data-testid="launch-intro"
+    onAnimationEnd={(event) => {
+      if (event.target === event.currentTarget && event.animationName === 'rs-launch-exit') setVisible(false);
+    }}>
     <div className="rs-launch-brand">
       <img src="/logo-revenda-smart-symbol-official.png" alt="" onError={() => setVisible(false)} />
       <span>Revenda Smart</span>
     </div>
-    <button type="button" onClick={() => setVisible(false)}>Continuar</button>
   </div>;
 }
