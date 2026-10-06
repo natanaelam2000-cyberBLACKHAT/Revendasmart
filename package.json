@@ -111,6 +111,8 @@
     "test:account-deletion": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore,storage \"npm run test:account-deletion:run\"",
     "test:owner-access:run": "tsx script/owner-access-02-tests.ts",
     "test:owner-access": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore,storage \"npm run test:owner-access:run\"",
+    "test:sorteios:unit": "tsx script/promotional-campaigns-tests.ts && tsx script/sorteios-public-link-tests.ts",
+    "test:sorteios:e2e": "playwright test --config playwright.sorteios.config.ts",
     "test:promotional-campaigns:run": "tsx script/promotional-campaigns-owner-access-tests.ts",
     "test:promotional-campaigns": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore,storage \"npm run test:promotional-campaigns:run\"",
     "test:mercadopago-oauth:run": "tsx script/mercadopago-oauth-tests.ts",
