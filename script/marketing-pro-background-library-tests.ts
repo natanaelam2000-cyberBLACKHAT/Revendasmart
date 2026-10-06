@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import {
   MARKETING_PRO_BACKGROUND_LIBRARY,
+  MARKETING_PRO_GENERATED_BACKGROUND_LIBRARY,
   resolveMarketingProBackground,
   renderMarketingProBackgroundSource,
 } from "../shared/marketing-pro-background-library";
@@ -13,6 +14,8 @@ import { isCreativeFamily } from "../shared/marketing-pro-creative-intelligence"
 const ids = MARKETING_PRO_BACKGROUND_LIBRARY.map((asset) => asset.id);
 assert.equal(new Set(ids).size, ids.length, "BG1: todo backgroundId deve ser único");
 assert.ok(ids.length >= 12, `BG1: seed V1 precisa ter >= 12 backgrounds (achou ${ids.length})`);
+assert.equal(MARKETING_PRO_GENERATED_BACKGROUND_LIBRARY.length, 12, "BG1: o seed gerado em código continua sendo exatamente 12 fundos");
+assert.ok(MARKETING_PRO_BACKGROUND_LIBRARY.length >= MARKETING_PRO_GENERATED_BACKGROUND_LIBRARY.length, "BG1: a biblioteca = seed + estáticos aprovados");
 
 // BG2 — toda entrada tem family válida (reaproveita CreativeFamily existente, nenhuma taxonomia nova).
 for (const asset of MARKETING_PRO_BACKGROUND_LIBRARY) {
@@ -50,20 +53,22 @@ for (let i = 0; i < 5; i += 1) {
 }
 
 // BG7 — variantIndex explícito produz alternativa determinística (nunca Math.random/Date.now).
-const variant0 = resolveMarketingProBackground({ creativeFamily: "luxury", category: "general", format: "square", seed: "product-variant-x", variantIndex: 0 });
-const variant1 = resolveMarketingProBackground({ creativeFamily: "luxury", category: "general", format: "square", seed: "product-variant-x", variantIndex: 1 });
+// BG7/BG8 provam o resolver sobre o SEED gerado em código (12 fundos): não dependem de quantos estáticos a auditoria aprovou.
+const seedLibrary = MARKETING_PRO_GENERATED_BACKGROUND_LIBRARY;
+const variant0 = resolveMarketingProBackground({ creativeFamily: "luxury", category: "general", format: "square", seed: "product-variant-x", variantIndex: 0, library: seedLibrary });
+const variant1 = resolveMarketingProBackground({ creativeFamily: "luxury", category: "general", format: "square", seed: "product-variant-x", variantIndex: 1, library: seedLibrary });
 assert.notEqual(variant1.backgroundId, variant0.backgroundId, "BG7: variantIndex diferente precisa produzir background diferente quando há >1 candidato");
-const variant0Again = resolveMarketingProBackground({ creativeFamily: "luxury", category: "general", format: "square", seed: "product-variant-x", variantIndex: 0 });
+const variant0Again = resolveMarketingProBackground({ creativeFamily: "luxury", category: "general", format: "square", seed: "product-variant-x", variantIndex: 0, library: seedLibrary });
 assert.equal(variant0Again.backgroundId, variant0.backgroundId, "BG7: o mesmo variantIndex precisa continuar determinístico");
 // Wrap-around: com 3 candidatos luxury/general/square, variantIndex 3 volta ao mesmo de variantIndex 0.
-const variant3 = resolveMarketingProBackground({ creativeFamily: "luxury", category: "general", format: "square", seed: "product-variant-x", variantIndex: 3 });
+const variant3 = resolveMarketingProBackground({ creativeFamily: "luxury", category: "general", format: "square", seed: "product-variant-x", variantIndex: 3, library: seedLibrary });
 assert.equal(variant3.backgroundId, variant0.backgroundId, "BG7: variantIndex deve dar a volta de forma determinística (módulo), nunca lançar");
 
 // BG8 — categoria sem match dentro da family cai para a mesma family com category relaxada (nunca lança,
 // nunca cai direto para a family genérica quando a family pedida já tem candidatos noutra categoria).
 // "modern" no seed V1 nunca declara a categoria "food".
-assert.ok(MARKETING_PRO_BACKGROUND_LIBRARY.filter((a) => a.family === "modern").every((a) => !a.categories.includes("food")), "pré-condição do teste: nenhum asset modern deveria ter categoria food");
-const unknownCategoryResolved = resolveMarketingProBackground({ creativeFamily: "modern", category: "food", format: "square", seed: "product-bg8" });
+assert.ok(seedLibrary.filter((a) => a.family === "modern").every((a) => !a.categories.includes("food")), "pré-condição do teste: nenhum asset modern do seed deveria ter categoria food");
+const unknownCategoryResolved = resolveMarketingProBackground({ creativeFamily: "modern", category: "food", format: "square", seed: "product-bg8", library: seedLibrary });
 assert.equal(unknownCategoryResolved.backgroundFamily, "modern", "BG8: categoria sem match ainda deve preferir a family pedida (relaxa category antes de relaxar family)");
 
 // BG9 — backgroundId explícito que não existe (ou não suporta o formato) cai deterministicamente para a
@@ -72,7 +77,7 @@ const unsupportedIdResolved = resolveMarketingProBackground({ creativeFamily: "e
 assert.equal(unsupportedIdResolved.backgroundFamily, "editorial", "BG9: id inexistente cai para a resolução normal por family, sem lançar");
 assert.notEqual(unsupportedIdResolved.backgroundId, "does-not-exist-in-library");
 // Um id que existe mas não suporta o formato pedido também deve cair para o fallback normal, nunca lançar.
-const wrongFormatAsset = MARKETING_PRO_BACKGROUND_LIBRARY[0];
+const wrongFormatAsset = MARKETING_PRO_GENERATED_BACKGROUND_LIBRARY[0];
 const unsupportedFormatResolved = resolveMarketingProBackground({ creativeFamily: wrongFormatAsset.family, format: "story", seed: "product-bg9-format", backgroundId: wrongFormatAsset.id });
 assert.ok(unsupportedFormatResolved.asset.formats.includes("story"), "BG9: fallback precisa respeitar o formato pedido mesmo quando o id explícito não suporta");
 // Explicit id válido é honrado diretamente (sem passar pelo hash de seed).
@@ -97,7 +102,7 @@ for (const category of MARKETING_PRO_CATEGORY_VALUES) {
 
 // renderMarketingProBackgroundSource produz uma data URI SVG válida e determinística — o composer
 // canônico continua recebendo exatamente `backgroundImageSrc: string`, sem mudança no renderer.
-const anyAsset = MARKETING_PRO_BACKGROUND_LIBRARY[0];
+const anyAsset = MARKETING_PRO_GENERATED_BACKGROUND_LIBRARY[0];
 const src1 = renderMarketingProBackgroundSource(anyAsset, "square");
 const src2 = renderMarketingProBackgroundSource(anyAsset, "square");
 assert.equal(src1, src2, "renderMarketingProBackgroundSource precisa ser determinístico para o mesmo asset+formato");

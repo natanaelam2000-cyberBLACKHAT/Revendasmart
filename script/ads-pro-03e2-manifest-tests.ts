@@ -35,6 +35,11 @@ import { MARKETING_PRO_BACKGROUND_LIBRARY } from "../shared/marketing-pro-backgr
 import { MARKETING_PRO_PRODUCT_ZONE } from "../shared/marketing-pro-contract";
 import { MARKETING_CAMPAIGN_INTENT_IDS } from "../shared/marketing-pro-creative-intelligence";
 
+/** ADS-PRO-FINAL: a biblioteca = 12 fundos gerados em código + fundos estáticos aprovados na auditoria. */
+const LIBRARY_SIZE = MARKETING_PRO_BACKGROUND_LIBRARY.length;
+const GENERATED_ASSETS = ADS_PRO_PRODUCTION_MANIFEST.assets.filter((asset) => asset.resource.type === "generated");
+const STATIC_ASSETS = ADS_PRO_PRODUCTION_MANIFEST.assets.filter((asset) => asset.resource.type === "static");
+
 let passedTests = 0;
 function test(name: string, fn: () => void): void {
   try {
@@ -58,17 +63,19 @@ test("Manifesto passa com sucesso pela validação formal de parseAssetLibrary",
   if (result.ok) {
     assert.equal(result.value.schemaVersion, 1);
     assert.match(result.value.libraryVersion, /^\d+\.\d+\.\d+$/);
-    assert.equal(result.value.assets.length, 12);
+    assert.equal(result.value.assets.length, LIBRARY_SIZE);
   }
 });
 
-test("Manifesto possui schemaVersion 1 e libraryVersion SemVer canônica 1.0.0", () => {
+test("Manifesto possui schemaVersion 1 e libraryVersion SemVer canônica (1.0.0 sem estáticos aprovados)", () => {
   assert.equal(ADS_PRO_PRODUCTION_MANIFEST.schemaVersion, 1);
-  assert.equal(ADS_PRO_PRODUCTION_MANIFEST.libraryVersion, "1.0.0");
+  if (STATIC_ASSETS.length === 0) assert.equal(ADS_PRO_PRODUCTION_MANIFEST.libraryVersion, "1.0.0");
+  else assert.match(ADS_PRO_PRODUCTION_MANIFEST.libraryVersion, /^1\.\d+\.0$/);
 });
 
-test("Manifesto contém exatamente 12 assets com IDs únicos em formato canônico", () => {
-  assert.equal(ADS_PRO_PRODUCTION_MANIFEST.assets.length, 12);
+test("Manifesto contém exatamente os assets da biblioteca (12 gerados + estáticos aprovados) com IDs únicos em formato canônico", () => {
+  assert.equal(GENERATED_ASSETS.length, 12, "os 12 fundos gerados em código continuam sendo o seed da biblioteca");
+  assert.equal(ADS_PRO_PRODUCTION_MANIFEST.assets.length, LIBRARY_SIZE);
   const seenIds = new Set<string>();
   const canonicalIdRegex = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
 
@@ -133,7 +140,11 @@ test("Estilos são mapeados exclusivamente por resolveMarketingProStyleForCreati
     const expectedStyle = resolveMarketingProStyleForCreativeFamily(bg.family);
     assert.deepEqual(asset.styles, [expectedStyle]);
     assert.ok(!asset.styles.some((s) => s.startsWith("fresh-")), "Nenhum fresh-* deve existir em AssetDNA");
-    assert.ok(!asset.styles.includes("sensory"), "Nenhum asset de seed deve receber sensory artificialmente");
+    // Seed gerado em código nunca é sensorial (gap documentado). Só um fundo ESTÁTICO classificado como
+    // sensorial pela auditoria da biblioteca pode ter o estilo sensory — e sempre via bg.family, nunca forçado.
+    if (bg.sourceType === "GENERATED_DETERMINISTIC") {
+      assert.ok(!asset.styles.includes("sensory"), "Nenhum asset de seed deve receber sensory artificialmente");
+    }
   }
 });
 
@@ -198,8 +209,11 @@ test("Safe Subject Zone está geometricamente contida em MARKETING_PRO_PRODUCT_Z
 // ---------------------------------------------------------------------------
 // 4. Recursos e Consistência de URI
 // ---------------------------------------------------------------------------
-test("Todos os assets possuem resource do tipo 'generated' e URI 'generated:<id>'", () => {
-  for (const asset of ADS_PRO_PRODUCTION_MANIFEST.assets) {
+test("Assets gerados possuem resource 'generated' e URI 'generated:<id>'; estáticos apontam para o WebP aprovado", () => {
+  for (const asset of STATIC_ASSETS) {
+    assert.match(asset.resource.uri, /^\/ads-pro\/backgrounds\/[a-z0-9-]+\.webp$/, `estático "${asset.id}" precisa apontar para o WebP otimizado publicado`);
+  }
+  for (const asset of GENERATED_ASSETS) {
     assert.equal(asset.resource.type, "generated");
     assert.equal(
       asset.resource.uri,
@@ -271,7 +285,7 @@ test("Cobertura total de 42 cenários em formato portrait sem nenhum array vazio
         results.length > 0,
         `Resultado não pode ser vazio para portrait, cat=${cat}, styles=${JSON.stringify(st)}`
       );
-      assert.equal(results.length, 12, "Todos os 12 backgrounds devem ser elegíveis em portrait");
+      assert.equal(results.length, LIBRARY_SIZE, "Todos os backgrounds da biblioteca devem ser elegíveis em portrait");
     }
   }
   assert.equal(count, 42);
@@ -292,7 +306,7 @@ test("Cobertura total de 42 cenários em formato square sem nenhum array vazio",
         results.length > 0,
         `Resultado não pode ser vazio para square, cat=${cat}, styles=${JSON.stringify(st)}`
       );
-      assert.equal(results.length, 12, "Todos os 12 backgrounds devem ser elegíveis em square");
+      assert.equal(results.length, LIBRARY_SIZE, "Todos os backgrounds da biblioteca devem ser elegíveis em square");
     }
   }
   assert.equal(count, 42);
@@ -306,8 +320,13 @@ test("Sensory gap: preferredStyles = ['sensory'] pontua como styleAffinity 'none
     preferredStyles: ["sensory"],
   });
 
-  assert.equal(results.length, 12);
+  assert.equal(results.length, LIBRARY_SIZE);
   for (const r of results) {
+    if (r.asset.styles.includes("sensory")) {
+      // Fundo estático aprovado na auditoria e classificado como sensorial: aí SIM há match primário.
+      assert.equal(r.breakdown.styleAffinity, "primary", `"${r.asset.id}" é sensorial e deve ganhar match`);
+      continue;
+    }
     assert.equal(
       r.breakdown.styleAffinity,
       "none",
@@ -329,7 +348,7 @@ test("Matriz de intenções: todas as 15 intents canônicas pontuam como 'univer
       format: "portrait",
       intent,
     });
-    assert.equal(results.length, 12, `Nenhum asset deve ser filtrado por intent=${intent}`);
+    assert.equal(results.length, LIBRARY_SIZE, `Nenhum asset deve ser filtrado por intent=${intent}`);
     for (const r of results) {
       assert.equal(
         r.breakdown.intentAffinity,
@@ -343,23 +362,23 @@ test("Matriz de intenções: todas as 15 intents canônicas pontuam como 'univer
 // ---------------------------------------------------------------------------
 // 7. Background Bridge (Resolução e Renderização)
 // ---------------------------------------------------------------------------
-test("resolveBackgroundForAsset localiza o background correspondente para todos os 12 assets", () => {
+test("resolveBackgroundForAsset localiza o background correspondente para todos os assets da biblioteca", () => {
   for (const asset of ADS_PRO_PRODUCTION_MANIFEST.assets) {
     const bg = resolveBackgroundForAsset(asset);
     assert.equal(bg.id, asset.id);
   }
 });
 
-test("renderAssetBackgroundSource renderiza Data URI SVG válido para todos os 12 assets em portrait", () => {
-  for (const asset of ADS_PRO_PRODUCTION_MANIFEST.assets) {
+test("renderAssetBackgroundSource renderiza Data URI SVG válido para todos os assets gerados em portrait", () => {
+  for (const asset of GENERATED_ASSETS) {
     const src = renderAssetBackgroundSource(asset, "portrait");
     assert.ok(typeof src === "string" && src.length > 0);
     assert.ok(src.startsWith("data:image/svg+xml;charset=utf-8,"));
   }
 });
 
-test("renderAssetBackgroundSource renderiza Data URI SVG válido para todos os 12 assets em square", () => {
-  for (const asset of ADS_PRO_PRODUCTION_MANIFEST.assets) {
+test("renderAssetBackgroundSource renderiza Data URI SVG válido para todos os assets gerados em square", () => {
+  for (const asset of GENERATED_ASSETS) {
     const src = renderAssetBackgroundSource(asset, "square");
     assert.ok(typeof src === "string" && src.length > 0);
     assert.ok(src.startsWith("data:image/svg+xml;charset=utf-8,"));
@@ -377,7 +396,9 @@ test("renderMatchResultBackgroundSource renderiza com sucesso a partir do result
   const topResult = results[0];
   const src = renderMatchResultBackgroundSource(topResult, "square");
   assert.ok(typeof src === "string" && src.length > 0);
-  assert.ok(src.startsWith("data:image/svg+xml;charset=utf-8,"));
+  // Gerado vira Data URI SVG; estático aprovado vira a URL do WebP otimizado publicado (nunca o acervo bruto).
+  if (topResult.asset.resource.type === "generated") assert.ok(src.startsWith("data:image/svg+xml;charset=utf-8,"));
+  else assert.match(src, /^\/ads-pro\/backgrounds\/[a-z0-9-]+\.webp$/);
 });
 
 test("resolveBackgroundForAsset e renderAssetBackgroundSource lançam BackgroundNotFoundError para ID desconhecido", () => {

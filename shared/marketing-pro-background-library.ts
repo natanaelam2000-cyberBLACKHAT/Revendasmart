@@ -17,6 +17,9 @@
 import type { MarketingProCategory, MarketingProFormat } from "./marketing-pro-contract";
 import { MARKETING_PRO_FORMAT_DIMENSIONS } from "./marketing-pro-contract";
 import type { CreativeFamily } from "./marketing-pro-creative-intelligence";
+import { ADS_PRO_APPROVED_STATIC_BACKGROUNDS } from "./ads-pro/approved-static-backgrounds";
+import { AUDIT_BUCKET_SLUGS } from "./ads-pro/background-audit";
+import { staticBackgroundThumbnailUrl, staticBackgroundUrl, type ApprovedStaticBackgroundEntry } from "./ads-pro/static-background-entry";
 
 export type MarketingProBackgroundSourceType = "GENERATED_DETERMINISTIC" | "STATIC_ASSET" | "AI_GENERATED";
 
@@ -40,6 +43,8 @@ interface MarketingProBackgroundAssetBase {
   readonly categories: readonly MarketingProCategory[];
   readonly formats: readonly MarketingProFormat[];
   readonly tags?: readonly string[];
+  /** Luminância medida do cenário (ADS-PRO-FINAL): decide a cor da tinta do texto. Ausente = derivar das cores. */
+  readonly luminance?: "dark" | "light";
 }
 
 export interface MarketingProGeneratedBackgroundAsset extends MarketingProBackgroundAssetBase {
@@ -51,6 +56,10 @@ export interface MarketingProStaticBackgroundAsset extends MarketingProBackgroun
   readonly sourceType: "STATIC_ASSET";
   /** Caminho servido do jeito que já existe hoje (ex.: client/public/...) — nunca uma nova infra. */
   readonly staticUrl: string;
+  /** Miniatura leve para a grade de escolha de fundo (ADS-PRO-FINAL). */
+  readonly thumbnailUrl?: string;
+  /** Zonas de texto movimentadas (medido na auditoria): o compositor aplica scrim atrás do texto. */
+  readonly needsScrim?: boolean;
 }
 
 export type MarketingProBackgroundAsset = MarketingProGeneratedBackgroundAsset | MarketingProStaticBackgroundAsset;
@@ -61,7 +70,7 @@ export type MarketingProBackgroundAsset = MarketingProGeneratedBackgroundAsset |
  * cada = 12. Categorias cobrem beauty/electronics/fashion/food/home/general sem nenhum `if categoria
  * === "perfume"` — a mesma lista serve qualquer categoria futura por composição de tags.
  */
-export const MARKETING_PRO_BACKGROUND_LIBRARY: readonly MarketingProBackgroundAsset[] = [
+export const MARKETING_PRO_GENERATED_BACKGROUND_LIBRARY: readonly MarketingProGeneratedBackgroundAsset[] = [
   {
     id: "luxury-onyx-spotlight", version: 1, family: "luxury", categories: ["beauty", "fashion", "general"], formats: ["square", "portrait"],
     tags: ["studio", "spotlight", "dark"], sourceType: "GENERATED_DETERMINISTIC",
@@ -127,6 +136,34 @@ export const MARKETING_PRO_BACKGROUND_LIBRARY: readonly MarketingProBackgroundAs
   },
 ];
 
+/**
+ * ADS-PRO-FINAL — fundos ESTÁTICOS aprovados pela auditoria do acervo bruto
+ * (`script/ads-pro-background-audit.ts`). Só entra aqui o que o manifest de produção gerado
+ * (`shared/ads-pro/approved-static-backgrounds.ts`) lista — o acervo bruto nunca é lido em runtime.
+ * Categoria: o balde comercial vira a categoria canônica; "geral" vira universal (`[]`), compatível com tudo.
+ */
+export function mapApprovedStaticBackground(entry: ApprovedStaticBackgroundEntry): MarketingProStaticBackgroundAsset {
+  return {
+    id: entry.id,
+    version: 1,
+    family: entry.style,
+    categories: entry.bucket === "geral" ? [] : [entry.category],
+    formats: ["square", "portrait"],
+    tags: [`bucket:${AUDIT_BUCKET_SLUGS[entry.bucket]}`, entry.luminance, ...(entry.needsScrim ? ["scrim"] : [])],
+    sourceType: "STATIC_ASSET",
+    staticUrl: staticBackgroundUrl(entry.id),
+    thumbnailUrl: staticBackgroundThumbnailUrl(entry.id),
+    luminance: entry.luminance,
+    needsScrim: entry.needsScrim,
+  };
+}
+
+/** Registry canônico: fundos gerados em código + estáticos aprovados na auditoria. UM registry, UM resolver. */
+export const MARKETING_PRO_BACKGROUND_LIBRARY: readonly MarketingProBackgroundAsset[] = [
+  ...MARKETING_PRO_GENERATED_BACKGROUND_LIBRARY,
+  ...ADS_PRO_APPROVED_STATIC_BACKGROUNDS.map(mapApprovedStaticBackground),
+];
+
 /** Família usada quando nem `creativeFamily` resolve nenhum candidato (§10, tier final antes do absoluto). */
 const GENERIC_FALLBACK_FAMILY: CreativeFamily = "minimal";
 
@@ -172,6 +209,9 @@ export interface ResolveMarketingProBackgroundInput {
    * usado diretamente (sem hash de seed). Se não existir/não suportar o formato, cai para a cadeia normal
    * de fallback abaixo — nunca lança, nunca ignora silenciosamente a falta do id pedido. */
   readonly backgroundId?: string;
+  /** Biblioteca a consultar. Padrão: o registry canônico completo. Existe para o resolver poder ser provado
+   * sobre o seed gerado em código sem depender de quantos fundos estáticos a auditoria aprovou. */
+  readonly library?: readonly MarketingProBackgroundAsset[];
 }
 
 /**
@@ -180,29 +220,30 @@ export interface ResolveMarketingProBackgroundInput {
  * genérica -> fallback absoluto embutido no código (nunca um array vazio, nunca branco cru).
  */
 export function resolveMarketingProBackground(input: ResolveMarketingProBackgroundInput): MarketingProResolvedBackground {
+  const library = input.library ?? MARKETING_PRO_BACKGROUND_LIBRARY;
   const exclude = new Set(input.excludeIds ?? []);
   const matchesFormat = (asset: MarketingProBackgroundAsset) => asset.formats.includes(input.format);
   const notExcluded = (asset: MarketingProBackgroundAsset) => !exclude.has(asset.id);
 
   if (input.backgroundId) {
-    const explicit = MARKETING_PRO_BACKGROUND_LIBRARY.find((asset) => asset.id === input.backgroundId && matchesFormat(asset) && notExcluded(asset));
+    const explicit = library.find((asset) => asset.id === input.backgroundId && matchesFormat(asset) && notExcluded(asset));
     if (explicit) return { backgroundId: explicit.id, backgroundVersion: explicit.version, backgroundFamily: explicit.family, sourceType: explicit.sourceType, asset: explicit };
   }
 
-  let candidates = MARKETING_PRO_BACKGROUND_LIBRARY.filter((asset) =>
+  let candidates = library.filter((asset) =>
     asset.family === input.creativeFamily
     && matchesFormat(asset)
     && notExcluded(asset)
     && (!input.category || asset.categories.includes(input.category)));
 
   if (candidates.length === 0) {
-    candidates = MARKETING_PRO_BACKGROUND_LIBRARY.filter((asset) => asset.family === input.creativeFamily && matchesFormat(asset) && notExcluded(asset));
+    candidates = library.filter((asset) => asset.family === input.creativeFamily && matchesFormat(asset) && notExcluded(asset));
   }
   if (candidates.length === 0) {
-    candidates = MARKETING_PRO_BACKGROUND_LIBRARY.filter((asset) => asset.family === GENERIC_FALLBACK_FAMILY && matchesFormat(asset) && notExcluded(asset));
+    candidates = library.filter((asset) => asset.family === GENERIC_FALLBACK_FAMILY && matchesFormat(asset) && notExcluded(asset));
   }
   if (candidates.length === 0) {
-    candidates = MARKETING_PRO_BACKGROUND_LIBRARY.filter((asset) => matchesFormat(asset) && notExcluded(asset));
+    candidates = library.filter((asset) => matchesFormat(asset) && notExcluded(asset));
   }
   if (candidates.length === 0) {
     candidates = [ABSOLUTE_FALLBACK_ASSET];
