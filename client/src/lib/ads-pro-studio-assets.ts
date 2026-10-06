@@ -14,6 +14,7 @@ import {
 } from "@/lib/marketing-image";
 import { generateProductCutoutRgba, type ProductCutoutGenerationFailureReason } from "@/lib/product-cutout-pipeline";
 import { applyPhotoAdjust, estimateEdgeColor, type RgbaImage } from "@shared/ads-pro/ad-photo-adjust";
+import { computeOpaqueBounds, estimateLightBackdropOptions } from "@shared/ads-pro/ad-cutout-options";
 import { isNeutralPhotoAdjust, type AdsProAdDocumentV1, type AdsProPhotoAdjust } from "@shared/ads-pro/ad-document";
 import type { AdsProPreparedPhoto, AdsProRenderAssets } from "@/lib/ads-pro-studio-render";
 import type { Product } from "@/lib/mock-data";
@@ -85,7 +86,10 @@ export type LocalCutoutResult =
 /** Recorte local gratuito (flood-fill a partir das bordas). Nunca lança: falha vira `ok:false`. */
 export async function generateStudioLocalCutout(product: Product, resolved: ResolvedMarketingImage): Promise<LocalCutoutResult> {
   try {
-    const generation = await generateProductCutoutRgba(product.id, resolved);
+    const generation = await generateProductCutoutRgba(product.id, resolved, {
+      // Fundo de estúdio cinza/bege também conta como "liso": os limiares seguem a cor real das bordas.
+      heuristicOptions: (decoded) => estimateLightBackdropOptions(decoded) ?? undefined,
+    });
     if (!generation.ok) return { ok: false, reason: generation.reason };
     const canvas = document.createElement("canvas");
     canvas.width = generation.width;
@@ -93,7 +97,20 @@ export async function generateStudioLocalCutout(product: Product, resolved: Reso
     const ctx = canvas.getContext("2d");
     if (!ctx) return { ok: false, reason: "decode-failed" };
     ctx.putImageData(new ImageData(new Uint8ClampedArray(generation.composed.rgba), generation.width, generation.height), 0, 0);
-    return { ok: true, generation, image: { key: `local-cutout:${product.id}:${generation.assetId}`, source: canvas, width: generation.width, height: generation.height } };
+    // Apara as margens transparentes: sem isso o produto (que na foto ocupa só o miolo) fica pequeno no anúncio.
+    const bounds = computeOpaqueBounds({ data: generation.composed.rgba, width: generation.width, height: generation.height });
+    let finalCanvas = canvas;
+    if (bounds) {
+      const trimmed = document.createElement("canvas");
+      trimmed.width = bounds.width;
+      trimmed.height = bounds.height;
+      const trimmedCtx = trimmed.getContext("2d");
+      if (trimmedCtx) {
+        trimmedCtx.drawImage(canvas, bounds.x, bounds.y, bounds.width, bounds.height, 0, 0, bounds.width, bounds.height);
+        finalCanvas = trimmed;
+      }
+    }
+    return { ok: true, generation, image: { key: `local-cutout:${product.id}:${generation.assetId}`, source: finalCanvas, width: finalCanvas.width, height: finalCanvas.height } };
   } catch {
     return { ok: false, reason: "decode-failed" };
   }

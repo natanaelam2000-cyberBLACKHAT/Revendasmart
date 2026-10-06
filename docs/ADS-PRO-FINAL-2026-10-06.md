@@ -34,7 +34,7 @@ experimentais". A lista falsa "Em desenvolvimento" foi removida.
 | --- | --- | --- |
 | Foto | carrega a foto real do produto; **nunca a altera** (ajustes vivem numa cópia em canvas) | `ads-pro-studio-assets.ts` |
 | Melhorar foto | análise local (histograma/nitidez) → ajuste automático conservador + sliders (brilho, contraste, cor, nitidez) + "Ver foto original"; foto já boa devolve "nada precisou mudar" | `shared/ads-pro/ad-photo-adjust.ts` |
-| Remover fundo | **local e grátis** (flood-fill a partir das bordas, `product-cutout-pipeline`); falhou → segue com a foto original com mensagem honesta | `use-studio-assets.ts` |
+| Remover fundo | **local e grátis** (flood-fill a partir das bordas, `product-cutout-pipeline`) com limiares que **seguem a cor real do fundo** (branco, cinza ou bege de estúdio; fundo escuro/médio continua falhando de forma honesta) e recorte **aparado** nas margens para o produto aparecer grande; falhou → segue com a foto original com mensagem honesta | `use-studio-assets.ts`, `ad-cutout-options.ts` |
 | Estilo | quiz de estilo (perfil) → estilos que **lideram** as opções; dá para escolher um estilo só para este anúncio; objetivo (Destaque/Promoção/Novidade/Últimas unidades/…); intensidade; formato 4:5 ou 1:1 | `ad-style-direction.ts` |
 | Opções | 3 versões **realmente diferentes** (papéis "Fiel ao seu estilo" / "Mais destaque" / "Mais sutil": estilo, composição, hierarquia, espaçamento, botão, estilo do preço, decoração e **fundo** mudam); "Outras opções" gira as escolhas de forma determinística | `ad-variations.ts` |
 | Comparar | diálogo lado a lado com as opções grandes e o porquê de cada uma (estilo, composição, fundo) | `StudioOptionsStep.tsx` |
@@ -143,7 +143,7 @@ fotográficos aprovados resolvem isso — não foi inventado nada para tapar o b
 | `npm run build` | PASS |
 | `git diff --check` | PASS |
 | Testes alvo exigidos (creative-intelligence, creative-director, concepts-ui, pro-ad-generation-ui, `ads-pro-04:geometry`, pro13, `pro14c`, `pro14g`, `pro14i`, `marketing-pro:bg-library`, `bg-orchestration`, `history`) | PASS (12/12) |
-| `npm run test:ads-pro:foundation` / `:final` (audit 17, style 11, document 11, photo 9, layout 13, variations 13, **state 17, persistence 9, flow 15**) | PASS |
+| `npm run test:ads-pro:foundation` / `:final` (audit 17, style 11, document 11, photo 9, layout 13, variations 13, **state 17, cutout 12, persistence 9, flow 15**) | PASS |
 | `npm run test:ads-pro:mutation` (manifest 10/10 mutações mortas após refatorar âncoras) | PASS |
 | `npm run test:firebase` (regras Firestore/Storage + 8 novos casos de `proDocument`) | PASS |
 | `npm run test:plan-impl-05` (cota/idempotência no servidor, emulador: Q1–Q9, R, SC, F, **C1–C3 concorrência/idempotência**, PT, M, S, UI) | PASS |
@@ -154,9 +154,9 @@ fotográficos aprovados resolvem isso — não foi inventado nada para tapar o b
 Itens vermelhos **que já eram vermelhos na canônica** (medido num worktree limpo de `10f0f4e`):
 
 - `npm run performance:bundle-check`: CSS 181,37 kB > 180; total JS 2603,73 kB > 2600; gzip 801,24 kB > 800.
-  Depois desta entrega: CSS 182,53 (+1,16: classes novas do estúdio), total JS 2729,03 (+125,3: chunk lazy do
-  estúdio, 127,59 kB / 41,62 kB gzip), gzip 842,02. **Boot inicial e rota `marketing` continuam dentro do budget**
-  (marketing 235,14/236 kB — menor que a linha de base, 235,3). Nenhum budget foi alterado.
+  Depois desta entrega: CSS 182,53 (+1,16: classes novas do estúdio), total JS 2730,55 (+126,8: chunk lazy do
+  estúdio, 129,1 kB / 42,25 kB gzip), gzip 842,7. **Boot inicial e rota `marketing` continuam dentro do budget**
+  (marketing 235,17/236 kB — menor que a linha de base, 235,3). Nenhum budget foi alterado.
 - `npm run test:bundle-budgets` (P6 usa o build real contra o checker real): falha pelos mesmos tetos.
 - `npm run test:dashboard-runtime-resilience`: o Playwright do projeto pede um Chromium de outra versão que esta
   máquina não tem (ambiente, não código).

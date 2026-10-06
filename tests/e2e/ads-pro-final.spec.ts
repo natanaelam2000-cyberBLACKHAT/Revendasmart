@@ -12,7 +12,8 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
-import { decodePng, generateProductOnPlainBackgroundPng, regionLuminanceStdDev } from "./support/png";
+import { decodePng, regionLuminanceStdDev } from "./support/png";
+import { generatePerfumeBottlePng } from "./support/product-photo";
 
 const emulatorMode = process.env.E2E_EMULATOR === "1";
 const PASSWORD = "LocalTestPassword!123";
@@ -180,7 +181,7 @@ test.describe("ADS-PRO-FINAL — estúdio de anúncios (runtime)", () => {
       price: "299.90",
       stock: "3",
       discountPercent: "20",
-      image: generateProductOnPlainBackgroundPng(900, 0.16, [240, 240, 235]),
+      image: await generatePerfumeBottlePng(),
     });
     await createProduct(page, { name: NO_PHOTO_PRODUCT_NAME, price: "49.90", stock: "10" });
     await seedPremiumPlan(uid);
@@ -419,10 +420,27 @@ test.describe("ADS-PRO-FINAL — estúdio de anúncios (runtime)", () => {
     await page.getByTestId("studio-tab-options").click();
     await page.screenshot({ path: join(proofDir, "11-desktop-options.png") });
 
+    // ---- F12b: exportar com o produto RECORTADO (sem fundo): o produto flutua sobre o fundo escolhido ----------------
+    await page.getByTestId("studio-tab-photo").click();
+    await page.getByTestId("studio-photo-mode-cutout").click();
+    await expect(page.getByTestId("studio-photo-mode-cutout")).toHaveAttribute("aria-pressed", "true", { timeout: 30_000 });
+    await page.getByTestId("studio-tab-save").click();
+    const cutoutExport = await pngOfDownload(page, () => page.getByTestId("studio-download").click(), "export-cutout.png");
+    expect(cutoutExport.png.width).toBe(1080);
+    expect(distinctColorRatio(cutoutExport.png)).toBeGreaterThan(60);
+    await page.screenshot({ path: join(proofDir, "09b-mobile-cutout-export.png") });
+
     // ---- F21: produto SEM foto — o estúdio avisa, bloqueia a exportação e não quebra ---------------------
     await page.setViewportSize(MOBILE);
     await page.getByTestId("studio-tab-photo").click();
+    // Trocar de produto com alterações não salvas pede confirmação (e cancelar mantém tudo como estava).
     await page.getByTestId("studio-product-select").selectOption({ label: NO_PHOTO_PRODUCT_NAME });
+    await expect(page.getByTestId("studio-switch-product-confirm")).toBeVisible();
+    await page.getByTestId("studio-switch-product-cancel").click();
+    await expect(page.getByTestId("studio-switch-product-confirm")).toBeHidden();
+    await expect(page.getByTestId("ads-pro-studio")).toHaveAttribute("data-photo-status", "ready");
+    await page.getByTestId("studio-product-select").selectOption({ label: NO_PHOTO_PRODUCT_NAME });
+    await page.getByTestId("studio-switch-product-confirm-button").click();
     await expect(page.getByTestId("ads-pro-studio")).toHaveAttribute("data-photo-status", "no-image", { timeout: 30_000 });
     await expect(page.getByTestId("studio-photo-missing")).toBeVisible();
     await waitForRender(page);
