@@ -1,8 +1,8 @@
 /**
  * PROMOTIONAL-CAMPAIGNS-01 — domínio do módulo "Sorteios Promocionais" (admin-only, MVP). Compras já
  * registradas em vendas geram direitos ("entries") para o cliente escolher números de uma campanha; a
- * campanha NUNCA vende números nem processa pagamento — o direito nasce exclusivamente de vendas já
- * finalizadas no RevendaSmart. Funções puras aqui não tocam Firestore (testáveis isoladamente); o
+ * campanha NUNCA vende números nem processa pagamento. A autorização explícita do administrador
+ * prevalece; participantes legados usam as vendas finalizadas no RevendaSmart. Funções puras aqui não tocam Firestore (testáveis isoladamente); o
  * servidor (`server/promotional-campaigns.ts`) é a única autoridade que decide `qualifyingSpend` a
  * partir das vendas reais — o cliente nunca envia esse valor como verdade.
  */
@@ -65,6 +65,11 @@ export interface PromotionalNumber {
 
 export interface PromotionalParticipant {
   readonly customerId: string;
+  /**
+   * Quantidade liberada explicitamente pelo administrador para este cliente.
+   * Ausente em participantes legados: nesse caso o limite continua vindo das vendas qualificadas.
+   */
+  readonly assignedNumberCount?: number;
   readonly entriesClaimed: number;
   readonly claimedNumbers: readonly number[];
   readonly updatedAt: string;
@@ -133,8 +138,16 @@ export function calculateAmountUntilNextEntry(qualifyingSpend: number, spendPerE
   return Math.round(missing * 100) / 100;
 }
 
-export function calculateEntitlement(qualifyingSpend: number, spendPerEntry: number, entriesAlreadyClaimed: number): PromotionalEntitlement {
-  const entriesEarned = calculateEarnedEntries(qualifyingSpend, spendPerEntry);
+export function calculateEntitlement(
+  qualifyingSpend: number,
+  spendPerEntry: number,
+  entriesAlreadyClaimed: number,
+  assignedNumberCount: number | null = null,
+): PromotionalEntitlement {
+  // Uma concessão explícita do admin substitui o cálculo por valor gasto. `null` mantém o contrato
+  // legado para participantes criados antes da quantidade por cliente existir.
+  const entriesEarned = assignedNumberCount === null ? calculateEarnedEntries(qualifyingSpend, spendPerEntry)
+    : Number.isSafeInteger(assignedNumberCount) && assignedNumberCount >= 0 ? assignedNumberCount : 0;
   const entriesAvailable = calculateAvailableEntries(entriesEarned, entriesAlreadyClaimed);
   return {
     qualifyingSpend,
@@ -173,7 +186,8 @@ export function validateClaimPayloadShape(input: {
   if (numbers.length === 0) return "NO_NUMBERS_SELECTED";
   const seen = new Set<number>();
   for (const raw of numbers) {
-    const value = Math.trunc(raw);
+    if (!Number.isSafeInteger(raw)) return "NUMBER_OUT_OF_RANGE";
+    const value = raw;
     if (seen.has(value)) return "DUPLICATE_NUMBER_IN_PAYLOAD";
     seen.add(value);
     if (value < numberStart || value > numberEnd) return "NUMBER_OUT_OF_RANGE";

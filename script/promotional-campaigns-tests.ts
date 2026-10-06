@@ -2,7 +2,7 @@
  * PROMOTIONAL-CAMPAIGNS-01 §31/§32 — testes das funções puras de domínio (`shared/promotional-campaigns.ts`).
  * Nenhum Firestore aqui — a parte que depende de rede/emulador (claim atômico, concorrência, admin gate,
  * cross-owner) está em `script/promotional-campaigns-owner-access-tests.ts`, atrás de
- * `npm run test:owner-access` (mesmo padrão de `owner-access-02-tests.ts`).
+ * `npm run test:promotional-campaigns` (mesmo padrão de `owner-access-02-tests.ts`).
  */
 import assert from "node:assert/strict";
 import {
@@ -46,6 +46,16 @@ function run(): void {
   assert.equal(entitlement.entriesEarned, 3);
   assert.equal(entitlement.entriesAlreadyClaimed, 2);
   assert.equal(entitlement.entriesAvailable, 1);
+
+  // Concessão explícita do admin é a fonte do limite por cliente; ainda respeita o que já foi usado.
+  const assignedEntitlement = calculateEntitlement(0, 100, 2, 5);
+  assert.equal(assignedEntitlement.entriesEarned, 5);
+  assert.equal(assignedEntitlement.entriesAvailable, 3);
+
+  assert.equal(calculateEntitlement(99999, 100, 1, 2).entriesAvailable, 1);
+  assert.equal(calculateEntitlement(99999, 100, 1, 0).entriesAvailable, 0);
+  assert.equal(calculateEntitlement(350, 100, 1).entriesAvailable, 2);
+  for (const invalid of [NaN, Infinity, 1.5]) assert.equal(validateClaimPayloadShape({ numbers: [invalid], numberStart: 1, numberEnd: 100, entriesAvailable: 3 }), "NUMBER_OUT_OF_RANGE");
 
   // ===== §15 — formatCampaignNumber: "0"->"00", "7"->"07", "100"->"100", sempre integer internamente =====
   assert.equal(formatCampaignNumber(0), "00");

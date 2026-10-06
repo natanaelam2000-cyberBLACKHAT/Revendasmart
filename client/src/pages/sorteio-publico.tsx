@@ -22,6 +22,8 @@ interface PublicCampaignView {
     numberEnd: number;
   };
   claimable: boolean;
+  entriesAuthorized: number;
+  entriesClaimed: number;
   entriesAvailable: number;
   myNumbers: number[];
   numbers: { number: number; status: "available" | "claimed" }[];
@@ -42,7 +44,7 @@ const DENY_MESSAGES: Record<ClaimDenyReason, string> = {
   NO_NUMBERS_SELECTED: "Selecione ao menos um número.",
   DUPLICATE_NUMBER_IN_PAYLOAD: "Você selecionou o mesmo número mais de uma vez.",
   NUMBER_OUT_OF_RANGE: "Um dos números selecionados é inválido.",
-  EXCEEDS_AVAILABLE_ENTRIES: "Você selecionou mais números do que os seus direitos disponíveis.",
+  EXCEEDS_AVAILABLE_ENTRIES: "Você selecionou mais números do que a quantidade restante autorizada. Atualize a seleção.",
   NUMBER_ALREADY_CLAIMED: "Um dos números escolhidos acabou de ser pego. Escolha outro número.",
 };
 
@@ -105,7 +107,7 @@ export default function SorteioPublico() {
       if (!result.ok) {
         setConfirmError(result.denyReason ? DENY_MESSAGES[result.denyReason] : "Não foi possível confirmar. Tente novamente.");
         // §18/§19 — se um número acabou de ser pego, recarrega a grade para refletir o estado real.
-        if (result.denyReason === "NUMBER_ALREADY_CLAIMED") await load();
+        if (result.denyReason === "NUMBER_ALREADY_CLAIMED" || result.denyReason === "EXCEEDS_AVAILABLE_ENTRIES") await load();
         return;
       }
       setJustConfirmedNumbers([...selected].sort((a, b) => a - b));
@@ -119,18 +121,18 @@ export default function SorteioPublico() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
-        <Ticket className="h-8 w-8 animate-pulse text-primary" />
+      <div style={{ colorScheme: "light" }} className="flex min-h-screen items-center justify-center bg-slate-50">
+        <Ticket className="h-8 w-8 animate-pulse text-rose-700" />
       </div>
     );
   }
 
   if (loadError || !view) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+      <div style={{ colorScheme: "light" }} className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
         <div className="text-center">
-          <Ticket className="mx-auto mb-3 h-10 w-10 text-muted-foreground" />
-          <p className="text-sm font-bold text-muted-foreground">{loadError ?? "Sorteio indisponível."}</p>
+          <Ticket className="mx-auto mb-3 h-10 w-10 text-slate-600" />
+          <p className="text-sm font-bold text-slate-600">{loadError ?? "Sorteio indisponível."}</p>
         </div>
       </div>
     );
@@ -139,15 +141,15 @@ export default function SorteioPublico() {
   const { campaign } = view;
 
   return (
-    <div className="min-h-screen bg-slate-50 pb-28">
+    <div style={{ colorScheme: "light" }} className="min-h-screen bg-slate-50 pb-28">
       <div className="mx-auto max-w-md px-4 py-6">
         {campaign.prizeImageUrl && (
           <img src={campaign.prizeImageUrl} alt={campaign.prizeName} className="mb-4 aspect-square w-full rounded-3xl object-cover" />
         )}
-        <h1 className="text-xl font-black text-foreground">{campaign.title}</h1>
-        <p className="text-sm font-bold text-primary">{campaign.prizeName}</p>
-        {campaign.description && <p className="mt-1 text-sm text-muted-foreground">{campaign.description}</p>}
-        <p className="mt-1 text-xs text-muted-foreground">
+        <h1 className="text-xl font-black text-slate-900">{campaign.title}</h1>
+        <p className="text-sm font-bold text-rose-700">{campaign.prizeName}</p>
+        {campaign.description && <p className="mt-1 text-sm text-slate-600">{campaign.description}</p>}
+        <p className="mt-1 text-xs text-slate-600">
           {new Date(campaign.startsAt).toLocaleDateString("pt-BR")} – {new Date(campaign.endsAt).toLocaleDateString("pt-BR")}
         </p>
 
@@ -157,39 +159,41 @@ export default function SorteioPublico() {
           </div>
         )}
 
+        {confirmError && <p role="alert" className="mt-4 text-sm font-bold text-rose-700">{confirmError}</p>}
         {justConfirmedNumbers && (
           <div className="mt-4 flex items-start gap-2.5 rounded-2xl border border-emerald-200 bg-emerald-50 p-3" data-testid="banner-participation-confirmed">
             <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
             <div>
               <p className="text-sm font-black text-emerald-700">Participação confirmada!</p>
               <p className="mt-1 text-xs font-black uppercase tracking-wide text-emerald-700/80">Seus números</p>
-              <p className="text-sm font-bold text-foreground">{justConfirmedNumbers.map(formatCampaignNumber).join(" • ")}</p>
+              <p className="text-sm font-bold text-slate-900">{view.myNumbers.map(formatCampaignNumber).join(" • ")}</p>
             </div>
           </div>
         )}
         {!justConfirmedNumbers && view.myNumbers.length > 0 && (
-          <div className="mt-4 rounded-2xl border border-primary/20 bg-primary/5 p-3">
-            <p className="text-xs font-black uppercase tracking-wide text-primary">Seus números</p>
-            <p className="text-sm font-bold text-foreground">
+          <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-3">
+            <p className="text-xs font-black uppercase tracking-wide text-rose-700">Seus números</p>
+            <p className="text-sm font-bold text-slate-900">
               {view.myNumbers.map(formatCampaignNumber).join(" • ")}
             </p>
           </div>
         )}
 
+        <p className="mt-4 text-sm font-bold text-slate-700">Você pode escolher até {view.entriesAvailable} números. Pode confirmar parte deles agora e voltar depois.</p>
         <div className="mt-4 flex items-center justify-between">
-          <p className="text-xs font-bold text-muted-foreground">
-            Você tem {view.entriesAvailable} {view.entriesAvailable === 1 ? "direito disponível" : "direitos disponíveis"}
+          <p className="text-xs font-bold text-slate-600">
+            Autorizados: {view.entriesAuthorized} · Escolhidos: {view.entriesClaimed} · Restantes: {view.entriesAvailable}
           </p>
           {view.entriesAvailable > 0 && (
-            <p className="text-xs font-black text-foreground" data-testid="text-selection-count">
+            <p className="text-xs font-black text-slate-900" data-testid="text-selection-count">
               {selected.length} de {view.entriesAvailable} selecionados
             </p>
           )}
         </div>
 
-        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-bold text-muted-foreground" data-testid="legend-number-states">
-          <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-md border border-border/60 bg-white" /> Disponível</span>
-          <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-md border border-primary bg-primary" /> Selecionado</span>
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-bold text-slate-600" data-testid="legend-number-states">
+          <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-md border border-slate-300 bg-white" /> Disponível</span>
+          <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-md border border-rose-700 bg-rose-700" /> Selecionado</span>
           <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-md bg-slate-200" /> Indisponível</span>
         </div>
 
@@ -209,12 +213,12 @@ export default function SorteioPublico() {
                 className={[
                   "flex h-11 min-w-11 items-center justify-center rounded-xl border text-sm font-black transition-colors",
                   status === "claimed"
-                    ? "cursor-not-allowed border-transparent bg-slate-200 text-slate-400"
+                    ? "cursor-not-allowed border-transparent bg-slate-200 text-slate-600"
                     : isSelected
-                      ? "border-primary bg-primary text-white"
+                      ? "border-rose-700 bg-rose-700 text-white"
                       : disabled
-                        ? "cursor-not-allowed border-border/40 bg-white text-slate-300"
-                        : "border-border/60 bg-white text-foreground active:scale-95",
+                        ? "cursor-not-allowed border-slate-300 bg-white text-slate-500"
+                        : "border-slate-300 bg-white text-slate-900 active:scale-95",
                 ].join(" ")}
               >
                 {formatCampaignNumber(number)}
@@ -225,7 +229,7 @@ export default function SorteioPublico() {
       </div>
 
       {selected.length > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-border/60 bg-white/95 p-4 shadow-[0_-4px_16px_rgba(0,0,0,0.08)] backdrop-blur">
+        <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-slate-300 bg-white/95 p-4 shadow-[0_-4px_16px_rgba(0,0,0,0.08)] backdrop-blur">
           <div className="mx-auto max-w-md">
             {confirmError && <p className="mb-2 text-xs font-bold text-rose-600">{confirmError}</p>}
             <button
@@ -233,7 +237,7 @@ export default function SorteioPublico() {
               onClick={handleConfirm}
               disabled={confirming}
               data-testid="button-confirm-numbers"
-              className="flex w-full items-center justify-center rounded-full bg-primary py-3.5 text-sm font-black text-white disabled:opacity-60"
+              className="flex w-full items-center justify-center rounded-full bg-rose-700 py-3.5 text-sm font-black text-white disabled:opacity-60"
             >
               {confirming ? "Confirmando…" : `Confirmar ${selected.length} ${selected.length === 1 ? "número" : "números"}`}
             </button>
