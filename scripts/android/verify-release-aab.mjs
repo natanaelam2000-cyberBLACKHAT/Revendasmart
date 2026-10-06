@@ -140,7 +140,11 @@ export function verifyReleaseAab(options = {}) {
       if (markerLocations(filesOutsideManifest, marker).length > 0) fail(`marcador legado encontrado no AAB: ${marker}`);
     }
 
-    const sourceHashes = buildDirectoryHashMap(resolve(root, ANDROID_WEB_DIR));
+    // Vite's dot-directory manifest is build metadata consumed by web tooling, not an application
+    // asset. Android packaging intentionally omits `.vite/`; mirror the APK verifier here so the
+    // release gate compares only assets that are actually eligible to be packaged.
+    const sourceHashes = new Map([...buildDirectoryHashMap(resolve(root, ANDROID_WEB_DIR))]
+      .filter(([file]) => !file.replaceAll("\\", "/").startsWith(".vite/")));
     const aabHashes = buildDirectoryHashMap(expectedWebRoot);
     const comparison = compareDirectoryHashMaps(sourceHashes, aabHashes);
     if (comparison.missing.length || comparison.unexpected.length || comparison.mismatched.length) {
