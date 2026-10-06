@@ -1,6 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const baseURL = process.env.E2E_BASE_URL || "http://127.0.0.1:5000";
+// Ambientes com um Chromium pré-instalado de outra versão (ex.: sandbox de CI) apontam para ele aqui, em vez
+// de baixar o navegador; sem a variável nada muda.
+const chromiumExecutable = process.env.E2E_CHROMIUM_EXECUTABLE;
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -20,7 +23,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: { ...devices["Desktop Chrome"], ...(chromiumExecutable ? { launchOptions: { executablePath: chromiumExecutable } } : {}) },
     },
   ],
 });

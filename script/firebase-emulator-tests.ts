@@ -583,6 +583,37 @@ async function run() {
       setDoc(historyRef(owner, ownerUid, "ad-bad-action"), validHistoryEntry({ action: "hackeado" })));
     await expectFails("campo extra no histórico é bloqueado", () =>
       setDoc(historyRef(owner, ownerUid, "ad-extra"), validHistoryEntry({ premiumActive: true })));
+    // --- proDocument (ADS-PRO-FINAL): o estúdio guarda as DECISÕES do anúncio (JSON curto) para reabrir e editar ---
+    const studioEntry = (overrides: Record<string, unknown> = {}) => validHistoryEntry({
+      mode: "pro",
+      composerVersion: 2,
+      creativeFamily: "luxury",
+      creativeConceptId: "studio:A:hero-center",
+      format: "portrait",
+      template: "pro-ad",
+      imageUrl: "https://exemplo.test/ad.png",
+      proBackground: { sourceType: "GENERATED_DETERMINISTIC", backgroundId: "luxury-onyx-spotlight", backgroundVersion: 1, backgroundFamily: "luxury" },
+      proDocument: JSON.stringify({ v: 1, productId: "product-local", format: "portrait" }),
+      ...overrides,
+    });
+    await expectSucceeds("anúncio do estúdio com proDocument (string curta) é permitido", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-studio-ok"), studioEntry()));
+    await expectSucceeds("salvar de novo o MESMO anúncio do estúdio atualiza o proDocument sem alterar a criação", () =>
+      updateDoc(historyRef(owner, ownerUid, "ad-studio-ok"), { proDocument: JSON.stringify({ v: 1, productId: "product-local", format: "square" }), updatedAtISO: laterThanNow }));
+    await expectFails("proDocument acima do limite de tamanho é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-studio-huge"), studioEntry({ proDocument: "x".repeat(4001) })));
+    await expectFails("proDocument que não é string é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-studio-object"), studioEntry({ proDocument: { v: 1 } })));
+    await expectFails("proDocument numérico é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-studio-number"), studioEntry({ proDocument: 42 })));
+    await expectFails("outro usuário não grava anúncio do estúdio no histórico do owner", () =>
+      setDoc(historyRef(intruder, ownerUid, "ad-studio-intruder"), studioEntry()));
+    await expectFails("outro usuário não lê o proDocument do owner", async () => {
+      await getDoc(historyRef(intruder, ownerUid, "ad-studio-ok"));
+    });
+    await expectSucceeds("histórico legado (sem proDocument) continua válido", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-studio-legacy"), validHistoryEntry({ mode: "pro", composerVersion: 1 })));
+
     // --- productAssetSnapshot (PRO-07D.1): opcional no legado, fechado e sem bytes inline ---
     await expectSucceeds("histórico legado sem snapshot continua permitido", () =>
       setDoc(historyRef(owner, ownerUid, "ad-snapshot-legacy"), validHistoryEntry()));
