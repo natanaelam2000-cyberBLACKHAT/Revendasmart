@@ -4,7 +4,8 @@
  */
 import assert from "node:assert/strict";
 import { ADS_PRO_PRODUCTION_MANIFEST, ADS_PRO_SAFE_SUBJECT_ZONE } from "../shared/ads-pro/production-manifest";
-import { MARKETING_PRO_BACKGROUND_LIBRARY, mapApprovedStaticBackground } from "../shared/marketing-pro-background-library";
+import { MARKETING_PRO_BACKGROUND_LIBRARY } from "../shared/marketing-pro-background-library";
+import { mapApprovedStaticBackground } from "../shared/ads-pro/background-catalog";
 import type { AssetDNA, AssetLibraryManifest } from "../shared/ads-pro/asset-dna";
 import { countDirectionAxisDifferences, type AdsProDirectionAxes } from "../shared/ads-pro/ad-style-direction";
 import { ADS_PRO_MAX_VARIATIONS, planVariationStyles, type AdsProVariation } from "../shared/ads-pro/ad-variations";

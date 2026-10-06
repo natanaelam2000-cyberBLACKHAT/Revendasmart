@@ -160,6 +160,51 @@ function rankBackgrounds(input: GenerateAdsProVariationsInput, manifest: AssetLi
   });
 }
 
+export interface AdsProBackgroundSuggestion {
+  readonly asset: MarketingProBackgroundAsset;
+  /** 0 = melhor patamar do matcher (categoria/objetivo); cresce conforme a adequação cai. */
+  readonly tierIndex: number;
+  readonly bucketMatch: boolean;
+  readonly legible: boolean;
+  readonly styleAffinity: AssetMatchResult["breakdown"]["styleAffinity"];
+}
+
+export interface RankAdsProBackgroundsInput {
+  readonly facts: AdsProProductFacts;
+  readonly preferredStyles?: readonly MarketingProStyle[];
+  /** Estilo da opção em edição: lidera a afinidade de estilo do matcher. */
+  readonly style: MarketingProStyle;
+  readonly intent: MarketingCampaignIntentId;
+  readonly format: AdsProFormat;
+  readonly manifest?: AssetLibraryManifest;
+  readonly library?: readonly MarketingProBackgroundAsset[];
+}
+
+/**
+ * Lista ORDENADA de fundos para a grade "Fundo" da UI — mesma regra das variações (matcher do manifest de
+ * produção; nunca um id solto). Só entra o que o manifest aprovado E a biblioteca conhecem.
+ */
+export function rankAdsProBackgroundsForFacts(input: RankAdsProBackgroundsInput): readonly AdsProBackgroundSuggestion[] {
+  const manifest = input.manifest ?? ADS_PRO_PRODUCTION_MANIFEST;
+  const library = input.library ?? MARKETING_PRO_BACKGROUND_LIBRARY;
+  const profileStyles = input.preferredStyles ?? [];
+  const ranked = rankBackgrounds(
+    { facts: input.facts, intent: input.intent, format: input.format, storeName: "" },
+    manifest,
+    library,
+    [input.style, ...ADS_PRO_ADJACENT_STYLES[input.style], ...profileStyles],
+  );
+  const tierOrder: string[] = [];
+  for (const item of ranked) if (!tierOrder.includes(item.tier)) tierOrder.push(item.tier);
+  return ranked.map((item) => ({
+    asset: item.asset,
+    tierIndex: tierOrder.indexOf(item.tier),
+    bucketMatch: item.bucketMatch,
+    legible: item.legible,
+    styleAffinity: item.result.breakdown.styleAffinity,
+  }));
+}
+
 /**
  * Papéis das variações — o que faz as opções serem de fato diferentes e não "o mesmo anúncio em outra cor":
  *   A "Fiel ao seu estilo"  : a receita do perfil como ela é;

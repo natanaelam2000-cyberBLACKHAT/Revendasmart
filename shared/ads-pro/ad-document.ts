@@ -307,6 +307,22 @@ export function withArchetype(doc: AdsProAdDocumentV1, archetype: AdsProLayoutAr
   return { ...doc, direction: { ...doc.direction, archetype } };
 }
 
+/** Ajusta os eixos de direção de arte editáveis (preço, botão, decoração…) sem tocar no resto do documento. */
+export function withDirection(
+  doc: AdsProAdDocumentV1,
+  patch: Partial<Pick<AdsProDocumentDirection, "priceStyle" | "ctaShape" | "decoration" | "spacing" | "hierarchy">>,
+): AdsProAdDocumentV1 {
+  const next: AdsProDocumentDirection = {
+    ...doc.direction,
+    priceStyle: oneOf(patch.priceStyle, ADS_PRO_PRICE_STYLES) ?? doc.direction.priceStyle,
+    ctaShape: oneOf(patch.ctaShape, ADS_PRO_CTA_SHAPES) ?? doc.direction.ctaShape,
+    decoration: oneOf(patch.decoration, ADS_PRO_DECORATIONS) ?? doc.direction.decoration,
+    spacing: oneOf(patch.spacing, ADS_PRO_SPACINGS) ?? doc.direction.spacing,
+    hierarchy: oneOf(patch.hierarchy, ADS_PRO_HIERARCHIES) ?? doc.direction.hierarchy,
+  };
+  return { ...doc, direction: next };
+}
+
 export function withIntensity(doc: AdsProAdDocumentV1, intensity: AdsProIntensity): AdsProAdDocumentV1 {
   return { ...doc, direction: { ...doc.direction, intensity } };
 }

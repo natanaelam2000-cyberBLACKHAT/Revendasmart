@@ -32,8 +32,8 @@ const MUTATIONS: readonly MutationDef[] = [
     id: "MUT-01",
     description: "Manifest omite um asset (slice de 11 em vez de 12)",
     file: "shared/ads-pro/production-manifest.ts",
-    target: `const rawAssets = MARKETING_PRO_BACKGROUND_LIBRARY.map((bg) => ({`,
-    replacement: `const rawAssets = MARKETING_PRO_BACKGROUND_LIBRARY.slice(0, 11).map((bg) => ({ // MUT-01`,
+    target: `const rawAssets = library.map((bg) => ({`,
+    replacement: `const rawAssets = library.slice(0, 11).map((bg) => ({ // MUT-01`,
   },
   {
     id: "MUT-02",
@@ -99,8 +99,8 @@ const MUTATIONS: readonly MutationDef[] = [
     id: "MUT-10",
     description: "Fallback procedural inserido no manifesto de produção",
     file: "shared/ads-pro/production-manifest.ts",
-    target: `  const rawAssets = MARKETING_PRO_BACKGROUND_LIBRARY.map((bg) => ({`,
-    replacement: `  const rawAssets = [...MARKETING_PRO_BACKGROUND_LIBRARY, { id: "pro-generic-fallback", version: 1, family: "minimal", categories: [], formats: ["portrait", "square"], tags: [], sourceType: "GENERATED_DETERMINISTIC", generated: { angleDeg: 0, stops: [] } } as any].map((bg) => ({ // MUT-10`,
+    target: `  const rawAssets = library.map((bg) => ({`,
+    replacement: `  const rawAssets = [...library, { id: "pro-generic-fallback", version: 1, family: "minimal", categories: [], formats: ["portrait", "square"], tags: [], sourceType: "GENERATED_DETERMINISTIC", generated: { angleDeg: 0, stops: [] } } as any].map((bg) => ({ // MUT-10`,
   },
 ];
 

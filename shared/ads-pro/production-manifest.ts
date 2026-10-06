@@ -5,10 +5,11 @@
  * Mantém a biblioteca visual como única fonte da verdade, transpondo os
  * cenários produtivos existentes para o contrato formal AssetDNA.
  *
- * ADS-PRO-FINAL: a biblioteca agora = fundos gerados em código + fundos ESTÁTICOS APROVADOS pela
- * auditoria do acervo bruto (`approved-static-backgrounds.ts`, gerado). Este manifesto é o ÚNICO insumo
- * do matcher: nada que não tenha sido aprovado na auditoria chega a ser escolhido. Cada entrada declara
- * `luminance` (medida do cenário) para que o compositor escolha a cor de tinta legível.
+ * ADS-PRO-FINAL: o construtor aceita qualquer biblioteca — o catálogo do estúdio (`background-catalog.ts`) o
+ * alimenta com fundos gerados em código + fundos ESTÁTICOS APROVADOS pela auditoria do acervo bruto
+ * (`approved-static-backgrounds.ts`, gerado). Este manifesto é o ÚNICO insumo do matcher: nada que não tenha
+ * sido aprovado na auditoria chega a ser escolhido. Cada entrada declara `luminance` (medida do cenário)
+ * para que o compositor escolha a cor de tinta legível.
  */
 
 import type { AssetDNA, AssetLibraryManifest, NormalizedRect } from "./asset-dna";
@@ -16,7 +17,6 @@ import { parseAssetLibrary } from "./asset-parser";
 import { resolveMarketingProStyleForCreativeFamily } from "../marketing-pro-art-direction";
 import { MARKETING_PRO_BACKGROUND_LIBRARY, type MarketingProBackgroundAsset } from "../marketing-pro-background-library";
 import { backdropColorsOfGenerated, classifyBackdropLuminance } from "./ad-contrast";
-import { ADS_PRO_APPROVED_STATIC_BACKGROUNDS, ADS_PRO_APPROVED_STATIC_BACKGROUNDS_VERSION } from "./approved-static-backgrounds";
 
 /**
  * Interseção segura normalizada entre MARKETING_PRO_PRODUCT_ZONE.portrait e square.
@@ -46,8 +46,11 @@ function resolveLuminanceField(bg: MarketingProBackgroundAsset): { readonly lumi
  * Constrói o manifesto de produção do Anúncios Pro derivando os assets
  * diretamente da biblioteca visual canônica e validando contra o parser formal.
  */
-export function buildAdsProProductionManifest(): AssetLibraryManifest {
-  const rawAssets = MARKETING_PRO_BACKGROUND_LIBRARY.map((bg) => ({
+export function buildAdsProProductionManifest(
+  library: readonly MarketingProBackgroundAsset[] = MARKETING_PRO_BACKGROUND_LIBRARY,
+  libraryVersion: string = "1.0.0",
+): AssetLibraryManifest {
+  const rawAssets = library.map((bg) => ({
     id: bg.id,
     entityKinds: ["product"] as const,
     targetCategories: bg.categories,
@@ -66,7 +69,7 @@ export function buildAdsProProductionManifest(): AssetLibraryManifest {
 
   const parseResult = parseAssetLibrary({
     schemaVersion: 1,
-    libraryVersion: ADS_PRO_APPROVED_STATIC_BACKGROUNDS.length === 0 ? "1.0.0" : ADS_PRO_APPROVED_STATIC_BACKGROUNDS_VERSION,
+    libraryVersion,
     assets: rawAssets,
   });
 
@@ -86,8 +89,8 @@ export function buildAdsProProductionManifest(): AssetLibraryManifest {
 }
 
 /**
- * Manifesto canônico congelado de produção do Anúncios Pro.
- * Contém os backgrounds gerados em código (12) + os estáticos aprovados na auditoria.
+ * Manifesto canônico congelado dos fundos GERADOS em código (12). O manifesto completo do estúdio — com os
+ * estáticos aprovados na auditoria — é `ADS_PRO_CATALOG_MANIFEST` (`background-catalog.ts`).
  */
 export const ADS_PRO_PRODUCTION_MANIFEST: AssetLibraryManifest = Object.freeze(
   buildAdsProProductionManifest()

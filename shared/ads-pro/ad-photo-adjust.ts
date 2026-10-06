@@ -180,4 +180,28 @@ export function applyPhotoAdjust(image: RgbaImage, adjustInput: Partial<AdsProPh
   return { data: out, width, height };
 }
 
+
+/**
+ * Cor média das 4 bordas da foto (pixels opacos nos cantos). Preenche o cartão atrás do produto, para o
+ * enquadramento (zoom/contain) ficar contínuo em vez de mostrar tarjas. Sem pixel opaco => branco.
+ */
+export function estimateEdgeColor(image: RgbaImage): string {
+  const { data, width, height } = image;
+  const patch = Math.max(2, Math.round(Math.min(width, height) * 0.04));
+  let r = 0; let g = 0; let b = 0; let count = 0;
+  const corners: readonly [number, number][] = [[0, 0], [width - patch, 0], [0, height - patch], [width - patch, height - patch]];
+  for (const [cx, cy] of corners) {
+    for (let y = Math.max(0, cy); y < Math.min(height, cy + patch); y += 1) {
+      for (let x = Math.max(0, cx); x < Math.min(width, cx + patch); x += 1) {
+        const o = (y * width + x) * 4;
+        if (data[o + 3] < 128) continue;
+        r += data[o]; g += data[o + 1]; b += data[o + 2]; count += 1;
+      }
+    }
+  }
+  if (count === 0) return "#FFFFFF";
+  const hex = (value: number) => Math.round(value / count).toString(16).padStart(2, "0");
+  return `#${hex(r)}${hex(g)}${hex(b)}`.toUpperCase();
+}
+
 export { NEUTRAL_PHOTO_ADJUST, PHOTO_ADJUST_LIMITS };

@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { PHOTO_ADJUST_LIMITS, isNeutralPhotoAdjust } from "../shared/ads-pro/ad-document";
-import { analyzePhoto, applyPhotoAdjust, computeAutoAdjust, isPhotoAlreadyGood, type RgbaImage } from "../shared/ads-pro/ad-photo-adjust";
+import { analyzePhoto, applyPhotoAdjust, computeAutoAdjust, estimateEdgeColor, isPhotoAlreadyGood, type RgbaImage } from "../shared/ads-pro/ad-photo-adjust";
 import { check, checkCount, createRng } from "./ads-pro-test-kit";
 
 function sha(data: Uint8ClampedArray): string {
@@ -123,6 +123,14 @@ async function main(): Promise<void> {
     assert.equal(stats.sampledPixels, 0);
     assert.ok(isNeutralPhotoAdjust(computeAutoAdjust(stats)));
     assert.equal(applyPhotoAdjust(empty, { brightness: 0.2 }).data.every((value) => value === 0), true);
+  });
+
+  await check("P9 cor das bordas: média dos cantos opacos; recorte transparente => branco", () => {
+    const solid: RgbaImage = { data: new Uint8ClampedArray(40 * 30 * 4), width: 40, height: 30 };
+    for (let i = 0; i < solid.data.length; i += 4) { solid.data[i] = 200; solid.data[i + 1] = 100; solid.data[i + 2] = 50; solid.data[i + 3] = 255; }
+    assert.equal(estimateEdgeColor(solid), "#C86432");
+    const transparent: RgbaImage = { data: new Uint8ClampedArray(40 * 30 * 4), width: 40, height: 30 };
+    assert.equal(estimateEdgeColor(transparent), "#FFFFFF");
   });
 
   console.log(`ADS-PRO photo adjust tests passed: ${checkCount()} checks.`);

@@ -50,6 +50,17 @@ export interface AdsProProductFacts {
   readonly availability: AdsProAvailability;
 }
 
+/**
+ * "Sem marca" é uma OPÇÃO do cadastro (nichos oferecem esse valor), não uma marca: anunciar "SEM MARCA" como se
+ * fosse o nome da marca seria um defeito visível. Valores que significam "não há marca" saem do anúncio.
+ */
+const UNBRANDED_LABELS: readonly string[] = ["sem marca", "semmarca", "generico", "generica", "outros", "outras", "outro", "outra", "nao informado", "nao informada", "n/a", "na", "nenhuma", "nenhum", "desconhecida", "desconhecido", "-"];
+
+export function isUnbrandedLabel(value: string): boolean {
+  const key = value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9/ -]/g, " ").replace(/\s+/g, " ").trim();
+  return key.length === 0 || UNBRANDED_LABELS.includes(key);
+}
+
 export function cleanText(value: unknown, maxLength: number): string | undefined {
   if (typeof value !== "string" && typeof value !== "number") return undefined;
   // eslint-disable-next-line no-control-regex
@@ -75,7 +86,8 @@ function readVolume(extras: Readonly<Record<string, unknown>> | undefined): stri
 
 export function buildAdsProProductFacts(input: AdsProProductInput): AdsProProductFacts {
   const name = cleanText(input.name, 120) ?? "Produto";
-  const brand = cleanText(input.brand, 60);
+  const rawBrand = cleanText(input.brand, 60);
+  const brand = rawBrand && !isUnbrandedLabel(rawBrand) ? rawBrand : undefined;
   const description = cleanText(input.description, 240);
   const rawCategory = cleanText(input.category, 80);
 

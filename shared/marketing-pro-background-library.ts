@@ -17,9 +17,6 @@
 import type { MarketingProCategory, MarketingProFormat } from "./marketing-pro-contract";
 import { MARKETING_PRO_FORMAT_DIMENSIONS } from "./marketing-pro-contract";
 import type { CreativeFamily } from "./marketing-pro-creative-intelligence";
-import { ADS_PRO_APPROVED_STATIC_BACKGROUNDS } from "./ads-pro/approved-static-backgrounds";
-import { AUDIT_BUCKET_SLUGS } from "./ads-pro/background-audit";
-import { staticBackgroundThumbnailUrl, staticBackgroundUrl, type ApprovedStaticBackgroundEntry } from "./ads-pro/static-background-entry";
 
 export type MarketingProBackgroundSourceType = "GENERATED_DETERMINISTIC" | "STATIC_ASSET" | "AI_GENERATED";
 
@@ -137,32 +134,14 @@ export const MARKETING_PRO_GENERATED_BACKGROUND_LIBRARY: readonly MarketingProGe
 ];
 
 /**
- * ADS-PRO-FINAL — fundos ESTÁTICOS aprovados pela auditoria do acervo bruto
- * (`script/ads-pro-background-audit.ts`). Só entra aqui o que o manifest de produção gerado
- * (`shared/ads-pro/approved-static-backgrounds.ts`) lista — o acervo bruto nunca é lido em runtime.
- * Categoria: o balde comercial vira a categoria canônica; "geral" vira universal (`[]`), compatível com tudo.
+ * Registry dos fundos GERADOS em código (a biblioteca que a rota de Anúncios sempre carregou).
+ *
+ * ADS-PRO-FINAL: os fundos ESTÁTICOS aprovados pela auditoria do acervo bruto NÃO entram aqui de propósito —
+ * eles somam dezenas de kB de metadados e só o estúdio precisa deles. Vivem em
+ * `shared/ads-pro/background-catalog.ts` (gerados + estáticos), que só o chunk lazy do estúdio importa; assim a
+ * rota de Anúncios continua dentro do budget de bundle, qualquer que seja o tamanho do acervo aprovado.
  */
-export function mapApprovedStaticBackground(entry: ApprovedStaticBackgroundEntry): MarketingProStaticBackgroundAsset {
-  return {
-    id: entry.id,
-    version: 1,
-    family: entry.style,
-    categories: entry.bucket === "geral" ? [] : [entry.category],
-    formats: ["square", "portrait"],
-    tags: [`bucket:${AUDIT_BUCKET_SLUGS[entry.bucket]}`, entry.luminance, ...(entry.needsScrim ? ["scrim"] : [])],
-    sourceType: "STATIC_ASSET",
-    staticUrl: staticBackgroundUrl(entry.id),
-    thumbnailUrl: staticBackgroundThumbnailUrl(entry.id),
-    luminance: entry.luminance,
-    needsScrim: entry.needsScrim,
-  };
-}
-
-/** Registry canônico: fundos gerados em código + estáticos aprovados na auditoria. UM registry, UM resolver. */
-export const MARKETING_PRO_BACKGROUND_LIBRARY: readonly MarketingProBackgroundAsset[] = [
-  ...MARKETING_PRO_GENERATED_BACKGROUND_LIBRARY,
-  ...ADS_PRO_APPROVED_STATIC_BACKGROUNDS.map(mapApprovedStaticBackground),
-];
+export const MARKETING_PRO_BACKGROUND_LIBRARY: readonly MarketingProBackgroundAsset[] = MARKETING_PRO_GENERATED_BACKGROUND_LIBRARY;
 
 /** Família usada quando nem `creativeFamily` resolve nenhum candidato (§10, tier final antes do absoluto). */
 const GENERIC_FALLBACK_FAMILY: CreativeFamily = "minimal";
