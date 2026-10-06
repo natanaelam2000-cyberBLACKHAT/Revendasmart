@@ -516,7 +516,7 @@ export function AdsProStudio({ products, selectedProductId, onSelectProduct, bra
     >
       <div
         ref={frameRef}
-        className="z-30 -mx-1 mb-3 rounded-2xl border border-border/60 bg-white/95 px-2 pb-2 pt-2 shadow-sm backdrop-blur [@media(min-height:560px)]:sticky lg:sticky lg:mx-0 lg:mb-0"
+        className="z-30 -mx-1 mb-3 rounded-2xl border border-border/60 bg-white/95 px-1.5 pb-2 pt-2 shadow-sm backdrop-blur sm:px-2 [@media(min-height:560px)]:sticky lg:sticky lg:mx-0 lg:mb-0"
         style={{ top: headerOffset + 8 }}
         data-testid="studio-preview-frame"
       >
@@ -558,7 +558,7 @@ export function AdsProStudio({ products, selectedProductId, onSelectProduct, bra
         <div
           role="tablist"
           aria-label="Etapas do anúncio"
-          className="mt-2 grid grid-cols-6 gap-1"
+          className="mt-2 grid grid-cols-6 gap-0.5 sm:gap-1"
           onKeyDown={onTabKeyDown}
           data-testid="studio-tabs"
         >

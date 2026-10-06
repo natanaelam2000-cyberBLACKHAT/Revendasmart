@@ -218,9 +218,33 @@ test.describe("ADS-PRO-FINAL — estúdio de anúncios (runtime)", () => {
     await page.getByTestId("studio-photo-mode-original").click();
     await expect(page.getByTestId("studio-photo-mode-original")).toHaveAttribute("aria-pressed", "true");
 
-    // ---- F4: estilo e objetivo mudam o anúncio ---------------------------------------------
+    // ---- F4a: o QUIZ de estilo (perfil) muda de verdade as opções geradas ---------------------------------
     await page.getByTestId("studio-tab-style").click();
     await expect(page.getByTestId("studio-step-style")).toBeVisible();
+    await expect(page.getByTestId("studio-style-summary")).toHaveAttribute("data-style-origin", "category-default");
+    const defaultStyle = (await page.getByTestId("studio-style-summary").getAttribute("data-resolved-style")) ?? "";
+    // Escolhe o caminho do quiz que leva a um estilo DIFERENTE do sugerido pela categoria (prova que o perfil manda).
+    const profileStyle = defaultStyle === "editorial" ? "modern" : "editorial";
+    const quizPath = profileStyle === "editorial"
+      ? ["comp_editorial", "light_clean_balanced", "atmo_curated", "density_structured", "expr_editorial"]
+      : ["comp_dynamic", "light_crisp_vibrant", "atmo_contemporary", "density_focused", "expr_progressive"];
+    await page.getByTestId("button-ads-pro-define-style").click();
+    await expect(page.getByTestId("ads-pro-style-quiz-dialog")).toBeVisible({ timeout: 15_000 });
+    for (const optionId of quizPath) {
+      await page.getByTestId(`button-ads-pro-quiz-option-${optionId}`).click();
+      await page.getByTestId("button-ads-pro-quiz-next").click();
+    }
+    await page.getByTestId("button-ads-pro-quiz-save").click();
+    await expect(page.getByTestId("ads-pro-style-quiz-dialog")).toBeHidden({ timeout: 20_000 });
+    await expect(page.getByTestId("studio-style-summary")).toHaveAttribute("data-style-origin", "profile", { timeout: 20_000 });
+    await expect(page.getByTestId("studio-style-summary")).toHaveAttribute("data-resolved-style", profileStyle);
+    await expect.poll(() => canvasAttr(page, "data-style"), { message: "o anúncio em edição passou a usar o estilo do perfil" }).toBe(profileStyle);
+    await page.getByTestId("studio-tab-options").click();
+    await expect(page.getByTestId("studio-variation-A")).toHaveAttribute("data-variation-style", profileStyle);
+    await page.screenshot({ path: join(proofDir, "03b-mobile-profile-options.png") });
+    await page.getByTestId("studio-tab-style").click();
+
+    // ---- F4: estilo e objetivo mudam o anúncio ---------------------------------------------
     await page.getByTestId("studio-style-luxury").click();
     await expect(page.getByTestId("studio-style-summary")).toHaveAttribute("data-resolved-style", "luxury");
     await expect.poll(() => canvasAttr(page, "data-style")).toBe("luxury");
@@ -286,6 +310,20 @@ test.describe("ADS-PRO-FINAL — estúdio de anúncios (runtime)", () => {
     expect(stuck, "a prévia fica visível (fixa) enquanto os controles rolam").toBeGreaterThanOrEqual(0);
     expect(stuck).toBeLessThan(200);
     await page.evaluate(() => window.scrollTo(0, 0));
+
+    // ---- F8b: celular pequeno (320×568): sem rolagem lateral, 6 abas ainda tocáveis, prévia fixa --------------------
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.waitForTimeout(300);
+    const small = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      innerWidth: window.innerWidth,
+      tabWidths: Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="studio-tab-"]')).map((el) => Math.round(el.getBoundingClientRect().width)),
+    }));
+    expect(small.scrollWidth, "320px: sem rolagem horizontal").toBeLessThanOrEqual(small.innerWidth);
+    for (const width of small.tabWidths) expect(width, "320px: abas largas o bastante para o toque").toBeGreaterThanOrEqual(40);
+    await page.screenshot({ path: join(proofDir, "07b-mobile-320.png") });
+    await page.setViewportSize(MOBILE);
+    await page.waitForTimeout(200);
 
     // ---- F9: salvar é idempotente (duas vezes = UM registro) --------------------------------------
     await page.getByTestId("studio-tab-save").click();
