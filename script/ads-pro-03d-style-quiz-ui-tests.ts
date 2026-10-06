@@ -423,17 +423,26 @@ for (const style of ["luxury", "editorial", "minimal", "sensory", "modern"] as c
 }
 console.log("PASS SEC-04: rótulos e descrições estéticas puras sem promessas comerciais");
 
-// SEC-05: Integração no painel MarketingProPanel preservada
+// SEC-05: Integração no painel MarketingProPanel preservada. ADS-PRO-FINAL: o painel monta o estúdio e é o
+// estúdio quem renderiza o cartão de perfil (e usa o perfil para decidir os estilos das opções).
+const studioSource = fs.readFileSync(path.resolve("client/src/components/marketing/ads-pro-studio/AdsProStudio.tsx"), "utf8");
 assert.match(
   panelSource,
-  /import\("@\/components\/marketing\/AdsProProfileCard"\)|import \{ AdsProProfileCard \} from "@\/components\/marketing\/AdsProProfileCard";/,
-  "SEC-05: MarketingProPanel importa AdsProProfileCard via alias canônico"
+  /import\("@\/components\/marketing\/ads-pro-studio\/AdsProStudio"\)/,
+  "SEC-05: MarketingProPanel carrega o estúdio de anúncios"
+);
+assert.match(panelSource, /<AdsProStudio\b/, "SEC-05: MarketingProPanel renderiza o estúdio");
+assert.match(
+  studioSource,
+  /import\("@\/components\/marketing\/AdsProProfileCard"\)/,
+  "SEC-05: o estúdio importa AdsProProfileCard via alias canônico"
 );
 assert.match(
-  panelSource,
-  /<AdsProProfileCard className="mb-1" \/>/,
-  "SEC-05: MarketingProPanel renderiza AdsProProfileCard"
+  studioSource,
+  /<AdsProProfileCard className="mb-1" onProfileChange=\{setProfile\} \/>/,
+  "SEC-05: o estúdio renderiza AdsProProfileCard e recebe o perfil"
 );
+assert.match(studioSource, /preferredStyles/, "SEC-05: o perfil decide os estilos que lideram as opções");
 console.log("PASS SEC-05: integração no MarketingProPanel comprovada");
 
 // SEC-06: Suporte a remoção limpa (clear)

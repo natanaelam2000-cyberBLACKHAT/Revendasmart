@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Eraser, ImagePlus, Layers, Sparkles, Wand2 } from "lucide-react";
+import { Eraser, ImagePlus, Sparkles } from "lucide-react";
 import { useLocation } from "wouter";
 import { canUseFeature } from "@shared/monetization";
 import { usePlan } from "@/providers/PlanProvider";
@@ -25,8 +25,10 @@ import {
   canvasToPngBlob,
 } from "@/lib/marketing-pro-real-background-composer";
 import { CreativeProfileOnboarding } from "./CreativeProfileOnboarding";
-const AdsProProfileCard = lazy(() =>
-  import("@/components/marketing/AdsProProfileCard").then((m) => ({ default: m.AdsProProfileCard }))
+// ADS-PRO-FINAL: o estúdio (foto → estilo → opções → fundo → edição → salvar/exportar/compartilhar) é o fluxo
+// principal do Anúncio Pro. Fica num chunk próprio: só é baixado quando o painel Pro abre para quem tem acesso.
+const AdsProStudio = lazy(() =>
+  import("@/components/marketing/ads-pro-studio/AdsProStudio").then((m) => ({ default: m.AdsProStudio }))
 );
 import {
   getCreativeProfile,
@@ -44,20 +46,6 @@ import {
   generateMarketingProBackgroundAndWait,
   type MarketingProGenerationDto,
 } from "@/lib/marketing-pro-real-background";
-
-/**
- * Fronteira de produto de Anúncios Pro.
- *
- * PRO-07 fase 1: "Remover fundo" e "Trocar fundo" saíram desta lista — viraram ferramentas reais
- * (ver seção de recorte/Composer V2 abaixo), não mais itens informativos. As 3 restantes ainda não
- * têm implementação real (fases 2/3 desta sprint) e continuam corretamente marcadas como tal — nunca
- * fingir pronto o que não está.
- */
-const PRO_TOOLS: { title: string; detail: string; icon: typeof Sparkles }[] = [
-  { title: "Melhorar foto", detail: "Ajustar luz e nitidez da foto do produto.", icon: Sparkles },
-  { title: "Reestilizar anúncio", detail: "Gerar outra direção visual para a mesma arte.", icon: Wand2 },
-  { title: "Criar variações", detail: "Montar versões alternativas do anúncio para testar.", icon: Layers },
-];
 
 const CREATIVE_FAMILY_LABELS: Record<PremiumCreativeFamily, string> = {
   luxury: "Luxo",
@@ -490,68 +478,14 @@ export function MarketingProPanel({ products = [], storeName = "Minha loja", sto
       </div>
 
       {proAdsEnabled && (
-        <Suspense fallback={null}>
-          <AdsProProfileCard className="mb-1" />
+        <Suspense fallback={<p className="text-xs font-semibold text-muted-foreground" role="status" data-testid="marketing-pro-studio-loading">Carregando o estúdio...</p>}>
+          <AdsProStudio
+            products={previewProducts}
+            selectedProductId={selectedProduct?.id ?? ""}
+            onSelectProduct={setSelectedProductId}
+            branding={{ storeName, storeLogoUrl, primaryColor }}
+          />
         </Suspense>
-      )}
-
-      {proAdsEnabled && creativeProfileState.status !== "loading" && (
-        <div className="min-w-0 rounded-2xl border border-primary/20 bg-primary/[0.04] p-3.5" data-testid="marketing-pro-creative-profile-entry">
-          {creativeProfileState.status === "profile" ? (
-            <>
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                  <h3 className="text-sm font-black text-foreground">Perfil criativo</h3>
-                  <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                    Pronto — usado como ponto de partida das suas próximas criações.
-                  </p>
-                </div>
-                <span className="rounded-full bg-emerald-100 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-emerald-700">pronto</span>
-              </div>
-              <div className="mt-3 flex gap-2">
-                <button
-                  type="button"
-                  onClick={handleCreativeProfileEdit}
-                  className="min-h-11 flex-1 rounded-xl border border-primary/30 bg-white text-xs font-black text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                  data-testid="button-creative-profile-entry-edit"
-                >
-                  Editar preferências
-                </button>
-                <button
-                  type="button"
-                  onClick={handleCreativeProfileRetake}
-                  className="min-h-11 flex-1 rounded-xl border border-border bg-white text-xs font-black text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                  data-testid="button-creative-profile-entry-retake"
-                >
-                  Refazer teste de estilo
-                </button>
-              </div>
-            </>
-          ) : creativeProfileState.status === "unavailable" ? (
-            <>
-              <h3 className="text-sm font-black text-foreground">Perfil criativo</h3>
-              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground" role="status" data-testid="text-creative-profile-unavailable">
-                Não foi possível carregar seu perfil criativo agora. Tente novamente em instantes.
-              </p>
-            </>
-          ) : (
-            <>
-              <h3 className="text-sm font-black text-foreground">Perfil criativo</h3>
-              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                Vamos descobrir seu estilo antes da primeira geração — leva menos de um minuto.
-              </p>
-              <button
-                type="button"
-                onClick={() => setCreativeProfileOnboardingOpen(true)}
-                className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 text-xs font-black text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                data-testid="button-creative-profile-entry-start"
-              >
-                <Sparkles className="h-4 w-4" />
-                Descobrir meu estilo
-              </button>
-            </>
-          )}
-        </div>
       )}
 
       {creativeProfileOnboardingOpen && (
@@ -563,342 +497,383 @@ export function MarketingProPanel({ products = [], storeName = "Minha loja", sto
         />
       )}
 
-      {proAdsEnabled && selectedProduct && (
-        <CreativeConceptsSection
-          product={selectedProduct}
-          approvedCutoutSource={approvedCutoutSource}
-          realBackgroundEnabled={realBackgroundEnabled}
-          branding={{ storeName, storeLogoUrl, primaryColor }}
-        />
-      )}
-
       {proAdsEnabled && (
-        <div className="min-w-0 rounded-2xl border border-primary/20 bg-primary/[0.04] p-3.5" data-testid="marketing-pro-local-demo">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div>
-              <h3 className="text-sm font-black text-foreground">Prévia de estilo</h3>
-              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                Composição local determinística para demonstrar a direção visual 4:5. Nenhuma imagem é gerada por IA.
-              </p>
-            </div>
-            <span className="rounded-full bg-primary/10 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-primary">
-              demonstração
-            </span>
-          </div>
-
-          {previewProducts.length > 0 ? (
-            <>
-              <label className="mt-3 block text-[11px] font-bold text-foreground" htmlFor="marketing-pro-preview-product">
-                Produto
-              </label>
-              <select
-                id="marketing-pro-preview-product"
-                value={selectedProduct?.id || ""}
-                onChange={(event) => setSelectedProductId(event.target.value)}
-                className="mt-1 min-h-11 w-full rounded-xl border border-border bg-background px-3 text-xs font-semibold text-foreground outline-none transition focus-visible:ring-2 focus-visible:ring-primary"
-                data-testid="marketing-pro-preview-product"
-              >
-                {previewProducts.map((product) => (
-                  <option key={product.id} value={product.id}>
-                    {product.name}
-                  </option>
-                ))}
-              </select>
-
-              <div className="mt-3" role="group" aria-label="Estilo da prévia Pro" data-testid="marketing-pro-preview-styles">
-                <p className="text-[11px] font-bold text-foreground">Estilo</p>
-                <div className="mt-1.5 flex flex-wrap gap-1.5">
-                  {(Object.keys(PRO_STYLE_LABELS) as MarketingProStyle[]).map((styleId) => {
-                    const selected = selectedStyle === styleId;
-                    return (
-                      <button
-                        key={styleId}
-                        type="button"
-                        aria-pressed={selected}
-                        onClick={() => setSelectedStyle(styleId)}
-                        className={`min-h-9 rounded-full border px-3 text-[10px] font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 ${selected ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background text-muted-foreground hover:border-primary/50"}`}
-                        data-testid={`marketing-pro-style-${styleId}`}
-                      >
-                        {PRO_STYLE_LABELS[styleId]}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="mt-3 min-w-0" data-testid="marketing-pro-preview-output">
-                {previewPreparation?.state === "ready" ? (
-                  <MarketingProPreview model={previewPreparation.model} />
-                ) : (
-                  <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800" role="status">
-                    {previewPreparation?.error.message || "Não foi possível preparar esta prévia."}
-                  </p>
-                )}
-              </div>
-            </>
-          ) : (
-            <p className="mt-3 rounded-xl border border-border/60 bg-background px-3 py-2 text-xs font-semibold text-muted-foreground" role="status">
-              {products.length === 0
-                ? "Cadastre um produto para começar um anúncio."
-                : "Este produto ainda não tem foto para a prévia. Você pode criar conceitos e adicionar a foto depois."}
-            </p>
-          )}
-        </div>
-      )}
-
-      {proAdsEnabled && selectedProduct && (
-        <div className="min-w-0 rounded-2xl border border-primary/20 bg-primary/[0.04] p-3.5" data-testid="marketing-pro-cutout-tool">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div>
-              <h3 className="text-sm font-black text-foreground">Remover fundo</h3>
-              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                Separa o produto do cenário original desta foto. Funciona melhor com fundo liso/uniforme. O produto nunca é redesenhado.
-              </p>
-            </div>
-          </div>
-
-          {cutoutToolState.phase === "idle" && (
-            <button
-              type="button"
-              onClick={handleGenerateCutout}
-              className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-primary/30 bg-white px-4 text-xs font-black text-primary transition hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-              data-testid="button-cutout-generate"
-            >
-              <Eraser className="h-4 w-4" />
-              Remover fundo desta foto
-            </button>
-          )}
-
-          {cutoutToolState.phase === "generating" && (
-            <p className="mt-3 rounded-xl border border-border/60 bg-background px-3 py-2 text-xs font-semibold text-muted-foreground" role="status" aria-live="polite" data-testid="text-cutout-generating">
-              Removendo o fundo...
-            </p>
-          )}
-
-          {(cutoutToolState.phase === "preview" || cutoutToolState.phase === "saving") && (
-            <div className="mt-3">
-              <div className="grid grid-cols-2 gap-2">
-                <div className="min-w-0">
-                  <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Antes</p>
-                  <div className="aspect-square overflow-hidden rounded-xl border border-border/60 bg-white">
-                    <img src={getProductImage(selectedProduct) || ""} alt="Foto original do produto" className="h-full w-full object-contain" />
-                  </div>
-                </div>
-                <div className="min-w-0">
-                  <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Depois</p>
-                  <div
-                    className="aspect-square overflow-hidden rounded-xl border border-border/60"
-                    style={{ backgroundImage: "conic-gradient(#e5e7eb 90deg, #fff 90deg 180deg, #e5e7eb 180deg 270deg, #fff 270deg)", backgroundSize: "16px 16px" }}
-                  >
-                    <img src={cutoutToolState.previewUrl} alt="Produto com fundo removido" className="h-full w-full object-contain" data-testid="img-cutout-preview" />
-                  </div>
-                </div>
-              </div>
-              <div className="mt-3 flex gap-2">
-                <button
-                  type="button"
-                  onClick={handleUndoCutout}
-                  disabled={cutoutToolState.phase === "saving"}
-                  className="min-h-11 flex-1 rounded-xl border border-border bg-white text-xs font-black text-muted-foreground disabled:opacity-50"
-                  data-testid="button-cutout-undo"
-                >
-                  Desfazer
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveCutout}
-                  disabled={cutoutToolState.phase === "saving"}
-                  className="min-h-11 flex-1 rounded-xl bg-primary text-xs font-black text-primary-foreground disabled:opacity-60"
-                  data-testid="button-cutout-save"
-                >
-                  {cutoutToolState.phase === "saving" ? "Salvando..." : "Usar no anúncio"}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {cutoutToolState.phase === "saved" && (
-            <div className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700" role="status" data-testid="text-cutout-saved">
-              Recorte salvo neste produto.
-              <button type="button" onClick={handleGenerateCutout} className="ml-2 underline">Gerar novamente</button>
-            </div>
-          )}
-
-          {cutoutToolState.phase === "error" && (
-            <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700" role="alert" data-testid="text-cutout-error">
-              {cutoutToolState.message}
-              <button type="button" onClick={handleUndoCutout} className="ml-2 underline">Fechar</button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {creativeV2Enabled && proAdsEnabled && approvedCutoutSource && (
-        <div className="min-w-0 rounded-2xl border border-primary/20 bg-primary/[0.04] p-3.5" data-testid="marketing-pro-creative-v2-section">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div>
-              <h3 className="text-sm font-black text-foreground">Composer Premium V2</h3>
-              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                Direção de arte avançada sobre o cutout já aprovado deste produto. O produto nunca é redesenhado.
-              </p>
-            </div>
-            <span className="rounded-full bg-primary/10 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-primary">beta</span>
-          </div>
-
-          <div className="mt-3" role="group" aria-label="Fundo do anúncio" data-testid="marketing-pro-creative-v2-family">
-            <p className="text-[11px] font-bold text-foreground">Trocar fundo</p>
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
-              {(Object.keys(CREATIVE_FAMILY_LABELS) as PremiumCreativeFamily[]).map((familyId) => {
-                const selected = selectedCreativeFamily === familyId;
-                return (
-                  <button
-                    key={familyId}
-                    type="button"
-                    aria-pressed={selected}
-                    onClick={() => setSelectedCreativeFamily(familyId)}
-                    className={`min-h-9 rounded-full border px-3 text-[10px] font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 ${selected ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background text-muted-foreground hover:border-primary/50"}`}
-                    data-testid={`marketing-pro-creative-family-${familyId}`}
-                  >
-                    {CREATIVE_FAMILY_LABELS[familyId]}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="mt-3">
-            {creativeV2Preparation?.state === "ready" ? (
-              <MarketingProCreativeV2Preview payload={creativeV2Preparation.payload} productImageSrc={approvedCutoutSource.downloadUrl || approvedCutoutSource.storagePath} />
-            ) : (
-              <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800" role="status">
-                Este cutout aprovado não pôde ser preparado para o Composer V2.
-              </p>
-            )}
-          </div>
-        </div>
-      )}
-
-      {realBackgroundEnabled && proAdsEnabled && selectedProduct && (
-        <div className="min-w-0 rounded-2xl border border-primary/20 bg-primary/[0.04] p-3.5" data-testid="marketing-pro-real-background-tool">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div>
-              <h3 className="text-sm font-black text-foreground">Gerar fundo com IA</h3>
-              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                Cria um cenário de fundo com IA e compõe localmente com o recorte já aprovado deste produto. Só o fundo é gerado — o produto nunca é enviado nem redesenhado.
-              </p>
-            </div>
-            <span className="rounded-full bg-primary/10 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-primary">beta</span>
-          </div>
-
-          {!approvedCutoutSource ? (
-            <p className="mt-3 rounded-xl border border-border/60 bg-background px-3 py-2 text-xs font-semibold text-muted-foreground" role="status">
-              Gere e salve um recorte em "Remover fundo" antes de gerar um fundo com IA.
-            </p>
-          ) : (
-            <>
-              {realBackgroundToolState.phase === "idle" && (
-                <button
-                  type="button"
-                  onClick={handleGenerateRealBackground}
-                  className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-primary/30 bg-white px-4 text-xs font-black text-primary transition hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                  data-testid="button-real-background-generate"
-                >
-                  <ImagePlus className="h-4 w-4" />
-                  Gerar fundo
-                </button>
-              )}
-
-              {realBackgroundToolState.phase === "generating" && (
-                <p className="mt-3 rounded-xl border border-border/60 bg-background px-3 py-2 text-xs font-semibold text-muted-foreground" role="status" aria-live="polite" data-testid="text-real-background-generating">
-                  Gerando o fundo...
-                </p>
-              )}
-
-              {(realBackgroundToolState.phase === "preview" || realBackgroundToolState.phase === "applied") && (
-                <div className="mt-3">
-                  <div className="aspect-[4/5] max-h-72 overflow-hidden rounded-xl border border-border/60 bg-white">
-                    <img src={realBackgroundToolState.previewUrl} alt="Prévia do anúncio com fundo gerado por IA" className="h-full w-full object-contain" data-testid="img-real-background-preview" />
-                  </div>
-                  {realBackgroundToolState.phase === "preview" ? (
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        type="button"
-                        onClick={handleUndoRealBackground}
-                        className="min-h-11 flex-1 rounded-xl border border-border bg-white text-xs font-black text-muted-foreground"
-                        data-testid="button-real-background-undo"
-                      >
-                        Desfazer
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleGenerateRealBackground}
-                        className="min-h-11 flex-1 rounded-xl border border-border bg-white text-xs font-black text-muted-foreground"
-                        data-testid="button-real-background-retry"
-                      >
-                        Tentar novamente
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleApplyRealBackground}
-                        className="min-h-11 flex-1 rounded-xl bg-primary text-xs font-black text-primary-foreground"
-                        data-testid="button-real-background-apply"
-                      >
-                        Aplicar
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="mt-3 flex items-center gap-2">
-                      <p className="flex-1 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700" role="status" data-testid="text-real-background-applied">
-                        Fundo aplicado nesta prévia.
+        <details className="min-w-0 rounded-2xl border border-border/60 bg-white p-3.5 shadow-sm" data-testid="marketing-pro-advanced">
+          <summary className="flex min-h-11 cursor-pointer items-center text-sm font-black text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+            Ferramentas avançadas e experimentais
+          </summary>
+          <div className="mt-3 grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3">
+              {proAdsEnabled && creativeProfileState.status !== "loading" && (
+                <div className="min-w-0 rounded-2xl border border-primary/20 bg-primary/[0.04] p-3.5" data-testid="marketing-pro-creative-profile-entry">
+                  {creativeProfileState.status === "profile" ? (
+                    <>
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <h3 className="text-sm font-black text-foreground">Perfil criativo</h3>
+                          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                            Pronto — usado como ponto de partida das suas próximas criações.
+                          </p>
+                        </div>
+                        <span className="rounded-full bg-emerald-100 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-emerald-700">pronto</span>
+                      </div>
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={handleCreativeProfileEdit}
+                          className="min-h-11 flex-1 rounded-xl border border-primary/30 bg-white text-xs font-black text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                          data-testid="button-creative-profile-entry-edit"
+                        >
+                          Editar preferências
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleCreativeProfileRetake}
+                          className="min-h-11 flex-1 rounded-xl border border-border bg-white text-xs font-black text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                          data-testid="button-creative-profile-entry-retake"
+                        >
+                          Refazer teste de estilo
+                        </button>
+                      </div>
+                    </>
+                  ) : creativeProfileState.status === "unavailable" ? (
+                    <>
+                      <h3 className="text-sm font-black text-foreground">Perfil criativo</h3>
+                      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground" role="status" data-testid="text-creative-profile-unavailable">
+                        Não foi possível carregar seu perfil criativo agora. Tente novamente em instantes.
                       </p>
-                      <button type="button" onClick={handleUndoRealBackground} className="min-h-11 rounded-xl border border-border bg-white px-4 text-xs font-black text-muted-foreground" data-testid="button-real-background-undo-applied">
-                        Desfazer
+                    </>
+                  ) : (
+                    <>
+                      <h3 className="text-sm font-black text-foreground">Perfil criativo</h3>
+                      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                        Vamos descobrir seu estilo antes da primeira geração — leva menos de um minuto.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setCreativeProfileOnboardingOpen(true)}
+                        className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 text-xs font-black text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                        data-testid="button-creative-profile-entry-start"
+                      >
+                        <Sparkles className="h-4 w-4" />
+                        Descobrir meu estilo
                       </button>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {proAdsEnabled && selectedProduct && (
+                <CreativeConceptsSection
+                  product={selectedProduct}
+                  approvedCutoutSource={approvedCutoutSource}
+                  realBackgroundEnabled={realBackgroundEnabled}
+                  branding={{ storeName, storeLogoUrl, primaryColor }}
+                />
+              )}
+
+              {proAdsEnabled && (
+                <div className="min-w-0 rounded-2xl border border-primary/20 bg-primary/[0.04] p-3.5" data-testid="marketing-pro-local-demo">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-black text-foreground">Prévia de estilo</h3>
+                      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                        Composição local determinística para demonstrar a direção visual 4:5. Nenhuma imagem é gerada por IA.
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-primary/10 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-primary">
+                      demonstração
+                    </span>
+                  </div>
+
+                  {previewProducts.length > 0 ? (
+                    <>
+                      <label className="mt-3 block text-[11px] font-bold text-foreground" htmlFor="marketing-pro-preview-product">
+                        Produto
+                      </label>
+                      <select
+                        id="marketing-pro-preview-product"
+                        value={selectedProduct?.id || ""}
+                        onChange={(event) => setSelectedProductId(event.target.value)}
+                        className="mt-1 min-h-11 w-full rounded-xl border border-border bg-background px-3 text-xs font-semibold text-foreground outline-none transition focus-visible:ring-2 focus-visible:ring-primary"
+                        data-testid="marketing-pro-preview-product"
+                      >
+                        {previewProducts.map((product) => (
+                          <option key={product.id} value={product.id}>
+                            {product.name}
+                          </option>
+                        ))}
+                      </select>
+
+                      <div className="mt-3" role="group" aria-label="Estilo da prévia Pro" data-testid="marketing-pro-preview-styles">
+                        <p className="text-[11px] font-bold text-foreground">Estilo</p>
+                        <div className="mt-1.5 flex flex-wrap gap-1.5">
+                          {(Object.keys(PRO_STYLE_LABELS) as MarketingProStyle[]).map((styleId) => {
+                            const selected = selectedStyle === styleId;
+                            return (
+                              <button
+                                key={styleId}
+                                type="button"
+                                aria-pressed={selected}
+                                onClick={() => setSelectedStyle(styleId)}
+                                className={`min-h-9 rounded-full border px-3 text-[10px] font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 ${selected ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background text-muted-foreground hover:border-primary/50"}`}
+                                data-testid={`marketing-pro-style-${styleId}`}
+                              >
+                                {PRO_STYLE_LABELS[styleId]}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="mt-3 min-w-0" data-testid="marketing-pro-preview-output">
+                        {previewPreparation?.state === "ready" ? (
+                          <MarketingProPreview model={previewPreparation.model} />
+                        ) : (
+                          <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800" role="status">
+                            {previewPreparation?.error.message || "Não foi possível preparar esta prévia."}
+                          </p>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <p className="mt-3 rounded-xl border border-border/60 bg-background px-3 py-2 text-xs font-semibold text-muted-foreground" role="status">
+                      {products.length === 0
+                        ? "Cadastre um produto para começar um anúncio."
+                        : "Este produto ainda não tem foto para a prévia. Você pode criar conceitos e adicionar a foto depois."}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {proAdsEnabled && selectedProduct && (
+                <div className="min-w-0 rounded-2xl border border-primary/20 bg-primary/[0.04] p-3.5" data-testid="marketing-pro-cutout-tool">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-black text-foreground">Remover fundo</h3>
+                      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                        Separa o produto do cenário original desta foto. Funciona melhor com fundo liso/uniforme. O produto nunca é redesenhado.
+                      </p>
+                    </div>
+                  </div>
+
+                  {cutoutToolState.phase === "idle" && (
+                    <button
+                      type="button"
+                      onClick={handleGenerateCutout}
+                      className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-primary/30 bg-white px-4 text-xs font-black text-primary transition hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                      data-testid="button-cutout-generate"
+                    >
+                      <Eraser className="h-4 w-4" />
+                      Remover fundo desta foto
+                    </button>
+                  )}
+
+                  {cutoutToolState.phase === "generating" && (
+                    <p className="mt-3 rounded-xl border border-border/60 bg-background px-3 py-2 text-xs font-semibold text-muted-foreground" role="status" aria-live="polite" data-testid="text-cutout-generating">
+                      Removendo o fundo...
+                    </p>
+                  )}
+
+                  {(cutoutToolState.phase === "preview" || cutoutToolState.phase === "saving") && (
+                    <div className="mt-3">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="min-w-0">
+                          <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Antes</p>
+                          <div className="aspect-square overflow-hidden rounded-xl border border-border/60 bg-white">
+                            <img src={getProductImage(selectedProduct) || ""} alt="Foto original do produto" className="h-full w-full object-contain" />
+                          </div>
+                        </div>
+                        <div className="min-w-0">
+                          <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Depois</p>
+                          <div
+                            className="aspect-square overflow-hidden rounded-xl border border-border/60"
+                            style={{ backgroundImage: "conic-gradient(#e5e7eb 90deg, #fff 90deg 180deg, #e5e7eb 180deg 270deg, #fff 270deg)", backgroundSize: "16px 16px" }}
+                          >
+                            <img src={cutoutToolState.previewUrl} alt="Produto com fundo removido" className="h-full w-full object-contain" data-testid="img-cutout-preview" />
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={handleUndoCutout}
+                          disabled={cutoutToolState.phase === "saving"}
+                          className="min-h-11 flex-1 rounded-xl border border-border bg-white text-xs font-black text-muted-foreground disabled:opacity-50"
+                          data-testid="button-cutout-undo"
+                        >
+                          Desfazer
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSaveCutout}
+                          disabled={cutoutToolState.phase === "saving"}
+                          className="min-h-11 flex-1 rounded-xl bg-primary text-xs font-black text-primary-foreground disabled:opacity-60"
+                          data-testid="button-cutout-save"
+                        >
+                          {cutoutToolState.phase === "saving" ? "Salvando..." : "Usar no anúncio"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {cutoutToolState.phase === "saved" && (
+                    <div className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700" role="status" data-testid="text-cutout-saved">
+                      Recorte salvo neste produto.
+                      <button type="button" onClick={handleGenerateCutout} className="ml-2 underline">Gerar novamente</button>
+                    </div>
+                  )}
+
+                  {cutoutToolState.phase === "error" && (
+                    <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700" role="alert" data-testid="text-cutout-error">
+                      {cutoutToolState.message}
+                      <button type="button" onClick={handleUndoCutout} className="ml-2 underline">Fechar</button>
                     </div>
                   )}
                 </div>
               )}
 
-              {realBackgroundToolState.phase === "error" && (
-                <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700" role="alert" data-testid="text-real-background-error">
-                  {realBackgroundToolState.message}
-                  <button type="button" onClick={handleUndoRealBackground} className="ml-2 underline">Fechar</button>
+              {creativeV2Enabled && proAdsEnabled && approvedCutoutSource && (
+                <div className="min-w-0 rounded-2xl border border-primary/20 bg-primary/[0.04] p-3.5" data-testid="marketing-pro-creative-v2-section">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-black text-foreground">Composer Premium V2</h3>
+                      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                        Direção de arte avançada sobre o cutout já aprovado deste produto. O produto nunca é redesenhado.
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-primary/10 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-primary">beta</span>
+                  </div>
+
+                  <div className="mt-3" role="group" aria-label="Fundo do anúncio" data-testid="marketing-pro-creative-v2-family">
+                    <p className="text-[11px] font-bold text-foreground">Trocar fundo</p>
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {(Object.keys(CREATIVE_FAMILY_LABELS) as PremiumCreativeFamily[]).map((familyId) => {
+                        const selected = selectedCreativeFamily === familyId;
+                        return (
+                          <button
+                            key={familyId}
+                            type="button"
+                            aria-pressed={selected}
+                            onClick={() => setSelectedCreativeFamily(familyId)}
+                            className={`min-h-9 rounded-full border px-3 text-[10px] font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 ${selected ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background text-muted-foreground hover:border-primary/50"}`}
+                            data-testid={`marketing-pro-creative-family-${familyId}`}
+                          >
+                            {CREATIVE_FAMILY_LABELS[familyId]}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="mt-3">
+                    {creativeV2Preparation?.state === "ready" ? (
+                      <MarketingProCreativeV2Preview payload={creativeV2Preparation.payload} productImageSrc={approvedCutoutSource.downloadUrl || approvedCutoutSource.storagePath} />
+                    ) : (
+                      <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800" role="status">
+                        Este cutout aprovado não pôde ser preparado para o Composer V2.
+                      </p>
+                    )}
+                  </div>
                 </div>
               )}
-            </>
-          )}
-        </div>
+
+              {realBackgroundEnabled && proAdsEnabled && selectedProduct && (
+                <div className="min-w-0 rounded-2xl border border-primary/20 bg-primary/[0.04] p-3.5" data-testid="marketing-pro-real-background-tool">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-black text-foreground">Gerar fundo com IA</h3>
+                      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                        Cria um cenário de fundo com IA e compõe localmente com o recorte já aprovado deste produto. Só o fundo é gerado — o produto nunca é enviado nem redesenhado.
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-primary/10 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-primary">beta</span>
+                  </div>
+
+                  {!approvedCutoutSource ? (
+                    <p className="mt-3 rounded-xl border border-border/60 bg-background px-3 py-2 text-xs font-semibold text-muted-foreground" role="status">
+                      Gere e salve um recorte em "Remover fundo" antes de gerar um fundo com IA.
+                    </p>
+                  ) : (
+                    <>
+                      {realBackgroundToolState.phase === "idle" && (
+                        <button
+                          type="button"
+                          onClick={handleGenerateRealBackground}
+                          className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-primary/30 bg-white px-4 text-xs font-black text-primary transition hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                          data-testid="button-real-background-generate"
+                        >
+                          <ImagePlus className="h-4 w-4" />
+                          Gerar fundo
+                        </button>
+                      )}
+
+                      {realBackgroundToolState.phase === "generating" && (
+                        <p className="mt-3 rounded-xl border border-border/60 bg-background px-3 py-2 text-xs font-semibold text-muted-foreground" role="status" aria-live="polite" data-testid="text-real-background-generating">
+                          Gerando o fundo...
+                        </p>
+                      )}
+
+                      {(realBackgroundToolState.phase === "preview" || realBackgroundToolState.phase === "applied") && (
+                        <div className="mt-3">
+                          <div className="aspect-[4/5] max-h-72 overflow-hidden rounded-xl border border-border/60 bg-white">
+                            <img src={realBackgroundToolState.previewUrl} alt="Prévia do anúncio com fundo gerado por IA" className="h-full w-full object-contain" data-testid="img-real-background-preview" />
+                          </div>
+                          {realBackgroundToolState.phase === "preview" ? (
+                            <div className="mt-3 flex gap-2">
+                              <button
+                                type="button"
+                                onClick={handleUndoRealBackground}
+                                className="min-h-11 flex-1 rounded-xl border border-border bg-white text-xs font-black text-muted-foreground"
+                                data-testid="button-real-background-undo"
+                              >
+                                Desfazer
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleGenerateRealBackground}
+                                className="min-h-11 flex-1 rounded-xl border border-border bg-white text-xs font-black text-muted-foreground"
+                                data-testid="button-real-background-retry"
+                              >
+                                Tentar novamente
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleApplyRealBackground}
+                                className="min-h-11 flex-1 rounded-xl bg-primary text-xs font-black text-primary-foreground"
+                                data-testid="button-real-background-apply"
+                              >
+                                Aplicar
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="mt-3 flex items-center gap-2">
+                              <p className="flex-1 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700" role="status" data-testid="text-real-background-applied">
+                                Fundo aplicado nesta prévia.
+                              </p>
+                              <button type="button" onClick={handleUndoRealBackground} className="min-h-11 rounded-xl border border-border bg-white px-4 text-xs font-black text-muted-foreground" data-testid="button-real-background-undo-applied">
+                                Desfazer
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {realBackgroundToolState.phase === "error" && (
+                        <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700" role="alert" data-testid="text-real-background-error">
+                          {realBackgroundToolState.message}
+                          <button type="button" onClick={handleUndoRealBackground} className="ml-2 underline">Fechar</button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+          </div>
+        </details>
       )}
 
-      <ul className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2" data-testid="marketing-pro-tools">
-        {PRO_TOOLS.map((tool) => {
-          const Icon = tool.icon;
-          return (
-            <li
-              key={tool.title}
-              aria-disabled="true"
-              className="flex items-start gap-3 rounded-2xl border border-dashed border-border/70 bg-secondary/20 p-3"
-            >
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-primary/10">
-                <Icon className="h-4 w-4 text-primary/60" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <p className="text-xs font-black text-foreground">{tool.title}</p>
-                  <span className="rounded-full bg-muted px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-muted-foreground">
-                    Em desenvolvimento
-                  </span>
-                </div>
-                <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{tool.detail}</p>
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-
       <p className="rounded-2xl border border-border/60 bg-secondary/25 p-3 text-[11px] leading-relaxed text-muted-foreground">
-        Nenhuma dessas ferramentas está ativa ainda: elas não geram imagem, não alteram a foto do seu produto e não
-        consomem créditos. A criação de anúncios continua completa e gratuita na aba <strong className="font-bold text-foreground">Criar anúncio</strong>.
+        O estúdio roda no seu aparelho e não consome créditos. A criação de anúncios continua completa e gratuita na aba <strong className="font-bold text-foreground">Criar anúncio</strong>.
       </p>
     </section>
   );

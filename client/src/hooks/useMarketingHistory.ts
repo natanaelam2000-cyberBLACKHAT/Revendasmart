@@ -74,6 +74,9 @@ export interface MarketingHistoryEntry {
     storagePath: string;
     sourceAssetId?: string;
   };
+  /** ADS-PRO-FINAL — documento editável do estúdio (JSON compacto com as DECISÕES: fundo, layout, textos,
+   * enquadramento; nunca pixels). Permite reabrir o anúncio e continuar editando sem perder nada. */
+  proDocument?: string;
   createdAt?: { toDate?: () => Date } | null;
   createdAtISO: string;
   updatedAt?: { toDate?: () => Date } | null;
@@ -175,7 +178,8 @@ export function useMarketingHistory() {
     // enxergava dois registros para a mesma ação, duplicando o histórico a cada geração/compartilhamento.
     const createdAtISO = new Date().toISOString();
     const optimistic: MarketingHistoryEntry = { ...cleaned, id: entryId, createdAtISO, createdAt: null };
-    setEntries(current => { const next = [optimistic, ...current].slice(0, 200); saveLocal(user.uid, next); return next; });
+    // Mesmo id = MESMA entrada: um retry com `explicitId` substitui a otimista anterior em vez de duplicá-la.
+    setEntries(current => { const next = [optimistic, ...current.filter(item => item.id !== entryId)].slice(0, 200); saveLocal(user.uid, next); return next; });
     try {
       await setDoc(doc(getFirestore(), "users", user.uid, "marketingHistory", entryId), { ...cleaned, createdAt: serverTimestamp(), createdAtISO });
       return { id: entryId, persisted: true };
@@ -184,15 +188,18 @@ export function useMarketingHistory() {
       return { id: entryId, persisted: false };
     }
   }, []);
-  const updateEntry = useCallback(async (id: string, patch: Partial<NewMarketingEntry>) => {
-    const user = getFirebaseAuth()?.currentUser; if (!user || !id) return;
+  /** Retorna `true` quando a atualização REMOTA aconteceu (ou a entrada é só local); `false` quando falhou —
+   * quem precisa avisar o usuário ("não salvou") não deve fingir sucesso. Callers antigos ignoram o retorno. */
+  const updateEntry = useCallback(async (id: string, patch: Partial<NewMarketingEntry>): Promise<boolean> => {
+    const user = getFirebaseAuth()?.currentUser; if (!user || !id) return false;
     const updatedAtISO = new Date().toISOString();
     const cleaned = cleanEntry({ ...patch, updatedAtISO } as Record<string, unknown>) as Partial<MarketingHistoryEntry>;
     setEntries(current => { const next = current.map(entry => entry.id === id ? { ...entry, ...cleaned } : entry); saveLocal(user.uid, next); return next; });
     if (!isLocalOnlyMarketingEntryId(id)) {
       try { await updateDoc(doc(getFirestore(), "users", user.uid, "marketingHistory", id), { ...cleaned, updatedAt: serverTimestamp(), updatedAtISO }); }
-      catch { /* local update remains available */ }
+      catch { return false; /* local update remains available */ }
     }
+    return true;
   }, []);
   const removeEntry = useCallback(async (id: string) => {
     const user = getFirebaseAuth()?.currentUser; if (!user || !id) return;

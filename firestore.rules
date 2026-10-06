@@ -732,7 +732,10 @@ service cloud.firestore {
         // ADS-PRO-03 — identidade reproduzível do Anúncios Pro. Todos OPCIONAIS: histórico clássico
         // (existente e futuro) nunca os envia e continua válido sem eles.
         'mode', 'composerVersion', 'creativeFamily', 'creativeConceptId', 'format',
-        'proBackground', 'proCutout'
+        'proBackground', 'proCutout',
+        // ADS-PRO-FINAL — documento editável do estúdio (JSON compacto com as DECISÕES do anúncio: fundo,
+        // layout, textos, enquadramento). Nunca pixels. OPCIONAL: histórico clássico e Pro antigo não o enviam.
+        'proDocument'
       ];
     }
 
@@ -829,7 +832,10 @@ service cloud.firestore {
         && data.get('format', '') is string
         && data.get('format', '') in ['', 'square', 'portrait', 'story']
         && (!data.keys().hasAny(['proBackground']) || isValidProBackground(data.proBackground))
-        && (!data.keys().hasAny(['proCutout']) || isValidProCutout(data.proCutout));
+        && (!data.keys().hasAny(['proCutout']) || isValidProCutout(data.proCutout))
+        // ADS-PRO-FINAL — o documento do estúdio é uma string JSON curta (o client já limita a 3600).
+        && data.get('proDocument', '') is string
+        && data.get('proDocument', '').size() <= 4000;
     }
 
     function isValidMarketingHistoryCreate() {

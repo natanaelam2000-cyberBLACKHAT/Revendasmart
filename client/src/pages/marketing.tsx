@@ -856,8 +856,14 @@ export default function MarketingPage() {
             `grid-cols-[minmax(0,1fr)]` é o que impede a página de rolar de lado: uma coluna implícita
             `auto` é dimensionada pelo min-content dos filhos, então qualquer trilho horizontal
             interno esticaria a coluna e, com ela, a página. Com o piso em 0, a coluna acompanha a
-            viewport e o scroll lateral fica restrito a quem realmente o pediu. */}
-        <div className="mx-auto grid w-full max-w-2xl grid-cols-[minmax(0,1fr)] gap-3 overflow-y-auto px-4 pb-[max(8rem,calc(8rem+env(safe-area-inset-bottom)))] pt-3 sm:px-6 sm:pt-5">
+            viewport e o scroll lateral fica restrito a quem realmente o pediu.
+
+            No Pro o contêiner alarga (max-w-5xl): o estúdio usa prévia + controles lado a lado no desktop.
+
+            `overflow-x-clip` (e não `overflow-y-auto`): este contêiner nunca teve altura própria, então
+            nunca rolou — mas, sendo um "scroll container", impedia qualquer `position: sticky` dentro dele
+            (a prévia fixa do estúdio Pro). `clip` continua cortando o que vazar de lado e não cria scroll. */}
+        <div className={`mx-auto grid w-full ${workspaceView === "pro" ? "max-w-5xl" : "max-w-2xl"} grid-cols-[minmax(0,1fr)] gap-3 overflow-x-clip px-4 pb-[max(8rem,calc(8rem+env(safe-area-inset-bottom)))] pt-3 sm:px-6 sm:pt-5`}>
           <MarketingTabs activeView={workspaceView} onChange={setWorkspaceView} showProTab={isProAdsAdmin} />
 
           {workspaceView === "editor" && (

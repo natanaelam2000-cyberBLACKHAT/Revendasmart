@@ -7098,15 +7098,29 @@ assert.doesNotMatch(marketingPreview, /Foto limpa|Preço visível|CTA direto/);
 // --- PRO-03: a fronteira Pro consome o entitlement sem contaminar o criador Free ---
 assert.match(marketingProPanel, /Anúncio Pro/);
 assert.match(marketingProPanel, /Crie anúncios com mais possibilidades/);
-for (const ferramenta of ["Melhorar foto", "Remover fundo", "Trocar fundo", "Reestilizar anúncio", "Criar variações"]) {
-  assert.ok(marketingProPanel.includes(ferramenta), `o roadmap Pro precisa listar ${ferramenta}`);
+// ADS-PRO-FINAL: as ferramentas que apareciam como "Em desenvolvimento" viraram o estúdio real. A fronteira de
+// produto continua honesta: nada na aba Pro se apresenta como "em desenvolvimento" nem como item fantasma, e
+// cada capacidade que a interface oferece tem implementação de verdade no código do estúdio (nunca um rótulo vazio).
+const adsProStudioDir = "client/src/components/marketing/ads-pro-studio";
+const adsProStudioSource = fs
+  .readdirSync(adsProStudioDir)
+  .filter((file) => /\.(tsx|ts)$/.test(file))
+  .map((file) => read(`${adsProStudioDir}/${file}`))
+  .join("\n");
+for (const [ferramenta, evidencia] of [
+  ["Melhorar foto", /computeAutoAdjust\(analyzePhoto\(/],
+  ["Remover fundo", /generateCutout\(\)/],
+  ["Fundo", /rankAdsProBackgroundsForFacts\(/],
+  ["Opções", /generateAdsProVariations\(/],
+  ["Estilo", /resolveAdsProStyleDirection\(/],
+] as const) {
+  assert.ok(adsProStudioSource.includes(ferramenta), `o estúdio Pro precisa oferecer ${ferramenta}`);
+  assert.match(adsProStudioSource, evidencia, `${ferramenta} precisa ter implementação real, não só rótulo`);
 }
-assert.equal(
-  (marketingProPanel.match(/Em desenvolvimento/g) || []).length,
-  1,
-  "o selo de indisponível é renderizado uma vez para todas as ferramentas da lista",
-);
-assert.match(marketingProPanel, /aria-disabled="true"/);
+assert.doesNotMatch(marketingProPanel, /Em desenvolvimento/, "nenhuma ferramenta da aba Pro pode se declarar em desenvolvimento: o que aparece funciona");
+assert.doesNotMatch(marketingProPanel, /aria-disabled="true"/, "a aba Pro não tem itens fantasma desabilitados");
+assert.doesNotMatch(marketingProPanel, /data-testid="marketing-pro-tools"/, "a lista de ferramentas fictícias foi removida");
+assert.match(marketingProPanel, /\{proAdsEnabled && \(\s*<Suspense[\s\S]*?<AdsProStudio\b/, "o estúdio só carrega com o entitlement proAds");
 assert.match(marketingProPanel, /usePlan\(\)/, "a aba Pro deve consultar a fonte canônica de plano");
 assert.match(marketingProPanel, /canUseFeature\(activePlan, "proAds"\)/, "o acesso deve ser decidido pelo entitlement proAds");
 assert.match(marketingProPanel, /data-pro-ads-state=\{accessState\}/);
@@ -7120,8 +7134,6 @@ assert.equal(
   1,
   "Free tem um único CTA principal de upgrade",
 );
-const proToolsSource = marketingProPanel.slice(marketingProPanel.indexOf('data-testid="marketing-pro-tools"'));
-assert.doesNotMatch(proToolsSource, /<button|<a/, "ferramentas em desenvolvimento não são clicáveis");
 assert.doesNotMatch(marketingProPanel, /premiumActive|hasPremiumAccess|currentPlan/, "a aba Pro não decide acesso por status paralelo");
 assert.doesNotMatch(marketingProPanel, /from ["'](?:openai|@ai-sdk|ai)["']/);
 // PRO-04: usePlan() só existe em marketingPage (ver assert acima, perto da linha ~804) — nenhum outro

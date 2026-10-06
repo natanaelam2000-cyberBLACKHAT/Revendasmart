@@ -95,6 +95,8 @@ async function prepareApprovedCutout(page: Page, productName: string): Promise<v
     await onboardingSkip.click();
     await expect(page.getByTestId("creative-profile-onboarding")).toBeHidden({ timeout: 10_000 });
   }
+  // ADS-PRO-FINAL: o fluxo anterior (conceitos, recorte salvo, Composer V2) agora vive em "Ferramentas avançadas".
+  await page.getByTestId("marketing-pro-advanced").locator("summary").click();
   await page.getByTestId("marketing-pro-preview-product").selectOption({ label: productName });
   await page.getByTestId("button-cutout-generate").click();
   await expect(page.getByTestId("img-cutout-preview")).toBeVisible({ timeout: 20_000 });
