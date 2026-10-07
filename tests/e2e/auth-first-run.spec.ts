@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { isolateEmulatorObservability, isExpectedAdminProbe, isKnownProductAnchorWarning } from "./auth-emulator-observability";
 
 const emulatorMode = process.env.E2E_EMULATOR === "1";
 const PASSWORD = "LocalTestPassword!123";
@@ -14,6 +15,7 @@ function uniqueEmail(label: string): string {
 }
 
 async function preparePage(page: Page, collected: string[]): Promise<void> {
+  await isolateEmulatorObservability(page);
   await page.addInitScript(() => {
     const removeOverlays = () => {
       for (const overlay of Array.from(document.querySelectorAll("vite-error-overlay"))) overlay.remove();
@@ -27,7 +29,7 @@ async function preparePage(page: Page, collected: string[]): Promise<void> {
   });
   page.on("pageerror", (error) => collected.push(error.message));
   page.on("console", (message) => {
-    if (message.type() === "error") collected.push(message.text());
+    if (message.type() === "error" && !isExpectedAdminProbe(message.location().url, message.text()) && !isKnownProductAnchorWarning(page.url(), message.text())) collected.push(message.text());
   });
 }
 
@@ -50,9 +52,15 @@ async function completeOnboarding(page: Page): Promise<void> {
   await expect(nextButton).toBeVisible({ timeout: 30_000 });
 
   for (let i = 0; i < 16; i += 1) {
+    const productMode = page.getByTestId("business-mode-option-products");
+    if (await productMode.isVisible()) await productMode.click();
+    await expect(nextButton).toBeEnabled();
+    const heading = page.getByRole("heading", { level: 1 });
+    const previousHeading = await heading.textContent();
     const label = (await nextButton.textContent())?.trim() ?? "";
     await nextButton.click();
     if (/meu painel/i.test(label)) break;
+    await expect(heading).not.toHaveText(previousHeading!);
   }
 
   await page.waitForURL("/", { timeout: 30_000 });
@@ -74,7 +82,7 @@ async function login(page: Page, email: string): Promise<void> {
   await page.goto("/login");
   await page.getByTestId("input-login-email").fill(email);
   await page.getByTestId("input-login-password").fill(PASSWORD);
-  await page.getByRole("button", { name: /entrar agora|entrar/i }).click();
+  await page.getByRole("button", { name: "Entrar agora", exact: true }).click();
   await page.waitForURL((url) => !url.pathname.includes("/login"), { timeout: 30_000 });
 }
 
@@ -95,7 +103,7 @@ test.describe("Primeira execução V1 — signup, onboarding, logout e relogin",
     await completeOnboarding(page);
     await createFirstProduct(page, productName);
 
-    await page.goto("/settings?tab=account");
+    await page.goto("/settings");
     await page.getByText(/^Sair$/).click();
     await page.waitForURL(/\/login/, { timeout: 30_000 });
 

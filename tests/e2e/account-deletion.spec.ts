@@ -14,6 +14,7 @@
  * (`npm run test:e2e:account-deletion`).
  */
 import { expect, test, type Page, type APIRequestContext } from "@playwright/test";
+import { isolateEmulatorObservability, isExpectedAdminProbe } from "./auth-emulator-observability";
 
 const emulatorMode = process.env.E2E_EMULATOR === "1";
 
@@ -50,6 +51,7 @@ const EXPECTED_CONSOLE_NOISE: Array<{ pattern: RegExp; why: string }> = [
 ];
 
 async function preparePage(page: Page, collected: string[]): Promise<void> {
+  await isolateEmulatorObservability(page);
   await page.addInitScript(() => {
     const removeOverlays = () => {
       for (const overlay of Array.from(document.querySelectorAll("vite-error-overlay"))) overlay.remove();
@@ -63,7 +65,7 @@ async function preparePage(page: Page, collected: string[]): Promise<void> {
   });
   page.on("pageerror", (error) => collected.push(error.message));
   page.on("console", (message) => {
-    if (message.type() === "error") collected.push(message.text());
+    if (message.type() === "error" && !isExpectedAdminProbe(message.location().url, message.text())) collected.push(message.text());
   });
 }
 
@@ -179,6 +181,9 @@ test.describe("Exclusão de conta — fluxo completo", () => {
 
     // ===== §4: bloqueios e erro recuperável, com retry (respostas interceptadas, zero Mercado Pago real) =====
     await confirmationInput.fill(CONFIRMATION);
+    await expect(submit).toBeDisabled();
+    await page.getByLabel("Senha atual", { exact: true }).fill(PASSWORD);
+    await page.getByLabel("Senha atual", { exact: true }).fill(PASSWORD);
     await expect(submit).toBeEnabled();
 
     await page.route("**/api/account", async (route) => {
@@ -189,6 +194,7 @@ test.describe("Exclusão de conta — fluxo completo", () => {
         body: JSON.stringify({ error: { code: "ACTIVE_SUBSCRIPTION", message: "Cancele a assinatura ativa antes de excluir a conta.", requestId: "e2e" } }),
       });
     });
+    await page.getByLabel("Senha atual", { exact: true }).fill(PASSWORD);
     await submit.click();
     await expect(page.getByTestId("card-account-deletion-blocked")).toBeVisible();
     await expect(page.getByTestId("link-account-deletion-subscription")).toBeVisible();
@@ -206,6 +212,7 @@ test.describe("Exclusão de conta — fluxo completo", () => {
         body: JSON.stringify({ error: { code: "ACTIVE_MERCADOPAGO_CONNECTION", message: "Desconecte sua conta Mercado Pago antes de excluir a conta.", requestId: "e2e" } }),
       });
     });
+    await page.getByLabel("Senha atual", { exact: true }).fill(PASSWORD);
     await submit.click();
     await expect(page.getByTestId("link-account-deletion-mercadopago")).toBeVisible();
 
@@ -218,10 +225,12 @@ test.describe("Exclusão de conta — fluxo completo", () => {
         body: JSON.stringify({ error: { code: "ACCOUNT_DELETION_FAILED", message: "A exclusão não foi concluída. Tente novamente.", requestId: "e2e" } }),
       });
     });
+    await page.getByLabel("Senha atual", { exact: true }).fill(PASSWORD);
     await submit.click();
     await expect(page.getByTestId("text-account-deletion-error")).toContainText(/tente novamente/i);
     // Erro recuperável vira retry explícito, sem bloquear o usuário.
     await expect(submit).toContainText(/tentar novamente/i);
+    await page.getByLabel("Senha atual", { exact: true }).fill(PASSWORD);
     await expect(submit).toBeEnabled();
     await expect(page.getByTestId("card-account-deletion-blocked")).toHaveCount(0);
 
@@ -230,7 +239,9 @@ test.describe("Exclusão de conta — fluxo completo", () => {
     const deleteRequestsBeforeRealRun = deleteRequests;
 
     // ===== F/G/H: confirmação exata executa, mostra carregando e conclui =====
+    await page.getByLabel("Senha atual", { exact: true }).fill(PASSWORD);
     await expect(submit).toBeEnabled();
+    await page.getByLabel("Senha atual", { exact: true }).fill(PASSWORD);
     await submit.click();
     await expect(submit).toHaveAttribute("aria-busy", "true");
     await expect(page.getByTestId("card-account-deletion-completed")).toBeVisible({ timeout: 60_000 });
@@ -261,7 +272,7 @@ test.describe("Exclusão de conta — fluxo completo", () => {
     await page.goto("/login");
     await page.getByTestId("input-login-email").fill(tenantAEmail);
     await page.getByTestId("input-login-password").fill(PASSWORD);
-    await page.getByRole("button", { name: /entrar/i }).click();
+    await page.getByRole("button", { name: "Entrar agora", exact: true }).click();
     await expect(page.getByTestId("text-login-error")).toBeVisible({ timeout: 30_000 });
     await expect(page).toHaveURL(/\/login/);
 
@@ -278,7 +289,7 @@ test.describe("Exclusão de conta — fluxo completo", () => {
     await tenantBReloginPage.goto("/login");
     await tenantBReloginPage.getByTestId("input-login-email").fill(tenantBEmail);
     await tenantBReloginPage.getByTestId("input-login-password").fill(PASSWORD);
-    await tenantBReloginPage.getByRole("button", { name: /entrar/i }).click();
+    await tenantBReloginPage.getByRole("button", { name: "Entrar agora", exact: true }).click();
     await tenantBReloginPage.waitForURL((url) => !url.pathname.includes("/login"), { timeout: 30_000 });
     await tenantBRelogin.close();
     await tenantBContext.close();

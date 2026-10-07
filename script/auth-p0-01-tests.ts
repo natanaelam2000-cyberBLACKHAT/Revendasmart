@@ -13,7 +13,7 @@ const baselineFirebaseSource = process.env.AUTH_P0_BASELINE === "1"
   : null;
 
 const browserHarness = `
-import { waitForAuthReady } from "test-production:firebase";
+import { waitForAuthReady, getFirebaseAuth } from "test-production:firebase";
 import { apiRequest } from "test-production:api-client";
 
 const io = globalThis.__io;
@@ -32,13 +32,18 @@ const equal = (actual, expected) => {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(JSON.stringify({ actual, expected }));
 };
 
+// Count global session subscriptions separately from the single bootstrap subscription. The UID
+// compatibility mirror is global; concurrent callers must still add exactly one bootstrap listener.
+getFirebaseAuth();
+const permanentAuthListeners = io.authListenerStarts;
+
 globalThis.__tests = (async () => {
   const results = [];
 
   if (io.scenario === "existing-user") {
     io.auth.currentUser = io.startingUser;
     const initial = waitForAuthReady();
-    equal(io.authListenerStarts, 2);
+    equal(io.authListenerStarts, permanentAuthListeners + 1);
     await emit(io.startingUser);
     equal(await initial, io.startingUser);
 
@@ -58,15 +63,15 @@ globalThis.__tests = (async () => {
   io.auth.currentUser = null;
 
   const bootstrapCalls = Array.from({ length: 20 }, () => waitForAuthReady());
-  equal(io.authListenerStarts, 2);
+  equal(io.authListenerStarts, permanentAuthListeners + 1);
   await emit(null);
   const bootstrapResults = await Promise.all(bootstrapCalls);
   equal(bootstrapResults, Array(20).fill(null));
-  equal(io.authListenerStarts, 2);
-  equal(io.authListeners.length, 1);
+  equal(io.authListenerStarts, permanentAuthListeners + 1);
+  equal(io.authListeners.length, permanentAuthListeners);
   equal(io.authListenerStops, 1);
   results.push(await check("T1 app starts without a user => null", async () => equal(bootstrapResults[0], null)));
-  results.push(await check("T5 concurrent bootstrap calls use bounded listeners", async () => equal(io.authListenerStarts, 2)));
+  results.push(await check("T5 concurrent bootstrap calls use bounded listeners", async () => equal(io.authListenerStarts, permanentAuthListeners + 1)));
 
   const userA = user("user-a");
   await emit(userA);
@@ -169,6 +174,8 @@ const bundled = await build({
   plugins: [{
     name: "auth-p0-controlled-firebase",
     setup(plugin) {
+      // Resolve the production mirror explicitly, like the other local Firebase dependencies.
+      plugin.onResolve({ filter: /^\.\/auth-session-mirror$/ }, () => ({ path: path.join(root, "client/src/lib/auth-session-mirror.ts") }));
       plugin.onResolve({ filter: /^test-production:firebase$/ }, () => ({ path: firebasePath }));
       plugin.onResolve({ filter: /^test-production:api-client$/ }, () => ({ path: apiClientPath }));
       plugin.onResolve({ filter: /^\.\/firebase$/ }, () => ({ path: firebasePath }));
