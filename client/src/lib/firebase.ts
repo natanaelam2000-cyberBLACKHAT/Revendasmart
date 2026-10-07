@@ -1,5 +1,6 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from "firebase/app";
 import { getAuth, connectAuthEmulator, Auth, User, setPersistence, browserLocalPersistence, onAuthStateChanged } from "firebase/auth";
+import { mirrorAuthenticatedUid } from "./auth-session-mirror";
 import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, terminate, clearIndexedDbPersistence } from "firebase/firestore";
 import { initializeErrorLogging, logError, setUserContext } from "./error-logging";
 import { initializeInternalTelemetry } from "./internal-telemetry";
@@ -19,6 +20,12 @@ const firebaseConfig = {
 
 let app: FirebaseApp | null = null;
 let authInstance: Auth | null = null;
+let authPersistenceReady: Promise<void> | null = null;
+
+export async function waitForAuthPersistence(): Promise<void> {
+  if (!getFirebaseAuth()) throw new Error("Autenticação indisponível.");
+  await authPersistenceReady;
+}
 let initError: string | null = null;
 
 const FIREBASE_EMULATORS_CONNECTED_KEY = "__revendaSmartFirebaseEmulatorsConnected";
@@ -170,14 +177,14 @@ initializeFirestoreWithOfflinePersistence(app);
 
 authInstance = getAuth(app);
 connectFirebaseEmulatorsOnce(app, authInstance);
+onAuthStateChanged(authInstance, user => mirrorAuthenticatedUid(user?.uid ?? null));
 installOfflineCacheTenantIsolation(authInstance);
 
 // força persistência corretamente
-setPersistence(authInstance, browserLocalPersistence)
-  .then(() => undefined)
-  .catch((err) => {
-    console.error("[Firebase] Persistence error:", err);
-  });
+authPersistenceReady = setPersistence(authInstance, browserLocalPersistence);
+// Observe initialization failures without exposing credentials or converting a failed persistence
+// setup into a successful persistent login. Interactive authentication awaits this same promise.
+void authPersistenceReady.catch(() => console.warn("[Firebase] Session persistence unavailable"));
 
     // Initialize error logging after Firebase is initialized
     try {
@@ -304,12 +311,11 @@ export async function getFirebaseIdToken(): Promise<string | null> {
     const token = await user.getIdToken();
     return token;
   } catch (e) {
-    console.warn("[getFirebaseIdToken] Failed to get ID token:", e);
+    console.warn("[getFirebaseIdToken] Session token unavailable");
 
     // Log to Crashlytics
     if (e instanceof Error) {
-      logError("firebase_id_token_error", e.message, {
-        error: e,
+      logError("firebase_id_token_error", "Session token unavailable", {
         severity: "warning",
       });
     }

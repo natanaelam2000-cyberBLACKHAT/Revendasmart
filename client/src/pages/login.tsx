@@ -1,6 +1,7 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useLocation, Link } from "wouter";
-import { sendPasswordResetEmail, signInWithEmailAndPassword } from "firebase/auth";
+import { authController } from "@/lib/auth-lifecycle";
+import { authErrorMessage, type SocialProvider } from "@/lib/auth-policy";
 import { getFirebaseAuth, getFirebaseError, logTelemetryEvent, setTelemetryUserId, trackAnalyticsEvent, setFirebaseAnalyticsUserId } from "@/lib/firebase";
 import { getApiUrl } from "@/lib/api-config";
 import "@/styles/login.css";
@@ -40,6 +41,7 @@ export default function Login() {
   const [success, setSuccess] = useState("");
   const [resetLoading, setResetLoading] = useState(false);
   const [loading, setLoading] = useState(false);
+  const submitting = useRef(false);
   // ONBOARDING-ROUTING-SAFETY-01 — distingue "não sabemos ainda" de "onboarding incompleto": só existe
   // porque uma falha real (rede/servidor) na busca de settings NUNCA pode virar um redirecionamento para
   // /onboarding (isso trataria um usuário existente como conta nova). O servidor já devolve 200 com
@@ -99,6 +101,8 @@ export default function Login() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
     setError("");
     setLoading(true);
 
@@ -116,8 +120,7 @@ export default function Login() {
       }
 
       // Authenticate with Firebase Auth (real authentication - NOT mock data)
-      const userCredential = await signInWithEmailAndPassword(auth, trimmedEmail, password);
-      const user = userCredential.user;
+      const user = await authController.login(trimmedEmail, password);
       const uid = user.uid;
       setRememberedEmail(trimmedEmail, rememberEmail);
       
@@ -131,21 +134,10 @@ export default function Login() {
       // Decide o destino (onboarding vs app) só depois de autenticado — nunca redireciona para
       // /onboarding a partir de uma falha real na busca de status (ver resolveOnboardingRoute acima).
       await resolveOnboardingRoute();
-    } catch (err: any) {
-      // Diagnóstico: log detalhado do erro do Firebase
-      console.error("[login] Firebase auth error:", err);
-      
-      // User-friendly error messages
-      if (err.code === "auth/user-not-found" || err.code === "auth/wrong-password") {
-        setError("Email ou senha incorretos");
-      } else if (err.code === "auth/invalid-email") {
-        setError("Email inválido");
-      } else if (err.code === "auth/too-many-requests") {
-        setError("Muitas tentativas. Tente novamente mais tarde.");
-      } else {
-        setError("Erro ao fazer login. Tente novamente.");
-      }
+    } catch (err: unknown) {
+      setError(authErrorMessage(err));
     } finally {
+      submitting.current = false;
       setLoading(false);
     }
   };
@@ -159,6 +151,8 @@ export default function Login() {
       return;
     }
 
+    if (submitting.current) return;
+    submitting.current = true;
     setResetLoading(true);
     try {
       const auth = getFirebaseAuth();
@@ -167,26 +161,30 @@ export default function Login() {
         return;
       }
 
-      await sendPasswordResetEmail(auth, email.trim());
-      setSuccess("Enviamos um link para redefinir sua senha.");
-    } catch (err: any) {
-      const code = err?.code;
-      if (code === "auth/invalid-email") {
-        setError("E-mail inválido");
-      } else if (code === "auth/user-not-found") {
-        setSuccess("Enviamos um link para redefinir sua senha.");
-      } else if (code === "auth/network-request-failed") {
-        setError("Falha de rede. Tente novamente.");
-      } else if (code === "auth/unauthorized-continue-uri" || code === "auth/invalid-continue-uri") {
-        setError("Configuração de recuperação de senha ausente.");
-      } else {
-        setError("Não foi possível enviar o link agora. Tente novamente.");
-      }
+      await authController.resetPassword(email);
+      setSuccess("Se houver uma conta para este e-mail, enviaremos as instruções para redefinir sua senha.");
+    } catch (err: unknown) {
+      setError(authErrorMessage(err));
     } finally {
+      submitting.current = false;
       setResetLoading(false);
     }
   };
 
+  const handleSocial = async (provider: SocialProvider) => {
+    if (submitting.current) return;
+    submitting.current = true;
+    setError("");
+    setLoading(true);
+    try {
+      const user = await authController.social(provider);
+      setTelemetryUserId(user.uid);
+      setFirebaseAnalyticsUserId(user.uid);
+      trackAnalyticsEvent("login", { method: provider });
+      await resolveOnboardingRoute();
+    } catch (cause) { setError(authErrorMessage(cause)); }
+    finally { submitting.current = false; setLoading(false); }
+  };
   // Demo mode disabled - login only via Firebase real authentication
   // const handleDemo = () => {
   //   loginDemo();
@@ -221,6 +219,10 @@ export default function Login() {
         </div>
 
         <form onSubmit={handleLogin} className="rs-login-form" aria-label="Entrar no Revenda Smart">
+          <div className="flex flex-wrap gap-2 mb-4" aria-label="Outras formas de entrar">
+            <button type="button" className="min-h-12 rounded-xl border px-4" disabled={loading || resetLoading} onClick={() => handleSocial("google")}>Entrar com Google</button>
+            <button type="button" className="min-h-12 rounded-xl border px-4" disabled={loading || resetLoading} onClick={() => handleSocial("facebook")}>Entrar com Facebook</button>
+          </div>
           {(error || success) && (
             <div className="rs-login-message-area" aria-live="polite">
               {error && <p className="rs-login-alert rs-login-alert-error" data-testid="text-login-error">{error}</p>}

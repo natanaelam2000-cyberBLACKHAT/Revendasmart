@@ -32,6 +32,11 @@ android {
         versionCode appVersionCode.toInteger()
         versionName appVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        // Public provider configuration is supplied by the build environment. No App Secret is
+        // accepted here. Blank values leave Facebook unavailable until its console setup is done.
+        resValue "string", "facebook_app_id", System.getenv("REVENDASMART_FACEBOOK_APP_ID") ?: ""
+        resValue "string", "facebook_client_token", System.getenv("REVENDASMART_FACEBOOK_CLIENT_TOKEN") ?: ""
+        resValue "string", "fb_login_protocol_scheme", System.getenv("REVENDASMART_FACEBOOK_APP_ID") ? "fb${System.getenv('REVENDASMART_FACEBOOK_APP_ID')}" : ""
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
@@ -68,6 +73,10 @@ android {
 // nunca deve produzir um artefato silenciosamente não assinado, nem cair no keystore de debug — falha
 // explicitamente, antes de qualquer trabalho de build, com uma mensagem dizendo exatamente o que falta.
 gradle.taskGraph.whenReady { graph ->
+    def wantsNativeApp = graph.allTasks.any { it.name.startsWith("assemble") || it.name.startsWith("bundle") }
+    if (wantsNativeApp && !file("google-services.json").exists()) {
+        throw new GradleException("Autenticação nativa requer android/app/google-services.json do app com.revendasmart.app configurado no Firebase. Veja docs/RS_AUTH_FINAL.md.")
+    }
     def wantsSignedRelease = graph.allTasks.any { it.name in ["bundleRelease", "assembleRelease"] }
     if (wantsSignedRelease && !releaseSigningConfigured) {
         def missing = []
@@ -89,6 +98,8 @@ repositories {
 }
 
 dependencies {
+    implementation "com.google.firebase:firebase-auth:$firebaseAuthVersion"
+    implementation "com.facebook.android:facebook-login:$facebookLoginVersion"
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"

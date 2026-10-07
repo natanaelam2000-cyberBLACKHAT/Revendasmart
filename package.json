@@ -4,6 +4,10 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
+    "test:auth-final": "tsx script/auth-final-tests.ts",
+    "test:auth-final:firebase:run": "tsx script/auth-final-emulator-tests.ts",
+    "test:e2e:auth-final:run": "node scripts/e2e/run-auth-final-e2e.mjs",
+    "test:e2e:auth-final": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore,storage \"npm run test:e2e:auth-final:run\"",
     "test:rc-p0-pricing:run": "tsx script/rc-p0-pricing-tests.ts",
     "test:rc-p0-pricing": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:rc-p0-pricing:run\"",
     "dev:client": "vite dev --port 5000",
@@ -163,6 +167,7 @@
     "test:dashboard-runtime-resilience": "tsx script/dashboard-runtime-resilience-tests.ts"
   },
   "dependencies": {
+    "@capacitor-firebase/authentication": "8.5.2",
     "@capacitor/android": "^8.4.2",
     "@capacitor/app": "^8.1.1",
     "@capacitor/core": "^8.4.2",

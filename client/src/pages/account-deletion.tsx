@@ -1,5 +1,8 @@
-import { useEffect, useState } from "react";
-import { onAuthStateChanged, signOut, type User } from "firebase/auth";
+import { useEffect, useRef, useState } from "react";
+import { authController } from "@/lib/auth-lifecycle";
+import { finishAuthCleanup } from "@/lib/auth-cleanup";
+import { authErrorCode, authErrorMessage, type SocialProvider } from "@/lib/auth-policy";
+import { onAuthStateChanged, type User } from "firebase/auth";
 import { AlertTriangle, ArrowLeft, CheckCircle2, Loader2 } from "lucide-react";
 import { Link } from "wouter";
 import { ApiError, apiRequest, buildApiErrorDisplayMessage } from "@/lib/api-client";
@@ -14,6 +17,9 @@ export default function AccountDeletionPage() {
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [confirmation, setConfirmation] = useState("");
+  const [password, setPassword] = useState("");
+  const [provider, setProvider] = useState<SocialProvider | "password">("password");
+  const deleting = useRef(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   // RELEASE-03B §4: o servidor recusa a exclusão (409) enquanto existir assinatura ativa ou conexão
@@ -23,29 +29,42 @@ export default function AccountDeletionPage() {
   const [blockedReason, setBlockedReason] = useState<"ACTIVE_SUBSCRIPTION" | "ACTIVE_MERCADOPAGO_CONNECTION" | null>(null);
   const [failed, setFailed] = useState(false);
   const [completed, setCompleted] = useState(false);
+  const [cleanupWarning, setCleanupWarning] = useState(false);
 
   useEffect(() => {
     const auth = getFirebaseAuth();
     if (!auth) { setAuthReady(true); return; }
-    return onAuthStateChanged(auth, (nextUser) => { setUser(nextUser); setAuthReady(true); });
+    return onAuthStateChanged(auth, (nextUser) => {
+      setUser(nextUser); setAuthReady(true); setPassword("");
+      const ids = nextUser?.providerData.map(p => p.providerId) ?? [];
+      setProvider(ids.includes("password") ? "password" : ids.includes("google.com") ? "google" : "facebook");
+    });
   }, []);
 
   async function deleteAccount() {
-    if (!user || confirmation !== CONFIRMATION) return;
+    if (!user || confirmation !== CONFIRMATION || deleting.current) return;
+    deleting.current = true;
     setLoading(true);
     setError("");
     setBlockedReason(null);
     setFailed(false);
     const uid = user.uid;
     try {
-      await apiRequest("/api/account", { method: "DELETE", auth: true, timeoutMs: 120_000 });
-      await clearDeletedAccountLocalData(uid);
-      await clearFirestoreOfflineCache();
-      queryClient.clear();
-      clearUserContext();
-      clearTelemetryUserId();
-      const auth = getFirebaseAuth();
-      if (auth) await signOut(auth).catch(() => undefined);
+      await authController.reauthenticate(provider, password);
+      setPassword("");
+      // Pin the request to the explicitly confirmed user, even if another session arrives while
+      // preparing the request. Never ask the API helper for a subsequently changed current user.
+      const token = await user.getIdToken(true);
+      await apiRequest("/api/account", { method: "DELETE", auth: false, headers: { Authorization: `Bearer ${token}` }, timeoutMs: 120_000 });
+      const clean = await finishAuthCleanup([
+        () => clearDeletedAccountLocalData(uid),
+        () => clearFirestoreOfflineCache(),
+        () => authController.logout(),
+        () => queryClient.clear(),
+        () => clearUserContext(),
+        () => clearTelemetryUserId(),
+      ]);
+      setCleanupWarning(!clean);
       setCompleted(true);
       setUser(null);
     } catch (cause) {
@@ -54,8 +73,10 @@ export default function AccountDeletionPage() {
       } else {
         setFailed(true);
       }
-      setError(buildApiErrorDisplayMessage(cause, "Não foi possível excluir a conta."));
+      setError(authErrorCode(cause).startsWith("auth/") ? authErrorMessage(cause) : buildApiErrorDisplayMessage(cause, "Não foi possível excluir a conta."));
     } finally {
+      deleting.current = false;
+      setPassword("");
       setLoading(false);
     }
   }
@@ -79,11 +100,22 @@ export default function AccountDeletionPage() {
         {!authReady ? <Loader2 className="mx-auto mt-10 h-6 w-6 animate-spin" /> : completed ? (
           <div data-testid="card-account-deletion-completed" role="status" className="mt-8 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-emerald-950">
             <p className="flex items-center gap-2 font-semibold"><CheckCircle2 className="h-5 w-5" aria-hidden="true" /> Conta excluída</p>
-            <p className="mt-2 text-sm">Sua sessão e os dados locais vinculados à conta foram removidos.</p>
+            <p className="mt-2 text-sm">{cleanupWarning ? "A conta foi excluída no servidor, mas a limpeza local não terminou. Feche o aplicativo e limpe os dados locais antes de entrar novamente." : "Sua sessão e os dados locais vinculados à conta foram removidos."}</p>
             <Link href="/login" className="mt-4 inline-block font-semibold underline">Ir para o login</Link>
           </div>
         ) : user ? (
           <div className="mt-8 space-y-5">
+            <p className="text-sm">Confirme sua identidade antes de excluir a conta.</p>
+            <label className="block text-sm">Método de confirmação
+              <select value={provider} disabled={loading} onChange={event => setProvider(event.target.value as SocialProvider | "password")} className="block min-h-12 border rounded-xl px-3">
+                {user.providerData.some(p => p.providerId === "password") && <option value="password">Senha</option>}
+                {user.providerData.some(p => p.providerId === "google.com") && <option value="google">Google</option>}
+                {user.providerData.some(p => p.providerId === "facebook.com") && <option value="facebook">Facebook</option>}
+              </select>
+            </label>
+            {provider === "password" && <label className="block text-sm">Senha atual
+              <input type="password" autoComplete="current-password" disabled={loading} value={password} onChange={event => setPassword(event.target.value)} className="block min-h-12 w-full border rounded-xl px-3" />
+            </label>}
             <p className="text-sm text-slate-700">Para confirmar, digite exatamente <strong>{CONFIRMATION}</strong>.</p>
             {/* a11y: label associado por `htmlFor`/`id`; o erro é anunciado (role="alert") E associado
                 ao campo por `aria-describedby`, para que leitores de tela leiam a mensagem ao focar. */}
@@ -141,7 +173,7 @@ export default function AccountDeletionPage() {
               type="button"
               data-testid="button-account-deletion-submit"
               onClick={deleteAccount}
-              disabled={loading || confirmation !== CONFIRMATION}
+              disabled={loading || confirmation !== CONFIRMATION || (provider === "password" && !password)}
               aria-busy={loading || undefined}
               className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-red-700 px-5 py-3 font-semibold text-white transition-colors hover:bg-red-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-700 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
             >

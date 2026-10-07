@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useLocation, Link } from "wouter";
 import { bootstrapUserData } from "@/lib/mock-data";
-import { createUserWithEmailAndPassword } from "firebase/auth";
+import { authController } from "@/lib/auth-lifecycle";
+import { authErrorMessage } from "@/lib/auth-policy";
 import { getFirebaseAuth, getFirebaseError, logTelemetryEvent, setTelemetryUserId, trackAnalyticsEvent, setFirebaseAnalyticsUserId, logError } from "@/lib/firebase";
 import { getApiUrl } from "@/lib/api-config";
 import { UserPlus } from "lucide-react";
@@ -13,9 +14,12 @@ export default function Signup() {
   const [storeName, setStoreName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const submitting = useRef(false);
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
     setError("");
     setLoading(true);
 
@@ -31,8 +35,9 @@ export default function Signup() {
       }
 
       // Create user with Firebase Auth
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      const user = userCredential.user;
+      const user = await authController.signup(email, password);
+      // A failed delivery can be retried in settings; never recreate an already-created account.
+      await authController.sendVerification().catch(() => undefined);
       
       // Track signup event (both telemetry and analytics)
       setTelemetryUserId(user.uid);
@@ -116,13 +121,6 @@ export default function Signup() {
         localStorage.removeItem("rs:referral_source");
       }
 
-      // Save user ID to localStorage for session tracking
-      try {
-        localStorage.setItem("rs:session", user.uid);
-      } catch (e) {
-        console.warn("Failed to save session:", e);
-      }
-
       // Bootstrap user data with store name from signup form
       try {
         bootstrapUserData(user.uid, email);
@@ -145,19 +143,9 @@ export default function Signup() {
       // Redirect to onboarding
       setLocation("/onboarding");
     } catch (err: unknown) {
-      const code = err && typeof err === "object" && "code" in err ? String(err.code) : "";
-      console.error("[signup] Firebase error:", err);
-      
-      if (code === "auth/email-already-in-use") {
-        setError("Este email já está cadastrado");
-      } else if (code === "auth/weak-password") {
-        setError("Senha muito fraca. Use pelo menos 6 caracteres.");
-      } else if (code === "auth/invalid-email") {
-        setError("Email inválido");
-      } else {
-        setError("Erro ao criar conta. Tente novamente.");
-      }
+      setError(authErrorMessage(err));
     } finally {
+      submitting.current = false;
       setLoading(false);
     }
   };

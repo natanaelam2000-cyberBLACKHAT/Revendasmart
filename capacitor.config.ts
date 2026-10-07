@@ -4,6 +4,12 @@ const config: CapacitorConfig = {
   appId: "com.revendasmart.app",
   appName: "RevendaSmart",
   webDir: "dist/public",
+  plugins: {
+    FirebaseAuthentication: {
+      skipNativeAuth: true,
+      providers: ["google.com", "facebook.com"],
+    },
+  },
   server: {
     androidScheme: "https",
   },

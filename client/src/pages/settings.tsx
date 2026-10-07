@@ -11,10 +11,13 @@ import { notifyError, notifySuccess, notifyWarning } from "@/lib/notify";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import {
   AppSettings,
-  logout, getCurrentUserId, getStored, STORAGE_KEYS
+  logout, getStored, STORAGE_KEYS
 } from "@/lib/mock-data";
 import { clearTelemetryUserId, clearUserContext, getFirebaseIdToken, getFirebaseAuth, measureOperation, logTelemetryEvent, clearFirestoreOfflineCache, trackAnalyticsEvent } from "@/lib/firebase";
-import { onAuthStateChanged, signOut, type User as FirebaseAuthUser } from "firebase/auth";
+import { onAuthStateChanged, type User as FirebaseAuthUser } from "firebase/auth";
+import { authController } from "@/lib/auth-lifecycle";
+import { finishAuthCleanup } from "@/lib/auth-cleanup";
+import { AccountAuthPanel } from "@/components/account-auth-panel";
 import { useLocation } from "wouter";
 import { getApiUrl } from "@/lib/api-config";
 import { buildPublicAppUrl } from "@/lib/public-url";
@@ -380,28 +383,27 @@ export default function Settings() {
 
   const handleLogout = async () => {
     const auth = getFirebaseAuth();
-    const uid = auth?.currentUser?.uid ?? getCurrentUserId();
+    const uid = auth?.currentUser?.uid ?? null;
 
     try {
       if (auth) {
-        await signOut(auth);
+        await authController.logout();
       }
-    } catch (error) {
-      console.error("[settings] Logout failed:", error);
+    } catch {
+      console.warn("[settings] Logout failed");
       notifyError("Não foi possível encerrar sua sessão agora.");
       return;
     }
 
-    if (uid) {
-      await clearScopedAccountLocalData(uid);
-    }
-    // §8: apaga o cache offline do Firestore (IndexedDB) — isolamento por tenant além do path uid.
-    await clearFirestoreOfflineCache();
-
-    queryClient.clear();
-    clearUserContext();
-    clearTelemetryUserId();
-    await logout();
+    const clean = await finishAuthCleanup([
+      () => uid ? clearScopedAccountLocalData(uid) : undefined,
+      () => clearFirestoreOfflineCache(),
+      () => queryClient.clear(),
+      () => clearUserContext(),
+      () => clearTelemetryUserId(),
+      () => logout(),
+    ]);
+    if (!clean) notifyError("A sessão foi encerrada, mas a limpeza local não terminou. Limpe os dados do aplicativo antes de entrar novamente.");
     setLocation("/login");
   };
 
@@ -498,12 +500,18 @@ export default function Settings() {
   };
 
   const restoreBackupFromFile = (file: File) => {
+    const id = firebaseUid;
+    if (!id) {
+      setSaveMessage("Sessão expirada. Faça login novamente.");
+      notifyError("Sessão expirada. Faça login novamente.");
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
-        const id = getCurrentUserId();
-        if (!id) {
-          setSaveMessage("Erro: usuário não identificado.");
+        if (getFirebaseAuth()?.currentUser?.uid !== id) {
+          setSaveMessage("Sessão expirada. Faça login novamente.");
+          notifyError("Sessão expirada. Faça login novamente.");
           return;
         }
         const backup = JSON.parse(event.target?.result as string);
@@ -642,6 +650,7 @@ export default function Settings() {
         <div className="flex-1 w-full max-w-4xl mx-auto p-4 sm:p-6 lg:p-8 pb-32 space-y-6">
           {activeTab === 'account' && (
             <div className="space-y-5 animate-in fade-in slide-in-from-right-4">
+              <AccountAuthPanel key={authUser?.uid ?? "anonymous"} user={authUser} />
               <div><p className="text-xs font-semibold text-primary">Minha Conta</p><h2 className="text-2xl font-semibold tracking-tight mt-1">Perfil e dados pessoais</h2><p className="text-sm text-muted-foreground mt-1">Atualize seus dados de contato e identificação.</p></div>
               <div className="bg-white border border-border/60 rounded-3xl p-5 space-y-4 shadow-sm">
                 <InputField label="Nome" value={formSettings?.sellerName} onChange={(v: string) => setFormSettings({...formSettings, sellerName: v})} />
@@ -1245,8 +1254,12 @@ export default function Settings() {
                 <button
                   onClick={() => {
                     try {
-                      const id = getCurrentUserId();
-                      if (!id) return;
+                      const id = firebaseUid;
+                      if (!id || getFirebaseAuth()?.currentUser?.uid !== id) {
+                        setSaveMessage("Sessão expirada. Faça login novamente.");
+                        notifyError("Sessão expirada. Faça login novamente.");
+                        return;
+                      }
                       const backup: Record<string, string> = {};
                       const prefix = `rs:${id}:`;
                       for (let i = 0; i < localStorage.length; i++) {

@@ -1,4 +1,9 @@
 ext {
+    rgcfaIncludeGoogle = true
+    rgcfaIncludeFacebook = true
+    androidxCredentialsVersion = '1.3.0'
+    firebaseAuthVersion = '24.0.1'
+    facebookLoginVersion = '18.1.3'
     minSdkVersion = 24
     compileSdkVersion = 36
     targetSdkVersion = 36
