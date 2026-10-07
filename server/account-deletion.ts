@@ -5,6 +5,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import type { Bucket } from "@google-cloud/storage";
 import { getFirebaseAdmin } from "./firebase-admin-init";
 import { logError, logInfo, logWarn } from "./logger";
+import { checkRecentIdentity } from "./auth-recent";
 
 type RequireAuth = (req: Request, res: Response, next: NextFunction) => unknown;
 
@@ -164,6 +165,16 @@ export function registerAccountDeletionRoutes(app: Express, requireAuth: Require
   app.delete("/api/account", requireAuth, async (req: Request, res: Response) => {
     const uid = (req as Request & { firebaseUid?: string }).firebaseUid;
     if (!uid) return res.status(401).json({ error: { code: "UNAUTHENTICATED", requestId: req.requestId } });
+
+    // Enforce freshness on the server before any destructive write. A refreshed old token is not
+    // proof of recent authentication, and neither a client timestamp nor a body UID is trusted.
+    const identityError = await checkRecentIdentity(uid, req.headers.authorization,
+      (token, checkRevoked) => getFirebaseAdmin().auth().verifyIdToken(token, checkRevoked));
+    if (identityError) {
+      return res.status(identityError === "REAUTH_REQUIRED" ? 403 : 401).json({
+        error: { code: identityError, message: "Confirme sua identidade novamente antes de excluir a conta.", requestId: req.requestId },
+      });
+    }
 
     try {
       await deleteAccountByUid(uid, createAccountDeletionDependencies());
