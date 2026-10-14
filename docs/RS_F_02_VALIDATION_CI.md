@@ -68,4 +68,5 @@ Se `npm ci` repetir `EPERM`, usar um diretório/checkout descartável novo, sem 
 
 - Apenas este relatório foi adicionado nesta missão.
 - Não houve alteração de lógica de negócio, produção, billing, Firebase, assinatura Android, push, merge, deploy ou publicação.
-- Commit local do relatório: preencher no commit desta missão; a identificação final também será informada na entrega.
+- Commit local que adicionou este relatório: `df72934` (`docs: record RS-F-02 validation results`).
+- Qualquer commit posterior de ajuste documental será informado junto na entrega.
