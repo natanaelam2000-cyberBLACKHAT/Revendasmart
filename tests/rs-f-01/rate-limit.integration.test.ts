@@ -8,15 +8,16 @@ import {
 
 type StoredDoc = { count?: unknown; [key: string]: unknown };
 
-function fakeFirestore(initial: StoredDoc | null = null) {
-  let current = initial;
+function fakeFirestore(initial: StoredDoc | null = null, initialKey = "rate-limit-doc") {
+  const documents = new Map<string, StoredDoc>();
   const ref = { id: "rate-limit-doc" };
+  if (initial) documents.set(initialKey, initial);
   const tx = {
-    async get() {
-      return { data: () => current };
+    async get(target: { id: string }) {
+      return { data: () => documents.get(target.id) };
     },
-    set(_ref: unknown, value: StoredDoc) {
-      current = { ...(current ?? {}), ...value };
+    set(target: { id: string }, value: StoredDoc) {
+      documents.set(target.id, { ...(documents.get(target.id) ?? {}), ...value });
     },
   };
   return {
@@ -27,7 +28,7 @@ function fakeFirestore(initial: StoredDoc | null = null) {
     async runTransaction(callback: (transaction: typeof tx) => unknown) {
       return callback(tx);
     },
-    read() { return current; },
+    read(id = ref.id) { return documents.get(id); },
   };
 }
 
@@ -43,8 +44,17 @@ test("distributed limiter increments a mocked Firestore document and blocks at m
   assert.match(buildPublicRateLimitDocId("a/b", 60_000, 120_000), /^a_b__/);
 });
 
+test("rate-limit keys and time windows use isolated mocked documents", async () => {
+  const db = fakeFirestore();
+  const options = { windowMs: 60_000, max: 1 };
+  assert.equal((await checkDistributedRateLimit(db as never, "ip-a", options, 120_000)).allowed, true);
+  assert.equal((await checkDistributedRateLimit(db as never, "ip-a", options, 120_000)).allowed, false);
+  assert.equal((await checkDistributedRateLimit(db as never, "ip-b", options, 120_000)).allowed, true);
+  assert.equal((await checkDistributedRateLimit(db as never, "ip-a", options, 180_000)).allowed, true);
+});
+
 test("corrupt counter fails closed while infrastructure failure stays open", async () => {
-  const corrupt = fakeFirestore({ count: Number.NaN });
+  const corrupt = fakeFirestore({ count: Number.NaN }, buildPublicRateLimitDocId("key", 10_000, 0));
   const decision = await checkDistributedRateLimit(corrupt as never, "key", { windowMs: 10_000, max: 5 }, 0);
   assert.equal(decision.allowed, false);
   assert.equal(decision.remaining, 0);
