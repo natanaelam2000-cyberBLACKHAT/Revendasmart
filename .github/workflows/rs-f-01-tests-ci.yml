@@ -1,0 +1,41 @@
+name: RS-F-01 Tests and CI
+
+on:
+  pull_request:
+    paths:
+      - "client/**"
+      - "server/**"
+      - "shared/**"
+      - "tests/rs-f-01/**"
+      - ".github/workflows/rs-f-01-tests-ci.yml"
+      - "package.json"
+      - "package-lock.json"
+  push:
+    branches: [main]
+    paths:
+      - "client/**"
+      - "server/**"
+      - "shared/**"
+      - "tests/rs-f-01/**"
+      - ".github/workflows/rs-f-01-tests-ci.yml"
+      - "package.json"
+      - "package-lock.json"
+
+permissions:
+  contents: read
+
+jobs:
+  tests-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run test:rs-f-01
+      - run: npm run check
+      - run: npm run lint
+      - run: npm run build
