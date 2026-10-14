@@ -10,7 +10,7 @@
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
     "test:dev-server": "tsx script/dev-server-integration-tests.ts",
-    "test:rs-f-01": "tsx --test tests/rs-f-01/shared-contracts.test.ts tests/rs-f-01/rate-limit.integration.test.ts",
+    "test:rs-f-01": "tsx --test tests/rs-f-01/shared-contracts.test.ts tests/rs-f-01/rate-limit.integration.test.ts tests/rs-f-06/product-pricing-regression.test.ts",
     "test:production-routing:run": "node scripts/e2e/run-production-routing-e2e.mjs",
     "test:production-routing": "npm run build && npm run test:production-routing:run",
     "db:push": "drizzle-kit push",
