@@ -1,10 +1,17 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { PLAN_CONFIG, isPremiumActive, type PlanType, type PlanData as MonetizationPlanData } from "@shared/monetization";
+import { PLAN_CONFIG, PLANS, isPremiumActive, type PlanType, type PlanLimits, type PlanData as MonetizationPlanData } from "@shared/monetization";
 import { apiRequest, buildApiErrorDisplayMessage } from "@/lib/api-client";
 import { getFirebaseAuth } from "@/lib/firebase";
+import { firePlanLifecycleAnalytics, type PlanLifecycleSnapshot } from "@/lib/plan-lifecycle-analytics";
 
 type ActivePlan = PlanType;
+
+type TrialInfo = {
+  status: "active" | "expired" | "converted";
+  startedAt: string | null;
+  endsAt: string | null;
+};
 
 type PlanData = {
   currentPlan?: string;
@@ -27,15 +34,14 @@ type PlanData = {
   isTester?: boolean;
   isPremiumPlus?: boolean;
   entitlementSource?: "commercial" | "tester_grant" | "premium_plus_grant" | "none";
-};
-
-type PlanLimits = {
-  products: number;
-  clients: number;
-  charges: boolean;
-  productHighlight: boolean;
-  categories: boolean;
-  niches: number;
+  // PLAN-IMPL-03 §17/§18 — também computados pelo servidor (ensurePlanLifecycleCurrent, server/
+  // plan-lifecycle.ts): basePlan ignora trial (o que o tenant tem "de verdade"), effectivePlan já inclui
+  // o boost de trial (o que vale para limites/entitlements agora). `trial` é só para exibição
+  // (banner/contador) — nunca usado para decidir acesso, que já está embutido em hasPremiumAccess/
+  // effectivePlan.
+  basePlan?: string;
+  effectivePlan?: string;
+  trial?: TrialInfo | null;
 };
 
 interface PlanProviderValue {
@@ -55,43 +61,44 @@ interface PlanProviderValue {
   referralCount: number;
   shareLink: string | null;
   error: string | null;
+  basePlan: ActivePlan;
+  trial: TrialInfo | null;
+  // PLAN-IMPL-08-VERIFY-FINAL §3/§4 — entitlement fail-closed-to-Free (resolveActivePlan acima) e
+  // promotion fail-closed-to-none são políticas DIFERENTES: negar acesso pago quando o estado é
+  // desconhecido é seguro, mas anunciar upgrade para um estado desconhecido não é (poderia mostrar a
+  // promoção Free para um pagante real durante uma falha transitória). `false` cobre exatamente loading
+  // e erro; nunca reflete o plano resolvido em si (um Free genuíno também tem planResolved=true).
+  planResolved: boolean;
 }
 
-const FREE_LIMITS = PLAN_CONFIG.free.limits;
 const PlanContext = createContext<PlanProviderValue | null>(null);
 
-// RELEASE-16 §3/§4, estendido em OWNER-ACCESS-02: única fonte de verdade para "tem acesso Premium" —
-// preferencialmente `data.hasPremiumAccess`, já composto pelo servidor (planData comercial + eventual
-// concessão interna Tester/Premium+, via resolveEntitlements em shared/monetization.ts). O fallback
-// local com `isPremiumActive()` só cobre um payload antigo/incompleto sem o campo (nunca deveria
-// acontecer com o servidor atual, mas evita quebrar se algum outro caminho ainda devolver o shape cru).
+// RELEASE-16 §3/§4, estendido em OWNER-ACCESS-02, PLAN-IMPL-01 §3 e PLAN-IMPL-03 §17/§18: única fonte
+// de verdade para "qual plano vale agora" — preferencialmente `data.effectivePlan`, já computado pelo
+// servidor (ensurePlanLifecycleCurrent, server/plan-lifecycle.ts) considerando trial. `hasPremiumAccess`
+// (também já trial-aware, via resolveEntitlements) é o fallback para um payload mais antigo sem
+// `effectivePlan`; `isPremiumActive()` local é o último fallback, só para um shape cru/incompleto (nunca
+// deveria acontecer com o servidor atual).
 function resolveActivePlan(data: PlanData | null): ActivePlan {
+  if (data?.effectivePlan === PLANS.FREE || data?.effectivePlan === PLANS.PRO || data?.effectivePlan === PLANS.PREMIUM) {
+    return data.effectivePlan;
+  }
   const hasAccess = typeof data?.hasPremiumAccess === "boolean"
     ? data.hasPremiumAccess
     : isPremiumActive(data as unknown as MonetizationPlanData | null);
-  return hasAccess ? "premium" : "free";
+  if (hasAccess) return PLANS.PREMIUM;
+  if (data?.currentPlan === PLANS.PRO) return PLANS.PRO;
+  return PLANS.FREE;
 }
 
+// PLAN-IMPL-01 §2: antes, esta função reconstruía um subconjunto dos limites à mão (com `Infinity`
+// hardcoded para Premium) — uma segunda configuração paralela a `PLAN_CONFIG`, e já divergente dele
+// mesmo antes deste ticket (Premium era `UNLIMITED` aqui e `Infinity` lá). Nenhum consumidor real lê
+// `usePlan().limits.<campo>` hoje (confirmado antes desta mudança) — delegar direto para
+// `PLAN_CONFIG[activePlan].limits` elimina a duplicação e já cobre `pro` e os campos novos
+// (`services`/`bookingsMonthly`/`proAdPreparationsMonthly`) sem precisar de um terceiro branch manual.
 function resolveLimits(activePlan: ActivePlan): PlanLimits {
-  if (activePlan === "premium") {
-    return {
-      products: Infinity,
-      clients: Infinity,
-      charges: true,
-      productHighlight: true,
-      categories: true,
-      niches: Infinity,
-    };
-  }
-
-  return {
-    products: FREE_LIMITS.products,
-    clients: FREE_LIMITS.clients,
-    charges: Boolean(FREE_LIMITS.charges),
-    productHighlight: Boolean(FREE_LIMITS.productHighlight),
-    categories: Boolean(FREE_LIMITS.categories),
-    niches: FREE_LIMITS.niches,
-  };
+  return PLAN_CONFIG[activePlan].limits;
 }
 
 async function fetchPlanData(user: User): Promise<PlanData> {
@@ -146,6 +153,27 @@ export function PlanProvider({ children }: { children: ReactNode }) {
   const activePlan = useMemo(() => resolveActivePlan(planData), [planData]);
   const hasPremiumAccess = activePlan === "premium";
   const limits = useMemo(() => resolveLimits(activePlan), [activePlan]);
+  // PLAN-IMPL-03 §4/§18 — basePlan ignora trial (mesma validação de shape do effectivePlan acima);
+  // documento sem o campo (payload antigo) cai no próprio activePlan já resolvido, nunca undefined.
+  const basePlan: ActivePlan = planData?.basePlan === PLANS.FREE || planData?.basePlan === PLANS.PRO || planData?.basePlan === PLANS.PREMIUM
+    ? planData.basePlan
+    : activePlan;
+  const trial = planData?.trial ?? null;
+
+  // PLAN-IMPL-06 §30-§32 — reage a transições de plano/trial já resolvidas (nunca decide nada sozinho,
+  // ver plan-lifecycle-analytics.ts para o raciocínio completo). `previousSnapshotRef` começa `null` e só
+  // grava a baseline na primeira observação da sessão atual — nunca finge uma transição que já existia
+  // antes desta sessão começar.
+  const previousSnapshotRef = useRef<PlanLifecycleSnapshot | null>(null);
+  useEffect(() => {
+    if (!planData) return;
+    const uid = currentUserRef.current?.uid;
+    if (!uid) return;
+    const current: PlanLifecycleSnapshot = { basePlan, trialStatus: planData.trial?.status ?? null };
+    firePlanLifecycleAnalytics(uid, previousSnapshotRef.current, current);
+    previousSnapshotRef.current = current;
+  }, [planData, basePlan]);
+
   // RELEASE-28: `/signup?ref=` nunca era capturado — `/signup` é rota PÚBLICA (App.tsx), fora do
   // PrivateRouter, que é onde a captura de `?referral=` roda. Corrigido para o mesmo formato que
   // settings.tsx já usa e que de fato é capturado: origem + `?referral=<código>`.
@@ -155,6 +183,12 @@ export function PlanProvider({ children }: { children: ReactNode }) {
   }, [planData?.referralCode]);
 
   const refresh = useCallback(() => loadPlan(), [loadPlan]);
+
+  // PLAN-IMPL-08-VERIFY-FINAL §2/§4 — reaproveita loading/error já existentes, nenhuma autoridade de
+  // lifecycle nova: `false` durante loading OU erro (mesmo em retry, quando error volta a null enquanto
+  // loading fica true — a checagem de loading já cobre essa janela), `true` assim que uma resposta real
+  // (sucesso) chegou, mesmo que o plano resolvido seja genuinamente Free.
+  const planResolved = !loading && !error;
 
   const value = useMemo<PlanProviderValue>(() => ({
     plan: planData,
@@ -173,7 +207,10 @@ export function PlanProvider({ children }: { children: ReactNode }) {
     referralCount: planData?.referralCount ?? 0,
     shareLink,
     error,
-  }), [activePlan, error, hasPremiumAccess, limits, loading, planData, refresh, shareLink]);
+    basePlan,
+    trial,
+    planResolved,
+  }), [activePlan, basePlan, error, hasPremiumAccess, limits, loading, planData, planResolved, refresh, shareLink, trial]);
 
   return <PlanContext.Provider value={value}>{children}</PlanContext.Provider>;
 }

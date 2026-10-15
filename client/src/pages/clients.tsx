@@ -1,12 +1,15 @@
 import { useState, useMemo } from "react";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Layout } from "@/components/layout";
+import { PlanLimitPrompt } from "@/components/PlanLimitPrompt";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import { Installment, defaultSettings } from "@/lib/mock-data";
-import { Search, UserPlus, ChevronRight, Download, CheckSquare, Square, Send, AlertCircle, Pencil, Trash2 } from "lucide-react";
-import { Link, useLocation } from "wouter";
+import { Search, UserPlus, ChevronRight, Download, CheckSquare, Square, Send, Pencil, Trash2 } from "lucide-react";
+import { Link } from "wouter";
 import { usePaginatedClientsData } from "@/hooks/usePaginatedClientsData";
 import { usePlan } from "@/providers/PlanProvider";
+import { checkClientLimit } from "@/lib/plan-helpers";
+import { PLAN_CONFIG } from "@shared/monetization";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, measureOperation } from "@/lib/firebase";
 import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
 import { buildPublicCatalogUrl } from "@/lib/public-url";
@@ -15,6 +18,7 @@ import { useSalesData } from "@/hooks/useSalesData";
 import { buildLastSaleByClientId, isClientInactive } from "@/lib/client-activity";
 import { useDismissibleOnBack } from "@/hooks/useDismissibleOnBack";
 import { PRIORITY_QUERY_PARAM } from "@/lib/home-dashboard-view-model";
+import { formatCurrency } from "@/lib/product-pricing";
 
 /**
  * RELEASE-26: lê o contexto do card de Prioridades ("N clientes sem comprar há +60 dias") ANTES de
@@ -29,7 +33,6 @@ function readInactiveFilterFromLocation(): boolean {
 export default function Clients() {
   const { clients, loading, loadingMore, error, hasMore, totalCount, loadMore, addClient, updateClient, deleteClient } = usePaginatedClientsData();
   const { activePlan } = usePlan();
-  const [, setLocation] = useLocation();
   const { sales } = useSalesData();
   const [billings] = useState<Installment[]>([]);
   const [settings] = useState(() => defaultSettings);
@@ -114,10 +117,14 @@ export default function Clients() {
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Validate plan limits for new clients
-    if ((totalCount ?? clients.length) >= 50 && activePlan === 'free') {
+    // PLAN-IMPL-01 §10 — was a hardcoded `>= 50 && activePlan === 'free'` duplicate of the canonical
+    // limit (shared/monetization.ts), which would have silently drifted from PLAN_CONFIG if the real
+    // limit ever changed, and never recognized Pro/Premium's own client caps. checkClientLimit is the
+    // canonical helper (already used nowhere until now); activePlan already reflects premium/tester/
+    // premium_plus grants via the server-composed hasPremiumAccess, so no separate bypass is needed.
+    if (!checkClientLimit(activePlan, totalCount ?? clients.length).allowed) {
       setShowLimitModal(true);
-      setCreateError("Limite de 50 clientes atingido no plano Grátis.");
+      setCreateError(`Limite de ${PLAN_CONFIG[activePlan].limits.clients} clientes atingido no plano ${PLAN_CONFIG[activePlan].name}.`);
       return;
     }
 
@@ -190,48 +197,7 @@ export default function Clients() {
   if (showLimitModal) {
     return (
       <Layout title="Limite Atingido">
-        <div className="px-6 py-8 flex flex-col items-center justify-center min-h-screen gap-6">
-          <div className="w-20 h-20 bg-amber-100 rounded-full flex items-center justify-center">
-            <AlertCircle className="w-12 h-12 text-amber-600" />
-          </div>
-
-          <div className="text-center space-y-3">
-            <h2 className="text-2xl font-bold text-foreground">Limite de Clientes Atingido</h2>
-            <p className="text-sm text-muted-foreground">
-              Você atingiu o limite de <strong>50 clientes</strong> no plano Grátis.
-            </p>
-            <p className="text-sm text-muted-foreground">
-              Upgrade para Premium para adicionar clientes ilimitados!
-            </p>
-          </div>
-
-          <div className="bg-blue-50 border border-blue-200 rounded-3xl p-4 w-full space-y-2">
-            <p className="text-xs text-blue-700 font-bold">Plano Premium inclui:</p>
-            <ul className="text-xs text-blue-600 space-y-1 list-disc list-inside">
-              <li>Produtos ilimitados</li>
-              <li>Clientes ilimitados</li>
-              <li>Cobranças via Mercado Pago</li>
-              <li>Múltiplos tipos de negócio</li>
-            </ul>
-          </div>
-
-          <div className="flex gap-3 w-full">
-            <button
-              onClick={() => setShowLimitModal(false)}
-              className="flex-1 bg-secondary text-foreground font-bold py-3 rounded-xl"
-              data-testid="button-close-limit-modal"
-            >
-              Entendi
-            </button>
-            <button
-              onClick={() => setLocation('/subscribe')}
-              className="flex-1 bg-primary text-white font-bold py-3 rounded-xl"
-              data-testid="button-upgrade-premium"
-            >
-              Upgrade →
-            </button>
-          </div>
-        </div>
+        <PlanLimitPrompt resource="clients" currentPlan={activePlan} onClose={() => setShowLimitModal(false)} />
       </Layout>
     );
   }
@@ -330,30 +296,29 @@ export default function Clients() {
                         {isSelected ? <CheckSquare className="w-6 h-6 text-primary" /> : <Square className="w-6 h-6 text-muted-foreground/30" />}
                       </button>
                     )}
-                    <Link href={isSelectionMode ? "#" : `/clients/${client.id}`} className="flex-1">
-                      <a
-                        onClick={(e) => {
-                          if (isSelectionMode) {
-                            e.preventDefault();
-                            toggleSelection(client.id);
-                          }
-                        }}
-                        className={`bg-white p-4 rounded-3xl border border-border/50 flex items-center gap-4 shadow-sm active:bg-secondary/30 transition-colors group w-full ${isSelected ? 'border-primary ring-2 ring-primary/5' : ''}`}
-                      >
-                        <div className="w-12 h-12 bg-primary/10 rounded-2xl flex items-center justify-center text-primary font-bold group-hover:bg-primary group-hover:text-white transition-colors">
-                          {client.name.charAt(0)}
-                        </div>
-                        <div className="flex-1">
-                          <h3 className="font-bold text-sm">{client.name}</h3>
-                          <p className="text-xs text-muted-foreground">{client.phone}</p>
-                        </div>
-                        <div className="text-right">
-                          <p className={`text-xs font-bold ${balance > 0 ? 'text-destructive' : 'text-green-600'}`}>
-                            {balance > 0 ? `R$ ${balance.toFixed(2)}` : 'Em dia'}
-                          </p>
-                          <ChevronRight className="w-4 h-4 text-muted-foreground ml-auto mt-1" />
-                        </div>
-                      </a>
+                    <Link
+                      href={isSelectionMode ? "#" : `/clients/${client.id}`}
+                      onClick={(e) => {
+                        if (isSelectionMode) {
+                          e.preventDefault();
+                          toggleSelection(client.id);
+                        }
+                      }}
+                      className={`flex-1 bg-white p-4 rounded-3xl border border-border/50 flex items-center gap-4 shadow-sm active:bg-secondary/30 transition-colors group w-full ${isSelected ? 'border-primary ring-2 ring-primary/5' : ''}`}
+                    >
+                      <div className="w-12 h-12 bg-primary/10 rounded-2xl flex items-center justify-center text-primary font-bold group-hover:bg-primary group-hover:text-white transition-colors">
+                        {client.name.charAt(0)}
+                      </div>
+                      <div className="flex-1">
+                        <h3 className="font-bold text-sm">{client.name}</h3>
+                        <p className="text-xs text-muted-foreground">{client.phone}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className={`text-xs font-bold ${balance > 0 ? 'text-destructive' : 'text-green-600'}`}>
+                          {balance > 0 ? formatCurrency(balance) : 'Em dia'}
+                        </p>
+                        <ChevronRight className="w-4 h-4 text-muted-foreground ml-auto mt-1" />
+                      </div>
                     </Link>
                     {/* P1-02: min-h-11/min-w-11 = 44px de área de toque real — o ícone continua w-4 h-4
                         visualmente, só a área clicável cresce (era 36px, abaixo do confortável em mobile). */}
@@ -383,18 +348,17 @@ export default function Clients() {
             <form onSubmit={handleAdd} className="space-y-4">
               <input required autoFocus enterKeyHint="next" autoComplete="name" placeholder="Nome completo" disabled={isCreating} className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none disabled:opacity-50" value={newClient.name} onChange={e => setNewClient({...newClient, name: e.target.value})} />
               <input
-                required
                 type="tel"
                 inputMode="tel"
                 enterKeyHint="next"
                 autoComplete="tel"
-                placeholder="WhatsApp (apenas números)"
+                placeholder="WhatsApp (opcional, apenas números)"
                 disabled={isCreating}
                 className="w-full bg-secondary/50 border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none disabled:opacity-50"
                 value={newClient.phone}
                 onChange={e => setNewClient({...newClient, phone: e.target.value.replace(/\D/g, '')})}
                 pattern="\d{10,15}"
-                title="WhatsApp deve ter de 10 a 15 dígitos"
+                title="Quando informado, o WhatsApp deve ter de 10 a 15 dígitos"
                 data-testid="input-client-phone"
               />
               <input

@@ -121,6 +121,24 @@ function validApprovedCutout(uid: string, productId: string) {
   };
 }
 
+/** PLAN-IMPL-02B1 X2 — shape mínimo válido de Service para as Rules (mesmos campos obrigatórios de
+ * isValidServiceShape em firestore.rules); `overrides` permite semear já com planAccessState="preserved". */
+function validService(id: string, uid: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id,
+    tenantUid: uid,
+    name: "Corte de Cabelo Local",
+    active: true,
+    published: true,
+    pricing: { mode: "fixed", priceCents: 8000 },
+    cost: { kind: "unknown" },
+    bookingMode: "instant",
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
 function validClient(id: string) {
   return {
     id,
@@ -222,8 +240,41 @@ async function run() {
     assert.notEqual(ownerUid, intruderUid);
     adminApp = await seedBackendOnlyData(ownerUid);
 
+    // RS-SEC-FINAL-01: a queue surviving an account change must remain inaccessible
+    // to the new account, including the transaction used to claim a replay lease.
+    const queuedSaleId = 'queued-account-switch';
+    await getAdminFirestore(adminApp).doc(`users/${ownerUid}/pendingSales/${queuedSaleId}`).set({
+      id: queuedSaleId, status: 'pending', createdAt: now, updatedAt: now,
+      payload: { saleId: queuedSaleId, paymentType: 'avista', clientId: 'client-local', products: [] },
+    });
+    assert.equal((await getDoc(doc(owner.db, 'users', ownerUid, 'pendingSales', queuedSaleId))).exists(), true);
+    const foreignQueueRef = doc(intruder.db, 'users', ownerUid, 'pendingSales', queuedSaleId);
+    const denied = (error: unknown) => (error as { code?: string })?.code === 'permission-denied';
+    await assert.rejects(getDoc(foreignQueueRef), denied, 'account B cannot read account A offline queue');
+    await assert.rejects(updateDoc(foreignQueueRef, { status: 'syncing', syncOwner: intruderUid }), denied, 'account B cannot claim account A replay');
+    await assert.rejects(deleteDoc(foreignQueueRef), denied, 'account B cannot remove account A queue');
+    console.log('PASS OFFLINE_USER_ISOLATION: account B cannot read, claim or delete account A pending sale');
+
     const ownerProductRef = doc(owner.db, "users", ownerUid, "products", "product-local");
-    await expectSucceeds("owner cria produto válido", () => setDoc(ownerProductRef, validProduct("product-local")));
+    // PLAN-IMPL-02A2-FINALIZE — Product create is now server-authoritative only (firestore.rules:
+    // allow create: if false, unconditionally — POST /api/products via server/plan-authoritative-
+    // mutations.ts is the only path in, proven end-to-end by script/plan-impl-02a2-authoritative-
+    // mutations-tests.ts). A direct client setDoc/create must be denied regardless of shape validity;
+    // every fixture the shape/ownership tests below need is seeded through the Admin SDK instead (a
+    // trusted setup step, same pattern seedBackendOnlyData already uses for server-owned collections),
+    // and every case that used to prove "an invalid CREATE is rejected" now proves "an invalid UPDATE
+    // is rejected" instead — isValidProductUpdate reuses the exact same shape contract as create, so no
+    // coverage is lost, only the mechanism that reaches it (§18 of the ticket).
+    await expectFails("owner não cria produto direto via setDoc (create é server-authoritative)", () => setDoc(ownerProductRef, validProduct("product-local")));
+    const adminProductsDb = getAdminFirestore(adminApp!);
+    const productFixtureIds = [
+      "product-local", "product-cutout-ok", "product-legacy", "product-mass-assignment-target",
+      "product-cutout-b64", "product-cutout-b64-upper", "product-cutout-mime", "product-cutout-preserve",
+      "product-cutout-coordinate", "product-cutout-extra", "product-cutout-wrongpath",
+      "product-cutout-other-user", "product-cutout-dimensions",
+    ];
+    await Promise.all(productFixtureIds.map((id) => adminProductsDb.doc(`users/${ownerUid}/products/${id}`).set(validProduct(id))));
+
     await expectSucceeds("owner lê próprio produto", async () => {
       const snapshot = await getDoc(ownerProductRef);
       assert.equal(snapshot.exists(), true);
@@ -231,43 +282,40 @@ async function run() {
     });
     await expectFails("outro usuário não lê produto do owner", () => getDoc(doc(intruder.db, "users", ownerUid, "products", "product-local")));
     await expectFails("usuário anônimo não lê produto privado", () => getDoc(doc(anonymous.db, "users", ownerUid, "products", "product-local")));
-    await expectFails("mass assignment de produto é bloqueado", () => setDoc(doc(owner.db, "users", ownerUid, "products", "product-invalid"), { ...validProduct("product-invalid"), premiumActive: true }));
+    await expectFails("mass assignment de produto é bloqueado", () => updateDoc(doc(owner.db, "users", ownerUid, "products", "product-mass-assignment-target"), { premiumActive: true }));
 
     // ===== PRO-07K: approvedCutout persistido =====
-    await expectSucceeds("owner cria produto com approvedCutout válido", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-ok"), { ...validProduct("product-cutout-ok"), approvedCutout: validApprovedCutout(ownerUid, "product-cutout-ok") }));
+    await expectSucceeds("owner define approvedCutout válido via update", () =>
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-ok"), { approvedCutout: validApprovedCutout(ownerUid, "product-cutout-ok") }));
     await expectSucceeds("owner atualiza outro campo mantendo approvedCutout válido", () =>
       updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-ok"), { name: "Perfume Teste Local Atualizado" }));
-    await expectSucceeds("owner adiciona approvedCutout num produto legacy sem o campo", async () => {
-      await setDoc(doc(owner.db, "users", ownerUid, "products", "product-legacy"), validProduct("product-legacy"));
-      await updateDoc(doc(owner.db, "users", ownerUid, "products", "product-legacy"), { approvedCutout: validApprovedCutout(ownerUid, "product-legacy") });
-    });
+    await expectSucceeds("owner adiciona approvedCutout num produto legacy sem o campo", () =>
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-legacy"), { approvedCutout: validApprovedCutout(ownerUid, "product-legacy") }));
     await expectSucceeds("owner remove approvedCutout (invalidação manual)", () =>
       updateDoc(doc(owner.db, "users", ownerUid, "products", "product-legacy"), { approvedCutout: deleteField() }));
     await expectFails("approvedCutout com base64 inline é bloqueado", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-b64"), { ...validProduct("product-cutout-b64"), approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-b64"), downloadUrl: "data:image/png;base64,AAAA" } }));
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-b64"), { approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-b64"), downloadUrl: "data:image/png;base64,AAAA" } }));
     await expectFails("approvedCutout com DATA URL em maiúsculas é bloqueado", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-b64-upper"), { ...validProduct("product-cutout-b64-upper"), approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-b64-upper"), downloadUrl: "DATA:image/png;base64,AAAA" } }));
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-b64-upper"), { approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-b64-upper"), downloadUrl: "DATA:image/png;base64,AAAA" } }));
     await expectFails("approvedCutout com mimeType diferente de PNG é bloqueado", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-mime"), { ...validProduct("product-cutout-mime"), approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-mime"), mimeType: "image/jpeg" } }));
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-mime"), { approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-mime"), mimeType: "image/jpeg" } }));
     await expectFails("approvedCutout com preservesOriginalPixels != true é bloqueado", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-preserve"), { ...validProduct("product-cutout-preserve"), approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-preserve"), preservesOriginalPixels: false } }));
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-preserve"), { approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-preserve"), preservesOriginalPixels: false } }));
     await expectFails("approvedCutout com coordinateSpaceVersion inválida é bloqueado", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-coordinate"), { ...validProduct("product-cutout-coordinate"), approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-coordinate"), coordinateSpaceVersion: "other-coordinate-space" } }));
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-coordinate"), { approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-coordinate"), coordinateSpaceVersion: "other-coordinate-space" } }));
     await expectFails("approvedCutout com campo extra é bloqueado", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-extra"), { ...validProduct("product-cutout-extra"), approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-extra"), apiKey: "secret" } }));
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-extra"), { approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-extra"), apiKey: "secret" } }));
     await expectFails("approvedCutout apontando para storagePath de outro produto é bloqueado", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-wrongpath"), { ...validProduct("product-cutout-wrongpath"), approvedCutout: validApprovedCutout(ownerUid, "outro-produto") }));
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-wrongpath"), { approvedCutout: validApprovedCutout(ownerUid, "outro-produto") }));
     await expectFails("approvedCutout apontando para storagePath de outro usuário é bloqueado", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-other-user"), {
-        ...validProduct("product-cutout-other-user"),
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-other-user"), {
         approvedCutout: {
           ...validApprovedCutout(ownerUid, "product-cutout-other-user"),
           storagePath: `users/${intruderUid}/product-cutouts/product-cutout-other-user/cutout-v1.png`,
         },
       }));
     await expectFails("approvedCutout com dimensões inválidas é bloqueado", () =>
-      setDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-dimensions"), { ...validProduct("product-cutout-dimensions"), approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-dimensions"), width: 0 } }));
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-dimensions"), { approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-dimensions"), width: 0 } }));
     await expectFails("update não aceita approvedCutout com MIME inválido", () =>
       updateDoc(doc(owner.db, "users", ownerUid, "products", "product-cutout-ok"), { approvedCutout: { ...validApprovedCutout(ownerUid, "product-cutout-ok"), mimeType: "image/jpeg" } }));
     await expectFails("trocar foto original sem remover approvedCutout stale é bloqueado", () =>
@@ -280,8 +328,36 @@ async function run() {
     await expectFails("outro usuário não escreve approvedCutout no produto do owner", () =>
       updateDoc(doc(intruder.db, "users", ownerUid, "products", "product-cutout-ok"), { approvedCutout: validApprovedCutout(ownerUid, "product-cutout-ok") }));
 
+    // ===== PLAN-IMPL-02B1 §29/X2 — planAccessState nunca é alterável pelo client, mesmo pelo dono do
+    // próprio produto/serviço; só o servidor (Admin SDK, reconcilePlanAccess) grava este campo. Editar
+    // outros campos de um documento já preservado continua permitido (não quebra a edição normal). =====
+    await expectFails("owner não marca o próprio produto como preserved via updateDoc", () =>
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-local"), { planAccessState: "preserved" }));
+
+    const adminDbForAccessState = getAdminFirestore(adminApp!);
+    await adminDbForAccessState.doc(`users/${ownerUid}/products/product-preserved`).set({ ...validProduct("product-preserved"), planAccessState: "preserved" });
+    await expectFails("owner não reativa produto preserved via updateDoc", () =>
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-preserved"), { planAccessState: "active" }));
+    await expectSucceeds("owner ainda edita outros campos de um produto preserved", () =>
+      updateDoc(doc(owner.db, "users", ownerUid, "products", "product-preserved"), { name: "Perfume Preservado Editado" }));
+    await expectSucceeds("owner lê o próprio produto preserved", async () => {
+      const snapshot = await getDoc(doc(owner.db, "users", ownerUid, "products", "product-preserved"));
+      assert.equal(snapshot.exists(), true);
+      assert.equal(snapshot.data()?.planAccessState, "preserved");
+    });
+
+    await adminDbForAccessState.doc(`users/${ownerUid}/services/service-local`).set(validService("service-local", ownerUid));
+    await adminDbForAccessState.doc(`users/${ownerUid}/services/service-preserved`).set(validService("service-preserved", ownerUid, { planAccessState: "preserved" }));
+    await expectFails("owner não marca o próprio serviço como preserved via updateDoc", () =>
+      updateDoc(doc(owner.db, "users", ownerUid, "services", "service-local"), { planAccessState: "preserved" }));
+    await expectFails("owner não reativa serviço preserved via updateDoc", () =>
+      updateDoc(doc(owner.db, "users", ownerUid, "services", "service-preserved"), { planAccessState: "active" }));
+    await expectSucceeds("owner ainda edita outros campos de um serviço preserved", () =>
+      updateDoc(doc(owner.db, "users", ownerUid, "services", "service-preserved"), { name: "Serviço Preservado Editado" }));
+
     const ownerClientRef = doc(owner.db, "users", ownerUid, "clients", "client-local");
-    await expectSucceeds("owner cria cliente válido", () => setDoc(ownerClientRef, validClient("client-local")));
+    await adminDbForAccessState.doc(`users/${ownerUid}/clients/client-local`).set(validClient("client-local"));
+    await expectFails("owner não cria cliente diretamente — criação é server-authoritative", () => setDoc(ownerClientRef, validClient("client-local-2")));
     await expectFails("outro usuário não altera cliente do owner", () => updateDoc(doc(intruder.db, "users", ownerUid, "clients", "client-local"), { notes: "tentativa indevida" }));
 
     // LGPD/segurança (REVENDASMART-LGPD-ANPD-REMEDIATION-01, Fase 9): sales só é gravável pelo backend
@@ -297,9 +373,14 @@ async function run() {
 
     await expectSucceeds("owner lista próprios produtos", async () => {
       const snapshot = await getDocs(collection(owner.db, "users", ownerUid, "products"));
-      // product-local + product-cutout-ok + product-legacy (os demais produtos de approvedCutout desta
-      // sprint foram recusados pelas Rules e nunca chegaram a ser criados).
-      assert.equal(snapshot.size, 3);
+      // PLAN-IMPL-02A2-FINALIZE — todos os productFixtureIds existem agora (seedados via Admin SDK antes
+      // de qualquer tentativa de update, diferente do fluxo antigo onde um create recusado nunca chegava
+      // a existir), mais "product-preserved" (seedado adiante, no bloco PLAN-IMPL-02B1 §29/X2). Comparar
+      // o SET de ids em vez de só o tamanho torna a asserção auto-descritiva e não silenciosamente
+      // desatualizada se um dos dois blocos de fixtures crescer no futuro.
+      const expectedIds = new Set([...productFixtureIds, "product-preserved"]);
+      const actualIds = new Set(snapshot.docs.map((docSnap) => docSnap.id));
+      assert.deepEqual(actualIds, expectedIds);
     });
     await expectFails("outro usuário não consulta coleção de produtos do owner", () => getDocs(collection(intruder.db, "users", ownerUid, "products")));
 
@@ -517,6 +598,37 @@ async function run() {
       setDoc(historyRef(owner, ownerUid, "ad-bad-action"), validHistoryEntry({ action: "hackeado" })));
     await expectFails("campo extra no histórico é bloqueado", () =>
       setDoc(historyRef(owner, ownerUid, "ad-extra"), validHistoryEntry({ premiumActive: true })));
+    // --- proDocument (ADS-PRO-FINAL): o estúdio guarda as DECISÕES do anúncio (JSON curto) para reabrir e editar ---
+    const studioEntry = (overrides: Record<string, unknown> = {}) => validHistoryEntry({
+      mode: "pro",
+      composerVersion: 2,
+      creativeFamily: "luxury",
+      creativeConceptId: "studio:A:hero-center",
+      format: "portrait",
+      template: "pro-ad",
+      imageUrl: "https://exemplo.test/ad.png",
+      proBackground: { sourceType: "GENERATED_DETERMINISTIC", backgroundId: "luxury-onyx-spotlight", backgroundVersion: 1, backgroundFamily: "luxury" },
+      proDocument: JSON.stringify({ v: 1, productId: "product-local", format: "portrait" }),
+      ...overrides,
+    });
+    await expectSucceeds("anúncio do estúdio com proDocument (string curta) é permitido", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-studio-ok"), studioEntry()));
+    await expectSucceeds("salvar de novo o MESMO anúncio do estúdio atualiza o proDocument sem alterar a criação", () =>
+      updateDoc(historyRef(owner, ownerUid, "ad-studio-ok"), { proDocument: JSON.stringify({ v: 1, productId: "product-local", format: "square" }), updatedAtISO: laterThanNow }));
+    await expectFails("proDocument acima do limite de tamanho é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-studio-huge"), studioEntry({ proDocument: "x".repeat(4001) })));
+    await expectFails("proDocument que não é string é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-studio-object"), studioEntry({ proDocument: { v: 1 } })));
+    await expectFails("proDocument numérico é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-studio-number"), studioEntry({ proDocument: 42 })));
+    await expectFails("outro usuário não grava anúncio do estúdio no histórico do owner", () =>
+      setDoc(historyRef(intruder, ownerUid, "ad-studio-intruder"), studioEntry()));
+    await expectFails("outro usuário não lê o proDocument do owner", async () => {
+      await getDoc(historyRef(intruder, ownerUid, "ad-studio-ok"));
+    });
+    await expectSucceeds("histórico legado (sem proDocument) continua válido", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-studio-legacy"), validHistoryEntry({ mode: "pro", composerVersion: 1 })));
+
     // --- productAssetSnapshot (PRO-07D.1): opcional no legado, fechado e sem bytes inline ---
     await expectSucceeds("histórico legado sem snapshot continua permitido", () =>
       setDoc(historyRef(owner, ownerUid, "ad-snapshot-legacy"), validHistoryEntry()));
@@ -617,6 +729,152 @@ async function run() {
     // Apagar o próprio registro É permitido: a UI tem "remover" e "limpar histórico".
     await expectSucceeds("owner apaga própria entrada de histórico", () => deleteDoc(historyRef(owner, ownerUid, "ad-local-1")));
 
+    // ===== ADS-PRO-03: histórico do Anúncios Pro (mode="pro" + proBackground/proCutout) =====
+    // Mesma coleção/Rule do histórico clássico (ONE_MARKETING_HISTORY_SYSTEM) — só campos adicionais,
+    // todos opcionais, validados por isValidProBackground/isValidProCutout.
+    const validProHistoryEntry = (overrides: Record<string, unknown> = {}) => ({
+      action: "generated",
+      mode: "pro",
+      productId: "product-pro-local",
+      productName: "Perfume Pro Local",
+      generatedText: "",
+      template: "pro-ad",
+      price: "R$ 189,90",
+      headline: "Perfume Pro Local",
+      storeName: "Loja Local",
+      primaryColor: "#6d5dfc",
+      composerVersion: 1,
+      creativeFamily: "luxury",
+      creativeConceptId: "concept-luxury-1",
+      format: "square",
+      proBackground: { sourceType: "GENERATED_DETERMINISTIC", backgroundId: "luxury-onyx-spotlight", backgroundVersion: 1, backgroundFamily: "luxury" },
+      proCutout: { cutoutAssetId: "product-cutout-approved:product-pro-local:sha256:abc123", storagePath: "users/owner-local/product-cutouts/product-pro-local/cutout-v1.png", sourceAssetId: "asset-original-1" },
+      createdAtISO: now,
+      ...overrides,
+    });
+
+    await expectSucceeds("owner cria entrada de histórico Pro válida", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-1"), validProHistoryEntry()));
+    await expectSucceeds("owner lê própria entrada Pro", async () => {
+      const snapshot = await getDoc(historyRef(owner, ownerUid, "ad-pro-1"));
+      assert.equal(snapshot.exists(), true);
+      assert.equal(snapshot.data()?.mode, "pro");
+      assert.equal((snapshot.data()?.proBackground as Record<string, unknown> | undefined)?.backgroundVersion, 1);
+    });
+    // H2: histórico clássico (sem nenhum campo Pro) continua válido lado a lado.
+    await expectSucceeds("histórico clássico sem campos Pro continua válido", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-classic-alongside-pro"), validHistoryEntry()));
+
+    await expectFails("mode com valor arbitrário é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-bad-mode"), validProHistoryEntry({ mode: "premium" })));
+    await expectFails("composerVersion zero é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-bad-version"), validProHistoryEntry({ composerVersion: 0 })));
+    await expectFails("composerVersion não-inteiro é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-bad-version-float"), validProHistoryEntry({ composerVersion: 1.5 })));
+    await expectFails("format inválido é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-bad-format"), validProHistoryEntry({ format: "landscape" })));
+
+    // --- proBackground ---
+    await expectFails("proBackground com sourceType inválido é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-bg-bad-source"), validProHistoryEntry({ proBackground: { sourceType: "MADE_UP" } })));
+    await expectFails("proBackground com campo extra é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-bg-extra"), validProHistoryEntry({ proBackground: { sourceType: "GENERATED_DETERMINISTIC", backgroundId: "x", hackedField: true } })));
+    await expectFails("proBackground com backgroundVersion negativo é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-bg-neg-version"), validProHistoryEntry({ proBackground: { sourceType: "GENERATED_DETERMINISTIC", backgroundId: "x", backgroundVersion: -1, backgroundFamily: "luxury" } })));
+    // H20 (variante): sourceType "ai" — só generationId é reproduzível hoje, nada mais é exigido.
+    await expectSucceeds("proBackground sourceType AI_GENERATED com só generationId é permitido", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-bg-ai"), validProHistoryEntry({ proBackground: { sourceType: "AI_GENERATED", generationId: "gen-abc123" } })));
+
+    // --- proCutout ---
+    await expectFails("proCutout sem storagePath é bloqueado", () => {
+      const bad = validProHistoryEntry() as Record<string, unknown>;
+      const cutout = { ...(bad.proCutout as Record<string, unknown>) };
+      delete cutout.storagePath;
+      return setDoc(historyRef(owner, ownerUid, "ad-pro-cutout-missing"), { ...bad, proCutout: cutout });
+    });
+    await expectFails("proCutout com storagePath inline (data:) é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-cutout-data"), validProHistoryEntry({ proCutout: { cutoutAssetId: "x", storagePath: "data:image/png;base64,AAAA" } })));
+    await expectFails("proCutout com campo extra é bloqueado", () =>
+      setDoc(historyRef(owner, ownerUid, "ad-pro-cutout-extra"), validProHistoryEntry({ proCutout: { cutoutAssetId: "x", storagePath: "users/owner-local/product-cutouts/p/cutout-v1.png", hackedField: true } })));
+    await expectSucceeds("proCutout sem sourceAssetId (opcional) é permitido", () => {
+      const entry = validProHistoryEntry() as Record<string, unknown>;
+      const cutout = { ...(entry.proCutout as Record<string, unknown>) };
+      delete cutout.sourceAssetId;
+      return setDoc(historyRef(owner, ownerUid, "ad-pro-cutout-no-source"), { ...entry, proCutout: cutout });
+    });
+
+    // --- H19/H20/H21: isolamento por tenant, mesmo padrão do histórico clássico ---
+    await expectFails("outro usuário não lê histórico Pro do owner", () => getDoc(historyRef(intruder, ownerUid, "ad-pro-1")));
+    await expectFails("outro usuário não cria histórico Pro no espaço do owner", () =>
+      setDoc(historyRef(intruder, ownerUid, "ad-pro-intruder"), validProHistoryEntry()));
+    await expectFails("outro usuário não altera histórico Pro do owner", () =>
+      updateDoc(historyRef(intruder, ownerUid, "ad-pro-1"), { note: "hackeado", updatedAtISO: laterThanNow }));
+    await expectFails("usuário anônimo não lê histórico Pro", () => getDoc(historyRef(anonymous, ownerUid, "ad-pro-1")));
+
+    await expectSucceeds("owner apaga própria entrada de histórico Pro", () => deleteDoc(historyRef(owner, ownerUid, "ad-pro-1")));
+
+    // ===== ADS-PRO-03C — Perfil Criativo V1 do Anúncios Pro (adsPro/creativeProfile) =====
+    const adsProProfileRef = (context: Context, uid: string, docId = "creativeProfile") =>
+      doc(context.db, "users", uid, "adsPro", docId);
+
+    const validCreativeProfileData = (overrides: Record<string, unknown> = {}) => ({
+      schemaVersion: 1,
+      preferredStyles: ["modern", "minimal"],
+      ...overrides,
+    });
+
+    // O-01 / O-02: owner cria e lê próprio perfil
+    await expectSucceeds("owner cria Creative Profile válido", () =>
+      setDoc(adsProProfileRef(owner, ownerUid), validCreativeProfileData()));
+
+    await expectSucceeds("owner lê próprio Creative Profile", async () => {
+      const snap = await getDoc(adsProProfileRef(owner, ownerUid));
+      assert.equal(snap.exists(), true);
+      assert.equal(snap.data()?.schemaVersion, 1);
+      assert.deepEqual(snap.data()?.preferredStyles, ["modern", "minimal"]);
+    });
+
+    // Atualização com preferredStyles vazio
+    await expectSucceeds("owner atualiza Creative Profile com lista vazia", () =>
+      setDoc(adsProProfileRef(owner, ownerUid), validCreativeProfileData({ preferredStyles: [] })));
+
+    // Validações de shape pelas Rules
+    await expectFails("Creative Profile com schemaVersion != 1 é bloqueado pelas rules", () =>
+      setDoc(adsProProfileRef(owner, ownerUid), validCreativeProfileData({ schemaVersion: 2 })));
+
+    await expectFails("Creative Profile com campo extra é bloqueado pelas rules", () =>
+      setDoc(adsProProfileRef(owner, ownerUid), validCreativeProfileData({ extraHacked: "foo" })));
+
+    await expectFails("Creative Profile com style inválido (fresh-commercial) é bloqueado pelas rules", () =>
+      setDoc(adsProProfileRef(owner, ownerUid), validCreativeProfileData({ preferredStyles: ["fresh-commercial"] })));
+
+    await expectFails("Creative Profile com style inexistente é bloqueado pelas rules", () =>
+      setDoc(adsProProfileRef(owner, ownerUid), validCreativeProfileData({ preferredStyles: ["not-a-style"] })));
+
+    await expectFails("Creative Profile em docId diferente de creativeProfile é bloqueado pelas rules", () =>
+      setDoc(adsProProfileRef(owner, ownerUid, "otherDoc"), validCreativeProfileData()));
+
+    // O-03 / O-04: outro usuário não lê nem grava perfil do owner
+    await expectFails("outro usuário não lê Creative Profile do owner", () =>
+      getDoc(adsProProfileRef(intruder, ownerUid)));
+
+    await expectFails("outro usuário não grava Creative Profile no espaço do owner", () =>
+      setDoc(adsProProfileRef(intruder, ownerUid), validCreativeProfileData()));
+
+    await expectFails("outro usuário não apaga Creative Profile do owner", () =>
+      deleteDoc(adsProProfileRef(intruder, ownerUid)));
+
+    // O-05: anônimo bloqueado
+    await expectFails("usuário anônimo não lê Creative Profile", () =>
+      getDoc(adsProProfileRef(anonymous, ownerUid)));
+
+    await expectFails("usuário anônimo não grava Creative Profile", () =>
+      setDoc(adsProProfileRef(anonymous, ownerUid), validCreativeProfileData()));
+
+    // Clear (delete) permitido pelo owner
+    await expectSucceeds("owner apaga próprio Creative Profile", () =>
+      deleteDoc(adsProProfileRef(owner, ownerUid)));
+
     // RELEASE-CHECKOUT-02 §1/§9-A/§9-B — idempotência atômica do pedido do catálogo público, contra o
     // emulador REAL (não mocada): duas reservas concorrentes com o MESMO clientOrderId só podem
     // produzir UM vencedor (Firestore optimistic concurrency control na transaction), nunca dois
@@ -663,6 +921,23 @@ async function run() {
     {
       const adminDb = getAdminFirestore(adminApp!);
       const chargeOrderId = `order-for-charge-${Date.now()}`;
+      // PEDIDOS EDITÁVEIS Etapa 2B: a reserva lê o pedido na MESMA transação e congela nela o total — o
+      // pedido precisa existir (antes a reserva nem olhava o pedido).
+      const seedChargeableOrder = (orderId: string) => adminDb.collection("users").doc(ownerUid).collection("orders").doc(orderId).set({
+        id: orderId,
+        clientId: "public-catalog",
+        clientName: "Cliente do catálogo",
+        status: "new",
+        items: [{ productId: "p1", name: "Produto", quantity: 1, unitPrice: 10 }],
+        total: 10,
+        createdAt: "2026-09-23T00:00:00.000Z",
+        updatedAt: "2026-09-23T00:00:00.000Z",
+        paymentMethod: "card",
+        paymentProvider: "mercadopago",
+        paymentStatus: "awaiting_customer_payment",
+        clientOrderId: `client-${orderId}`,
+      });
+      await seedChargeableOrder(chargeOrderId);
 
       const [first, second] = await Promise.all([
         reserveOrderCharge(adminDb, ownerUid, chargeOrderId),
@@ -673,18 +948,20 @@ async function run() {
       assert.equal(chargeWinners.length, 1, "F: exatamente UMA das duas tentativas simultâneas de pagar o mesmo pedido deve vencer a reserva de cobrança");
       assert.equal(chargeLosers.length, 1, "F: a outra tentativa precisa ver a reserva já existente, nunca criar uma segunda cobrança");
       assert.equal(chargeWinners[0].chargeId, chargeLosers[0].chargeId, "F: as duas tentativas concorrentes precisam apontar para o MESMO chargeId — nunca duas cobranças para o mesmo pedido");
+      assert.equal(chargeWinners[0].amount, 10, "F: a reserva vencedora congela o total lido do pedido na própria transação");
 
       await finalizeOrderChargeReservation(adminDb, ownerUid, chargeOrderId, chargeWinners[0].chargeId);
       const chargeReplay = await reserveOrderCharge(adminDb, ownerUid, chargeOrderId);
       assert.equal(chargeReplay.alreadyExisted, true, "F: replay de pagamento do mesmo pedido já finalizado precisa ver a reserva existente");
       assert.equal(chargeReplay.chargeId, chargeWinners[0].chargeId, "F: replay devolve o MESMO chargeId da cobrança original");
 
-      // J: falha do provider (simulada aqui como "nunca chegou a finalizar") libera a reserva — o
-      // pedido pode ser tentado de novo sem ficar travado para sempre em "pending".
+      // J: falha ANTES de chamar o provider (reserva ainda "pending") libera a reserva — o pedido pode ser
+      // tentado de novo. Etapa 2C: resultado ambíguo nunca libera (order-charge-recovery-emulator-tests.ts).
       const failedChargeOrderId = `order-charge-failed-${Date.now()}`;
+      await seedChargeableOrder(failedChargeOrderId);
       const failedAttempt = await reserveOrderCharge(adminDb, ownerUid, failedChargeOrderId);
       assert.equal(failedAttempt.alreadyExisted, false, "J: primeira tentativa de cobrança de um pedido novo sempre vence");
-      await releaseOrderChargeReservation(adminDb, ownerUid, failedChargeOrderId);
+      assert.equal(await releaseOrderChargeReservation(adminDb, ownerUid, failedChargeOrderId, failedAttempt.chargeId, "before_provider"), true, "J: reserva pending desta intenção é liberada");
       const retryAfterProviderFailure = await reserveOrderCharge(adminDb, ownerUid, failedChargeOrderId);
       assert.equal(retryAfterProviderFailure.alreadyExisted, false, "J: depois de uma falha do provider liberar a reserva, o mesmo pedido pode tentar pagar de novo");
 

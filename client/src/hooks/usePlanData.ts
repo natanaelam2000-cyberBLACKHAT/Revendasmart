@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { getFirebaseAuth } from "@/lib/firebase";
+import { waitForAuthReady } from "@/lib/firebase";
 import { apiRequest, buildApiErrorDisplayMessage } from "@/lib/api-client";
-import { isPremiumActive, toEntitlementDate, type PlanData as MonetizationPlanData } from "@shared/monetization";
+import { isPremiumActive, toEntitlementDate, PLANS, type PlanType, type PlanData as MonetizationPlanData } from "@shared/monetization";
 
 interface PlanData {
   currentPlan?: string;
@@ -27,6 +27,10 @@ interface PlanData {
   hasPremiumAccess?: boolean;
   isTester?: boolean;
   isPremiumPlus?: boolean;
+  // PLAN-IMPL-03 §17/§18 — ver PlanProvider.tsx: também computados pelo servidor.
+  basePlan?: string;
+  effectivePlan?: string;
+  trial?: { status: "active" | "expired" | "converted"; startedAt: string | null; endsAt: string | null } | null;
 }
 
 export function usePlanData() {
@@ -37,8 +41,11 @@ export function usePlanData() {
   async function loadPlanData() {
     try {
       setError(null);
-      const auth = getFirebaseAuth();
-      const user = auth?.currentUser;
+      // RELEASE-AUTOMATION-01 — waits for Firebase Auth's initial state instead of reading
+      // `auth.currentUser` synchronously, which is null on a fresh page load before the persisted
+      // session restores; the old early-return here silently left a genuinely logged-in user with
+      // `data: null` (e.g. subscribe.tsx would show "Assinar agora" for an active subscriber).
+      const user = await waitForAuthReady();
 
       if (!user) {
         setLoading(false);
@@ -71,7 +78,20 @@ export function usePlanData() {
     ? data.hasPremiumAccess
     : isPremiumActive(data as unknown as MonetizationPlanData | null);
 
-  const activePlan = hasPremiumAccess ? "premium" : "free";
+  // PLAN-IMPL-01 §3, estendido por PLAN-IMPL-03 §17/§18: preferencialmente `data.effectivePlan`, já
+  // computado pelo servidor (ensurePlanLifecycleCurrent) considerando trial. Sem o campo (payload
+  // antigo), cai na mesma regra de resolveCommercialPlan/resolveActivePlan (PlanProvider.tsx) — Premium
+  // sempre vence; um `currentPlan` gravado como "pro" é preservado; qualquer outro valor (incluindo
+  // documentos antigos que só conheciam "free"/"premium") cai em "free" sem migração.
+  const activePlan: PlanType =
+    data?.effectivePlan === PLANS.FREE || data?.effectivePlan === PLANS.PRO || data?.effectivePlan === PLANS.PREMIUM
+      ? data.effectivePlan
+      : hasPremiumAccess ? PLANS.PREMIUM : data?.currentPlan === PLANS.PRO ? PLANS.PRO : PLANS.FREE;
+  const basePlan: PlanType =
+    data?.basePlan === PLANS.FREE || data?.basePlan === PLANS.PRO || data?.basePlan === PLANS.PREMIUM
+      ? data.basePlan
+      : activePlan;
+  const trial = data?.trial ?? null;
 
   // "Cancelada, mas ainda paga até DD/MM": renovação desligada com acesso ainda válido.
   const isCancelledWithinPaidPeriod =
@@ -81,6 +101,8 @@ export function usePlanData() {
     planData: data,
     plan: data,
     activePlan,
+    basePlan,
+    trial,
     hasPremiumAccess,
     premiumPeriodEndsAt,
     isCancelledWithinPaidPeriod,

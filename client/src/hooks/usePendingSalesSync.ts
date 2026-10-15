@@ -4,12 +4,15 @@ import { onAuthStateChanged } from "firebase/auth";
 import { getFirebaseAuth } from "@/lib/firebase";
 import { useOnlineStatus } from "./useOnlineStatus";
 import {
-  markPendingSaleSyncing,
+  claimPendingSale,
+  settlePendingSale,
+  renewPendingSaleLease,
+  SYNC_REQUEST_TIMEOUT_MS,
   markPendingSalePending,
-  markPendingSaleFailed,
-  markPendingSaleConflict,
   removePendingSale,
   syncPendingSaleToServer,
+  isValidPendingSaleDoc,
+  markPendingSaleFailed,
   type PendingSaleDoc,
 } from "@/lib/offline-sales-queue";
 
@@ -36,6 +39,16 @@ export function usePendingSalesSync(): PendingSalesSyncState {
   const isOnline = useOnlineStatus();
   const [docs, setDocs] = useState<PendingSaleDoc[]>([]);
   const syncInFlight = useRef(false);
+  const workerId = useRef("");
+  if (!workerId.current) workerId.current = typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString(16).padStart(8, "0")).join("");
+  const [recoveryTick, setRecoveryTick] = useState(0);
+
+  useEffect(() => {
+    if (!isOnline) return;
+    const timer = setInterval(() => setRecoveryTick((tick) => tick + 1), 5_000);
+    return () => clearInterval(timer);
+  }, [isOnline]);
 
   useEffect(() => {
     const auth = getFirebaseAuth();
@@ -43,13 +56,16 @@ export function usePendingSalesSync(): PendingSalesSyncState {
     let unsubscribeSnapshot: (() => void) | undefined;
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
       unsubscribeSnapshot?.();
+      setDocs([]);
       if (!user) {
         setDocs([]);
         return;
       }
       unsubscribeSnapshot = onSnapshot(
         collection(getFirestore(), "users", user.uid, "pendingSales"),
-        (snapshot) => setDocs(snapshot.docs.map((d) => d.data() as PendingSaleDoc)),
+        (snapshot) => {
+          if (auth.currentUser?.uid === user.uid) setDocs(snapshot.docs.map((d) => ({ id: d.id, ...d.data() }) as PendingSaleDoc));
+        },
         () => setDocs([]),
       );
     });
@@ -58,7 +74,7 @@ export function usePendingSalesSync(): PendingSalesSyncState {
 
   useEffect(() => {
     if (!isOnline || syncInFlight.current) return;
-    const pending = docs.filter((d) => d.status === "pending");
+    const pending = docs.filter((d) => d.status === "pending" || d.status === "syncing");
     if (pending.length === 0) return;
 
     const auth = getFirebaseAuth();
@@ -67,31 +83,45 @@ export function usePendingSalesSync(): PendingSalesSyncState {
 
     syncInFlight.current = true;
     (async () => {
-      for (const item of pending) {
+      try { for (const item of pending) {
+        // Cast through unknown deliberately: `docs` is typed for the happy path, but Firestore
+        // snapshots are untrusted runtime data and may contain malformed documents after a crash.
+        if (!isValidPendingSaleDoc(item as unknown)) {
+          if (typeof item.id === "string" && item.id) {
+            await markPendingSaleFailed(user.uid, item.id, "Não foi possível recuperar esta venda. Revise os dados e tente novamente.").catch(() => {});
+          }
+          continue;
+        }
+        let claimed = false;
+        let tokenTimer: ReturnType<typeof setTimeout> | undefined;
         try {
-          await markPendingSaleSyncing(user.uid, item.id);
+          if (auth?.currentUser?.uid !== user.uid) break;
+          const lease = await claimPendingSale(user.uid, item.id, workerId.current);
+          if (!lease) continue;
+          claimed = true;
           // Força renovação: o token em cache pode ter expirado durante o período offline (mesmo
           // motivo do checkout online em sell.tsx) — um token velho aqui viraria uma falha permanente
           // (§"nunca fica tentando de novo sozinho") por um motivo puramente de sessão, não de negócio.
-          const token = await user.getIdToken(true);
-          const result = await syncPendingSaleToServer(token, item.payload);
-          if (result.outcome === "synced" || result.outcome === "already-exists") {
-            await removePendingSale(user.uid, item.id);
-          } else if (result.outcome === "conflict") {
-            await markPendingSaleConflict(user.uid, item.id, result.reason, result.message);
-          } else {
-            await markPendingSaleFailed(user.uid, item.id, result.message);
-          }
+          const token = await Promise.race([
+            user.getIdToken(true),
+            new Promise<never>((_, reject) => { tokenTimer = setTimeout(() => reject(new Error("SYNC_TOKEN_TIMEOUT")), SYNC_REQUEST_TIMEOUT_MS); }),
+          ]);
+          clearTimeout(tokenTimer);
+          if (auth?.currentUser?.uid !== user.uid) break;
+          if (!await renewPendingSaleLease(user.uid, item.id, workerId.current)) continue;
+          const result = await syncPendingSaleToServer(token, lease.payload, AbortSignal.timeout(SYNC_REQUEST_TIMEOUT_MS));
+          await settlePendingSale(user.uid, item.id, workerId.current, result);
         } catch {
           // Erro de rede no meio do drain — volta pra pending (não fica preso em "syncing") e a
           // próxima transição online tenta de novo.
-          await markPendingSalePending(user.uid, item.id).catch(() => {});
+          if (claimed) await settlePendingSale(user.uid, item.id, workerId.current, { outcome: "retry" }).catch(() => {});
           break;
+        } finally {
+          clearTimeout(tokenTimer);
         }
-      }
-      syncInFlight.current = false;
+      } } finally { syncInFlight.current = false; }
     })();
-  }, [isOnline, docs]);
+  }, [isOnline, docs, recoveryTick]);
 
   const retryPendingSale = useCallback(async (saleId: string) => {
     const uid = getFirebaseAuth()?.currentUser?.uid;

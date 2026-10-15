@@ -3,6 +3,7 @@ import { Copy, Download, ImageOff, MessageSquare, MoreVertical, Palette, Pencil,
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import { ProductImageCard } from "@/components/ProductImageCard";
 import { resolveMarketingTemplate } from "@/lib/marketing-ad";
+import { MARKETING_PRO_CREATIVE_FAMILY_LABELS } from "@/lib/marketing-pro-creative-family-labels";
 import type { MarketingHistoryEntry } from "@/hooks/useMarketingHistory";
 
 const ACTION_LABELS: Record<string, string> = {
@@ -67,7 +68,12 @@ export function MarketingHistoryCard({
   entry, productMissing, busy, onShare, onDownload, onCopy, onEdit, onTheme, onDuplicate, onRemove,
 }: MarketingHistoryCardProps) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const template = resolveMarketingTemplate(entry.templateId || entry.template);
+  // ADS-PRO-03 §16 — entrada do Anúncios Pro (composer canônico + library), distinta do editor clássico.
+  // resolveMarketingTemplate nunca é chamada para ela: um valor como "pro-ad" não é um MarketingTemplateId
+  // real, e o rótulo certo para Pro é a creativeFamily, não um template clássico.
+  const isPro = entry.mode === "pro";
+  const template = isPro ? null : resolveMarketingTemplate(entry.templateId || entry.template);
+  const proFamilyLabel = isPro && entry.creativeFamily ? MARKETING_PRO_CREATIVE_FAMILY_LABELS[entry.creativeFamily as keyof typeof MARKETING_PRO_CREATIVE_FAMILY_LABELS] : undefined;
   const date = entry.createdAt?.toDate?.() || new Date(entry.createdAtISO);
   const timeLabel = Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
 
@@ -97,9 +103,15 @@ export function MarketingHistoryCard({
           </div>
 
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
-              {template.emoji} {template.label}
-            </span>
+            {isPro ? (
+              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary" data-testid={`badge-history-pro-${entry.id}`}>
+                ✨ Pro{proFamilyLabel ? ` · ${proFamilyLabel}` : ""}
+              </span>
+            ) : (
+              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
+                {template!.emoji} {template!.label}
+              </span>
+            )}
             <span className="text-[10px] text-muted-foreground">{ACTION_LABELS[entry.action] || entry.action}</span>
             {timeLabel && <span className="text-[10px] text-muted-foreground">· {timeLabel}</span>}
           </div>
@@ -140,24 +152,29 @@ export function MarketingHistoryCard({
           {/* Camada de fechamento: toque fora fecha o menu sem exigir um segundo toque no botão. */}
           <button type="button" className="fixed inset-0 z-10 cursor-default" aria-label="Fechar menu" onClick={() => setMenuOpen(false)} />
           <div className="absolute right-3 top-11 z-20 w-44 overflow-hidden rounded-xl border border-border/60 bg-white py-1 shadow-lg" role="menu">
-            {onEdit && (
+            {/* ADS-PRO-03 §17 — editar/trocar tema/duplicar/copiar texto pressupõem o editor clássico
+                (reescrevem `entry` via normalizeMarketingAdConfig, que não entende campos Pro); nunca
+                mostrados para um registro Pro. Não é escopo deste ticket implementar os equivalentes. */}
+            {onEdit && !isPro && (
               <button type="button" role="menuitem" disabled={busy} onClick={() => runAndClose(() => onEdit(entry))} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-foreground hover:bg-secondary/50 disabled:opacity-40">
                 <Pencil className="h-3.5 w-3.5" /> Editar
               </button>
             )}
-            {onTheme && (
+            {onTheme && !isPro && (
               <button type="button" role="menuitem" disabled={busy} onClick={() => runAndClose(() => onTheme(entry))} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-foreground hover:bg-secondary/50 disabled:opacity-40">
                 <Palette className="h-3.5 w-3.5" /> Trocar tema
               </button>
             )}
-            {onDuplicate && (
+            {onDuplicate && !isPro && (
               <button type="button" role="menuitem" disabled={busy} onClick={() => runAndClose(() => onDuplicate(entry))} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-foreground hover:bg-secondary/50 disabled:opacity-40">
                 <Copy className="h-3.5 w-3.5" /> Duplicar
               </button>
             )}
-            <button type="button" role="menuitem" disabled={busy} onClick={() => runAndClose(() => onCopy(entry))} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-foreground hover:bg-secondary/50 disabled:opacity-40">
-              <Copy className="h-3.5 w-3.5" /> Copiar texto
-            </button>
+            {!isPro && (
+              <button type="button" role="menuitem" disabled={busy} onClick={() => runAndClose(() => onCopy(entry))} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-foreground hover:bg-secondary/50 disabled:opacity-40">
+                <Copy className="h-3.5 w-3.5" /> Copiar texto
+              </button>
+            )}
             <ConfirmActionDialog
               description="Deseja remover este registro do histórico? Essa ação não pode ser desfeita."
               confirmLabel="Remover"

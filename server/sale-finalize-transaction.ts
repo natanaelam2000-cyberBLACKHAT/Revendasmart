@@ -43,7 +43,8 @@ export interface SaleFinalizeResult {
  * Lança `Error` com uma das mensagens abaixo — o chamador (rota HTTP ou teste) mapeia para o código de
  * resposta apropriado, exatamente como a rota já fazia antes da extração:
  * SALE_ALREADY_EXISTS · CLIENT_NOT_FOUND · DOWN_PAYMENT_EXCEEDS_TOTAL ·
- * INSUFFICIENT_STOCK:<nome> · PRODUCT_NOT_FOUND:<id> · INVALID_PRODUCT_PRICE:<id>
+ * INSUFFICIENT_STOCK:<nome> · PRODUCT_NOT_FOUND:<id> · INVALID_PRODUCT_PRICE:<id> ·
+ * PRODUCT_NOT_AVAILABLE:<id> (PLAN-IMPL-02B1 — produto preservado por downgrade de plano)
  */
 export async function finalizeSaleTransaction(db: Firestore, input: SaleFinalizeInput): Promise<SaleFinalizeResult> {
   const { uid, saleId, clientId, paymentType, discountType, discountValue, downPayment, installmentCount, paymentMethod, downPaymentMethod } = input;
@@ -76,6 +77,13 @@ export async function finalizeSaleTransaction(db: Firestore, input: SaleFinalize
       const snapshot = productSnapshots[index];
       if (!snapshot.exists) throw new Error(`PRODUCT_NOT_FOUND:${item.productId}`);
       const product = snapshot.data() ?? {};
+      // PLAN-IMPL-02B1 §13 — produto preservado por downgrade de plano nunca entra numa venda NOVA;
+      // vendas passadas que já o referenciam continuam intactas (esta transação só roda para vendas
+      // novas — nenhuma venda existente é relida/alterada aqui). Checado ANTES do estoque: um produto
+      // preservado é indisponível independente de ter estoque > 0.
+      if (product.planAccessState === "preserved") {
+        throw new Error(`PRODUCT_NOT_AVAILABLE:${item.productId}`);
+      }
       const stock = Number(product.stock);
       if (!Number.isFinite(stock) || stock < item.quantity) {
         throw new Error(`INSUFFICIENT_STOCK:${String(product.name ?? item.productId)}`);
@@ -95,7 +103,14 @@ export async function finalizeSaleTransaction(db: Firestore, input: SaleFinalize
         throw pricingError;
       }
       subtotalCents += priceCents * item.quantity;
-      return { productId: item.productId, quantity: item.quantity, price: priceCents / 100, stock };
+      // PLAN-IMPL-07B-COST-SNAPSHOT-FINAL — custo histórico capturado AQUI, da mesma leitura de Product já
+      // feita para preço/estoque (nenhuma leitura extra), nunca do que o cliente enviou (products[] do
+      // input só carrega productId/quantity — ver SaleFinalizeInput acima). Mesma regra de confiança já
+      // estabelecida para relatórios: só um custo > 0 é confiável (0/ausente nunca vira um snapshot
+      // fabricado); em centavos para evitar deriva de ponto flutuante, convertido a decimal só ao gravar.
+      const rawCostPrice = Number(product.costPrice);
+      const costPriceAtSaleCents = Number.isFinite(rawCostPrice) && rawCostPrice > 0 ? Math.round(rawCostPrice * 100) : null;
+      return { productId: item.productId, quantity: item.quantity, price: priceCents / 100, stock, costPriceAtSaleCents };
     });
 
     const requestedDiscountCents = discountType === "percent"
@@ -116,6 +131,9 @@ export async function finalizeSaleTransaction(db: Firestore, input: SaleFinalize
         productId: product.productId,
         quantity: product.quantity,
         price: product.price,
+        // Campo omitido (nunca `null`/`undefined` gravado) quando o custo não era confiável — mesmo
+        // padrão aditivo de Client.lastPurchaseAt/Product.lastSoldDate (PLAN-IMPL-07A).
+        ...(product.costPriceAtSaleCents !== null ? { costPriceAtSale: product.costPriceAtSaleCents / 100 } : {}),
       })),
       subtotal: subtotalCents / 100,
       discountType,
@@ -140,6 +158,13 @@ export async function finalizeSaleTransaction(db: Firestore, input: SaleFinalize
         lastSoldDate: date,
       });
     }
+
+    // PLAN-IMPL-07A — mesmo padrão de Product.lastSoldDate acima, aplicado ao Client: a MESMA
+    // transação que já lê e valida clientRef (linha ~67/73) também grava a recência da última compra
+    // real, nunca uma segunda gravação/caminho separado. Habilita a detecção de "cliente inativo" via
+    // uma query indexada e limitada por intervalo (where lastPurchaseAt < limiar), sem nunca carregar
+    // todas as Sales/Clients do tenant em runtime.
+    transaction.update(clientRef, { lastPurchaseAt: date });
 
     const installmentIds: string[] = [];
     if (remainingCents > 0) {

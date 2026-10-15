@@ -7,8 +7,9 @@ import { defaultSettings, getProductImage } from "@/lib/mock-data";
 import { useProductPickerData } from "@/hooks/useProductPickerData";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, logError } from "@/lib/firebase";
+import { fireServerCountedFirstOccurrence } from "@/lib/analytics-milestones";
 import { useFeatureEnabled } from "@/lib/remote-config-context";
-import { useMarketingHistory, type MarketingHistoryEntry, type MarketingAction } from "@/hooks/useMarketingHistory";
+import { useMarketingHistory, countMarketingHistoryEntries, type MarketingHistoryEntry, type MarketingAction, type NewMarketingEntry } from "@/hooks/useMarketingHistory";
 import { MarketingHistoryPanel } from "@/components/MarketingHistoryPanel";
 import { MarketingSection } from "@/components/marketing/MarketingSection";
 import { MarketingSelectedProduct } from "@/components/marketing/MarketingSelectedProduct";
@@ -408,7 +409,25 @@ export default function MarketingPage() {
 
   const registerAction = async (action: MarketingAction) => {
     const payload = entryPayload(action);
-    if (payload) await recordAction(payload).catch(error => logError("marketing_history_record_failed", error instanceof Error ? error.message : "Falha ao registrar histórico", { context: { action } }));
+    if (!payload) return;
+    try {
+      await recordAction(payload);
+      // PLAN-IMPL-06 §14 — "primeiro Marketing" é o primeiro registro REAL persistido em
+      // users/{uid}/marketingHistory (useMarketingHistory.ts), nunca só abrir a tela — mesma contagem
+      // real de servidor de fireServerCountedFirstOccurrence, reaproveitada (não um marcador local só,
+      // já que este histórico é de fato persistido no Firestore).
+      const uid = getFirebaseAuth()?.currentUser?.uid;
+      if (uid) {
+        void fireServerCountedFirstOccurrence(
+          uid,
+          "first_marketing_created",
+          "first_marketing_created",
+          () => countMarketingHistoryEntries(uid),
+        );
+      }
+    } catch (error) {
+      logError("marketing_history_record_failed", error instanceof Error ? error.message : "Falha ao registrar histórico", { context: { action } });
+    }
   };
 
   useEffect(() => () => {
@@ -601,6 +620,36 @@ export default function MarketingPage() {
     }
   };
 
+  /**
+   * ADS-PRO-03 — repetição de ação para uma entrada Pro: preserva mode/identidade (composer/family/
+   * background/cutout) exatamente como já persistidos, nunca via repeatPayload/normalizeMarketingAdConfig
+   * (que só entendem o shape clássico e descartariam os campos Pro).
+   */
+  const repeatProPayload = (entry: MarketingHistoryEntry, action: MarketingAction): NewMarketingEntry => ({
+    action,
+    mode: "pro",
+    composerVersion: entry.composerVersion,
+    creativeFamily: entry.creativeFamily,
+    creativeConceptId: entry.creativeConceptId,
+    format: entry.format,
+    productId: entry.productId,
+    productName: entry.productName,
+    productBrand: entry.productBrand,
+    productImageUrl: entry.productImageUrl,
+    productVolume: entry.productVolume,
+    imageUrl: entry.imageUrl,
+    generatedText: "",
+    template: "pro-ad",
+    price: entry.price,
+    priceText: entry.priceText,
+    headline: entry.headline,
+    storeName: entry.storeName,
+    storeLogoUrl: entry.storeLogoUrl,
+    primaryColor: entry.primaryColor,
+    proBackground: entry.proBackground,
+    proCutout: entry.proCutout,
+  });
+
   const repeatCopy = async (entry: MarketingHistoryEntry) => runHistoryAction(entry, "copy", async () => {
     const payload = repeatPayload(entry, "copied");
     await copyTextWithFallback(payload.generatedText);
@@ -608,6 +657,30 @@ export default function MarketingPage() {
     notifySuccess("Anúncio copiado.");
   });
   const repeatShare = async (entry: MarketingHistoryEntry) => runHistoryAction(entry, "share", async () => {
+    // ADS-PRO-03 §26 — um registro Pro já tem a arte final persistida (imageUrl); nunca re-renderiza
+    // pelo compositor clássico, que não entende creativeFamily/background/cutout.
+    if (entry.mode === "pro") {
+      if (!entry.imageUrl) { notifyInfo("Este anúncio não tem uma imagem salva para compartilhar."); return; }
+      try {
+        const blob = await fetch(entry.imageUrl).then((response) => response.blob());
+        const text = `${entry.productName}${entry.priceText ? ` — ${entry.priceText}` : ""}`;
+        const result = await shareMarketingCard({
+          blob,
+          productName: entry.productName,
+          text,
+          title: `${entry.productName} | ${entry.storeName || "Revenda Smart"}`,
+          dialogTitle: "Compartilhar anúncio",
+          onTextFallback: copyTextWithFallback,
+        });
+        await recordAction(repeatProPayload(entry, "shared"));
+        notifyShareResult(result);
+      } catch (error) {
+        if (isMarketingShareCancelledError(error)) { notifyInfo("Compartilhamento cancelado."); return; }
+        const failure = reportMarketingActionError(error, "share");
+        logError("ad_history_share_failed", failure.message, { context: { stage: failure.code, entryAction: entry.action } });
+      }
+      return;
+    }
     const payload = repeatPayload(entry, "shared");
     try {
       const historicalImage = await resolveEntryImage(entry);
@@ -634,6 +707,19 @@ export default function MarketingPage() {
     }
   });
   const repeatDownload = async (entry: MarketingHistoryEntry) => runHistoryAction(entry, "download", async () => {
+    if (entry.mode === "pro") {
+      if (!entry.imageUrl) { notifyInfo("Este anúncio não tem uma imagem salva para baixar."); return; }
+      try {
+        const blob = await fetch(entry.imageUrl).then((response) => response.blob());
+        const result = await saveMarketingCard({ blob, productName: entry.productName });
+        await recordAction(repeatProPayload(entry, "downloaded"));
+        notifySuccess(`Card salvo em ${result.locationLabel}.`);
+      } catch (error) {
+        const failure = reportMarketingActionError(error, "download");
+        logError("ad_history_download_failed", failure.message, { context: { stage: failure.code, entryAction: entry.action } });
+      }
+      return;
+    }
     try {
       const payload = repeatPayload(entry, "downloaded");
       const historicalImage = await resolveEntryImage(entry);
@@ -770,8 +856,14 @@ export default function MarketingPage() {
             `grid-cols-[minmax(0,1fr)]` é o que impede a página de rolar de lado: uma coluna implícita
             `auto` é dimensionada pelo min-content dos filhos, então qualquer trilho horizontal
             interno esticaria a coluna e, com ela, a página. Com o piso em 0, a coluna acompanha a
-            viewport e o scroll lateral fica restrito a quem realmente o pediu. */}
-        <div className="mx-auto grid w-full max-w-2xl grid-cols-[minmax(0,1fr)] gap-3 overflow-y-auto px-4 pb-[max(8rem,calc(8rem+env(safe-area-inset-bottom)))] pt-3 sm:px-6 sm:pt-5">
+            viewport e o scroll lateral fica restrito a quem realmente o pediu.
+
+            No Pro o contêiner alarga (max-w-5xl): o estúdio usa prévia + controles lado a lado no desktop.
+
+            `overflow-x-clip` (e não `overflow-y-auto`): este contêiner nunca teve altura própria, então
+            nunca rolou — mas, sendo um "scroll container", impedia qualquer `position: sticky` dentro dele
+            (a prévia fixa do estúdio Pro). `clip` continua cortando o que vazar de lado e não cria scroll. */}
+        <div className={`mx-auto grid w-full ${workspaceView === "pro" ? "max-w-5xl" : "max-w-2xl"} grid-cols-[minmax(0,1fr)] gap-3 overflow-x-clip px-4 pb-[max(8rem,calc(8rem+env(safe-area-inset-bottom)))] pt-3 sm:px-6 sm:pt-5`}>
           <MarketingTabs activeView={workspaceView} onChange={setWorkspaceView} showProTab={isProAdsAdmin} />
 
           {workspaceView === "editor" && (

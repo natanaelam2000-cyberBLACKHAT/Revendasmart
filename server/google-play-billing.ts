@@ -32,6 +32,7 @@ import {
   isEntitledPlayState,
   isKnownPlayBillingBasePlanId,
   isKnownPlayBillingProductId,
+  resolvePlayBillingPlanAndCycle,
   mapGooglePlaySubscriptionState,
   UnknownGooglePlaySubscriptionStateError,
   type PlayEntitlementState,
@@ -102,7 +103,7 @@ export type VerifyPurchaseOutcome =
  * `verify`, `restore` (chamado uma vez por compra) e `rtdn` (chamado com o purchaseToken da notificação).
  */
 export async function verifyAndApplyGooglePlayPurchase(uid: string, body: GooglePlayVerifyRequestBody): Promise<VerifyPurchaseOutcome> {
-  const { productId, purchaseToken } = body;
+  const { productId, basePlanId, purchaseToken } = body;
   const packageName = PLAY_BILLING_PACKAGE_NAME;
 
   if (typeof purchaseToken !== "string" || !purchaseToken.trim() || purchaseToken.length > 4096) {
@@ -115,6 +116,10 @@ export async function verifyAndApplyGooglePlayPurchase(uid: string, body: Google
   if (!isKnownPlayBillingProductId(productId)) {
     pbWarn("purchase_rejected", { reason: "unknown_product_id" });
     return { status: 400, payload: { error: "UNKNOWN_PRODUCT_ID" } };
+  }
+  if (typeof basePlanId !== "string" || !resolvePlayBillingPlanAndCycle(productId, basePlanId)) {
+    pbWarn("purchase_rejected", { reason: "unknown_base_plan_id" });
+    return { status: 400, payload: { error: "BASE_PLAN_MISMATCH" } };
   }
 
   const client = createGooglePlayDeveloperApiClient();
@@ -135,7 +140,7 @@ export async function verifyAndApplyGooglePlayPurchase(uid: string, body: Google
     pbWarn("purchase_rejected", { reason: "product_id_mismatch" });
     return { status: 400, payload: { error: "PRODUCT_ID_MISMATCH" } };
   }
-  if (!isKnownPlayBillingBasePlanId(productId, purchase.lineItemBasePlanId)) {
+  if (purchase.lineItemBasePlanId !== basePlanId || !isKnownPlayBillingBasePlanId(productId, purchase.lineItemBasePlanId)) {
     pbWarn("purchase_rejected", { reason: "base_plan_mismatch" });
     return { status: 400, payload: { error: "BASE_PLAN_MISMATCH" } };
   }
@@ -155,6 +160,7 @@ export async function verifyAndApplyGooglePlayPurchase(uid: string, body: Google
   const planRef = db.collection("users").doc(uid).collection("planData").doc("main");
 
   const expiresAt = purchase.expiryTimeMillis === null ? null : new Date(purchase.expiryTimeMillis).toISOString();
+  const catalog = resolvePlayBillingPlanAndCycle(productId, basePlanId)!;
   let isActive: boolean;
   let subscriptionStatus: SubscriptionStatus;
   try {
@@ -183,14 +189,14 @@ export async function verifyAndApplyGooglePlayPurchase(uid: string, body: Google
     const existing = planDoc.exists ? planDoc.data() : null;
     const deduplicated = existing?.playPurchaseTokenHash === tokenHash && (existing?.premiumExpiresAt ?? null) === expiresAt;
 
-    transaction.set(tokenRef, { uid, productId, verifiedAt: now() }, { merge: true });
+    transaction.set(tokenRef, { uid, productId, basePlanId, plan: catalog.plan, billingCycle: catalog.cycle, verifiedAt: now() }, { merge: true });
     transaction.set(planRef, {
       billingProvider: "google_play",
       playProductId: productId,
       playPurchaseTokenHash: tokenHash,
       playOrderId: purchase.orderId ?? null,
       playPackageName: packageName,
-      currentPlan: isActive ? "premium" : "free",
+      currentPlan: isActive ? catalog.plan : "free",
       premiumActive: isActive,
       premiumExpiresAt: expiresAt,
       premiumSource: "subscription",
@@ -224,7 +230,8 @@ export async function verifyAndApplyGooglePlayPurchase(uid: string, body: Google
     status: 200,
     payload: {
       premiumActive: isActive,
-      currentPlan: isActive ? "premium" : "free",
+      currentPlan: isActive ? catalog.plan : "free",
+      billingCycle: isActive ? catalog.cycle : null,
       premiumExpiresAt: expiresAt,
       autoRenew: purchase.autoRenewing,
       deduplicated: transactionResult.deduplicated,
@@ -235,7 +242,7 @@ export async function verifyAndApplyGooglePlayPurchase(uid: string, body: Google
 function isValidVerifyBody(value: unknown): value is GooglePlayVerifyRequestBody {
   if (!value || typeof value !== "object") return false;
   const body = value as Record<string, unknown>;
-  return typeof body.productId === "string" && typeof body.purchaseToken === "string" && typeof body.packageName === "string";
+  return typeof body.productId === "string" && typeof body.basePlanId === "string" && typeof body.purchaseToken === "string" && typeof body.packageName === "string";
 }
 
 async function handleVerify(req: Request, res: Response) {
@@ -297,11 +304,12 @@ async function handleRtdn(req: Request, res: Response) {
 
     const uid = tokenDoc.data()?.uid as string | undefined;
     const productId = tokenDoc.data()?.productId as string | undefined;
-    if (!uid || !productId) {
+    const basePlanId = tokenDoc.data()?.basePlanId as string | undefined;
+    if (!uid || !productId || !basePlanId) {
       return res.status(200).json({ ok: true });
     }
 
-    await verifyAndApplyGooglePlayPurchase(uid, { productId, purchaseToken: notification.purchaseToken, packageName });
+    await verifyAndApplyGooglePlayPurchase(uid, { productId, basePlanId, purchaseToken: notification.purchaseToken, packageName });
     pbInfo("rtdn_reconciled");
     return res.status(200).json({ ok: true });
   } catch (err) {

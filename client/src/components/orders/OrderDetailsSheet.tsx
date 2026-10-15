@@ -4,6 +4,8 @@ import { formatCurrency } from "@/lib/product-pricing";
 import {
   calculateOrderItemSubtotal,
   getAllowedOrderTransitions,
+  isOrderEditableStatus,
+  isOrderPaymentEditable,
   ORDER_PAYMENT_METHOD_LABELS,
   ORDER_PAYMENT_STATUS_LABELS,
   ORDER_STATUS_LABELS,
@@ -32,6 +34,10 @@ interface OrderDetailsSheetProps {
   onChangeStatus: (order: Order) => void;
   /** Ausente em telas que não confirmam pagamento (ex.: se este sheet for reaproveitado em outro lugar). */
   onConfirmPayment?: (order: Order) => Promise<void>;
+  /** RS-PEDIDOS-01 — ausente em telas que não editam pedido. O guard aqui é só de UX: o servidor
+   * (server/order-edit-command.ts) continua a autoridade final sobre editabilidade (status, pagamento
+   * e reserva/cobrança já iniciada, esta última só conhecida no servidor). */
+  onEdit?: (order: Order) => void;
 }
 
 /**
@@ -40,7 +46,7 @@ interface OrderDetailsSheetProps {
  * recalculado aqui; o subtotal por item vem de calculateOrderItemSubtotal e o total vem do próprio
  * pedido salvo, para que a tela mostre exatamente o valor gravado no momento do pedido.
  */
-export function OrderDetailsSheet({ order, onClose, onChangeStatus, onConfirmPayment }: OrderDetailsSheetProps) {
+export function OrderDetailsSheet({ order, onClose, onChangeStatus, onConfirmPayment, onEdit }: OrderDetailsSheetProps) {
   useDismissibleOnBack(Boolean(order), onClose);
   const [confirmingPayment, setConfirmingPayment] = useState(false);
   if (!order) return null;
@@ -50,6 +56,7 @@ export function OrderDetailsSheet({ order, onClose, onChangeStatus, onConfirmPay
   const canChangeStatus = getAllowedOrderTransitions(order.status).length > 0;
   const canConfirmPayment = Boolean(onConfirmPayment)
     && (order.paymentStatus === "customer_reported_paid" || order.paymentStatus === "awaiting_customer_payment");
+  const canEditOrder = Boolean(onEdit) && isOrderEditableStatus(order.status) && isOrderPaymentEditable(order.paymentStatus);
 
   const handleConfirmClick = async () => {
     if (!onConfirmPayment || confirmingPayment) return;
@@ -166,6 +173,16 @@ export function OrderDetailsSheet({ order, onClose, onChangeStatus, onConfirmPay
             <span className="text-xs font-semibold text-muted-foreground">Total do pedido</span>
             <span className="text-xl font-semibold">{formatCurrency(order.total)}</span>
           </div>
+          {canEditOrder && (
+            <button
+              type="button"
+              data-testid="button-edit-order"
+              onClick={() => onEdit?.(order)}
+              className="rs-pressable min-h-11 w-full rounded-2xl bg-secondary text-xs font-black text-foreground"
+            >
+              Editar pedido
+            </button>
+          )}
           {canConfirmPayment && (
             <button
               type="button"

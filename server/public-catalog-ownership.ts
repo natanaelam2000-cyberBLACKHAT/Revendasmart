@@ -1,10 +1,18 @@
 import { FieldValue } from "firebase-admin/firestore";
+import { assertReferralProgramEnabledInTransaction } from "./referral-program";
 
 const PUBLIC_CATALOG_SLUGS_COLLECTION = "public_catalog_slugs";
 const LEGACY_SLUG_FIELDS = ["catalogSlug", "catalog_slug", "userSlug", "slug"] as const;
 const PLACEHOLDER_STORE_NAMES = new Set(["minha-revenda", "minha-loja"]);
 const PLACEHOLDER_CATALOG_SLUGS = new Set(["minha-revenda", "minha-loja"]);
 const MAX_SLUG_COLLISION_ATTEMPTS = 50;
+
+export class ReferralSourceConflictError extends Error {
+  constructor() {
+    super("REFERRAL_SOURCE_ALREADY_SET");
+    this.name = "ReferralSourceConflictError";
+  }
+}
 
 // RELEASE-02: nenhum destes pode chegar ao Firestore vindo do body do cliente — allowlist por exclusão
 // (blocklist), normalizada (case/underscore-insensível) para pegar tanto aliases camelCase quanto
@@ -51,6 +59,9 @@ const SERVER_OWNED_SETTINGS_KEYS = new Set([
   "referralconversions",
   "referredusers",
   "lastreferralconversionat",
+  "referralappliedat",
+  "referralappliedby",
+  "referralimmutable",
 ]);
 
 function normalizeServerOwnedKey(value: string): string {
@@ -130,6 +141,22 @@ export class InvalidCatalogSlugError extends Error {
   }
 }
 
+/**
+ * HOTFIX-P0-B — antes, um slug que resolvia com sucesso mas estava com enablePublicCatalog:false
+ * (ou disablePublicCatalog:true) virava exatamente o mesmo `return null` de "esse slug não resolve
+ * para ninguém", e as duas coisas terminavam na MESMA mensagem "não foi encontrado ou está
+ * desativado pelo consultor" — inclusive para visitantes de lojas que nunca foram desativadas e só
+ * bateram num erro técnico intermediário. Um erro dedicado deixa quem chama (loadPublicCatalog em
+ * server/routes.ts) responder com um código diferente de "não existe", e o cliente (public-catalog.tsx)
+ * finalmente mostrar as duas causas como o que realmente são.
+ */
+export class PublicCatalogDeactivatedError extends Error {
+  constructor() {
+    super("PUBLIC_CATALOG_DEACTIVATED");
+    this.name = "PublicCatalogDeactivatedError";
+  }
+}
+
 async function findLegacyOwners(transaction: any, settingsRef: any, slug: string): Promise<Set<string>> {
   const owners = new Set<string>();
   for (const field of LEGACY_SLUG_FIELDS) {
@@ -151,7 +178,16 @@ export async function persistUserSettingsWithCatalogOwnership(input: {
 
   await db.runTransaction(async (transaction: any) => {
     const currentDoc = await transaction.get(settingsRef);
+    if (typeof safePayload.referral_source === "string" && safePayload.referral_source.length > 0) {
+      await assertReferralProgramEnabledInTransaction(transaction, db);
+    }
     const currentSettings = currentDoc.data() ?? {};
+    const currentReferralSource = currentSettings.referral_source;
+    const requestedReferralSource = safePayload.referral_source;
+    if (typeof currentReferralSource === "string" && currentReferralSource.length > 0 &&
+        typeof requestedReferralSource === "string" && requestedReferralSource !== currentReferralSource) {
+      throw new ReferralSourceConflictError();
+    }
     const previousSlug = storedSlug(currentSettings);
     const effectiveSlug = requested.provided ? requested.slug : previousSlug;
 

@@ -12,7 +12,7 @@ import { getFirestore, doc, setDoc } from "firebase/firestore";
 import { uploadImageViaServer, type ServerUploadResult } from "@/lib/server-upload";
 import type { ResolvedMarketingImage } from "@/lib/marketing-image";
 import { createProductAssetOriginal } from "@/lib/marketing-product-preservation";
-import { removeBackgroundLocalHeuristic } from "@/lib/product-cutout-local-heuristic";
+import { removeBackgroundLocalHeuristic, type LocalHeuristicOptions } from "@/lib/product-cutout-local-heuristic";
 import { composeProductCutoutRgba, type ComposeProductCutoutRgbaResult } from "@shared/product-cutout";
 import { buildApprovedProductCutoutForPersistence, type ApprovedProductCutout } from "@shared/approved-product-cutout";
 import { PRODUCT_IMAGE_COORDINATE_SPACE_VERSION } from "@shared/product-image-coordinate-space";
@@ -74,14 +74,21 @@ export type ProductCutoutGenerationResult =
 export async function generateProductCutoutRgba(
   productId: string,
   resolvedImage: ResolvedMarketingImage,
-  dependencies: { decodeImageToRgba?: DecodeImageToRgba } = {},
+  dependencies: {
+    decodeImageToRgba?: DecodeImageToRgba;
+    /** ADS-PRO-FINAL — limiares da heurística decididos a partir dos pixels (ex.: fundo de estúdio cinza/bege). */
+    heuristicOptions?: (decoded: DecodedRgbaImage) => LocalHeuristicOptions | undefined;
+  } = {},
 ): Promise<ProductCutoutGenerationResult> {
   const decode = dependencies.decodeImageToRgba || defaultDecodeImageToRgba;
   const decoded = await decode(resolvedImage.safeSrc);
   if (!decoded) return { ok: false, reason: "decode-failed" };
 
   const asset = createProductAssetOriginal(productId, resolvedImage);
-  const heuristic = removeBackgroundLocalHeuristic({ data: decoded.data, width: decoded.width, height: decoded.height });
+  const heuristic = removeBackgroundLocalHeuristic(
+    { data: decoded.data, width: decoded.width, height: decoded.height },
+    dependencies.heuristicOptions?.(decoded),
+  );
   if (!heuristic.ok) return { ok: false, reason: "background-not-detected" };
 
   const composed = composeProductCutoutRgba({

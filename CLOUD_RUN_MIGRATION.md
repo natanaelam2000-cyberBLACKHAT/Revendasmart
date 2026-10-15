@@ -56,7 +56,7 @@ Backend             Backend ─────────────────�
 | `MERCADOPAGO_WEBHOOK_SECRET` | string | Criar no MP Dashboard |
 | `FIREBASE_PROJECT_ID` | `revenda-smart` | Firebase Console |
 | `FIREBASE_CLIENT_EMAIL` | `firebase-adminsdk-xxx@...` | Firebase → Service Accounts |
-| `FIREBASE_PRIVATE_KEY` | `-----BEGIN PRIVATE KEY-----\n...` | Firebase → Service Accounts |
+| `FIREBASE_PRIVATE_KEY` | `-----BEGIN PRIVATE KEY EXAMPLE-----\n...` | Firebase → Service Accounts |
 
 ### Env Vars normais (não-sensíveis, configurados no deploy)
 
@@ -175,7 +175,7 @@ export CLOUD_RUN_URL="https://revendasmart-backend-xxxx-uc.a.run.app"
 
 # Para testes autenticados, pegue um token Firebase:
 # No browser: firebase.auth().currentUser.getIdToken(true).then(t => console.log(t))
-export FIREBASE_ID_TOKEN="eyJhbGciOiJSUzI1NiIs..."
+export FIREBASE_ID_TOKEN="SYNTHETIC_FIREBASE_ID_TOKEN"
 
 # Roda todos os testes
 ./validate-cloud-run.sh

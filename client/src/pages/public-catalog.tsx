@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Check, ChevronLeft, Copy, CreditCard, QrCode, Send, ShoppingCart, Store, Trash2, X, Minus, Plus } from "lucide-react";
-import { useParams } from "wouter";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Calendar, Check, ChevronLeft, Clock, Copy, CreditCard, QrCode, Send, ShoppingCart, Store, Trash2, X, Minus, Plus } from "lucide-react";
+import { useLocation, useParams } from "wouter";
 import { QRCodeSVG } from "qrcode.react";
 import { CatalogShowcase } from "@/components/catalog/CatalogShowcase";
 import { PageSkeleton } from "@/components/PageSkeleton";
@@ -9,6 +9,7 @@ import { getApiBaseUrl, getApiUrl } from "@/lib/api-config";
 import { buildPublicProductNicheMap, toCatalogExperience, toCatalogProduct } from "@/lib/public-catalog-adapter";
 import { formatCurrency, resolveEffectiveProductPrice } from "@/lib/product-pricing";
 import { normalizeWhatsappPhone } from "@/lib/whatsapp-phone";
+import { formatCentsBRL } from "@/lib/service-work-helpers";
 import { buildPixEmvPayload } from "@/lib/pix-emv";
 import { renderOrderVisualSummary, type OrderVisualSummaryItem } from "@/lib/order-visual-summary";
 import { isMarketingShareCancelledError, shareMarketingCard } from "@/lib/marketing-share";
@@ -48,14 +49,107 @@ interface CartItem {
  */
 type PublicCatalogFailureReason =
   | "store_not_found"
+  | "store_deactivated"
   | "api_route_missing"
   | "permission_denied"
   | "network"
   | "invalid_response"
   | "unexpected";
 
+type HybridSection = "produtos" | "servicos";
+
+type PublicCatalogServiceSummary = {
+  id: string;
+  name: string;
+  description?: string;
+  durationMinutes: number;
+  priceCents: number;
+};
+
+/**
+ * CATÁLOGO-PÚBLICO-POR-MODO — seção Serviços do link HYBRID: nunca estoque/quantidade/carrinho/Esgotado
+ * (§ requisito explícito), CTA "Agendar" leva para a página pública de agendamento já existente e
+ * comprovada (/agendar/:slug, public-service-booking.tsx) em vez de duplicar o fluxo de hold/confirm
+ * aqui — o mesmo serviço nunca fica "reservável" por dois caminhos client diferentes.
+ */
+function PublicCatalogServicesSection({
+  services,
+  loading,
+  failed,
+  searchTerm,
+  onSearchTermChange,
+  storeSlug,
+}: {
+  services: PublicCatalogServiceSummary[];
+  loading: boolean;
+  failed: boolean;
+  searchTerm: string;
+  onSearchTermChange: (value: string) => void;
+  storeSlug: string;
+}) {
+  const normalizedSearch = searchTerm.trim().toLowerCase();
+  const filtered = normalizedSearch ? services.filter((service) => service.name.toLowerCase().includes(normalizedSearch)) : services;
+  const bookingHref = `/agendar/${encodeURIComponent(storeSlug)}`;
+
+  return (
+    <div className="mx-auto max-w-3xl px-4 py-5" data-testid="section-public-services">
+      <div className="relative mb-4">
+        <input
+          type="text"
+          placeholder="Buscar serviço..."
+          value={searchTerm}
+          onChange={(event) => onSearchTermChange(event.target.value)}
+          className="w-full rounded-full border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-primary/20"
+          data-testid="input-service-search-public"
+        />
+      </div>
+      {loading ? (
+        <div className="space-y-3">{[1, 2, 3].map((key) => <div key={key} className="h-20 animate-pulse rounded-3xl bg-slate-100" />)}</div>
+      ) : failed ? (
+        <p className="rounded-2xl bg-red-50 p-4 text-center text-sm font-semibold text-red-700">Não foi possível carregar os serviços agora.</p>
+      ) : filtered.length === 0 ? (
+        <p className="rounded-2xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">
+          {services.length === 0 ? "Nenhum serviço disponível no momento." : "Nenhum serviço encontrado."}
+        </p>
+      ) : (
+        <ul className="space-y-3" data-testid="list-public-services-hybrid">
+          {filtered.map((service) => (
+            <li key={service.id} className="flex items-center gap-3 rounded-3xl border border-slate-200 bg-white p-4">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-black text-slate-900">{service.name}</p>
+                {service.description && <p className="truncate text-xs text-slate-500">{service.description}</p>}
+                <div className="mt-1 flex items-center gap-3 text-xs text-slate-500">
+                  <span className="flex items-center gap-1"><Clock className="h-3 w-3" /> {service.durationMinutes} min</span>
+                  <span className="font-black text-primary">{formatCentsBRL(service.priceCents)}</span>
+                </div>
+              </div>
+              <a
+                href={bookingHref}
+                data-testid={`link-book-service-${service.id}`}
+                className="flex shrink-0 items-center gap-1.5 rounded-full bg-slate-950 px-3.5 py-2.5 text-xs font-black text-white"
+              >
+                <Calendar className="h-3.5 w-3.5" /> Agendar
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export default function PublicCatalog() {
   const { storeSlug } = useParams();
+  const [, setLocation] = useLocation();
+  // CATÁLOGO-PÚBLICO-POR-MODO — HYBRID mostra Produtos e Serviços como seções separadas no MESMO link
+  // (nunca dados misturados); "produtos" é o default porque preserva o comportamento atual de quem já
+  // usava o catálogo antes deste hotfix (zero regressão de UX para o caso mais comum, produtos puro).
+  const [activeSection, setActiveSection] = useState<HybridSection>("produtos");
+  const [publicServices, setPublicServices] = useState<PublicCatalogServiceSummary[]>([]);
+  const [publicServicesLoading, setPublicServicesLoading] = useState(false);
+  const [publicServicesError, setPublicServicesError] = useState(false);
+  const [serviceSearchTerm, setServiceSearchTerm] = useState("");
+  const servicesFetchStartedRef = useRef(false);
   const [selectedGender, setSelectedGender] = useState("todos");
   const [selectedCategory, setSelectedCategory] = useState("todos");
   const [searchTerm, setSearchTerm] = useState("");
@@ -68,6 +162,9 @@ export default function PublicCatalog() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState("");
   const [loadFailed, setLoadFailed] = useState(false);
+  // HOTFIX-P0-B req.7 — "Tentar novamente" em falhas recuperáveis: incrementar reexecuta o mesmo
+  // efeito de carga (dependência abaixo), sem duplicar a lógica de fetch/retry que já existe nele.
+  const [retryToken, setRetryToken] = useState(0);
   // Diagnóstico interno: a tela mostra uma única mensagem amigável, mas o motivo real precisa ser
   // distinguível nos logs. Sem isso, "rota de API inexistente no backend" e "loja não encontrada"
   // ficam indistinguíveis — foi exatamente o que mascarou o 404 de backend errado no Preview.
@@ -130,11 +227,18 @@ export default function PublicCatalog() {
         try {
           const response = await fetch(getApiUrl(`/api/public/catalog/${encodeURIComponent(storeSlug || "")}`), { signal: controller.signal });
           if (response.status === 404) {
-            // Um 404 tem DOIS significados muito diferentes: a API respondeu que a loja não existe
-            // (JSON), ou a própria rota não existe no backend atingido (HTML "Cannot GET"). O segundo
-            // é erro de configuração/deploy, não de dados, e precisa aparecer diferente no log.
+            // Um 404 tem significados diferentes: a API respondeu que a loja realmente não existe, que
+            // o dono desativou o catálogo (HOTFIX-P0-B — antes indistinguível da anterior, ambas viravam
+            // a mesma mensagem "não encontrado ou desativado" mesmo quando a loja nunca foi desativada),
+            // ou a própria rota não existe no backend atingido (HTML "Cannot GET", erro de
+            // configuração/deploy, não de dados — precisa aparecer diferente no log).
             const contentType = response.headers.get("content-type") || "";
-            reason = contentType.includes("application/json") ? "store_not_found" : "api_route_missing";
+            if (!contentType.includes("application/json")) {
+              reason = "api_route_missing";
+            } else {
+              const body = await response.json().catch(() => null) as { error?: string } | null;
+              reason = body?.error === "CATALOG_DEACTIVATED" ? "store_deactivated" : "store_not_found";
+            }
             break;
           }
           if (response.status === 401 || response.status === 403) {
@@ -149,6 +253,14 @@ export default function PublicCatalog() {
             throw new Error("INVALID_PUBLIC_CATALOG_RESPONSE");
           }
           if (cancelled) return;
+          // CATÁLOGO-PÚBLICO-POR-MODO — quem só presta serviço nunca deve ver a vitrine de produtos
+          // (hoje mostraria "nenhum produto", sem nenhum caminho para agendar). Links antigos/impressos
+          // para /u/:slug continuam funcionando: redireciona para a página pública real de agendamento
+          // assim que o servidor confirma o businessMode (nunca decidido no client antes de saber).
+          if (data.store.businessMode === "services") {
+            setLocation(`/agendar/${encodeURIComponent(storeSlug || "")}`, { replace: true });
+            return;
+          }
           setStore(data.store);
           setPresentation(data.presentation);
           setPublicProducts(data.products);
@@ -186,7 +298,38 @@ export default function PublicCatalog() {
     }
     loadCatalog();
     return () => { cancelled = true; activeController?.abort(); };
-  }, [storeSlug]);
+  }, [storeSlug, retryToken]);
+
+  // CATÁLOGO-PÚBLICO-POR-MODO — a seção Serviços do HYBRID reaproveita 100% o mesmo endpoint público já
+  // usado por /agendar/:slug (server/service-public-booking.ts) — nenhum endpoint novo, nenhuma segunda
+  // fonte de dados de serviço. Busca só quando o visitante realmente abre a aba (nunca no carregamento
+  // inicial de uma loja HYBRID que a maioria só visita pela aba Produtos).
+  useEffect(() => {
+    if (!storeSlug || store?.businessMode !== "both" || activeSection !== "servicos") return;
+    // Guarda por ref, não por state: `publicServicesLoading` no array de dependências reexecutaria este
+    // efeito assim que a linha abaixo o setasse para true, cancelando (cleanup) a própria busca em voo
+    // antes dela responder — o fetch real terminava, mas cancelled=true (do cleanup do 2º disparo)
+    // impedia setPublicServices/setPublicServicesLoading(false) de rodar, travando "Serviços" em loading
+    // para sempre. Reproduzido ao vivo: o skeleton nunca saía mesmo com a API respondendo em <100ms.
+    if (servicesFetchStartedRef.current) return;
+    servicesFetchStartedRef.current = true;
+    let cancelled = false;
+    setPublicServicesLoading(true);
+    setPublicServicesError(false);
+    fetch(getApiUrl(`/api/public/services/${encodeURIComponent(storeSlug)}`))
+      .then((response) => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.json(); })
+      .then((data: { services?: PublicCatalogServiceSummary[] }) => {
+        if (cancelled) return;
+        setPublicServices(Array.isArray(data.services) ? data.services : []);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.warn("[CATALOG] Falha ao carregar serviços públicos:", error);
+        setPublicServicesError(true);
+      })
+      .finally(() => { if (!cancelled) setPublicServicesLoading(false); });
+    return () => { cancelled = true; };
+  }, [storeSlug, store?.businessMode, activeSection]);
 
   // LGPD §7: busca a chave Pix só quando o comprador realmente chega nesta etapa, não na carga inicial
   // do catálogo (ver GET /api/public/catalog/:storeSlug/pix-key em server/routes.ts).
@@ -610,15 +753,27 @@ export default function PublicCatalog() {
       <div className="flex min-h-screen flex-col items-center justify-center bg-background p-6 text-center">
         <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-secondary"><Store className="h-10 w-10 text-muted-foreground" /></div>
         <h1 className="mb-2 text-xl font-bold">Catálogo Indisponível</h1>
-        {/* Duas mensagens só: "essa loja não existe" é acionável pelo visitante, o resto é problema
-            nosso e vira "tente de novo". A causa técnica exata fica no console, não na tela. */}
+        {/* HOTFIX-P0-B — três mensagens, não duas: "não existe" e "foi desativado pelo consultor" agora
+            só aparecem quando o servidor de fato confirmou qual das duas é (server/routes.ts distingue
+            CATALOG_DEACTIVATED de CATALOG_NOT_FOUND desde este hotfix); qualquer outro motivo (rede,
+            rota de API ausente, resposta inválida, erro inesperado) é sempre "problema nosso, tente de
+            novo" — nunca mais cai por padrão em "desativado pelo consultor" só por não ser store_not_found. */}
         <p className="text-sm text-muted-foreground" data-failure-reason={failureReason ?? undefined}>
           {failureReason === "store_not_found"
-            ? "Este catálogo não foi encontrado ou está desativado pelo consultor."
-            : loadFailed
-              ? "Não foi possível carregar agora. Tente novamente em instantes."
-              : "Este catálogo não foi encontrado ou está desativado pelo consultor."}
+            ? "Este catálogo não foi encontrado. Confira o link com o consultor."
+            : failureReason === "store_deactivated"
+              ? "Este catálogo foi desativado pelo consultor."
+              : "Não foi possível carregar agora. Tente novamente em instantes."}
         </p>
+        {loadFailed && (
+          <button
+            type="button"
+            onClick={() => setRetryToken((token) => token + 1)}
+            className="mt-4 rounded-xl bg-primary px-5 py-2.5 text-xs font-black uppercase text-white"
+          >
+            Tentar novamente
+          </button>
+        )}
       </div>
     );
   }
@@ -646,37 +801,75 @@ export default function PublicCatalog() {
                 : "Pagamento em processamento. O vendedor será notificado assim que for confirmado."}
         </div>
       )}
-      <CatalogShowcase
-        context="public"
-        experience={experience}
-        products={products}
-        store={{
-          name: storeDisplayName,
-          logoUrl: store.logoUrl,
-          bannerUrl: store.bannerUrl,
-          bannerTitle: store.bannerTitle,
-          description: storeDescription,
-          showPrice: store.showPrice,
-          showStock: store.showStock,
-        }}
-        searchTerm={searchTerm}
-        selectedCategory={selectedCategory}
-        selectedGender={selectedGender}
-        cartQuantities={cartQuantities}
-        productNicheIds={productNicheIds}
-        cartCount={cartCount}
-        onSearchTermChange={setSearchTerm}
-        onCategoryChange={setSelectedCategory}
-        onGenderChange={setSelectedGender}
-        onAddToCart={addToCart}
-        onUpdateQuantity={updateQuantity}
-        onOpenCart={() => setShowCart(true)}
-        onShareCatalog={handleShareCatalog}
-        hasMore={hasMore}
-        loadingMore={loadingMore}
-        loadMoreError={loadMoreError}
-        onLoadMore={loadMoreProducts}
-      />
+      {store.businessMode === "both" && (
+        <div className="sticky top-0 z-[60] border-b border-slate-200 bg-white px-4 py-2.5" data-testid="hybrid-section-tabs">
+          <div className="mx-auto flex max-w-3xl gap-2">
+            <button
+              type="button"
+              onClick={() => setActiveSection("produtos")}
+              data-testid="button-hybrid-section-produtos"
+              aria-pressed={activeSection === "produtos"}
+              className={`flex-1 rounded-full py-2.5 text-xs font-black uppercase tracking-wide transition-colors ${activeSection === "produtos" ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-500"}`}
+            >
+              Produtos
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveSection("servicos")}
+              data-testid="button-hybrid-section-servicos"
+              aria-pressed={activeSection === "servicos"}
+              className={`flex-1 rounded-full py-2.5 text-xs font-black uppercase tracking-wide transition-colors ${activeSection === "servicos" ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-500"}`}
+            >
+              Serviços
+            </button>
+          </div>
+        </div>
+      )}
+
+      {(store.businessMode !== "both" || activeSection === "produtos") && (
+        <CatalogShowcase
+          context="public"
+          experience={experience}
+          products={products}
+          store={{
+            name: storeDisplayName,
+            logoUrl: store.logoUrl,
+            bannerUrl: store.bannerUrl,
+            bannerTitle: store.bannerTitle,
+            description: storeDescription,
+            showPrice: store.showPrice,
+            showStock: store.showStock,
+          }}
+          searchTerm={searchTerm}
+          selectedCategory={selectedCategory}
+          selectedGender={selectedGender}
+          cartQuantities={cartQuantities}
+          productNicheIds={productNicheIds}
+          cartCount={cartCount}
+          onSearchTermChange={setSearchTerm}
+          onCategoryChange={setSelectedCategory}
+          onGenderChange={setSelectedGender}
+          onAddToCart={addToCart}
+          onUpdateQuantity={updateQuantity}
+          onOpenCart={() => setShowCart(true)}
+          onShareCatalog={handleShareCatalog}
+          hasMore={hasMore}
+          loadingMore={loadingMore}
+          loadMoreError={loadMoreError}
+          onLoadMore={loadMoreProducts}
+        />
+      )}
+
+      {store.businessMode === "both" && activeSection === "servicos" && (
+        <PublicCatalogServicesSection
+          services={publicServices}
+          loading={publicServicesLoading}
+          failed={publicServicesError}
+          searchTerm={serviceSearchTerm}
+          onSearchTermChange={setServiceSearchTerm}
+          storeSlug={storeSlug || ""}
+        />
+      )}
 
       {showCart && checkoutStep === "pix" && store?.pixAvailable && (
         <div className="fixed inset-0 z-[70] flex flex-col overflow-hidden bg-white" data-testid="drawer-pix">

@@ -30,10 +30,12 @@ function run(): void {
   }
   assert.match(panelSource, /não expõe etapas reais/, "o comentário precisa deixar explícito que as mensagens são só ritmo de UX");
 
-  // C. Preview real 1:1 (1080x1080) — usa "square", nunca inventa outro formato para a primeira versão.
-  assert.match(panelSource, /format: "square"/g);
-  assert.doesNotMatch(panelSource, /format: "portrait"|format: "story"/, "C: a primeira versão do preview final é 1:1, não reaproveita portrait/story");
-  assert.match(panelSource, /aspect-square/, "C: o preview ocupa uma área quadrada, sem cortar a arte");
+  // C. ADS-PRO-04 — o fluxo canônico agora suporta 4:5 e 1:1, com 4:5 como padrão local.
+  assert.match(panelSource, /useState<Extract<MarketingProFormat, "portrait" \| "square">>\("portrait"\)/, "C: o formato padrão precisa ser portrait");
+  assert.match(panelSource, /data-testid="button-pro-ad-format-portrait"/, "C: seletor 4:5 ausente");
+  assert.match(panelSource, /data-testid="button-pro-ad-format-square"/, "C: seletor 1:1 ausente");
+  assert.match(panelSource, /format: selectedFormat/g, "C: geração e identidade precisam propagar o formato escolhido");
+  assert.match(panelSource, /style=\{\{ aspectRatio: previewAspectRatio \}\}/, "C: o preview precisa refletir o aspect ratio real, não um quadrado fixo");
   assert.match(panelSource, /object-contain/, "C: a arte nunca é cortada (object-contain, não object-cover)");
 
   // D. Comparação Anterior/Atual só aparece quando existe uma versão anterior de verdade.
@@ -46,16 +48,25 @@ function run(): void {
     assert.match(panelSource, new RegExp(`data-testid="${testid}"`), `E: ação ausente (${testid})`);
   }
   // "Gerar novamente" não pode disparar double-click — mesmo guard usado no resto do painel Pro.
-  assert.match(panelSource, /if \(!approvedCutoutSource \|\| !realBackgroundEnabled \|\| !serverCapabilityReady \|\| busyRef\.current\) return;/, "E: geração é fail-closed contra flag OFF, capability server-side ausente, cutout ausente e double-click");
-  assert.match(panelSource, /createMarketingProGenerationRequestId\(\)/, "E: cada geração usa um generationRequestId novo, nunca reaproveitado");
+  // ADS-PRO-02: library-first — o guard incondicional só protege cutout ausente e double-click; flag
+  // OFF/capability server-side ausente só bloqueiam quando o usuário optou pelo modo IA experimental
+  // (o caminho library, padrão, nunca depende de nenhum dos dois — AI_UNAVAILABLE_BLOCKS_PRO_GENERATION = NO).
+  assert.match(panelSource, /if \(!approvedCutoutSource \|\| busyRef\.current\) return;/, "E: geração é fail-closed contra cutout ausente e double-click, incondicionalmente");
+  assert.match(panelSource, /if \(sourceMode === "ai" && \(!realBackgroundEnabled \|\| !serverCapabilityReady\)\) return;/, "E: flag OFF/capability ausente só bloqueiam o modo IA opt-in, nunca o caminho library padrão");
+  assert.match(panelSource, /createMarketingProGenerationRequestId\(\)/, "E: cada geração via IA usa um generationRequestId novo, nunca reaproveitado");
 
   // F. Erro: mantém conceito selecionado (o componente inteiro só desmonta via onBackToConcepts,
   // nunca sozinho no catch), mantém a última arte pronta se existir, mensagem amigável, "Tentar
   // novamente", e nunca chama onBackToConcepts a partir do catch (nunca joga o usuário pro início).
   assert.match(panelSource, /lastReady\?: ReadyArt/);
   assert.match(panelSource, /state\.lastReady &&/, "F: a última arte pronta continua visível durante uma falha nova");
+  // ADS-PRO-03: persistProAdHistory (função à parte, definida ANTES de handleGenerate no arquivo) ganhou
+  // seu próprio "} catch {" — buscar a partir do início do arquivo pegaria o catch ERRADO. A busca agora
+  // começa em "const handleGenerate = ", o marcador único da função que este teste realmente audita.
+  const handleGenerateStart = panelSource.indexOf("const handleGenerate = ");
+  assert.ok(handleGenerateStart > -1, "F: handleGenerate precisa existir");
   assert.doesNotMatch(
-    panelSource.slice(panelSource.indexOf("} catch {"), panelSource.indexOf("} finally {")),
+    panelSource.slice(panelSource.indexOf("} catch {", handleGenerateStart), panelSource.indexOf("} finally {", handleGenerateStart)),
     /onBackToConcepts/,
     "F: uma falha de geração nunca volta o usuário para a tela de conceitos sozinha",
   );
@@ -124,7 +135,12 @@ function run(): void {
   assert.match(panelSource, /creativeConceptId: concept\.concept\.id/);
   assert.match(panelSource, /creativeFamily: concept\.concept\.creativeFamily/);
 
-  console.log("Pro Ad Generation UI Foundation: 16 invariants (A-P) passed (static source verification — canvas/Image real execution requires a browser, not covered here).");
+  // Q. O preview e o histórico usam as dimensões canônicas do formato, sem schema novo nem rerender
+  // divergente — a identidade persiste o mesmo selectedFormat mostrado no preview.
+  assert.match(panelSource, /const previewDimensions = MARKETING_PRO_FORMAT_DIMENSIONS\[selectedFormat\];/, "Q: dimensões canônicas do formato ausentes no preview");
+  assert.match(panelSource, /format: selectedFormat, creativeConceptId:/, "Q: a identidade persistida precisa carregar o formato escolhido");
+
+  console.log("Pro Ad Generation UI Foundation: 17 invariants (A-Q) passed (static source verification — canvas/Image real execution requires a browser, not covered here).");
 }
 
 run();

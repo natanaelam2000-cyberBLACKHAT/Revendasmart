@@ -33,7 +33,16 @@ export function resolveRepositoryRoot(startDirectory = process.cwd()) {
   if (result.status !== 0) throw new Error("o diretório atual não pertence a um repositório Git.");
   const root = String(result.stdout || "").trim();
   if (!root) throw new Error("não foi possível determinar a raiz Git.");
-  return resolve(root);
+  const resolvedRoot = resolve(root);
+  const requestedRoot = resolve(startDirectory);
+  // Git expands a Windows SUBST drive back to its physical path. Preserve an
+  // equivalent root alias so child builds do not traverse inaccessible parents.
+  const requestedStat = statSync(requestedRoot);
+  const rootStat = statSync(resolvedRoot);
+  if (requestedStat.ino !== 0 && requestedStat.dev === rootStat.dev && requestedStat.ino === rootStat.ino) {
+    return requestedRoot;
+  }
+  return resolvedRoot;
 }
 
 export function assertRevendaSmartRepository(root) {

@@ -24,7 +24,7 @@ process.env.FIREBASE_AUTH_EMULATOR_HOST = process.env.FIREBASE_AUTH_EMULATOR_HOS
 // Lidas no module-load de server/subscriptions.ts — precisam existir ANTES do primeiro import dele.
 // Token com prefixo de produção só para passar na validação de formato; nunca é enviado a lugar
 // nenhum, porque todo fetch para api.mercadopago.com é interceptado pelo mock abaixo.
-process.env.MERCADOPAGO_ACCESS_TOKEN = "APP_USR-test-central-token-never-sent-anywhere";
+process.env.MERCADOPAGO_ACCESS_TOKEN = "APP_USR-PLACEHOLDER";
 const WEBHOOK_SECRET = "release09-test-webhook-secret";
 process.env.MERCADOPAGO_WEBHOOK_SECRET = WEBHOOK_SECRET;
 
@@ -411,8 +411,8 @@ async function run(): Promise<void> {
     {
       const serverSource = await import("node:fs").then((fs) => fs.readFileSync("server/subscriptions.ts", "utf8"));
       const createBlock = serverSource.slice(
-        serverSource.indexOf('"/api/app-subscription/create"'),
-        serverSource.indexOf('"/api/app-subscription/cancel"'),
+        serverSource.indexOf('export async function createSubscriptionCommand'),
+        serverSource.indexOf('export async function syncSubscriptionFromProviderCommand'),
       );
       assert.match(createBlock, /billingProvider:\s*"mercado_pago"/,
         "estrutural: toda nova assinatura MP grava billingProvider desde a criação");

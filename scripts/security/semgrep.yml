@@ -1,0 +1,27 @@
+rules:
+  - id: revendasmart-request-token-logging
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: Do not log Authorization headers or authentication tokens.
+    metadata:
+      confidence: HIGH
+      category: security
+    patterns:
+      - pattern-either:
+          - pattern: console.$METHOD(..., $REQ.headers.authorization, ...)
+          - pattern: console.$METHOD(..., $REQ.headers["authorization"], ...)
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(log|warn|error|debug|info)$
+    paths:
+      include: [server/**]
+  - id: revendasmart-webview-file-access
+    languages: [java]
+    severity: ERROR
+    message: Native WebView file access needs explicit security review.
+    metadata:
+      confidence: HIGH
+      category: security
+    pattern-either:
+      - pattern: $SETTINGS.setAllowUniversalAccessFromFileURLs(true)
+      - pattern: $SETTINGS.setAllowFileAccessFromFileURLs(true)

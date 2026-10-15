@@ -1,4 +1,5 @@
 import { getApiUrl } from "./api-config";
+import { abortable } from "./abortable";
 
 export type ApiMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 export type ApiResponseType = "json" | "text" | "blob" | "arrayBuffer" | "response";
@@ -84,7 +85,7 @@ export async function apiRequest<T = unknown>(path: string, options: ApiRequestO
 
   try {
     if (options.auth) {
-      const token = await resolveAuthToken(options.getAuthToken);
+      const token = await abortable(resolveAuthToken(options.getAuthToken), controller.signal);
       if (!token) {
         throw new ApiError({ status: 401, code: "UNAUTHENTICATED", message: "Sua sessão expirou. Entre novamente.", retryable: false });
       }
@@ -111,9 +112,14 @@ export async function apiRequest<T = unknown>(path: string, options: ApiRequestO
 
 async function resolveAuthToken(getAuthToken?: ApiRequestOptions["getAuthToken"]): Promise<string | null | undefined> {
   if (getAuthToken) return await getAuthToken();
-  const { getFirebaseAuth } = await import("./firebase");
-  const auth = getFirebaseAuth();
-  return await auth?.currentUser?.getIdToken();
+  // RELEASE-AUTOMATION-01 — waits for Firebase Auth's INITIAL onAuthStateChanged emission instead of
+  // reading `auth.currentUser` synchronously. On a fresh full-page load, the persisted session is still
+  // being restored asynchronously when this can run, so a synchronous read sees `null` even for a
+  // genuinely logged-in user — every apiRequest(path, { auth: true }) call site inherited this race by
+  // construction (e.g. sorteios-admin.tsx on first load), throwing "Sua sessão expirou" for no reason.
+  const { waitForAuthReady } = await import("./firebase");
+  const user = await waitForAuthReady();
+  return await user?.getIdToken();
 }
 
 function prepareRequestBody(body: unknown, headers: Headers): BodyInit | undefined {
@@ -204,7 +210,10 @@ function extractSafeMessage(json: Record<string, unknown> | undefined, nestedErr
   const trimmed = raw.trim();
   if (!trimmed || trimmed.length > 240) return undefined;
   if (/<\/?[a-z][\s\S]*>/i.test(trimmed)) return undefined;
-  if (/stack|trace|authorization|bearer\s+|firebase|mercadopago|access[_ -]?token/i.test(trimmed)) return undefined;
+  // Backend/proxy failures sometimes return a short filesystem path, SQL fragment or
+  // implementation exception. Length and HTML checks alone do not make that text safe
+  // to show to an end user.
+  if (/stack|trace|authorization|bearer\s+|firebase|mercadopago|access[_ -]?token|(?:[a-z]:\\|\/usr\/|\/home\/|node_modules)|(?:select|insert|update|delete)\s+.+\s+(?:from|into|set)|(?:syntax|type|reference)error|exception|process\.env/i.test(trimmed)) return undefined;
   return trimmed;
 }
 

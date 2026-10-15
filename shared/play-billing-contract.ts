@@ -16,11 +16,13 @@
 export const PLAY_BILLING_PACKAGE_NAME = "com.revendasmart.app";
 
 export const PLAY_BILLING_PRODUCT_IDS = {
-  premiumMonthly: "revendasmart_premium_monthly",
-  premiumYearly: "revendasmart_premium_yearly",
+  pro: "revendasmart_pro",
+  premium: "revendasmart_premium",
 } as const;
 
 export type PlayBillingProductId = (typeof PLAY_BILLING_PRODUCT_IDS)[keyof typeof PLAY_BILLING_PRODUCT_IDS];
+export type PlayBillingPlan = "pro" | "premium";
+export type PlayBillingCycle = "monthly" | "annual";
 
 export function isKnownPlayBillingProductId(value: unknown): value is PlayBillingProductId {
   return typeof value === "string"
@@ -28,18 +30,43 @@ export function isKnownPlayBillingProductId(value: unknown): value is PlayBillin
 }
 
 /**
- * RELEASE-07B — Android subscriptions (Google Play Billing Library) exigem TANTO o product id quanto
- * um base plan id na hora de comprar. Estes IDs são só uma CONVENÇÃO de nomenclatura — o base plan
- * REAL só passa a existir depois de criado no Play Console (PLAY_CONSOLE_PENDING). Usar exatamente
- * estes nomes ao criar os base plans lá, para o código já bater sem precisar mudar depois.
+ * Android subscriptions (Google Play Billing Library) exigem TANTO o product id quanto um base plan
+ * id na hora de comprar. Este é o catálogo canônico compartilhado por client e servidor.
  */
-export const PLAY_BILLING_BASE_PLAN_IDS: Record<PlayBillingProductId, string> = {
-  [PLAY_BILLING_PRODUCT_IDS.premiumMonthly]: "premium-monthly-autorenew",
-  [PLAY_BILLING_PRODUCT_IDS.premiumYearly]: "premium-yearly-autorenew",
-};
+export const PLAY_BILLING_CATALOG = {
+  pro: {
+    monthly: { productId: PLAY_BILLING_PRODUCT_IDS.pro, basePlanId: "pro-monthly-autorenew" },
+    annual: { productId: PLAY_BILLING_PRODUCT_IDS.pro, basePlanId: "pro-annual-autorenew" },
+  },
+  premium: {
+    monthly: { productId: PLAY_BILLING_PRODUCT_IDS.premium, basePlanId: "premium-monthly-autorenew" },
+    annual: { productId: PLAY_BILLING_PRODUCT_IDS.premium, basePlanId: "premium-annual-autorenew" },
+  },
+} as const satisfies Record<PlayBillingPlan, Record<PlayBillingCycle, { productId: PlayBillingProductId; basePlanId: string }>>;
+
+export const PLAY_BILLING_BASE_PLAN_IDS = {
+  proMonthly: PLAY_BILLING_CATALOG.pro.monthly.basePlanId,
+  proAnnual: PLAY_BILLING_CATALOG.pro.annual.basePlanId,
+  premiumMonthly: PLAY_BILLING_CATALOG.premium.monthly.basePlanId,
+  premiumAnnual: PLAY_BILLING_CATALOG.premium.annual.basePlanId,
+} as const;
+
+export function getPlayBillingCatalogEntry(plan: PlayBillingPlan, cycle: PlayBillingCycle) {
+  return PLAY_BILLING_CATALOG[plan][cycle];
+}
+
+export function resolvePlayBillingPlanAndCycle(productId: unknown, basePlanId: unknown): { plan: PlayBillingPlan; cycle: PlayBillingCycle } | null {
+  for (const plan of ["pro", "premium"] as const) {
+    for (const cycle of ["monthly", "annual"] as const) {
+      const entry = PLAY_BILLING_CATALOG[plan][cycle];
+      if (entry.productId === productId && entry.basePlanId === basePlanId) return { plan, cycle };
+    }
+  }
+  return null;
+}
 
 export function isKnownPlayBillingBasePlanId(productId: PlayBillingProductId, basePlanId: unknown): boolean {
-  return typeof basePlanId === "string" && PLAY_BILLING_BASE_PLAN_IDS[productId] === basePlanId;
+  return resolvePlayBillingPlanAndCycle(productId, basePlanId) !== null;
 }
 
 /**
@@ -160,13 +187,15 @@ export function isGooglePlaySubscriptionEntitled(
 
 export interface GooglePlayVerifyRequestBody {
   readonly productId: string;
+  readonly basePlanId: string;
   readonly purchaseToken: string;
   readonly packageName: string;
 }
 
 export interface GooglePlayVerifyResponseBody {
   readonly premiumActive: boolean;
-  readonly currentPlan: "free" | "premium";
+  readonly currentPlan: "free" | "pro" | "premium";
+  readonly billingCycle: PlayBillingCycle | null;
   readonly premiumExpiresAt: string | null;
   readonly autoRenew: boolean;
   readonly deduplicated: boolean;

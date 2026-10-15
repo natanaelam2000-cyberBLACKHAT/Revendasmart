@@ -16,6 +16,9 @@ import {
   ORDER_PAYMENT_STATUS_IDS,
   resolveOrderPaymentMethod,
   resolveOrderPaymentStatus,
+  calculateOrderItemSubtotal,
+  calculateOrderTotal,
+  type OrderItem,
 } from "../client/src/lib/orders";
 import {
   computeOrderVisualSummaryLayout,
@@ -85,6 +88,30 @@ function run(): void {
   assert.ok(ORDER_PAYMENT_STATUS_IDS.includes("customer_reported_paid"));
   assert.ok(ORDER_PAYMENT_STATUS_IDS.includes("paid"));
 
+  // RELEASE-AUTOMATION-01 — calculateOrderItemSubtotal/calculateOrderTotal precisam somar em CENTS
+  // inteiros por baixo dos panos, nunca reais em ponto flutuante: `19.9 * 3` sozinho já não bate com
+  // `59.70` em JS puro (dá 59.699999999999996). order.total sai direto como o valor cobrado de verdade
+  // (server/routes.ts -> server/payments.ts `unit_price` na preferência do Mercado Pago), então um
+  // resíduo de ponto flutuante aqui vazaria para uma cobrança real.
+  {
+    const threeAt1990: OrderItem[] = [{ name: "Item", quantity: 3, unitPrice: 19.9 }];
+    assert.equal(calculateOrderItemSubtotal(threeAt1990[0]), 59.7, "3 × R$19,90 precisa dar exatamente 59.7, nunca 59.699999999999996");
+    assert.equal(calculateOrderTotal(threeAt1990), 59.7);
+
+    // Vários itens cujo próprio subtotal já é exato, mas cuja SOMA em ponto flutuante poderia derivar
+    // (0.1 + 0.2 = 0.30000000000000004 em JS puro) — a soma em cents inteiros elimina a classe inteira.
+    const manySmallItems: OrderItem[] = [
+      { name: "A", quantity: 1, unitPrice: 0.10 },
+      { name: "B", quantity: 1, unitPrice: 0.20 },
+      { name: "C", quantity: 3, unitPrice: 33.33 },
+    ];
+    assert.equal(calculateOrderTotal(manySmallItems), 100.29, "soma de vários itens precisa ser exata em cents, nunca um resíduo de soma binária");
+
+    // Defesas existentes (negativo/NaN -> 0) continuam intactas com a nova implementação.
+    assert.equal(calculateOrderItemSubtotal({ name: "X", quantity: -5, unitPrice: 10 }), 0, "quantidade negativa continua sendo tratada como 0");
+    assert.equal(calculateOrderItemSubtotal({ name: "Y", quantity: 2, unitPrice: NaN }), 0, "unitPrice inválido continua sendo tratado como 0");
+  }
+
   // ===== Servidor: preço/estoque nunca vêm do cliente; idempotência; nunca marca "paid" no auto-relato =====
 
   const routesSource = read("server/routes.ts");
@@ -111,13 +138,14 @@ function run(): void {
   assert.ok(markPaidRouteEnd > markPaidRouteStart, "rota de auto-relato de pagamento precisa existir");
   const markPaidRoute = routesSource.slice(markPaidRouteStart, markPaidRouteEnd);
   assert.doesNotMatch(markPaidRoute, /paymentStatus:\s*"paid"/, "auto-relato do cliente NUNCA pode marcar o pedido como \"paid\" — só customer_reported_paid");
-  assert.match(markPaidRoute, /paymentStatus: "customer_reported_paid"/, "auto-relato só pode marcar customer_reported_paid");
-  assert.match(markPaidRoute, /order\.clientOrderId !== clientOrderId/, "só quem tem o clientOrderId do pedido pode reportar pagamento dele");
+  assert.match(markPaidRoute, /transitionOrderPayment\(db, catalogSettings.uid, orderId, "report", clientOrderId\)/, "relato público delega com o token do comprador e tenant resolvido no servidor");
+  const transitionsSource = read("server/payment-state-transitions.ts");
+  assert.match(transitionsSource, /order\.clientOrderId !== clientOrderId/, "token do comprador é validado na transação");
 
   const confirmPaymentRouteStart = markPaidRouteEnd;
   const confirmPaymentRoute = routesSource.slice(confirmPaymentRouteStart, confirmPaymentRouteStart + 2000);
   assert.match(confirmPaymentRoute, /requireAuth/, "confirmação real de pagamento exige o lojista autenticado");
-  assert.match(confirmPaymentRoute, /paymentStatus: "paid"/, "só a rota autenticada do lojista pode marcar \"paid\"");
+  assert.match(confirmPaymentRoute, /transitionOrderPayment\(db, uid, orderId, "confirm"\)/, "confirmação delega com UID autenticado");
 
   // ===== Client: fallback do WhatsApp nunca é removido; Pix não depende do pedido existir no servidor =====
 
@@ -218,7 +246,7 @@ function run(): void {
 
   const paymentsSource = read("server/payments.ts");
   const chargeFnStart = paymentsSource.indexOf("export async function createOrderMercadoPagoCharge");
-  const chargeFnEnd = paymentsSource.indexOf("async function syncOrderPaymentStatusFromCharge");
+  const chargeFnEnd = paymentsSource.indexOf("async function handleWebhook");
   assert.ok(chargeFnStart >= 0 && chargeFnEnd > chargeFnStart, "createOrderMercadoPagoCharge precisa existir");
   const chargeFnBody = paymentsSource.slice(chargeFnStart, chargeFnEnd);
 
@@ -232,6 +260,14 @@ function run(): void {
   assert.match(chargeFnBody, /orderId: params\.orderId/, "C: Charge precisa gravar o vínculo com orderId");
   // Token nunca sai do servidor.
   assert.doesNotMatch(chargeFnBody, /res\.json\([^)]*accessToken/, "token MP nunca pode ser devolvido na resposta");
+  // PEDIDOS EDITÁVEIS Etapa 2C: reserva marcada ANTES do POST, uma tentativa só, com a chave da intenção; a
+  // reconciliação só busca — nunca cria preferência.
+  const markIndex = chargeFnBody.indexOf("await params.markProviderCallStarted();");
+  assert.ok(markIndex >= 0 && markIndex < chargeFnBody.indexOf("preferenceClient.create("), "2C: provider_started precisa ser gravado antes do POST ao Mercado Pago");
+  assert.match(chargeFnBody, /requestOptions: singleAttemptPreferenceOptions\(params\.idempotencyKey\),/, "2C: POST com a chave estável da intenção");
+  assert.match(paymentsSource, /return \{ idempotencyKey, retries: 1 \} as PreferenceRequestOptions;/, "2C: sem reenvio automático do SDK (retries: 1 = uma tentativa)");
+  const findFnBody = paymentsSource.slice(paymentsSource.indexOf("export async function findOrderMercadoPagoCharge"), paymentsSource.indexOf("type MPAccessTokenResolution"));
+  assert.ok(findFnBody.length > 0 && !/\.create\(/.test(findFnBody), "2C: reconciliação nunca cria preferência");
 
   const routesSourceV3 = read("server/routes.ts");
   const mpRouteStart = routesSourceV3.indexOf('app.post("/api/public/catalog/:storeSlug/orders/:orderId/payment/mercadopago"');
@@ -242,28 +278,49 @@ function run(): void {
   // A/B: cartão só é oferecido quando MP está conectado — mesma checagem de cardAvailable já usada na
   // criação do pedido.
   assert.match(mpRoute, /if \(!catalogSettings\.store\.cardAvailable\)/, "A/B: rota de pagamento precisa recusar quando a loja não tem Mercado Pago conectado");
-  // D novamente, no nível da rota: total vem do pedido já carregado do Firestore, nunca do req.body.
-  assert.match(mpRoute, /amount: order\.total/, "D: rota precisa passar order.total (já persistido), nunca um valor do corpo da requisição");
+  // D novamente, no nível da rota — PEDIDOS EDITÁVEIS Etapa 2B: o valor cobrado é o total do pedido
+  // persistido, lido e congelado NA transação da reserva (serializada com a edição de itens). A rota nunca
+  // lê o pedido fora dela nem cobra um order.total lido antes da reserva (era a janela de corrida).
+  assert.doesNotMatch(mpRoute, /amount: order\.total|orderRef\.get\(\)/, "D: rota não pode ler o pedido fora da transação da reserva nem cobrar um order.total lido antes dela");
+  assert.match(mpRoute, /await startOrderMercadoPagoCharge\(\s*db,\s*\{ uid, orderId,/, "D/F: rota precisa delegar a cobrança ao protocolo transacional de reserva");
   assert.doesNotMatch(mpRoute, /req\.body\.amount|body\.amount|body\.total/, "D: rota de pagamento não pode ler amount/total do corpo da requisição pública");
-  // F: idempotência atômica via reserva — mesma garantia já testada ao vivo contra o emulador.
-  assert.match(mpRoute, /await reserveOrderCharge\(db, uid, orderId\)/, "F: criação de cobrança precisa passar pela reserva atômica antes de chamar o Mercado Pago");
   assert.match(mpRoute, /reused: true/, "F: reenvio devolve a cobrança já existente, nunca cria uma segunda");
-  // J: falha do provider libera a reserva e preserva o pedido — nunca marca pago, nunca deixa a
-  // reserva travada.
-  assert.match(mpRoute, /await releaseOrderChargeReservation\(db, uid, orderId\);/, "J: falha ao criar a cobrança precisa liberar a reserva");
   assert.doesNotMatch(mpRoute, /orderRef\.set|order\.paymentStatus = /, "J: rota de criação de cobrança não pode escrever no pedido — só cria a cobrança, o webhook decide paymentStatus");
+
+  const chargeStartSource = read("server/public-catalog-order-payment-idempotency.ts");
+  const reserveFn = chargeStartSource.slice(chargeStartSource.indexOf("export async function reserveOrderCharge"), chargeStartSource.indexOf("export async function releaseOrderChargeReservation"));
+  const startFn = chargeStartSource.slice(chargeStartSource.indexOf("export async function startOrderMercadoPagoCharge"));
+  assert.ok(reserveFn.length > 0 && startFn.length > 0, "reserveOrderCharge e startOrderMercadoPagoCharge precisam existir");
+  // D: pedido lido e valor/versão congelados na MESMA transação que cria a reserva.
+  assert.match(reserveFn, /const \[snap, orderSnap\] = await tx\.getAll\(idempotencyRef, orderRef\);/, "D: a reserva precisa ler o pedido dentro da própria transação");
+  assert.match(reserveFn, /tx\.create\(idempotencyRef, \{ status: "pending", orderId, chargeId: chargeRef\.id, createdAt: nowIso, amount, orderUpdatedAt, providerIdempotencyKey \}\);/, "D/2C: a reserva precisa congelar valor, versão e a chave externa da intenção antes de qualquer chamada ao provedor");
+  // PEDIDOS EDITÁVEIS Etapa 2C: a chave externa é o chargeId da reserva — a mesma em qualquer retry desta intenção.
+  assert.match(reserveFn, /const providerIdempotencyKey = chargeRef\.id;/, "2C: chave externa estável derivada da reserva, nunca Date.now()/aleatória por tentativa");
+  // F: idempotência atômica via reserva — mesma garantia já testada ao vivo contra o emulador.
+  assert.match(startFn, /await reserveOrderCharge\(db, uid, orderId[,)]/, "F: criação de cobrança precisa passar pela reserva atômica antes de chamar o Mercado Pago");
+  assert.match(startFn, /amount: reservation\.amount,/, "D: o provedor precisa receber o valor congelado na reserva, nunca um total relido");
+  assert.doesNotMatch(startFn, /collection\("orders"\)/, "D: o início da cobrança não pode reler o pedido fora da transação da reserva");
+  // J (Etapa 2C): a reserva só é liberada quando o provedor comprovadamente não criou nada (falha antes da
+  // chamada ou recusa definitiva); resultado ambíguo mantém a reserva e fica fechado; falha ao finalizar depois
+  // do sucesso nunca libera. O provedor recebe a chave persistida na reserva.
+  assert.match(startFn, /idempotencyKey: intent\.providerIdempotencyKey,/, "2C: o provedor recebe a chave persistida na reserva");
+  assert.match(startFn, /await releaseOrderChargeReservation\(db, uid, orderId, intent\.chargeId, phase === "not_started" \? "before_provider" : "provider_rejected"\)/, "J/2C: falha sem efeito externo libera só a reserva desta intenção");
+  assert.match(startFn, /if \(phase === "ambiguous"\) \{\r?\n(?:(?!releaseOrderChargeReservation)[\s\S])*?return \{ outcome: "reconciliation_required" \};\r?\n\s*\}/, "2C: resultado ambíguo nunca libera a reserva");
+  assert.doesNotMatch(paymentsSource, /DEFINITIVE_PREFERENCE_REJECTIONS/, "2C: nenhum status HTTP pós-provider_started pode provar ausência de efeito externo");
+  assert.match(paymentsSource, /function classifyPreferenceFailure\(\): MercadoPagoProviderCallPhase \{\r?\n\s*return "ambiguous";/, "2C: falhas do POST ficam fail-closed para reconciliação");
+  const finalizeStep = startFn.slice(startFn.indexOf("await hooks.beforeFinalize?.();"), startFn.indexOf('return { outcome: "created"'));
+  assert.ok(finalizeStep.length > 0 && !finalizeStep.includes("releaseOrderChargeReservation"), "2C: falha ao finalizar depois do sucesso do provedor nunca libera a reserva");
+  assert.doesNotMatch(startFn, /orderRef\.set|order\.paymentStatus = /, "J: início da cobrança não pode escrever no pedido — só cria a cobrança, o webhook decide paymentStatus");
 
   const statusRouteStart = mpRouteEnd;
   const statusRoute = routesSourceV3.slice(statusRouteStart, statusRouteStart + 1600);
   assert.doesNotMatch(statusRoute, /orderRef\.set|orderRef\.update|paymentStatus:\s*["']paid["']/, "I: rota de status é somente leitura — nunca escreve/marca paid a partir de um GET");
 
   // G/H: webhook propaga paid para o pedido, e só quando ainda não estava paid (idempotente).
-  const syncOrderFnStart = paymentsSource.indexOf("async function syncOrderPaymentStatusFromCharge");
-  const syncOrderFnEnd = paymentsSource.indexOf("// ---", syncOrderFnStart);
-  const syncOrderFnBody = paymentsSource.slice(syncOrderFnStart, syncOrderFnEnd);
-  assert.match(syncOrderFnBody, /if \(snap\.data\(\)\?\.paymentStatus === "paid"\) return;/, "H: propagação para o pedido precisa ser um no-op quando já está paid — webhook repetido não reescreve");
-  assert.match(syncOrderFnBody, /paymentStatus: "paid"/, "G: propagação real marca o pedido como paid");
-  assert.match(paymentsSource, /if \(newStatus === "paid" && charge\.orderId\) \{\s*\n\s*await syncOrderPaymentStatusFromCharge\(uid, charge\.orderId\);/, "G: sync do pedido só dispara quando a charge realmente virou paid E tem orderId vinculado");
+  assert.match(paymentsSource, /await applyChargePaymentUpdate\(getFirebaseAdmin\(\)\.firestore\(\), uid, chargeId, updates\)/, "webhook/resync delegam ao protocolo atômico");
+  assert.match(transitionsSource, /next\.status === "paid" && charge\.orderId/, "G: só uma charge confirmada propaga para seu pedido");
+  assert.match(transitionsSource, /orderSnap\.data\(\)\?\.paymentStatus !== "paid"/, "H: pedido já confirmado não é reescrito");
+  assert.match(transitionsSource, /tx\.update\(orderRef, \{ paymentStatus: "paid"/, "G: charge e pedido usam a mesma transação");
 
   // K: fluxo de venda (handleCreateLink) não foi tocado — assinatura e corpo continuam usando saleId.
   assert.match(paymentsSource, /const externalReference = buildExternalReference\(body\.uid, chargeId, body\.saleId\);/, "K: create-link do vendedor continua chamando buildExternalReference exatamente como antes");

@@ -23,6 +23,8 @@ export type PublicCatalogEmptyReason =
 export interface PublicCatalogStore {
   slug: string;
   name: string;
+  /** Fonte central (shared/business-mode.ts) — decide se a vitrine mostra produtos, serviços ou ambos. */
+  businessMode: "products" | "services" | "both";
   description?: string;
   logoUrl?: string;
   bannerUrl?: string;

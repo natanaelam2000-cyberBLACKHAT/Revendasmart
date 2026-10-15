@@ -13,7 +13,7 @@ import {
   AppSettings,
   logout, getCurrentUserId, getStored, STORAGE_KEYS
 } from "@/lib/mock-data";
-import { clearTelemetryUserId, clearUserContext, getFirebaseIdToken, getFirebaseAuth, measureOperation, logTelemetryEvent, clearFirestoreOfflineCache } from "@/lib/firebase";
+import { clearTelemetryUserId, clearUserContext, getFirebaseIdToken, getFirebaseAuth, measureOperation, logTelemetryEvent, clearFirestoreOfflineCache, trackAnalyticsEvent } from "@/lib/firebase";
 import { onAuthStateChanged, signOut, type User as FirebaseAuthUser } from "firebase/auth";
 import { useLocation } from "wouter";
 import { getApiUrl } from "@/lib/api-config";
@@ -39,8 +39,8 @@ import { ORDERS_FEATURE_LABEL, ORDERS_FEATURE_LABEL_MAX_LENGTH, resolveOrdersFea
 import { useTheme } from "next-themes";
 import { APPEARANCE_THEME_STORAGE_KEY } from "@/components/ThemeProvider";
 import {
-  Store, CreditCard, ClipboardList, Loader2,
-  Download, Save, ChevronRight, Bell, Upload, RefreshCw, Users, Share2, ExternalLink, FileSpreadsheet, QrCode, Copy, Mail, Scale, HelpCircle, ChevronDown, User, KeyRound, LogOut, ArrowLeft, Receipt, Trash2, Monitor, Sun, Moon, Gift, ShieldCheck, Ticket,
+  Store, CreditCard, ClipboardList, Loader2, CalendarClock,
+  Download, Save, ChevronRight, Bell, Upload, RefreshCw, Users, Share2, ExternalLink, FileSpreadsheet, QrCode, Copy, Mail, Scale, HelpCircle, ChevronDown, User, KeyRound, LogOut, ArrowLeft, Receipt, Trash2, Monitor, Sun, Moon, Gift, ShieldCheck, Ticket, Gauge, Sparkles,
   type LucideIcon
 } from "lucide-react";
 
@@ -187,6 +187,14 @@ export default function Settings() {
       const current = Array.isArray(prev?.businessTypes) ? prev.businessTypes.filter((item): item is NichoId => item in NICHO_CONFIG) : [];
       return { ...prev, businessType: safeNicho, businessTypes: [safeNicho, ...current.filter((item) => item !== safeNicho)] };
     });
+  };
+
+  // PLAN-IMPL-09-FINAL §28/§29/§30 — mesmo caminho genérico de save já usado pelo resto desta página
+  // (formSettings -> handleSave -> POST /api/user/settings/:uid); nunca apaga Produtos/Serviços/Vendas/
+  // Agendamentos/Clientes (nenhum deles vive em formSettings), nunca reabre o onboarding (só
+  // onboarding_completed decide isso, intocado aqui).
+  const updateBusinessMode = (mode: "products" | "services" | "both") => {
+    setFormSettings((prev) => ({ ...prev, businessMode: mode }));
   };
 
   const toggleBusinessType = (nicho: NichoId) => {
@@ -353,7 +361,10 @@ export default function Settings() {
         setSaveMessage("Configurações salvas.");
         notifySuccess("Configurações salvas.");
         setFormSettings(confirmedSettings);
-        patchUserSettingsOptimistic(confirmedSettings);
+        patchUserSettingsOptimistic(confirmedSettings, firebaseUid);
+        // PLAN-IMPL-06 §12 — dispara só na transição real "slug provisionado agora pela primeira vez"
+        // (sinal do servidor, ensurePublicCatalogSlug's `created`), nunca a cada salvamento de config.
+        if (result.catalogSlugJustCreated) trackAnalyticsEvent("catalog_published");
         setTimeout(() => setSaveMessage(""), 3000);
       } else {
         throw new Error(result.error || "Erro ao salvar");
@@ -417,7 +428,7 @@ export default function Settings() {
         enablePublicCatalog: true,
       };
       setFormSettings(confirmedSettings);
-      patchUserSettingsOptimistic(confirmedSettings);
+      patchUserSettingsOptimistic(confirmedSettings, firebaseUid);
       setGeneratedUrl(buildPublicAppUrl(`/u/${encodeURIComponent(slug)}`));
     } catch {
       notifyError("Erro ao gerar link.");
@@ -474,7 +485,7 @@ export default function Settings() {
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       setFormSettings(nextSettings);
-      patchUserSettingsOptimistic(nextSettings);
+      patchUserSettingsOptimistic(nextSettings, firebaseUid);
       setSaveMessage("Logo atualizado.");
       notifySuccess("Logo atualizado.");
     } catch (error) {
@@ -529,7 +540,14 @@ export default function Settings() {
     { title: "Indique e ganhe", subtitle: `A cada ${REFERRAL_REWARD_LIMIT} indicações, 30 dias de Premium`, icon: Gift, color: "bg-amber-100 text-amber-700", path: "/settings?tab=growth" },
     { title: "Clientes", subtitle: "Cadastro, busca e histórico de compras", icon: Users, color: "bg-cyan-100 text-cyan-700", path: "/clients" },
     { title: "Cobranças", subtitle: "Pendentes, vencidas e recebidas", icon: Receipt, color: "bg-emerald-100 text-emerald-700", path: "/billings" },
+    // SERV-E2E-01 §3/§19 — único ponto de entrada navegável para o módulo Serviços (Agenda, de onde o
+    // dono também alcança Configurar horários e cada Atendimento) — antes só existia digitando a URL.
+    { title: "Serviços", subtitle: "Agenda, horários de atendimento e agendamentos", icon: CalendarClock, color: "bg-indigo-100 text-indigo-700", path: "/servicos/agenda" },
     { title: "Minha Assinatura", subtitle: "Plano e faturamento", icon: CreditCard, color: "bg-sky-100 text-sky-700", path: "/subscribe" },
+    // PLAN-IMPL-04A §34 — entrada nova, conceitualmente separada das outras duas: "Minha Assinatura" é
+    // gestão de cobrança, "Plano e uso" é capacidade/limites atuais, "Planos" é comparação/upgrade.
+    { title: "Planos", subtitle: "Compare Free, Pro e Premium", icon: Sparkles, color: "bg-amber-100 text-amber-700", path: "/plans?source=settings" },
+    { title: "Plano e uso", subtitle: "Produtos, serviços e clientes ativos no seu plano", icon: Gauge, color: "bg-cyan-100 text-cyan-700", path: "/settings/plano-e-uso" },
     { title: resolveOrdersFeatureLabel(firestoreSettings), subtitle: "Pedidos e encomendas da loja", icon: ClipboardList, color: "bg-purple-100 text-purple-700", path: "/orders" },
     { title: "Preferências", subtitle: "Notificações e ajustes", icon: Bell, color: "bg-slate-100 text-slate-700", path: "/settings?tab=preferences" },
     { title: "Suporte", subtitle: "Ajuda, FAQ e contato", icon: HelpCircle, color: "bg-amber-100 text-amber-700", path: "/settings?tab=support" },
@@ -772,6 +790,32 @@ export default function Settings() {
                         })}
                       </div>
                     </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rs-store-card rs-store-premium-panel">
+                <div className="rs-store-panel-head">
+                  <div>
+                    <h3>Meu negócio</h3>
+                    <p>Isso prioriza o que você vê primeiro no app — nunca esconde produtos, serviços, vendas, agendamentos ou clientes já existentes.</p>
+                  </div>
+                </div>
+                <div className="rs-store-nicho-grid" aria-label="Como você trabalha">
+                  {([
+                    { id: "products" as const, label: "Produtos" },
+                    { id: "services" as const, label: "Serviços" },
+                    { id: "both" as const, label: "Produtos e serviços" },
+                  ]).map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      data-testid={`button-business-mode-${option.id}`}
+                      onClick={() => updateBusinessMode(option.id)}
+                      className={formSettings?.businessMode === option.id ? "is-selected" : ""}
+                    >
+                      {option.label}
+                    </button>
                   ))}
                 </div>
               </div>

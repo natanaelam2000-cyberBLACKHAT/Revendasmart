@@ -6,9 +6,11 @@ import { OrderCard } from "@/components/orders/OrderCard";
 import { NewOrderSheet } from "@/components/orders/NewOrderSheet";
 import { OrderDetailsSheet } from "@/components/orders/OrderDetailsSheet";
 import { OrderStatusSheet } from "@/components/orders/OrderStatusSheet";
+import { EditOrderSheet } from "@/components/orders/EditOrderSheet";
 import { useOrdersData } from "@/hooks/useOrdersData";
 import { useUserSettings } from "@/hooks/useUserSettings";
 import { notifyError, notifySuccess } from "@/lib/notify";
+import { logError } from "@/lib/firebase";
 import { ORDER_STATUS_IDS, ORDER_STATUS_LABELS, resolveOrdersFeatureLabel, type Order, type OrderStatus } from "@/lib/orders";
 
 const STATUS_FILTERS: { value: "todos" | OrderStatus; label: string }[] = [
@@ -25,7 +27,7 @@ const STATUS_FILTERS: { value: "todos" | OrderStatus; label: string }[] = [
 const SUMMARY_STATUSES: ("todos" | OrderStatus)[] = ["todos", "new", "in_progress", "delivered"];
 
 export default function Orders() {
-  const { orders, loading, error, createOrder, updateOrderStatus, confirmOrderPayment } = useOrdersData();
+  const { orders, loading, error, createOrder, updateOrderStatus, confirmOrderPayment, editOrder } = useOrdersData();
   const { settings } = useUserSettings();
   const ordersLabel = resolveOrdersFeatureLabel(settings);
   const [search, setSearch] = useState("");
@@ -33,6 +35,7 @@ export default function Orders() {
   const [showNewOrder, setShowNewOrder] = useState(false);
   const [detailOrderId, setDetailOrderId] = useState<string | null>(null);
   const [statusOrderId, setStatusOrderId] = useState<string | null>(null);
+  const [editOrderId, setEditOrderId] = useState<string | null>(null);
 
   const normalizedSearch = search.trim().toLowerCase();
   // Busca e filtro são independentes e combinam: nenhum dos dois zera o outro, e ambos rodam sobre a
@@ -55,6 +58,7 @@ export default function Orders() {
   // (ex: o status recém-alterado) em vez de exibir um snapshot congelado do pedido.
   const detailOrder = detailOrderId ? orders.find((order) => order.id === detailOrderId) ?? null : null;
   const statusOrder = statusOrderId ? orders.find((order) => order.id === statusOrderId) ?? null : null;
+  const editOrderTarget = editOrderId ? orders.find((order) => order.id === editOrderId) ?? null : null;
 
   const handleChangeStatus = async (status: OrderStatus) => {
     if (!statusOrder) return;
@@ -63,7 +67,11 @@ export default function Orders() {
       notifySuccess(`Pedido marcado como ${ORDER_STATUS_LABELS[status]}.`);
       setStatusOrderId(null);
     } catch (err) {
-      notifyError(err instanceof Error && err.message ? err.message : "Não foi possível alterar o status do pedido.");
+      // PRODUCT-HARDENING-02 — nunca exibe err.message cru (a escrita em useOrdersData pode lançar um
+      // erro técnico do SDK do Firestore, ex. "Missing or insufficient permissions.") — mensagem fixa e
+      // acionável para o usuário; o texto original ainda vai pro logError para investigação.
+      notifyError("Não foi possível alterar o status do pedido. Tente novamente.");
+      logError("order_status_update_failed", err instanceof Error ? err.message : String(err), { context: { orderId: statusOrder.id, status } });
     }
   };
 
@@ -75,7 +83,20 @@ export default function Orders() {
       notifySuccess("Pedido criado.");
       return order;
     } catch (err) {
-      notifyError(err instanceof Error && err.message ? err.message : "Não foi possível criar o pedido.");
+      notifyError("Não foi possível criar o pedido. Tente novamente.");
+      logError("order_create_failed", err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  };
+
+  const handleEditOrder = async (input: Parameters<typeof editOrder>[0]) => {
+    try {
+      const result = await editOrder(input);
+      notifySuccess("Pedido atualizado.");
+      return result;
+    } catch (err) {
+      notifyError("Não foi possível salvar as alterações do pedido.");
+      logError("order_edit_failed", err instanceof Error ? err.message : String(err), { context: { orderId: input.orderId } });
       throw err;
     }
   };
@@ -85,7 +106,8 @@ export default function Orders() {
       await confirmOrderPayment(order.id);
       notifySuccess("Pagamento confirmado.");
     } catch (err) {
-      notifyError(err instanceof Error && err.message ? err.message : "Não foi possível confirmar o pagamento.");
+      notifyError("Não foi possível confirmar o pagamento. Tente novamente.");
+      logError("order_confirm_payment_failed", err instanceof Error ? err.message : String(err), { context: { orderId: order.id } });
     }
   };
 
@@ -199,6 +221,7 @@ export default function Orders() {
         onClose={() => setDetailOrderId(null)}
         onChangeStatus={(order) => setStatusOrderId(order.id)}
         onConfirmPayment={handleConfirmPayment}
+        onEdit={(order) => setEditOrderId(order.id)}
       />
 
       {statusOrder && (
@@ -207,6 +230,14 @@ export default function Orders() {
           currentStatus={statusOrder.status}
           onClose={() => setStatusOrderId(null)}
           onSelect={handleChangeStatus}
+        />
+      )}
+
+      {editOrderTarget && (
+        <EditOrderSheet
+          order={editOrderTarget}
+          onClose={() => setEditOrderId(null)}
+          onSubmit={handleEditOrder}
         />
       )}
     </Layout>

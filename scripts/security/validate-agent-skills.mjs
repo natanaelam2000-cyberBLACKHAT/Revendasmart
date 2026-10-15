@@ -9,8 +9,9 @@ const requiredFields = ['name','description','version','source','sourceCommit','
 const allowedCategories = new Set(['security', 'performance-engineering', 'ux', 'architecture', 'production-readiness']);
 const errors = [];
 const warnings = [];
+const privateKeyMarker = ['-----BEGIN ', 'PRIVATE KEY-----'].join('');
 
-function read(file) { return fs.readFileSync(file, 'utf8'); }
+function read(file) { return fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n'); }
 function parseFrontmatter(text, file) {
   if (!text.startsWith('---\n')) {
     errors.push(`${file}: missing YAML frontmatter`);
@@ -84,7 +85,7 @@ for (const dir of dirs) {
   }
   const offensiveName = /(exploit|intercept|penetration|bypass|ssrf|race|webhook|bola|idor|rate-limiting|deeplink)/i.test(dir);
   if (offensiveName && fm.defaultMode !== 'REVIEW_ONLY') errors.push(`${dir}: offensive/hybrid skill must default to REVIEW_ONLY`);
-  if (/APP_USR-|-----BEGIN PRIVATE KEY-----|AKIA[0-9A-Z]{16}|xox[baprs]-/i.test(text)) errors.push(`${dir}: possible hardcoded secret`);
+  if (new RegExp(['APP_USR-', privateKeyMarker, 'AKIA[0-9A-Z]{16}', 'xox[baprs]-'].join('|'), 'i').test(text)) errors.push(`${dir}: possible hardcoded secret`);
   if (/\brm\s+-rf\s+\/|git\s+push\s+--force|terraform\s+destroy/i.test(text)) errors.push(`${dir}: destructive command pattern`);
   if (/curl\s+[^\n]*\|\s*(bash|sh)|wget\s+[^\n]*\|\s*(bash|sh)|base64\s+-d\s*\|\s*(bash|sh)/i.test(text)) errors.push(`${dir}: suspicious remote execution pattern`);
   if (text.length > 18000) warnings.push(`${dir}: large SKILL.md (${text.length} bytes)`);

@@ -1,39 +1,23 @@
-import { useCallback, useMemo } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useLocation } from "wouter";
 import { Layout } from "@/components/layout";
 import { PageSkeleton } from "@/components/PageSkeleton";
+import { EmptyState } from "@/components/EmptyState";
 import { useClientsLiteData } from "@/hooks/useClientsLiteData";
 import { useProductsData } from "@/hooks/useProductsData";
 import { useSalesData } from "@/hooks/useSalesData";
+import { usePlan } from "@/providers/PlanProvider";
+import { trackAnalyticsEvent, type HousePromotionId, type HousePromotionPlacement } from "@/lib/firebase";
+import type { PlanType } from "@shared/monetization";
 import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import {
-  AlertTriangle,
-  ArrowDownRight,
-  ArrowUpRight,
   BarChart3,
-  Boxes,
-  CalendarDays,
-  Crown,
   DollarSign,
   FileSpreadsheet,
-  Package,
-  PieChart as PieChartIcon,
+  Lock,
   Printer,
   ReceiptText,
+  Sparkles,
   TrendingUp,
-  Users,
 } from "lucide-react";
 import {
   calculateComparisons,
@@ -41,33 +25,28 @@ import {
   calculateIndicators,
   calculateRanking,
   calculateReportCharts,
-  type ComparisonMetric,
-  type RankingItem,
+  PROFIT_UNAVAILABLE,
 } from "@/lib/report-metrics";
 import { exportReportToExcel, exportReportToPdf, printReport } from "@/lib/report-export";
 import { notifyError, notifySuccess } from "@/lib/notify";
+import { fetchStrategicSummary, type OpportunitySummary } from "@/lib/reports-strategic-summary-client";
+import type { OpportunityType } from "@shared/opportunity-rules";
 
-const COLORS = ["#ec4899", "#f43f5e", "#fb7185", "#fda4af", "#be5363", "#9f4150"];
+// PLAN-IMPL-07B-VERIFY-FINAL §31 — o bloco OPERATIONAL (comparativos/gráficos/rankings/estoque/export,
+// reports-operational.tsx) é a maior fatia de JSX da rota e só renderiza para Pro/Premium; lazy-load
+// tira esse peso do chunk "reports" sem tocar no orçamento (Free nunca baixa este chunk extra).
+const LazyOperationalSection = lazy(() => import("./reports-operational"));
 
-// RC-04 P0/P1-01 — o tooltip padrão do Recharts usa background branco fixo via inline style da própria
-// lib (não é classe Tailwind, então a regra global `.dark .bg-white` não alcança). `contentStyle` vira
-// inline style de verdade, então usar var(--x) aqui resolve contra o token ativo no momento do hover —
-// acompanha claro/escuro sem precisar recriar o objeto quando o tema muda.
-const RECHARTS_TOOLTIP_STYLE = {
-  backgroundColor: "hsl(var(--card))",
-  borderColor: "hsl(var(--border))",
-  borderRadius: "0.75rem",
-  color: "hsl(var(--foreground))",
-  fontSize: "12px",
-} as const;
+// PLAN-IMPL-07B-VERIFY-FINAL §3/§4 — null = custo insuficientemente confiável no período/item (nunca
+// fabrica lucro/margem a partir de custo ausente tratado como 0; ver isTrustedCost em report-metrics.ts).
+// Aceita null só para lucro/margem — os demais call-sites (receita, ticket médio, etc.) nunca passam null.
+export const formatCurrency = (value: number | null) =>
+  value === null ? PROFIT_UNAVAILABLE : value.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
 
-const formatCurrency = (value: number) =>
-  value.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
-
-const formatDecimal = (value: number, digits = 1) =>
+export const formatDecimal = (value: number, digits = 1) =>
   value.toLocaleString("pt-BR", { maximumFractionDigits: digits });
 
-function SummaryCard({ title, value, subtitle, tone = "neutral" }: { title: string; value: string; subtitle?: string; tone?: "neutral" | "green" | "rose" }) {
+export function SummaryCard({ title, value, subtitle, tone = "neutral" }: { title: string; value: string; subtitle?: string; tone?: "neutral" | "green" | "rose" }) {
   const toneClass = tone === "green" ? "text-emerald-600 bg-emerald-50" : tone === "rose" ? "text-rose-600 bg-rose-50" : "text-primary bg-primary/10";
   return (
     <div className="rounded-[1.5rem] border border-border/50 bg-white p-4 shadow-sm">
@@ -81,56 +60,92 @@ function SummaryCard({ title, value, subtitle, tone = "neutral" }: { title: stri
   );
 }
 
-function ComparisonCard({ item }: { item: ComparisonMetric }) {
-  const isDown = item.direction === "down";
-  const Icon = isDown ? ArrowDownRight : ArrowUpRight;
-  const tone = item.direction === "flat" ? "text-muted-foreground bg-secondary" : isDown ? "text-rose-600 bg-rose-50" : "text-emerald-600 bg-emerald-50";
+// PLAN-IMPL-07B §29/§30 — a seção estratégica é um RESUMO do que já existe em /opportunities (PLAN-
+// IMPL-07A), nunca uma segunda leitura/ordenação: contagens + o "strongest" já vêm prontos do servidor
+// (server/opportunity-engine.ts's summarizeOpportunities), esta seção só formata.
+const OPPORTUNITY_TYPES: [OpportunityType, string][] = [
+  ["inactive_client", "Clientes inativos"],
+  ["stalled_product", "Produtos parados"],
+  ["idle_schedule", "Agenda ociosa"],
+];
+
+function StrategicSummarySection({ summary }: { summary: OpportunitySummary }) {
+  const [, setLocation] = useLocation();
   return (
-    <div className="rounded-[1.5rem] border border-border/50 bg-white p-4 shadow-sm">
-      <p className="text-xs font-black text-foreground">{item.label}</p>
-      <div className="mt-3 flex items-center justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-bold text-muted-foreground">Atual</p>
-          <p className="text-base font-black text-foreground">{formatCurrency(item.current)}</p>
-        </div>
-        <div className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-black ${tone}`}>
-          <Icon className="h-3.5 w-3.5" />
-          {item.changePercent}%
-        </div>
+    <section className="rounded-[2rem] border border-primary/10 bg-white p-5 sm:p-6 shadow-sm">
+      <div className="mb-4 flex items-center gap-2">
+        <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-primary/10 text-primary"><Sparkles className="h-4 w-4" /></span>
+        <h2 className="text-sm font-black text-foreground">Leitura estratégica</h2>
       </div>
-      <p className="mt-2 text-[11px] font-semibold text-muted-foreground">Anterior: {formatCurrency(item.previous)}</p>
-    </div>
+      {summary.totalCount === 0 ? (
+        <EmptyState
+          className="!p-6"
+          icon={<Sparkles className="h-8 w-8 text-emerald-500/60" />}
+          title="Nenhuma oportunidade prioritária encontrada agora"
+          description="Assim que uma condição real do seu negócio pedir atenção, ela aparece aqui."
+        />
+      ) : (
+        <>
+          <div className="grid grid-cols-3 gap-3">
+            {OPPORTUNITY_TYPES.map(([type, label]) => (
+              <div key={type} className="rounded-2xl bg-secondary/30 px-3 py-3 text-center">
+                <p className="text-xl font-black text-foreground">{summary.countsByType[type]}</p>
+                <p className="mt-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">{label}</p>
+              </div>
+            ))}
+          </div>
+          {summary.strongest && (
+            <p className="mt-4 rounded-2xl bg-secondary/30 px-4 py-3 text-sm font-bold text-foreground">{summary.strongest.reason}</p>
+          )}
+          <button
+            type="button"
+            onClick={() => setLocation("/opportunities")}
+            className="mt-4 w-full rounded-xl bg-primary/10 text-primary text-xs font-black py-2.5 active:scale-95 transition-all"
+            data-testid="button-view-opportunities"
+          >
+            Ver oportunidades
+          </button>
+        </>
+      )}
+    </section>
   );
 }
 
-function RankingList({ title, icon: Icon, items, valueType }: { title: string; icon: typeof Crown; items: RankingItem[]; valueType: "quantity" | "profit" | "revenue" | "sales" }) {
-  const formatValue = (item: RankingItem) => {
-    if (valueType === "quantity") return `${formatDecimal(item.quantity, 0)} un.`;
-    if (valueType === "sales") return `${item.salesCount} compra${item.salesCount === 1 ? "" : "s"}`;
-    return formatCurrency(valueType === "profit" ? item.profit : item.revenue);
+// §31 — nunca resultado real (contagens) para quem não tem acesso; só a capacidade, genérica.
+// §8/§9/§31 — um único componente parametrizado para os dois teasers (Free->Pro, Pro->Premium): mesma
+// estrutura/estilo, só ícone/copy mudam. Nunca contagens/resultado real (§31/§32) — só copy fixa.
+// PLAN-IMPL-08 §34/§35 — view uma vez por montagem real (deps vazias); nunca monta os dois teasers desta
+// página ao mesmo tempo para o mesmo usuário (ver os dois call sites em Reports, abaixo — mutuamente
+// exclusivos por design, não só por coincidência de dados).
+function UpgradeTeaser({ icon, title, description, buttonLabel, testId, promotionId, placement, currentPlan, recommendedPlan }: {
+  icon: React.ReactNode; title: string; description: string; buttonLabel: string; testId: string;
+  promotionId: HousePromotionId; placement: HousePromotionPlacement; currentPlan: PlanType; recommendedPlan: PlanType;
+}) {
+  const [, setLocation] = useLocation();
+  useEffect(() => {
+    trackAnalyticsEvent("house_promotion_viewed", { promotion_id: promotionId, placement, current_plan: currentPlan, recommended_plan: recommendedPlan });
+  }, []);
+  const handleClick = () => {
+    trackAnalyticsEvent("house_promotion_clicked", { promotion_id: promotionId, placement, current_plan: currentPlan, recommended_plan: recommendedPlan });
+    setLocation("/plans");
   };
-
   return (
-    <section className="rounded-[2rem] border border-border/50 bg-white p-4 shadow-sm">
-      <div className="mb-4 flex items-center gap-2">
-        <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-primary/10 text-primary"><Icon className="h-4 w-4" /></span>
-        <h3 className="text-sm font-black text-foreground">{title}</h3>
-      </div>
-      {items.length === 0 ? (
-        <p className="rounded-2xl bg-secondary/40 p-4 text-center text-xs font-semibold text-muted-foreground">Sem dados suficientes.</p>
-      ) : (
-        <div className="space-y-2">
-          {items.slice(0, 5).map((item, index) => (
-            <div key={`${title}-${item.id}-${index}`} className="flex items-center justify-between gap-3 rounded-2xl bg-secondary/30 px-3 py-3">
-              <div className="min-w-0">
-                <p className="truncate text-xs font-black text-foreground">{index + 1}. {item.label}</p>
-                <p className="text-[10px] font-semibold text-muted-foreground">{formatDecimal(item.quantity, 0)} itens · {formatCurrency(item.revenue)}</p>
-              </div>
-              <span className="shrink-0 text-xs font-black text-primary">{formatValue(item)}</span>
-            </div>
-          ))}
+    <section className="rounded-[2rem] border border-primary/10 bg-white p-5 sm:p-6 shadow-sm">
+      <div className="flex items-start gap-3">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">{icon}</span>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-sm font-black text-foreground">{title}</h2>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p>
+          <button
+            type="button"
+            onClick={handleClick}
+            className="mt-3 rounded-xl bg-primary px-4 py-2 text-xs font-black text-white active:scale-95 transition-all"
+            data-testid={testId}
+          >
+            {buttonLabel}
+          </button>
         </div>
-      )}
+      </div>
     </section>
   );
 }
@@ -139,14 +154,37 @@ export default function Reports() {
   const { products, loading: productsLoading, error: productsError } = useProductsData();
   const { sales, loading: salesLoading, error: salesError } = useSalesData();
   const { clients, loading: clientsLoading, error: clientsError } = useClientsLiteData();
+  const { activePlan, hasPremiumAccess, loading: planLoading, planResolved } = usePlan();
   const loading = productsLoading || salesLoading || clientsLoading;
   const dataError = productsError || salesError || clientsError;
+  // §8/§9 — Pro E Premium têm a camada operacional completa; só Premium ganha a seção estratégica nova.
+  const hasOperationalAccess = activePlan === "pro" || activePlan === "premium";
 
-  const summary = useMemo(() => calculateFinancialSummary(sales, products), [sales, products]);
+  const [strategicSummary, setStrategicSummary] = useState<OpportunitySummary | null>(null);
+  const [strategicLoading, setStrategicLoading] = useState(true);
+  const [strategicError, setStrategicError] = useState(false);
+
+  // §22/§32 — mesmo padrão de opportunities.tsx: só chama a rota real quando já se sabe (via usePlan())
+  // que o tenant tem acesso — nunca busca o resultado real para esconder depois.
+  useEffect(() => {
+    if (planLoading) return;
+    if (!hasPremiumAccess) { setStrategicLoading(false); return; }
+    let cancelled = false;
+    setStrategicLoading(true);
+    setStrategicError(false);
+    fetchStrategicSummary()
+      .then((result) => { if (!cancelled) setStrategicSummary(result); })
+      .catch(() => { if (!cancelled) setStrategicError(true); })
+      .finally(() => { if (!cancelled) setStrategicLoading(false); });
+    return () => { cancelled = true; };
+  }, [planLoading, hasPremiumAccess]);
+
+  const summary = useMemo(() => calculateFinancialSummary(sales), [sales]);
   const rankings = useMemo(() => calculateRanking(sales, products, clients), [sales, products, clients]);
-  const comparisons = useMemo(() => calculateComparisons(sales, products), [sales, products]);
+  const comparisons = useMemo(() => calculateComparisons(sales), [sales]);
   const charts = useMemo(() => calculateReportCharts(sales, products), [sales, products]);
   const indicators = useMemo(() => calculateIndicators(sales, products), [sales, products]);
+  const margin = indicators.averageMargin;
   const exportPayload = useMemo(() => ({
     storeName: "Revenda Smart",
     periodLabel: "Dados consolidados do sistema",
@@ -176,7 +214,9 @@ export default function Reports() {
 
   const hasReportData = products.length > 0 || clients.length > 0 || sales.length > 0;
 
-  if (loading) {
+  // §40 — espera o plano resolver ANTES de renderizar qualquer seção com gate, para nunca piscar
+  // conteúdo Free e depois trocar para Pro/Premium (ou vice-versa) assim que usePlan() responde.
+  if (loading || planLoading) {
     return (
       <Layout title="Relatórios">
         <PageSkeleton variant="cards" />
@@ -207,16 +247,24 @@ export default function Reports() {
               <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-primary shadow-sm">
                 <BarChart3 className="h-3.5 w-3.5" /> Painel executivo
               </span>
-              <h1 className="mt-4 text-3xl sm:text-4xl font-black tracking-tight text-foreground">Relatórios Premium</h1>
+              <h1 className="mt-4 text-3xl sm:text-4xl font-black tracking-tight text-foreground">Relatórios</h1>
               <p className="mt-2 max-w-2xl text-sm font-medium leading-relaxed text-muted-foreground">
-                Acompanhe faturamento, lucro, rankings, estoque e comparativos usando os dados já registrados no Revenda Smart.
+                {/* PLAN-IMPL-07B §UI4 — copy honesta por plano: nunca promete lucro/rankings/comparativos
+                    a quem não vai vê-los nesta carga (o gate já resolveu antes de chegar aqui, §40). */}
+                {hasOperationalAccess
+                  ? "Acompanhe faturamento, lucro, rankings, estoque e comparativos usando os dados já registrados no Revenda Smart."
+                  : "Acompanhe seu faturamento e volume de vendas no Revenda Smart."}
               </p>
             </div>
-            <div className="grid grid-cols-3 gap-2">
-              <button type="button" onClick={handleExportExcel} className="min-h-12 rounded-2xl bg-white px-3 text-[11px] font-black text-primary shadow-sm transition-all active:scale-95" title="Exportar planilha CSV compatível com Excel"><FileSpreadsheet className="mx-auto mb-1 h-4 w-4" /> Excel</button>
-              <button type="button" onClick={handleExportPdf} className="min-h-12 rounded-2xl bg-white px-3 text-[11px] font-black text-primary shadow-sm transition-all active:scale-95" title="Gerar visual de PDF para impressão"><ReceiptText className="mx-auto mb-1 h-4 w-4" /> PDF</button>
-              <button type="button" onClick={handlePrintReport} className="min-h-12 rounded-2xl bg-white px-3 text-[11px] font-black text-primary shadow-sm transition-all active:scale-95" title="Imprimir relatório"><Printer className="mx-auto mb-1 h-4 w-4" /> Imprimir</button>
-            </div>
+            {/* §9/§28 — exportação é uma capacidade operacional (Pro+); Free não vê os botões, nunca um
+                export parcial/inconsistente com o que a tela mostra. */}
+            {hasOperationalAccess && (
+              <div className="grid grid-cols-3 gap-2">
+                <button type="button" onClick={handleExportExcel} className="min-h-12 rounded-2xl bg-white px-3 text-[11px] font-black text-primary shadow-sm transition-all active:scale-95" title="Exportar planilha CSV compatível com Excel"><FileSpreadsheet className="mx-auto mb-1 h-4 w-4" /> Excel</button>
+                <button type="button" onClick={handleExportPdf} className="min-h-12 rounded-2xl bg-white px-3 text-[11px] font-black text-primary shadow-sm transition-all active:scale-95" title="Gerar visual de PDF para impressão"><ReceiptText className="mx-auto mb-1 h-4 w-4" /> PDF</button>
+                <button type="button" onClick={handlePrintReport} className="min-h-12 rounded-2xl bg-white px-3 text-[11px] font-black text-primary shadow-sm transition-all active:scale-95" title="Imprimir relatório"><Printer className="mx-auto mb-1 h-4 w-4" /> Imprimir</button>
+              </div>
+            )}
           </div>
         </section>
 
@@ -232,144 +280,89 @@ export default function Reports() {
 
         <section className="space-y-3">
           <h2 className="text-lg font-black text-foreground">Visão do negócio</h2>
+          {/* §8 — BASIC: sempre visível, em qualquer plano. Receita e volume, nunca lucro/margem (julgamento
+              profissional, §9) — o que o Free já tinha antes desta ticket nunca foi removido. */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-6">
             <SummaryCard title="Receita hoje" value={formatCurrency(summary.today.revenue)} />
             <SummaryCard title="Receita semana" value={formatCurrency(summary.week.revenue)} />
             <SummaryCard title="Receita mês" value={formatCurrency(summary.month.revenue)} />
             <SummaryCard title="Receita ano" value={formatCurrency(summary.year.revenue)} />
-            <SummaryCard title="Lucro hoje" value={formatCurrency(summary.today.profit)} tone="green" />
-            <SummaryCard title="Lucro semana" value={formatCurrency(summary.week.profit)} tone="green" />
-            <SummaryCard title="Lucro mês" value={formatCurrency(summary.month.profit)} tone="green" />
-            <SummaryCard title="Lucro ano" value={formatCurrency(summary.year.profit)} tone="green" />
             <SummaryCard title="Ticket médio" value={formatCurrency(summary.averageTicket)} subtitle="Por venda" />
-            <SummaryCard title="Clientes ativos" value={String(summary.activeClients)} subtitle="Com compras" />
             <SummaryCard title="Produtos vendidos" value={formatDecimal(summary.totalProductsSold, 0)} subtitle="Unidades" />
-            <SummaryCard title="Margem média" value={`${indicators.averageMargin}%`} tone={indicators.averageMargin >= 30 ? "green" : "rose"} />
+            {/* §9 — OPERATIONAL: lucro/margem/clientes ativos, Pro+, mesma grade do BASIC acima. */}
+            {hasOperationalAccess && (
+              <>
+                <SummaryCard title="Lucro hoje" value={formatCurrency(summary.today.profit)} tone="green" />
+                <SummaryCard title="Lucro semana" value={formatCurrency(summary.week.profit)} tone="green" />
+                <SummaryCard title="Lucro mês" value={formatCurrency(summary.month.profit)} tone="green" />
+                <SummaryCard title="Lucro ano" value={formatCurrency(summary.year.profit)} tone="green" />
+                <SummaryCard title="Clientes ativos" value={String(summary.activeClients)} subtitle="Com compras" />
+                <SummaryCard title="Margem média" value={margin === null ? PROFIT_UNAVAILABLE : `${margin}%`} tone={margin !== null && margin >= 30 ? "green" : "rose"} />
+              </>
+            )}
           </div>
         </section>
 
-        <section className="space-y-3">
-          <h2 className="text-lg font-black text-foreground">Comparativos</h2>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <ComparisonCard item={comparisons.today} />
-            <ComparisonCard item={comparisons.week} />
-            <ComparisonCard item={comparisons.month} />
-            <ComparisonCard item={comparisons.year} />
-          </div>
-        </section>
+        {/* PLAN-IMPL-08-VERIFY-FINAL §3/§5 — promotion fail-closed-to-none: planResolved só é false durante
+            loading (já coberto pelo early-return acima) OU erro real de usePlan() — nesse caso
+            hasOperationalAccess também cai no fallback "false" (§Critical Separation, entitlement
+            continua fail-closed-to-Free), então SEM o `planResolved` este teaser apareceria para um
+            Pro/Premium real durante uma falha transitória de rede, dizendo a um pagante para comprar o
+            que ele já tem. */}
+        {!hasOperationalAccess && planResolved && (
+          <UpgradeTeaser
+            icon={<TrendingUp className="h-5 w-5" />}
+            title="Relatórios operacionais completos no Pro"
+            description="Lucro, margem, comparativos, rankings e indicadores de estoque no Pro."
+            buttonLabel="Conhecer os planos"
+            testId="button-upgrade-pro"
+            promotionId="reports_operational_upgrade"
+            placement="reports"
+            currentPlan={activePlan}
+            recommendedPlan="pro"
+          />
+        )}
 
-        <section className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
-          <div className="rounded-[2rem] border border-border/50 bg-white p-4 sm:p-6 shadow-sm">
-            <div className="mb-5 flex items-center gap-2">
-              <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-primary/10 text-primary"><TrendingUp className="h-4 w-4" /></span>
-              <h3 className="text-sm font-black text-foreground">Receita e lucro por mês</h3>
-            </div>
-            <div className="h-72">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={charts.revenueByMonth}>
-                  <defs>
-                    <linearGradient id="revenueGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#ec4899" stopOpacity={0.28} />
-                      <stop offset="95%" stopColor="#ec4899" stopOpacity={0.02} />
-                    </linearGradient>
-                    <linearGradient id="profitGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.25} />
-                      <stop offset="95%" stopColor="#10b981" stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis dataKey="label" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <Tooltip formatter={(value: number) => formatCurrency(value)} contentStyle={RECHARTS_TOOLTIP_STYLE} />
-                  <Area type="monotone" dataKey="revenue" name="Receita" stroke="#ec4899" fill="url(#revenueGradient)" strokeWidth={3} />
-                  <Area type="monotone" dataKey="profit" name="Lucro" stroke="#10b981" fill="url(#profitGradient)" strokeWidth={3} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
+        {/* §9 — OPERATIONAL: comparativos, gráficos, rankings e indicadores de estoque, Pro+. Todo este
+            bloco já existia sem gate nenhum antes desta ticket; agora exige Pro ou Premium. Lazy-loaded
+            (reports-operational.tsx) — ver §31 acima. */}
+        {hasOperationalAccess && (
+          <Suspense fallback={<PageSkeleton variant="cards" />}>
+            <LazyOperationalSection comparisons={comparisons} charts={charts} rankings={rankings} indicators={indicators} />
+          </Suspense>
+        )}
 
-          <div className="rounded-[2rem] border border-border/50 bg-white p-4 shadow-sm sm:p-5">
-            <div className="mb-3 flex items-center gap-2">
-              <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-primary/10 text-primary"><PieChartIcon className="h-4 w-4" /></span>
-              <h3 className="text-sm font-black text-foreground">Vendas por categoria</h3>
-            </div>
-            <div className="h-56 sm:h-60">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={charts.salesByCategory} dataKey="revenue" nameKey="name" innerRadius={46} outerRadius={74} paddingAngle={4}>
-                    {charts.salesByCategory.map((entry, index) => <Cell key={entry.name} fill={COLORS[index % COLORS.length]} />)}
-                  </Pie>
-                  <Tooltip formatter={(value: number) => formatCurrency(value)} contentStyle={RECHARTS_TOOLTIP_STYLE} />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </section>
-
-        <section className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-          <RankingList title="Produtos mais vendidos" icon={Package} items={rankings.topSellingProducts} valueType="quantity" />
-          <RankingList title="Produtos mais lucrativos" icon={TrendingUp} items={rankings.mostProfitableProducts} valueType="profit" />
-          <RankingList title="Categorias mais lucrativas" icon={PieChartIcon} items={rankings.mostProfitableCategories} valueType="profit" />
-          <RankingList title="Marcas mais lucrativas" icon={Crown} items={rankings.mostProfitableBrands} valueType="profit" />
-          <RankingList title="Clientes que mais compraram" icon={Users} items={rankings.clientsByPurchases} valueType="sales" />
-          <RankingList title="Clientes que mais gastaram" icon={DollarSign} items={rankings.clientsByRevenue} valueType="revenue" />
-        </section>
-
-        <section className="grid gap-4 lg:grid-cols-2">
-          <div className="rounded-[2rem] border border-border/50 bg-white p-4 shadow-sm sm:p-5">
-            <div className="mb-3 flex items-center gap-2">
-              <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-primary/10 text-primary"><BarChart3 className="h-4 w-4" /></span>
-              <h3 className="text-sm font-black text-foreground">Top 10 produtos</h3>
-            </div>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={charts.topProducts} layout="vertical" margin={{ left: 8, right: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
-                  <XAxis type="number" hide />
-                  <YAxis dataKey="name" type="category" width={124} tick={{ fontSize: 10 }} tickFormatter={(value) => String(value).length > 20 ? `${String(value).slice(0, 20)}?` : String(value)} />
-                  <Tooltip formatter={(value: number) => formatCurrency(value)} labelFormatter={(label) => String(label)} contentStyle={RECHARTS_TOOLTIP_STYLE} />
-                  <Bar dataKey="revenue" name="Receita" fill="#ec4899" radius={[0, 10, 10, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          <div className="rounded-[2rem] border border-border/50 bg-white p-4 sm:p-6 shadow-sm">
-            <div className="mb-5 flex items-center gap-2">
-              <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-primary/10 text-primary"><Boxes className="h-4 w-4" /></span>
-              <h3 className="text-sm font-black text-foreground">Indicadores de estoque</h3>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <SummaryCard title="Qtd. média/venda" value={formatDecimal(indicators.averageQuantityPerSale)} />
-              <SummaryCard title="Estoque médio" value={formatCurrency(indicators.averageInventoryValue)} />
-              <SummaryCard title="Sem giro" value={String(indicators.productsWithoutTurnover.length)} tone="rose" />
-              <SummaryCard title="Críticos" value={String(indicators.criticalProducts.length)} tone="rose" />
-            </div>
-            <div className="mt-4 rounded-2xl bg-amber-50 p-4">
-              <div className="flex items-center gap-2 text-amber-700">
-                <AlertTriangle className="h-4 w-4" />
-                <p className="text-xs font-black">Produtos críticos</p>
-              </div>
-              <p className="mt-2 text-xs font-semibold text-amber-800">
-                {indicators.criticalProducts.length > 0
-                  ? indicators.criticalProducts.slice(0, 3).map(product => product.name).join(", ")
-                  : "Nenhum produto crítico no momento."}
-              </p>
-            </div>
-          </div>
-        </section>
-
-        <section className="rounded-[2rem] border border-dashed border-border/60 bg-white p-5 sm:p-6">
-          <div className="flex items-start gap-3">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-secondary text-muted-foreground"><CalendarDays className="h-5 w-5" /></span>
-            <div>
-              <h3 className="text-sm font-black text-foreground">Exportação profissional preparada</h3>
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                Exportação client-side preparada com cabeçalho, resumo financeiro e tabelas profissionais. O PDF usa o fluxo de impressão do navegador e o Excel baixa uma planilha CSV compatível.
-              </p>
-            </div>
-          </div>
-        </section>
+        {/* PLAN-IMPL-07B §10/§29 — STRATEGIC: só Premium (efetivo, trial incluso via hasPremiumAccess).
+            §40 — nunca pisca: strategicLoading já respeitou planLoading antes de resolver.
+            PLAN-IMPL-08 §9/§22/§43 — o teaser Premium só aparece para quem JÁ tem acesso operacional
+            (Pro): um usuário Free já vê o teaser operacional acima — mostrar os dois ao mesmo tempo
+            seria dois banners de upgrade empilhados na mesma tela, exatamente o que a política proíbe.
+            Free descobre a leitura estratégica em /opportunities (seu próprio teaser lá), não aqui.
+            PLAN-IMPL-08-VERIFY-FINAL §3/§5 — mesma razão do teaser operacional acima: planResolved=false
+            (erro de usePlan()) já cai no ramo hasOperationalAccess=false por baixo, então este `&&
+            planResolved` é defensivo/explícito, não incidental — nunca depende de uma transitividade não
+            documentada entre dois fallbacks diferentes. */}
+        {hasPremiumAccess ? (
+          strategicLoading ? (
+            <PageSkeleton variant="cards" />
+          ) : strategicError ? (
+            <p className="rounded-[2rem] border border-border/50 bg-white px-6 py-8 text-center text-sm font-bold text-destructive">Não foi possível carregar este relatório.</p>
+          ) : strategicSummary ? (
+            <StrategicSummarySection summary={strategicSummary} />
+          ) : null
+        ) : hasOperationalAccess && planResolved ? (
+          <UpgradeTeaser
+            icon={<Lock className="h-4.5 w-4.5" />}
+            title="Leitura estratégica é um recurso Premium"
+            description="Encontre automaticamente oportunidades comerciais no Premium."
+            buttonLabel="Conhecer o Premium"
+            testId="button-upgrade-premium"
+            promotionId="reports_strategic_upgrade"
+            placement="reports"
+            currentPlan={activePlan}
+            recommendedPlan="premium"
+          />
+        ) : null}
       </div>
     </Layout>
   );

@@ -50,7 +50,8 @@ import { composeProductCutoutRgba } from "../shared/product-cutout";
 import { sanitizePublicSettingsPayload } from "../server/public-catalog-ownership";
 import { escapeHtmlText, escapeCsvCell, toCsvRow } from "../client/src/lib/export-security";
 import { buildPrintableHtml, buildExcelCsvContent, type ReportExportPayload } from "../client/src/lib/report-export";
-import { parseCookieHeader, hasMatchingOAuthContinuityCookie, sanitizeMercadoPagoAccountMetadata } from "../server/mercadopago-connections";
+import { parseCookieHeader, hasMatchingOAuthContinuityCookie, classifyOAuthContinuityCookie, sanitizeMercadoPagoAccountMetadata } from "../server/mercadopago-connections";
+import { resolvePaymentWebhookBaseUrl } from "../server/payments";
 import { encryptToken, decryptToken, assertEncryptionKeyConfigured, MercadoPagoEncryptionKeyError } from "../server/mercadopago-crypto";
 import { MP_OAUTH_CONTINUITY_COOKIE } from "../shared/connections";
 import {
@@ -72,6 +73,8 @@ import { composeProductCutoutRgba } from "../shared/product-cutout";
 import {
   PLAY_BILLING_PACKAGE_NAME,
   PLAY_BILLING_PRODUCT_IDS,
+  PLAY_BILLING_CATALOG,
+  resolvePlayBillingPlanAndCycle,
   isKnownPlayBillingProductId,
   mapGooglePlaySubscriptionState,
   isEntitledPlayState,
@@ -80,7 +83,7 @@ import {
 import { hashPurchaseToken } from "../server/google-play-billing";
 import {
   isAndroidNativeApp,
-  getPlayBillingProductId,
+  getPlayBillingProduct,
   getAndroidPremiumOffers,
   purchasePremiumViaGooglePlay,
   recoverPendingGooglePlayPurchases,
@@ -124,6 +127,7 @@ const publicCatalogAdapter = read("client/src/lib/public-catalog-adapter.ts");
 const publicCatalogDto = read("shared/public-catalog.ts");
 const publicCatalogServer = read("server/public-catalog.ts");
 const productsPage = read("client/src/pages/products.tsx");
+const productCard = read("client/src/components/ProductCard.tsx");
 const clientsPage = read("client/src/pages/clients.tsx");
 const paginatedClientsHook = read("client/src/hooks/usePaginatedClientsData.ts");
 const paginatedProductsHook = read("client/src/hooks/usePaginatedProductsData.ts");
@@ -169,6 +173,7 @@ const clientMetrics = read("client/src/lib/client-metrics.ts");
 const dashboardMetrics = read("client/src/lib/dashboard-metrics.ts");
 const reportMetrics = read("client/src/lib/report-metrics.ts");
 const reports = read("client/src/pages/reports.tsx");
+const reportsOperational = read("client/src/pages/reports-operational.tsx");
 const reportExport = read("client/src/lib/report-export.ts");
 const sell = read("client/src/pages/sell.tsx");
 const clientPickerSheet = read("client/src/components/sell/ClientPickerSheet.tsx");
@@ -177,6 +182,8 @@ const productsSold = read("client/src/pages/products-sold.tsx");
 const monthlySalesHook = read("client/src/hooks/useMonthlySalesData.ts");
 const chargesHook = read("client/src/hooks/useCharges.ts");
 const billingsPage = read("client/src/pages/billings.tsx");
+const billingCalendar = read("client/src/pages/billing-calendar.tsx");
+const adminMetrics = read("client/src/pages/admin.tsx");
 const sharedCharges = read("shared/charges.ts");
 const firestoreIndexes = read("firestore.indexes.json");
 const firestoreIndexConfig = JSON.parse(firestoreIndexes);
@@ -199,6 +206,7 @@ const buildInfo = read("client/src/lib/build-info.ts");
 const onboardingChecklist = read("client/src/components/OnboardingChecklist.tsx");
 const partialPaymentModal = read("client/src/components/PartialPaymentModal.tsx");
 const onboarding = read("client/src/pages/onboarding.tsx");
+const onboardingReferral = read("client/src/lib/onboarding-referral.ts");
 const nichoConfig = read("client/src/lib/nicho-config.ts");
 const productPricingSource = read("client/src/lib/product-pricing.ts");
 const sharedProductPricingSource = read("shared/product-pricing.ts");
@@ -318,8 +326,8 @@ assert.equal(productSearchFields.searchSchemaVersion, PRODUCT_SEARCH_SCHEMA_VERS
 for (const token of ["perfume", "flor", "cafe", "natura", "perfumes", "7891234567890"]) {
   assert.ok(productSearchFields.searchTokens.includes(token), `missing product search token ${token}`);
 }
-assert.equal(CATALOG_SERVER_SEARCH_ENABLED, false);
-assert.equal(SERVER_SIDE_PRODUCT_SEARCH_ENABLED, false);
+assert.equal(CATALOG_SERVER_SEARCH_ENABLED, true);
+assert.equal(SERVER_SIDE_PRODUCT_SEARCH_ENABLED, true);
 assert.equal(SERVER_SIDE_CLIENT_SEARCH_ENABLED, false);
 assert.equal(canUseCatalogServerSearch("a"), false);
 assert.equal(canUseCatalogServerSearch("ab"), true);
@@ -343,6 +351,7 @@ assert.equal(buildProductServerSearchPlan({ term: "p", serverSearchEnabled: true
 assert.equal(buildProductServerSearchPlan({ term: "0012345678905", serverSearchEnabled: true }).kind, "barcode_exact");
 assert.equal(buildProductServerSearchPlan({ term: "perfume aguas", serverSearchEnabled: true }).kind, "token");
 assert.equal(buildProductServerSearchPlan({ term: "perf", serverSearchEnabled: true }).kind, "name_prefix");
+assert.equal(buildProductServerSearchPlan({ term: "perfume", serverSearchEnabled: true }).kind, "token");
 
 const defaultListSpec = buildProductServerSearchQuerySpec({ plan: buildProductServerSearchPlan({ term: "", serverSearchEnabled: true }), categoryFilter: "todos" });
 assert.equal(defaultListSpec.indexKey, "single:nameNormalized");
@@ -379,8 +388,8 @@ assert.equal(productMatchesLocalSearch({ name: "Perfume Águas", brand: "", cate
 assert.ok(buildProductSearchFields({ name: Array.from({ length: 40 }, (_, index) => `token${index}`).join(" ") }).searchTokens.length <= 16);
 assert.equal(buildProductSearchBackfillPatch({ ...indexedProductSearchRecord }), null);
 assert.ok(buildProductSearchBackfillPatch({ name: "Perfume Novo", brand: "Marca", category: "Perfumes", barcode: "0012345678905", productType: "Cosmeticos" }));
-assert.match(productSearch, /SERVER_SIDE_PRODUCT_SEARCH_ENABLED = false/);
-assert.match(productSearch, /CATALOG_SERVER_SEARCH_ENABLED = SERVER_SIDE_PRODUCT_SEARCH_ENABLED/);
+assert.match(productSearch, /SERVER_SIDE_PRODUCT_SEARCH_ENABLED = true/);
+assert.match(productSearch, /CATALOG_SERVER_SEARCH_ENABLED = true/);
 
 for (const skill of [minimalChangeSkill, conciseOutputSkill, terminalOutputSkill]) {
   assert.match(skill, /defaultMode: REVIEW_ONLY/);
@@ -462,6 +471,21 @@ try {
   assert.ok(error instanceof ApiError);
   assert.equal(error.message, "Falha temporária do serviço. Tente novamente.");
   assert.equal(error.requestId, "req-html-123");
+}
+for (const leaked of [
+  "C:\\srv\\app\\server.ts:42 database exception",
+  "/home/node/app/server/routes.ts",
+  "SELECT password FROM users WHERE uid = ?",
+  "TypeError: cannot read properties of undefined",
+]) {
+  try {
+    await apiRequest("/api/error-internal-detail", { fetchImpl: async () => textApiResponse(leaked, 500) });
+    assert.fail("apiRequest should hide internal implementation details");
+  } catch (error) {
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.message, "Falha temporária do serviço. Tente novamente.");
+    assert.equal(error.message.includes(leaked), false);
+  }
 }
 for (const [status, code] of [[401, "UNAUTHENTICATED"], [403, "FORBIDDEN"], [404, "NOT_FOUND"], [409, "CONFLICT"], [429, "RATE_LIMITED"], [500, "INTERNAL_SERVER_ERROR"]] as const) {
   try {
@@ -580,7 +604,9 @@ assert.match(addProduct, /getProductSaveErrorMessage/);
 assert.match(addProduct, /auth_check|plan_limit_read|storage_upload|firestore_create|storage_cleanup/);
 assert.match(addProduct, /Sem conexão|Sua sessão expirou|Limite de produtos atingido|Permissão negada/);
 const productDataBlock = addProduct.slice(addProduct.indexOf("const productData = buildProductCreatePayload"), addProduct.indexOf("saveStage = id ?"));
-assert.doesNotMatch(productDataBlock, /thumbnailUrl|thumbnailStoragePath/);
+// PERFORMANCE-OPTIMIZATION-03: thumbnailUrl/thumbnailStoragePath agora são repassados ao payload
+// (derivados do upload da miniatura acima), nunca como valor literal `undefined`.
+assert.match(productDataBlock, /thumbnailUrl, thumbnailStoragePath/);
 assert.doesNotMatch(productDataBlock, /undefined/);
 const createPayloadFixture = buildProductCreatePayload({
   formData: {
@@ -607,6 +633,18 @@ assert.equal(JSON.stringify(createPayloadFixture).includes("undefined"), false);
 // chave vazia/undefined.
 assert.equal(Object.prototype.hasOwnProperty.call(createPayloadFixture, "thumbnailUrl"), false);
 assert.equal(Object.prototype.hasOwnProperty.call(createPayloadFixture, "thumbnailStoragePath"), false);
+const createPayloadWithThumbnailFixture = buildProductCreatePayload({
+  formData: {
+    name: "Perfume Teste", brand: "Natura", origin: "Brasil", category: "Perfumes", costPrice: 10, salePrice: 30, stock: 2,
+    barcode: "001234", description: "desc", imageUrl: "", storagePath: "", extras: {}, isFeatured: false, isOnSale: false,
+    discountPercent: 0, productType: "Cosméticos & Perfumes", gender: "unisex",
+  },
+  productName: "Perfume Teste", normalizedBrand: "Natura", category: "Perfumes", costPrice: 10, salePrice: 30, stock: 2,
+  imageUrl: "https://example.invalid/p.webp", storagePath: "users/test/products/p1/p.webp", activeNicho: "Cosméticos & Perfumes" as any,
+  thumbnailUrl: "https://example.invalid/p-thumb.webp", thumbnailStoragePath: "users/test/product-thumbnails/p1/thumb-v1.webp",
+});
+assert.equal(createPayloadWithThumbnailFixture.thumbnailUrl, "https://example.invalid/p-thumb.webp");
+assert.equal(createPayloadWithThumbnailFixture.thumbnailStoragePath, "users/test/product-thumbnails/p1/thumb-v1.webp");
 const productAllowedFieldsMatch = firestoreRules.match(/function productAllowedFields\(\) \{\s*return \[([\s\S]*?)\];/);
 assert.ok(productAllowedFieldsMatch);
 const productAllowedFields = new Set([...productAllowedFieldsMatch[1].matchAll(/'([^']+)'/g)].map((match) => match[1]));
@@ -616,12 +654,12 @@ for (const key of ["id", "name", "brand", "origin", "category", "productType", "
 assert.match(addProduct, /Number\.isFinite\(costPrice\)/);
 assert.match(addProduct, /Number\.isFinite\(salePrice\)/);
 assert.match(addProduct, /Number\.isFinite\(stock\)/);
-assert.match(addProduct, /cleanupUploadedProductImages\(productId, cleanupToken, uploadedPaths\)/);
+assert.match(addProduct, /cleanupUploadedProductImages\(productId, cleanupToken, uploadedAssets\)/);
 assert.match(addProduct, /if \(isSaving\) return/);
 assert.match(mockData, /nameNormalized\?: string/);
 assert.match(firestoreRules, /searchTokens/);
 assert.match(firestoreRules, /searchSchemaVersion/);
-assert.match(catalog, /useProductsData/);
+assert.match(catalog, /useCatalogProductsData/);
 // REVENDASMART-CATALOG-VISUAL-RESTORE-02 — a referência visual correta (confirmada pelo usuário com a
 // arte original e prints antigos reais) é a vitrine de e-commerce com rails horizontais que
 // CatalogShowcase já implementa — não a grade 2 colunas de uma tentativa anterior de restauração, que
@@ -685,7 +723,7 @@ assert.match(publicCatalog, /Enviar pedido no WhatsApp/);
   // §2 showPrice: nenhuma superfície do carrinho/WhatsApp pode revelar preço quando showPrice=false.
   assert.match(publicCatalog, /const showPrice = store\?\.showPrice !== false;/);
   assert.match(publicCatalog, /\{showPrice && \(/, "C: bloco de preço no carrinho precisa ser condicional a showPrice");
-  assert.match(publicCatalog, /showPrice\s*\n\s*\? `  Qtd: \$\{item\.quantity\} \| Subtotal:/, "C: mensagem do WhatsApp só inclui subtotal quando showPrice=true");
+  assert.match(publicCatalog, /showPrice\s*\n\s*\? ` {2}Qtd: \$\{item\.quantity\} \| Subtotal:/, "C: mensagem do WhatsApp só inclui subtotal quando showPrice=true");
   assert.match(publicCatalog, /if \(showPrice\) message \+= `💰 \*Total:/, "C: mensagem do WhatsApp só inclui total quando showPrice=true");
 
   // §3 allowWhatsappOrders: CTA de envio não pode continuar funcional quando desativado.
@@ -780,23 +818,19 @@ assert.match(publicCatalog, /Enviar pedido no WhatsApp/);
 assert.match(productSearch, /getProductSearchIndexField/);
 assert.match(catalogShowcase, /searchable\.includes\(normalizedSearch\)/);
 assert.match(catalogShowcase, /effectiveCategory/);
-assert.doesNotMatch(catalog, /useCatalogProductsData/);
+assert.match(catalog, /useCatalogProductsData/);
 assert.match(catalogProductsHook, /const CATALOG_PAGE_SIZE = 30/);
 assert.match(catalogProductsHook, /buildProductServerSearchPlan/);
 assert.match(catalogProductsHook, /requestIdRef/);
-assert.match(catalogProductsHook, /barcodeNormalized/);
-assert.match(catalogProductsHook, /categoryNormalized/);
-assert.match(catalogProductsHook, /orderBy\(querySpec\.orderByField\)/);
-assert.doesNotMatch(catalogProductsHook, /orderBy\("name"\)/);
-assert.doesNotMatch(catalogProductsHook, /where\("category",\s*"=="/);
-assert.match(catalogProductsHook, /name_prefix/);
-assert.match(catalogProductsHook, /array-contains/);
+assert.match(catalogProductsHook, /apiRequest<.*CatalogProductsSearchResponse>/);
+assert.doesNotMatch(catalogProductsHook, /from "firebase\/firestore"/);
+assert.match(productSearch, /name_prefix/);
 assert.match(catalogProductsHook, /searchFallbackRequired/);
-assert.match(catalogProductsHook, /getDocs/);
+assert.doesNotMatch(catalogProductsHook, /getDocs/);
 assert.match(productSearchBackfill, /dry-run/);
-assert.match(productSearchBackfill, /CATALOG_SERVER_SEARCH_ENABLED=false/);
+assert.match(productSearchBackfill, /SERVER_SIDE_PRODUCT_SEARCH_ENABLED/);
 assert.match(productSearchBackfill, /Não executar em produção/);
-assert.match(serverSideSearchDoc, /SERVER_SIDE_PRODUCT_SEARCH_ENABLED=false/);
+assert.match(serverSideSearchDoc, /SERVER_SIDE_PRODUCT_SEARCH_ENABLED=true/);
 assert.match(searchDataModelDoc, /PRODUCT_SEARCH_SCHEMA_VERSION = 1/);
 assert.match(searchBackfillDoc, /revenda-smart/);
 assert.match(searchBackfillScript, /FIRESTORE_EMULATOR_HOST/);
@@ -808,7 +842,7 @@ assertProductIndex([asc("categoryNormalized"), contains("searchTokens"), asc("na
 assertProductIndex([asc("categoryNormalized"), asc("barcodeNormalized"), asc("nameNormalized")]);
 assertNoProductIndex([contains("searchTokens"), asc("name")]);
 assertNoProductIndex([asc("barcodeNormalized"), asc("name")]);
-assertNoProductIndex([asc("category"), asc("name")]);
+assertProductIndex([asc("category"), asc("name"), asc("__name__")]);
 assert.match(firestoreIndexes, /searchTokens/);
 assert.match(firestoreIndexes, /barcodeNormalized/);
 assert.match(firestoreIndexes, /categoryNormalized/);
@@ -979,7 +1013,10 @@ assert.deepEqual(mergeMarketingHistory([localOnlyHistory], [remoteOnlyHistory], 
 // correcao do P1-1: um callback atrasado nao pode ler/gravar no armazenamento da conta trocada.
 assert.match(marketingHistoryHook, /readLocal\(expectedUid\)/);
 assert.match(marketingHistoryHook, /mergeMarketingHistory\(readLocal\(expectedUid\), remote, readDeletedIds\(expectedUid\)\)/);
-assert.match(marketingHistoryHook, /catch \{ \/\* Firestore rules may deny this optional history; local history remains available\. \*\/ \}/);
+// ADS-PRO-03 reestruturou recordAction para um catch multi-linha (agora devolve {id, persisted} em vez
+// de void, para o caller Pro saber se a escrita remota realmente aconteceu) — a garantia (falha do
+// Firestore nunca propaga, histórico local sempre permanece disponível) continua a mesma.
+assert.match(marketingHistoryHook, /catch \{\s*\/\/ Firestore rules may deny this optional history; local history remains available\./);
 assert.match(marketingHistoryHook, /rs:marketing-history-deleted/);
 assert.doesNotMatch(marketingHistoryHook, /createdWithAI\s*:\s*true/);
 assert.doesNotMatch(marketing + marketingFlow, /from ["'](?:openai|@ai-sdk|ai)["']/);
@@ -1416,6 +1453,48 @@ assert.match(clientsPage, /usePaginatedClientsData/);
 assert.match(clientsPage, /Carregar mais/);
 assert.match(clientsPage, /totalCount \?\? clients\.length/);
 assert.match(clientsPage, /Exportando clientes carregados/);
+
+// PRODUCT-HARDENING-02 — regressão: o formulário compartilhado de criar/editar cliente (clients.tsx)
+// não pode mais exigir WhatsApp — o fluxo rápido de "Novo cliente" em sell.tsx já trata o telefone como
+// opcional (placeholder "Telefone (opcional)", sem `required`), então um cliente criado por lá NUNCA
+// podia ser reaberto/editado depois (o form de edição, o MESMO componente, bloqueava o submit nativo do
+// browser por falta de telefone). O padrão (`pattern="\d{10,15}"`) continua — só valida quando um valor
+// é de fato digitado, nunca exige que exista um.
+assert.doesNotMatch(clientsPage, /<input\s+required\s+type="tel"/, "o campo de WhatsApp não pode mais ser required — bloqueava editar um cliente criado sem telefone");
+assert.match(clientsPage, /placeholder="WhatsApp \(opcional, apenas números\)"/);
+assert.match(clientsPage, /pattern="\\d\{10,15\}"/, "quando um telefone É informado, o formato continua validado");
+
+// PRODUCT-CLEANUP-03 — regressão: a linha de cliente usava <Link href=...><a onClick=...>...</a></Link>.
+// No wouter v3, Link já renderiza seu próprio <a> — um <a> filho explícito produzia <a> aninhado em
+// <a>, HTML inválido e aviso de hidratação do React. onClick/className precisam estar diretamente no
+// Link (que os repassa para a âncora que ele mesmo renderiza), sem nenhum <a> filho.
+assert.doesNotMatch(clientsPage, /<Link[^>]*>\s*<a\b/, "Link não pode mais envolver um <a> filho explícito — <a> aninhado em <a> é HTML inválido");
+assert.match(clientsPage, /href=\{isSelectionMode \? "#" : `\/clients\/\$\{client\.id\}`\}/, "a navegação para /clients/:id precisa continuar funcionando");
+assert.match(clientsPage, /toggleSelection\(client\.id\)/, "o clique em modo de seleção precisa continuar alternando o cliente selecionado");
+
+// PRODUCT-CLEANUP-03 — mesma correção de formatCurrency do PRODUCT-HARDENING-02 (ProductCard.tsx/
+// sell.tsx), agora nas telas financeiras restantes: nenhum valor de dinheiro exibido ao usuário pode
+// usar `.toFixed(2)` cru (sempre ponto, nunca vírgula — "R$ 59.90" em vez de "R$ 59,90"). Cálculos
+// internos, payloads de API/provedor e exportação CSV (toCsvRow em billings.tsx) NÃO são afetados —
+// só a exibição/mensagem lida por um humano precisa de formatCurrency.
+for (const [name, source] of [
+  ["clients.tsx", clientsPage],
+  ["products.tsx", productsPage],
+  ["products-sold.tsx", productsSold],
+  ["monthly-sales.tsx", monthlySales],
+  ["admin.tsx", adminMetrics],
+  ["billing-calendar.tsx", billingCalendar],
+  ["billings.tsx", billingsPage],
+  ["PartialPaymentModal.tsx", partialPaymentModal],
+] as const) {
+  assert.doesNotMatch(source, /R\$ \{[^}]*\.toFixed\(2\)[^}]*\}/, `${name}: nenhum valor exibido pode mais usar "R$ {...toFixed(2)}" cru`);
+  assert.doesNotMatch(source, /R\$ \$\{[^}]*\.toFixed\(2\)[^}]*\}/, `${name}: nenhuma template literal exibida pode mais usar "R$ \${...toFixed(2)}" cru`);
+  assert.match(source, /import \{ formatCurrency \} from "@\/lib\/product-pricing";/, `${name}: precisa importar formatCurrency`);
+}
+// billings.tsx exporta CSV com o valor numérico cru (b.amount) — não deve passar por formatCurrency,
+// que formataria para exibição humana (vírgula/símbolo) e quebraria o CSV como dado de máquina.
+assert.match(billingsPage, /toCsvRow\(\[format\(parseISO\(b\.dueDate\), "dd\/MM\/yyyy"\), getRecordClient\(b as InstallmentWithClientSnapshot\)\?\.name \|\| "N\/A", b\.amount, b\.status\]\)/, "exportação CSV precisa continuar usando o número cru, não formatCurrency");
+
 assert.match(paginatedClientsHook, /const CLIENTS_PAGE_SIZE = 30/);
 assert.match(paginatedClientsHook, /orderBy\("name"\)/);
 assert.match(paginatedClientsHook, /limit\(CLIENTS_PAGE_SIZE\)/);
@@ -1444,12 +1523,18 @@ assert.match(reportMetrics, /calculateIndicators/);
 assert.match(reports, /useSalesData/);
 assert.match(reports, /useProductsData/);
 assert.match(reports, /useClientsLiteData/);
-assert.match(reports, /Relatórios Premium/);
+// PLAN-IMPL-07B — título "Relatórios Premium" era cosmético (nenhum gate real existia); agora que a
+// página tem diferenciação Free/Pro/Premium de verdade, o H1 fixo "Premium" ficaria enganoso para
+// quem está no Free/Pro. Renomeado para "Relatórios" simples, com subtítulo condicional por plano.
+assert.match(reports, /<h1[^>]*>Relatórios<\/h1>/);
+assert.doesNotMatch(reports, /<h1[^>]*>Relatórios Premium<\/h1>/);
 // RELEASE-26: copy renomeada de "Resumo executivo" para "Visão do negócio" (só o texto de UI).
 assert.match(reports, /Visão do negócio/);
 assert.doesNotMatch(reports, /Resumo executivo/);
-assert.match(reports, /Produtos mais vendidos/);
-assert.match(reports, /Exportação profissional preparada/);
+// PLAN-IMPL-07B-VERIFY-FINAL §31 — bloco operacional extraído para chunk lazy-loaded (budget do profit-
+// safety fix); estas duas strings agora vivem em reports-operational.tsx, não em reports.tsx.
+assert.match(reportsOperational, /Produtos mais vendidos/);
+assert.match(reportsOperational, /Exportação profissional preparada/);
 assert.doesNotMatch(reports, /getStored|STORAGE_KEYS|initialProducts|initialClients/);
 assert.match(reportExport, /exportReportToPdf/);
 assert.match(reportExport, /exportReportToExcel/);
@@ -1583,10 +1668,13 @@ assert.match(catalogShowcase, /title="Produtos mais vendidos"/);
 assert.match(catalogShowcase, /CatalogCategoryRail/);
 assert.match(catalogShowcase, /CatalogProductRail/);
 
-// 4b. RELEASE-CHECKOUT-03 §1/§3 — a barra flutuante "Ver pedido" foi removida do storefront público
-// por ser redundante com o botão+badge do carrinho já presente no cabeçalho (CatalogHeader). Ver
-// script/checkout-payment-tests.ts para a asserção completa desse contrato.
-assert.doesNotMatch(catalogShowcase, /Ver pedido/, "barra flutuante \"Ver pedido\" permanece removida do storefront público (RELEASE-CHECKOUT-03)");
+// 4b. CATALOG-GOLDEN-RESTORE-05 §1/§8 restaurou fielmente a barra flutuante "Ver pedido" do commit
+// histórico (6de2c85) — mas RELEASE-CHECKOUT-03 (mais recente, ver bloco "Barra 'Ver pedido' redundante
+// removida" em script/checkout-payment-tests.ts) removeu essa mesma barra deliberadamente por ser
+// redundante com o badge de contagem já presente no ícone de carrinho do CatalogHeader. As 4 assertions
+// que existiam aqui (exigindo a barra) ficaram desatualizadas por essa decisão posterior — a verificação
+// de que a barra NÃO existe mais já está coberta em checkout-payment-tests.ts, não duplicada aqui.
+assert.doesNotMatch(catalogShowcase, /data-testid="button-open-order-bar"/, "a barra flutuante \"Ver pedido\" foi removida por RELEASE-CHECKOUT-03 — o badge do CatalogHeader já cobre a função");
 
 // 5. Rolagem horizontal com scroll-snap nos trilhos.
 assert.match(catalogProductRail, /overflow-x-auto/);
@@ -1643,7 +1731,7 @@ assert.match(catalogProductDetails, /getPromotionalPrice\(product\)/);
 // por ambos via CatalogShowcase, sem duplicar implementação.
 assert.match(publicCatalog, /CatalogShowcase/);
 assert.match(catalog, /CatalogShowcase/);
-assert.match(catalog, /import \{ ShareCatalogSheet \} from "@\/components\/catalog\/ShareCatalogSheet"/);
+assert.match(catalog, /lazy\(async \(\) => \{\s*const mod = await import\("@\/components\/catalog\/ShareCatalogSheet"\)/);
 assert.match(catalogProductTile, /import \{ ProductImageCard \} from "@\/components\/ProductImageCard"/);
 assert.doesNotMatch(catalogShowcase, /border border-slate-200 bg-white p-4 shadow-sm/);
 assert.doesNotMatch(catalogProductTile, /border border-slate-200/);
@@ -1914,6 +2002,37 @@ assert.match(sell, /setSaveError\(friendlyMessage\)/);
 // Proteção contra duplo toque: não deve iniciar uma nova venda enquanto a anterior ainda está salvando.
 assert.match(sell, /const handleCheckout = async \(\) => \{\s*if \(isSaving\) return;/);
 
+// --- PRODUCT-HARDENING-02: nenhum valor monetário pode mais usar `.toFixed(2)` diretamente (sempre
+// ponto decimal, nunca vírgula — reproduzido ao vivo: o card de produto mostrava "R$ 59.90" ao lado do
+// cabeçalho da mesma página mostrando "R$ 299,00" com formatCurrency). sell.tsx (fluxo de Vendas) e
+// ProductCard.tsx (usado em /products) precisam sempre passar por formatCurrency (pt-BR real). ---
+assert.doesNotMatch(sell, /R\$ \{.*\.toFixed\(2\)\}/, "nenhum valor da tela de Vendas pode mais usar toFixed(2) cru");
+assert.doesNotMatch(sell, /R\$ \$\{.*\.toFixed\(2\)\}/, "nenhuma description/template literal de Vendas pode mais usar toFixed(2) cru");
+assert.match(sell, /import \{ resolveEffectiveProductPrice, formatCurrency \} from "@\/lib\/product-pricing";/);
+assert.doesNotMatch(productCard, /R\$ \{.*\.toFixed\(2\)\}/, "o card de produto não pode mais usar toFixed(2) cru — precisa bater com o mesmo formatCurrency que o cabeçalho da página já usa");
+assert.match(productCard, /import \{ formatCurrency \} from "@\/lib\/product-pricing";/);
+const productCardFormatCurrencyCalls = (productCard.match(/\{formatCurrency\((?:sale|cost|profit)\)\}/g) ?? []).length;
+assert.equal(productCardFormatCurrencyCalls, 3, "Venda/Custo/Lucro no card precisam usar formatCurrency");
+
+// --- PRODUCT-HARDENING-02: falha ao criar/tentar de novo a cobrança da venda não pode mais exibir texto
+// cru do servidor/exceção (createSaleCharge usa fetch() direto, não apiRequest — errorData.message/
+// .error podiam conter uma string técnica interna, ex. "APP_BASE_URL is not configured"; o catch de
+// retry mostrava err.message de uma exceção de rede crua). Mensagem sempre fixa/acionável em português
+// agora; o texto original de cada chamador continua indo pro logError (nunca removido, só não mais
+// mostrado na tela). ---
+assert.match(sell, /function sanitizeChargeFailureMessage\(status\?: number\): string \{/);
+assert.doesNotMatch(sell, /setChargeFailure\(\{ message: chargeResult\.message/, "falha inicial de cobrança não pode mais usar chargeResult.message cru");
+assert.doesNotMatch(sell, /setChargeFailure\(\{ message: result\.message/, "falha de retry de cobrança não pode mais usar result.message cru");
+assert.doesNotMatch(sell, /message: err instanceof Error \? err\.message : "Erro desconhecido", payload/, "catch do retry de cobrança não pode mais usar err.message cru");
+assert.match(sell, /setChargeFailure\(\{ message: sanitizeChargeFailureMessage\(chargeResult\.status\), payload: chargePayload \}\)/);
+assert.match(sell, /setChargeFailure\(\{ message: sanitizeChargeFailureMessage\(result\.status\), payload: chargeFailure\.payload \}\)/);
+assert.match(sell, /setChargeFailure\(\{ message: sanitizeChargeFailureMessage\(\), payload: chargeFailure\.payload \}\)/);
+// O texto cru continua preservado pro debug — nenhum logError foi removido, e o retry ganhou dois que
+// não existiam antes (result.message e err.message da exceção).
+assert.match(sell, /logError\("sale_charge_creation_failed", chargeResult\.message,/);
+assert.match(sell, /logError\("sale_charge_retry_failed", result\.message,/);
+assert.match(sell, /logError\("sale_charge_retry_error", errorMsg,/);
+
 // --- Investigação P0: causa raiz da falha real de venda no Galaxy ---
 // requireAuth/requireOwnership respondem com { error }, não { message } — confirmado no próprio servidor.
 assert.match(routes, /return res\.status\(401\)\.json\(\{ error: "Unauthorized: missing token" \}\);/);
@@ -2024,7 +2143,7 @@ assert.match(catalog, /setCopied\(true\)/);
 
 // --- Sprint "Redesign Conta": modal de Compartilhar Catálogo virou o componente ShareCatalogSheet,
 // fiel à referência do Figma (WhatsApp / Instagram / Copiar link, sem SDK/token do Instagram) ---
-assert.match(catalog, /import \{ ShareCatalogSheet \} from "@\/components\/catalog\/ShareCatalogSheet"/);
+assert.match(catalog, /const ShareCatalogSheet = lazy\(async \(\) => \{/);
 assert.match(catalog, /<ShareCatalogSheet/);
 assert.match(catalog, /onShareInstagram=\{handleShareInstagram\}/);
 assert.match(catalog, /typeof navigator\.share === "function"/);
@@ -2128,8 +2247,9 @@ assert.match(subscriptions, /sendSubscriptionCredentialError\(res, "sync-now", u
 assert.match(subscriptions, /sendSubscriptionCredentialError\(res, "webhook", null\)/);
 assert.match(subscriptions, /app\.post\("\/api\/app-subscription\/sync-now", requireAuth/);
 assert.match(subscriptions, /SUBSCRIPTION_OWNERSHIP_MISMATCH/);
-assert.match(subscriptions, /external_reference:\s*uid/);
-assert.match(subscriptions, /transaction_amount:\s*PREMIUM_PRICE_BRL/);
+assert.match(subscriptions, /LEGACY_OFFER_RETIRED/);
+assert.doesNotMatch(subscriptions, /transaction_amount:\s*PREMIUM_PRICE_BRL/);
+assert.match(subscriptions, /external_reference:\s*externalReference/);
 assert.doesNotMatch(subscriptions, /req\.body\.(price|plan|premiumActive|currentPlan|transaction_amount)/);
 assert.match(subscriptions, /lastSubscriptionEventId/);
 assert.match(subscriptions, /lastSubscriptionEventAt/);
@@ -2164,7 +2284,7 @@ assert.equal(packageJson.scripts["test:mercado-pago:sandbox"], "tsx script/merca
   try {
     // A: chave válida (64 hex chars) → encrypt/decrypt funciona, round-trip exato.
     process.env.MERCADOPAGO_TOKEN_ENCRYPTION_KEY = "b".repeat(64);
-    const plaintext = "TEST-mp-access-token-abc123";
+    const plaintext = "TEST-PLACEHOLDER";
     const encrypted = encryptToken(plaintext);
     assert.equal(decryptToken(encrypted), plaintext, "A: round-trip precisa devolver exatamente o texto original");
     assert.doesNotThrow(() => assertEncryptionKeyConfigured(), "A: chave válida não lança");
@@ -2183,7 +2303,10 @@ assert.equal(packageJson.scripts["test:mercado-pago:sandbox"], "tsx script/merca
     assert.notEqual(first.iv, second.iv, "B: cada encrypt usa um IV novo e aleatório");
     assert.notEqual(first.ciphertext, second.ciphertext, "B: mesmo texto claro nunca produz o mesmo ciphertext (IV distinto)");
     // Ciphertext adulterado falha a autenticação GCM em vez de decodificar silenciosamente.
-    assert.throws(() => decryptToken({ ...first, ciphertext: first.ciphertext.slice(0, -2) + "00" }));
+    // Escolha um sufixo sempre diferente para não tornar o teste probabilístico quando o valor original termina em 00.
+    const tamperedCiphertext = first.ciphertext.slice(0, -2) + (first.ciphertext.endsWith("00") ? "01" : "00");
+    assert.notEqual(tamperedCiphertext, first.ciphertext);
+    assert.throws(() => decryptToken({ ...first, ciphertext: tamperedCiphertext }));
 
     // C: chave ausente → fail-closed (nunca cai num valor conhecido/utilizável).
     delete process.env.MERCADOPAGO_TOKEN_ENCRYPTION_KEY;
@@ -2211,14 +2334,14 @@ assert.equal(packageJson.scripts["test:mercado-pago:sandbox"], "tsx script/merca
 
     // F: a mensagem de erro nunca inclui o texto claro do token nem o valor da chave configurada.
     process.env.MERCADOPAGO_TOKEN_ENCRYPTION_KEY = "e".repeat(64);
-    const secretPlaintext = "TEST-super-secret-mp-token-xyz789";
+    const secretPlaintext = "TEST-PLACEHOLDER";
     let leakCheckRan = false;
     try {
       decryptToken({ ...encryptToken(secretPlaintext), authTag: "00".repeat(16) });
     } catch (err) {
       leakCheckRan = true;
       const message = err instanceof Error ? err.message : String(err);
-      assert.doesNotMatch(message, /TEST-super-secret-mp-token-xyz789/, "F: erro de decrypt nunca inclui o token em claro");
+      assert.doesNotMatch(message, /TEST-PLACEHOLDER/, "F: erro de decrypt nunca inclui o token em claro");
     }
     assert.ok(leakCheckRan, "F: o cenário de tag inválida precisa realmente lançar para o assert acima valer algo");
     delete process.env.MERCADOPAGO_TOKEN_ENCRYPTION_KEY;
@@ -2278,9 +2401,9 @@ assert.match(runRequestIdMiddlewareForTest(), /^[a-f0-9]{16}$/);
 assert.equal(runRequestIdMiddlewareForTest("valid-REQ_123"), "valid-REQ_123");
 assert.match(runRequestIdMiddlewareForTest("bad header with spaces"), /^[a-f0-9]{16}$/);
 const sanitizedLogFixture = JSON.stringify(sanitizeForLog({
-  headers: { authorization: "Bearer TEST-12345678901234567890", cookie: "session=abc" },
+  headers: { authorization: "Bearer TEST-PLACEHOLDER", cookie: "session=abc" },
   body: { password: "123456", email: "cliente@example.com", phone: "1199999-8888" },
-  query: { access_token: "APP_USR-12345678901234567890" },
+  query: { access_token: "APP_USR-PLACEHOLDER" },
 }));
 assert.equal(sanitizedLogFixture.includes("Bearer TEST-"), false);
 assert.equal(sanitizedLogFixture.includes("session=abc"), false);
@@ -2374,8 +2497,10 @@ assert.match(privateRouter, /PlanProvider/);
 
   // --- PRO-01: capability `proAds` no contrato compartilhado ---
   //
-  // É uma feature key como as outras, consumida pelo MESMO caminho. `PlanType` continua free|premium:
-  // "Anúncios Pro" é o nome do recurso, não um plano novo.
+  // É uma feature key como as outras, consumida pelo MESMO caminho. Em PRO-01, `PlanType` era
+  // free|premium: "Anúncios Pro" era o nome do recurso, não um plano novo. PLAN-IMPL-01 introduz o
+  // terceiro nível comercial de verdade (`pro`, PLAN-DEFINITION-01) — a distinção que este bloco
+  // protege (capability != plano) continua válida entre `proAds` e `pro`, só o número de planos mudou.
   assert.equal(PLAN_CONFIG.free.limits.proAds, false, "Free não tem Anúncios Pro");
   assert.equal(PLAN_CONFIG.premium.limits.proAds, true, "Premium tem Anúncios Pro");
   assert.equal(canUseFeature("free", "proAds"), false);
@@ -2389,10 +2514,12 @@ assert.match(privateRouter, /PlanProvider/);
   }
   assert.equal(PLAN_CONFIG.free.limits.products, 30, "o limite de produtos do Free não mudou");
   assert.equal(PLAN_CONFIG.free.limits.clients, 50, "o limite de clientes do Free não mudou");
-  // `PlanType` NÃO cresceu: sem plano "pro" no runtime desta etapa.
+  // PLAN-IMPL-01: `PlanType` agora tem três níveis comerciais reais (PLAN-DEFINITION-01) — a asserção
+  // original travava em free|premium para pegar um "pro" introduzido por acidente antes de existir
+  // contrato/testes/decisão comercial para ele; agora que PLAN-IMPL-01 é exatamente essa decisão, a
+  // invariante que ainda importa é a ORDEM/composição exata, não mais a ausência de "pro".
   const { PLANS } = await import("../shared/monetization.js");
-  assert.deepEqual(Object.values(PLANS), ["free", "premium"], "PlanType continua free|premium");
-  assert.doesNotMatch(read("shared/monetization.ts"), /PRO:\s*'pro'|'pro'\s*as const/, "não existe plano 'pro' no runtime");
+  assert.deepEqual(Object.values(PLANS), ["free", "pro", "premium"], "PlanType é free|pro|premium");
   // Sem helper paralelo: o consumo é pelo caminho canônico, não por um atalho dedicado.
   for (const atalho of ["canUseProAds", "isProUser", "hasProAdsAccess"]) {
     assert.doesNotMatch(read("shared/monetization.ts"), new RegExp(atalho), `não pode existir helper paralelo ${atalho}`);
@@ -2578,10 +2705,12 @@ assert.match(privateRouter, /PlanProvider/);
     checkMarketingProNewGenerationRateLimit,
     resetMarketingProRateLimitStateForTests,
     resolveMarketingProEntitlement,
+    isMarketingProV1Allowed,
     runProviderWithTimeout,
     MARKETING_PRO_DEFAULT_MAX_NEW_GENERATIONS_PER_MINUTE,
     registerMarketingProRoutes,
   } = await import("../server/marketing-pro.js");
+  const { canAccessAdsPro, PLANS } = await import("../shared/monetization.js");
   const { createDeterministicMockProvider } = await import("../server/marketing-pro-provider.js");
 
   // 1) Contrato de ID: generationId === generationRequestId, mesmo formato de saleId (sales/finalize).
@@ -2612,15 +2741,36 @@ assert.match(privateRouter, /PlanProvider/);
   // Sem requireOwnership redundante: não há :userId na URL para comparar.
   assert.doesNotMatch(marketingProSource, /requireOwnership\(/, "as rotas do PRO-06A não usam requireOwnership — o escopo já é o do token");
 
-  // 4) Entitlement — decisão pura, testável sem Firestore.
+  // 4) Contrato comercial futuro — decisão pura, preservada e testável sem Firestore.
   assert.equal(resolveMarketingProEntitlement(null).allowed, false, "sem planData é Free, sem acesso");
-  assert.equal(resolveMarketingProEntitlement({ premiumActive: false } as any).allowed, false, "Free explícito não tem acesso");
-  assert.equal(resolveMarketingProEntitlement({ premiumActive: true } as any).allowed, true, "Premium ativo tem acesso");
-  assert.equal(resolveMarketingProEntitlement({ currentPlan: "premium" } as any).allowed, true, "legado currentPlan=premium tem acesso");
-  assert.equal(resolveMarketingProEntitlement({ subscriptionStatus: "authorized" } as any).allowed, true, "assinatura autorizada tem acesso");
-  // Mesmos helpers do PRO-01 — nenhum "if (premium)" solto reimplementando a regra.
-  assert.match(marketingProSource, /isPremiumActive\(planData\)/);
-  assert.match(marketingProSource, /canUseFeature\(plan, "proAds"\)/);
+  assert.equal(resolveMarketingProEntitlement({ currentPlan: "pro", pricingVersion: "v2", subscriptionStatus: "authorized" } as any).allowed, true, "Pro ativo tem acesso");
+  assert.equal(resolveMarketingProEntitlement({ currentPlan: "premium", pricingVersion: "v2", subscriptionStatus: "authorized" } as any).allowed, true, "Premium ativo tem acesso");
+  assert.equal(resolveMarketingProEntitlement({ currentPlan: "free" } as any, "play_review").allowed, true, "grant play_review tem acesso");
+  assert.equal(canAccessAdsPro(PLANS.FREE), false, "Free permanece bloqueado");
+  assert.equal(canAccessAdsPro(PLANS.PRO), true, "Pro é permitido");
+  assert.equal(canAccessAdsPro(PLANS.PREMIUM), true, "Premium é permitido");
+  assert.equal(canAccessAdsPro(PLANS.FREE, true), true, "Admin é permitido");
+  assert.equal(canAccessAdsPro(PLANS.FREE, false, "play_review"), true, "play_review é permitido");
+  // 4b) Rollout efetivo V1 — não confundir entitlement comercial futuro com autorização atual.
+  assert.equal(isMarketingProV1Allowed(PLANS.FREE, false, null), false, "Free sem privilégio é negado");
+  assert.equal(isMarketingProV1Allowed(PLANS.PRO, false, null), false, "Pro comercial sem privilégio é negado");
+  assert.equal(isMarketingProV1Allowed(PLANS.PREMIUM, false, null), false, "Premium comercial sem privilégio é negado");
+  assert.equal(isMarketingProV1Allowed(PLANS.FREE, true, null), true, "admin autorizado é permitido");
+  assert.equal(isMarketingProV1Allowed(PLANS.FREE, false, "play_review"), true, "play_review válido é permitido");
+  assert.equal(isMarketingProV1Allowed(PLANS.PREMIUM, false, "revoked"), false, "grant revogado é negado");
+  assert.equal(isMarketingProV1Allowed(PLANS.PRO, false, "unknown"), false, "grant ausente/desconhecido é negado");
+  assert.match(marketingProSource, /resolveCommercialPlan\(planData\)/);
+  assert.doesNotMatch(
+    marketingProSource,
+    /canAccessAdsPro\(entitlement\.plan,\s*isAdmin,\s*internalGrant\)/,
+    "o entitlement comercial futuro não pode ser autorização direta do middleware V1",
+  );
+  assert.match(marketingProSource, /isMarketingProV1Allowed\(entitlement\.plan, isAdmin, internalGrant\)/);
+  assert.match(marketingProSource, /collection\("planData"\)\.doc\("main"\)/);
+  assert.match(marketingProSource, /collection\("internalGrants"\)\.doc\("main"\)/);
+  assert.match(marketingProSource, /benefitGrant === "play_review"/);
+  assert.match(marketingProSource, /PRO_ADS_REQUIRED/);
+  assert.match(marketingProSource, /admin_only_in_v1/);
   assert.doesNotMatch(marketingProSource, /if \(plan(Data)? === ["']premium["']\)/, "sem atalho reimplementando a regra de plano");
 
   // 5) Input: só style/format/productId — nada de MarketingProInput inteiro nem texto comercial livre.
@@ -3831,8 +3981,8 @@ assert.match(addProduct, /getProductCategoriesForNicho/);
 assert.match(addProduct, /baseCategorySuggestions/);
 assert.doesNotMatch(dashboard, /OnboardingChecklist/);
 assert.match(dashboard, /home-onboarding-strip/);
-assert.match(dashboard, /Finalize a configura..o da loja/);
-assert.match(dashboard, /products\.length === 0/);
+assert.match(dashboard, /Finalize a configuração \{isServicesMode \? "do negócio" : "da loja"\}/);
+assert.match(homeDashboardViewModel, /products\.length === 0/);
 assert.match(onboardingChecklist, /local|Primeiros passos|Configure sua loja/);
 assert.match(planProvider, /api\/plan\/data/);
 assert.match(planProvider, /onAuthStateChanged/);
@@ -3924,13 +4074,13 @@ assert.equal(existsSync("api/[...path].ts"), false);
 
 // Android Capacitor foundation guardrails.
 assert.match(capacitorConfig, /appId:\s*"com\.revendasmart\.app"/);
-assert.match(capacitorConfig, /appName:\s*"Revenda Smart"/);
+assert.match(capacitorConfig, /appName:\s*"RevendaSmart"/);
 assert.match(capacitorConfig, /webDir:\s*"dist\/public"/);
-assert.equal(packageJson.dependencies?.["@capacitor/core"]?.replace(/[\^~]/g, ""), "8.4.2");
-assert.equal(packageJson.dependencies?.["@capacitor/android"]?.replace(/[\^~]/g, ""), "8.4.2");
+assert.equal(packageJson.dependencies?.["@capacitor/core"]?.replace(/[\^~]/g, ""), "8.4.3");
+assert.equal(packageJson.dependencies?.["@capacitor/android"]?.replace(/[\^~]/g, ""), "8.4.3");
 assert.equal(packageJson.dependencies?.["@capacitor/share"]?.replace(/[\^~]/g, ""), "8.0.1");
 assert.equal(packageJson.dependencies?.["@capacitor/filesystem"]?.replace(/[\^~]/g, ""), "8.1.2");
-assert.equal(packageJson.devDependencies?.["@capacitor/cli"]?.replace(/[\^~]/g, ""), "8.4.2");
+assert.equal(packageJson.devDependencies?.["@capacitor/cli"]?.replace(/[\^~]/g, ""), "8.4.3");
 assert.equal(packageJson.scripts?.["android:copy"], "node scripts/android/sync-web.mjs copy");
 assert.equal(packageJson.scripts?.["android:sync"], "node scripts/android/sync-web.mjs sync");
 assert.equal(packageJson.scripts?.["android:open"], "cap open android");
@@ -3943,8 +4093,8 @@ assert.match(androidManifest, /android:theme="@style\/AppTheme\.NoActionBarLaunc
 assert.match(androidManifest, /android:exported="true"/);
 assert.match(androidManifest, /android:icon="@mipmap\/ic_launcher"/);
 assert.match(androidManifest, /android:roundIcon="@mipmap\/ic_launcher_round"/);
-assert.match(androidStrings, /<string name="app_name">Revenda Smart<\/string>/);
-assert.match(androidStrings, /<string name="title_activity_main">Revenda Smart<\/string>/);
+assert.match(androidStrings, /<string name="app_name">RevendaSmart<\/string>/);
+assert.match(androidStrings, /<string name="title_activity_main">RevendaSmart<\/string>/);
 assert.match(androidStrings, /<string name="package_name">com\.revendasmart\.app<\/string>/);
 assert.match(androidStrings, /<string name="custom_url_scheme">com\.revendasmart\.app<\/string>/);
 assert.match(androidStyles, /Theme\.SplashScreen/);
@@ -4310,9 +4460,9 @@ assert.match(androidDebugDocs, /configuração remota de servidor do Capacitor/)
   assert.equal(isPremiumActive({ ...cancelledInPeriod, premiumExpiresAt: past }), false,
     "depois do período pago o acesso acaba, mesmo com premiumActive=true no documento");
 
-  // O período manda inclusive sobre um status "authorized" desatualizado.
+  // A expiração paga tem precedência sobre o rótulo autorizado.
   assert.equal(isPremiumActive({ subscriptionStatus: "authorized", premiumActive: true, premiumExpiresAt: past } as any), false,
-    "um período já vencido não pode ser mantido vivo pelo rótulo do status");
+    "subscriptionStatus autorizado não prolonga período pago expirado");
   assert.equal(isPremiumActive({ subscriptionStatus: "authorized", premiumActive: true, premiumExpiresAt: null } as any), true,
     "assinatura renovando (sem data de término) continua Premium");
 
@@ -4444,9 +4594,12 @@ assert.match(validateReferralRoute, /validationDoc\.exists/);
 assert.match(validateReferralRoute, /status\(409\)/);
 assert.match(validateReferralRoute, /DUPLICATE_REFERRAL/);
 assert.match(validateReferralRoute, /transaction\.create\(validationRef/);
+assert.match(validateReferralRoute, /referralRewardLedger/);
+assert.match(validateReferralRoute, /referralLifetimeCount/);
+assert.match(validateReferralRoute, /isPaidEntitlementActive/);
 // Validation, unique marker, counter increment and Premium grant share one transaction.
 assert.match(validateReferralRoute, /runTransaction/);
-assert.match(validateReferralRoute, /const newCount = validatedReferrals.size \+ 1/);
+assert.match(validateReferralRoute, /const newCount = currentLifetimeCount \+ 1/);
 assert.match(validateReferralRoute, /transaction\.set\(planRef, planUpdate/);
 assert.match(validateReferralRoute, /newCount === REFERRAL_REWARD_LIMIT/);
 assert.doesNotMatch(validateReferralRoute, /referralCount\s*=\s*body|body\.referralCount|planDoc\.data\(\)\?\.referralCount/);
@@ -4455,19 +4608,20 @@ assert.match(trackReferralRoute, /checkReferralRateLimit\(referredUid, "track"\)
 assert.match(validateReferralRoute, /checkReferralRateLimit\(referredUid, "validate"\)/);
 
 
-// Referral frontend sends a Firebase ID token and never trusts a client UID.
-assert.match(onboarding, /currentUser\.getIdToken\(\)/);
-assert.match(onboarding, /Authorization: `Bearer \$\{referralToken\}`/);
-assert.ok(onboarding.includes("/api/referral/track-event"));
-assert.ok(onboarding.includes("/api/referral/validate-referral"));
-assert.doesNotMatch(onboarding, /referredUID:/);
-const frontendTrackStart = onboarding.indexOf("/api/referral/track-event");
-const frontendValidateStart = onboarding.indexOf("/api/referral/validate-referral");
+// Referral uses the current helper abstraction: the Firebase ID token is authoritative,
+// while the referrer identifier is treated as untrusted input and validated server-side.
+assert.match(onboardingReferral, /currentUser\.getIdToken\(\)/);
+assert.match(onboardingReferral, /Authorization: `Bearer \$\{referralToken\}`/);
+assert.ok(onboardingReferral.includes("/api/referral/track-event"));
+assert.ok(onboardingReferral.includes("/api/referral/validate-referral"));
+assert.doesNotMatch(onboardingReferral, /referredUID:/);
+const frontendTrackStart = onboardingReferral.indexOf("/api/referral/track-event");
+const frontendValidateStart = onboardingReferral.indexOf("/api/referral/validate-referral");
 assert.ok(frontendTrackStart >= 0 && frontendValidateStart > frontendTrackStart);
-const referralFrontend = onboarding.slice(frontendTrackStart, frontendValidateStart + 600);
+const referralFrontend = onboardingReferral.slice(frontendTrackStart, frontendValidateStart + 600);
 assert.match(referralFrontend, /status === 401 \|\| .*status === 403/);
-assert.match(onboarding, /if \(!currentUser \|\| !uid\) return/);
-assert.match(onboarding, /if \(!refUID\) return/);
+assert.match(onboardingReferral, /if \(!currentUser \|\| !uid\) return/);
+assert.match(onboardingReferral, /if \(!refUID\) return/);
 
 // --- RELEASE-27: fechar Referral para V1 — fonte única do limiar de recompensa + UI sem contador
 // paralelo desconectado da recompensa real ---
@@ -4521,6 +4675,7 @@ const publicStoreFixture = buildPublicCatalogStore({
 assert.deepEqual(Object.keys(publicStoreFixture).sort(), [
   "allowWhatsappOrders",
   "bannerUrl",
+  "businessMode",
   "cardAvailable",
   "description",
   "logoUrl",
@@ -4797,6 +4952,8 @@ assert.match(loginPage, /autoComplete="email"/);
 assert.match(loginPage, /autoComplete="current-password"/);
 assert.match(loginPage, /Lembrar meus dados/);
 assert.match(loginPage, /Mostrar senha/);
+assert.match(loginPage, /loginInFlightRef\.current/);
+assert.match(loginPage, /if \(loginInFlightRef\.current\) return/);
 assert.match(loginCss, /rs-login-hero-image/);
 assert.match(loginCss, /rs-login-message-area/);
 assert.doesNotMatch(loginPage, /login-reference-official\.png/);
@@ -4888,7 +5045,7 @@ assert.match(dashboard, /O que precisa da sua atenção/);
 assert.match(dashboard, /Meta mensal/);
 assert.match(dashboard, /Insight principal/);
 assert.match(dashboard, /Defina uma meta mensal/);
-assert.match(dashboard, /Finalize a configuração da loja/);
+assert.match(dashboard, /Finalize a configuração \{isServicesMode \? "do negócio" : "da loja"\}/);
 assert.match(dashboard, /home-onboarding-strip/);
 assert.doesNotMatch(dashboard, /Math\.max\(12/);
 assert.match(dashboard, /hiddenPriorityCount/);
@@ -5072,7 +5229,9 @@ const gitleaksConfig = read(".gitleaks.toml");
 const gitleaksRunner = read("scripts/security/run-gitleaks.mjs");
 const dependabotConfig = read(".github/dependabot.yml");
 const knipConfig = read("knip.json");
-const qualityWorkflow = read(".github/workflows/quality-gates.yml");
+const hasShipSnapshotWorkflows = fs.existsSync(".github/workflows/ship-04-offline.yml") && fs.existsSync(".github/workflows/ship-05-quality.yml");
+const qualityWorkflowPath = hasShipSnapshotWorkflows ? ".github/workflows/ship-05-quality.yml" : ".github/workflows/quality-gates.yml";
+const qualityWorkflow = read(qualityWorkflowPath);
 const androidSkill = read(".codex/skills/revendasmart-android-release/SKILL.md");
 const skillIndex = JSON.parse(read(".codex/skills/index.json"));
 
@@ -5086,13 +5245,43 @@ assert.match(gitleaksConfig, /mercado-pago-token/);
 assert.match(gitleaksConfig, /firebase-admin-private-key/);
 assert.match(gitleaksConfig, /vercel-token/);
 assert.match(gitleaksRunner, /--redact/);
-assert.match(gitleaksRunner, /não encontrou padrões sensíveis|nao encontrou padroes sensiveis/i);
+assert.match(gitleaksRunner, /--log-opts=--all/);
+assert.match(gitleaksRunner, /'working-tree', \['dir', snapshot\]/);
+assert.match(gitleaksRunner, /failed \|\|= result\.status !== 0/);
 assert.match(dependabotConfig, /open-pull-requests-limit: 5/);
 assert.doesNotMatch(dependabotConfig, /automerge/i);
 assert.match(knipConfig, /client\/src/);
-assert.match(qualityWorkflow, /gitleaks\/gitleaks-action@v2/);
-assert.match(qualityWorkflow, /npm run quality:knip/);
-assert.doesNotMatch(qualityWorkflow, /deploy|vercel|cloud run|AAB|keystore/i);
+if (hasShipSnapshotWorkflows) {
+  const offlineWorkflow = read(".github/workflows/ship-04-offline.yml");
+  const securityFinalWorkflow = fs.existsSync(".github/workflows/security-final.yml")
+    ? fs.readFileSync(".github/workflows/security-final.yml", "utf8")
+    : null;
+  const shipBranchTrigger = /^on:\r?\n  push:\r?\n    branches:\s*\[\s*ci\/ship-04-offline-rc\s*\]\s*$/m;
+  assert.match(offlineWorkflow, shipBranchTrigger);
+  assert.match(qualityWorkflow, shipBranchTrigger);
+  assert.match(offlineWorkflow, /permissions:\s*\n\s+contents:\s*read/);
+  assert.match(qualityWorkflow, /permissions:\s*\n\s+contents:\s*read/);
+  assert.match(offlineWorkflow, /persist-credentials:\s*false/);
+  assert.match(qualityWorkflow, /persist-credentials:\s*false/);
+  assert.doesNotMatch(`${offlineWorkflow}\n${qualityWorkflow}`, /pull_request_target|deploy|vercel|cloud run|AAB|keystore|production/i);
+  assert.match(offlineWorkflow, /node script\/pending-sale-response-tests\.mjs/);
+  assert.match(offlineWorkflow, /tsx script\/security-queue-corruption-tests\.ts/);
+  assert.match(offlineWorkflow, /tsx script\/hardening-offline-browser-tests\.ts/);
+  assert.match(qualityWorkflow, /npm run skills:validate/);
+  assert.match(qualityWorkflow, /npm run check/);
+  assert.match(qualityWorkflow, /npm run lint/);
+  assert.match(qualityWorkflow, /npm run test/);
+  assert.match(qualityWorkflow, /npm run build/);
+  assert.match(qualityWorkflow, /npm run performance:bundle-check/);
+  assert.equal(securityFinalWorkflow, null, "SHIP snapshot must not require historical security-final.yml");
+} else {
+  const securityFinalWorkflow = fs.readFileSync(".github/workflows/security-final.yml", "utf8");
+  assert.match(securityFinalWorkflow, /npm run security:final/);
+  assert.match(securityFinalWorkflow, /persist-credentials: false/);
+  assert.doesNotMatch(securityFinalWorkflow, /pull_request_target/);
+  assert.match(qualityWorkflow, /npm run quality:knip/);
+  assert.doesNotMatch(qualityWorkflow, /deploy|vercel|cloud run|AAB|keystore/i);
+}
 assert.match(androidSkill, /Não fazer commit/);
 assert.match(androidSkill, /android:sync/);
 assert.match(androidSkill, /SHA-256/);
@@ -5642,9 +5831,10 @@ assert.match(useOrdersData, /\.\.\.\(input\.notes \? \{ notes: input\.notes \} :
 assert.doesNotMatch(newOrderSheet, /imageUrl: product\.imageUrl \}/, "imageUrl não pode mais ser gravado como undefined quando o produto não tem foto");
 assert.match(newOrderSheet, /if \(product\.imageUrl\) newItem\.imageUrl = product\.imageUrl;/);
 
-// Cadastro de cliente em Pedidos reaproveita a mesma lógica de criação (setDoc em users/{uid}/clients)
-// já usada em Vendas, extraída para um hook compartilhado em vez de duplicada em Pedidos.
-assert.match(useCreateClient, /await setDoc\(doc\(getFirestore\(\), "users", uid, "clients", clientId\), clientData\);/);
+// Cadastro de cliente em Pedidos usa a fronteira server-authoritative única, preservando
+// idempotência e quotas; nunca grava diretamente no Firestore.
+assert.match(useCreateClient, /apiRequest\("\/api\/clients"/);
+assert.doesNotMatch(useCreateClient, /setDoc\(/);
 assert.match(newOrderSheet, /import \{ useCreateClient \} from "@\/hooks\/useCreateClient"/);
 
 // Preço/formatação/imagem de produto reaproveitados — nada disso foi reimplementado em Pedidos.
@@ -5708,11 +5898,28 @@ assert.match(ordersPage, /onChangeStatus=\{\(order\) => setStatusOrderId\(order\
 // 4. updateOrderStatus existente é reaproveitado — nenhuma segunda implementação de escrita de status.
 // confirmOrderPayment (CATALOGO-CHECKOUT-01 §5/§6) reaproveita o MESMO hook em vez de um segundo hook
 // paralelo para o fluxo de pagamento do catálogo.
-assert.match(ordersPage, /const \{ orders, loading, error, createOrder, updateOrderStatus, confirmOrderPayment \} = useOrdersData\(\);/);
+const ordersHookMatch = ordersPage.match(/const\s*\{([^}]+)\}\s*=\s*useOrdersData\(\);/s);
+assert.ok(ordersHookMatch, "orders.tsx deve desestruturar useOrdersData()");
+for (const field of ["orders", "loading", "error", "createOrder", "updateOrderStatus", "confirmOrderPayment", "editOrder"]) {
+  assert.match(ordersHookMatch[1], new RegExp(`\\b${field}\\b`), `orders.tsx deve consumir ${field} de useOrdersData()`);
+}
 assert.match(ordersPage, /await updateOrderStatus\(statusOrder\.id, status\);/);
 for (const [name, source] of [["orders.tsx", ordersPage], ["OrderStatusSheet", orderStatusSheet], ["OrderDetailsSheet", orderDetailsSheet]] as const) {
   assert.doesNotMatch(source, /setDoc|updateDoc|getFirestore/, `${name} não pode escrever no Firestore direto — a escrita mora só em useOrdersData`);
 }
+
+// PRODUCT-HARDENING-02 — regressão: os 3 catches de mutação (status/criação/pagamento) não podem mais
+// exibir err.message cru ao usuário (setDoc pode lançar um erro técnico do SDK do Firestore, ex.
+// "Missing or insufficient permissions.") — precisam usar uma mensagem fixa em português e logar o
+// original via logError para investigação.
+assert.doesNotMatch(ordersPage, /notifyError\(err instanceof Error && err\.message/, "nenhum catch de mutação de pedido pode mais exibir err.message cru");
+assert.match(ordersPage, /import \{ logError \} from "@\/lib\/firebase";/);
+assert.match(ordersPage, /notifyError\("Não foi possível alterar o status do pedido\. Tente novamente\."\);/);
+assert.match(ordersPage, /logError\("order_status_update_failed", err instanceof Error \? err\.message : String\(err\)/);
+assert.match(ordersPage, /notifyError\("Não foi possível criar o pedido\. Tente novamente\."\);/);
+assert.match(ordersPage, /logError\("order_create_failed", err instanceof Error \? err\.message : String\(err\)\)/);
+assert.match(ordersPage, /notifyError\("Não foi possível confirmar o pagamento\. Tente novamente\."\);/);
+assert.match(ordersPage, /logError\("order_confirm_payment_failed", err instanceof Error \? err\.message : String\(err\)/);
 
 // 5. Filtros e busca: locais, combináveis e sem nova consulta por clique.
 assert.match(ordersPage, /const matchesStatus = statusFilter === "todos" \|\| order\.status === statusFilter;/);
@@ -5743,14 +5950,24 @@ assert.match(orderCard, /const createdLabel = formatFullDate\(order\.createdAt\)
 // 7. Detalhes em sheet (não em página nova) e sempre sobre o pedido real, sem recalcular preço.
 assert.doesNotMatch(privateRouter, /order-detail|orders\/:/, "detalhes do pedido é um sheet — nenhuma rota nova foi criada");
 assert.match(orderDetailsSheet, /import \{ formatCurrency \} from "@\/lib\/product-pricing"/);
-assert.match(orderDetailsSheet, /calculateOrderItemSubtotal,\s*getAllowedOrderTransitions,\s*ORDER_PAYMENT_METHOD_LABELS,\s*ORDER_PAYMENT_STATUS_LABELS,\s*ORDER_STATUS_LABELS,\s*type Order,/);
+const orderDetailsOrdersImport = orderDetailsSheet.match(/import \{([\s\S]*?)\} from "@\/lib\/orders";/);
+assert.ok(orderDetailsOrdersImport, "OrderDetailsSheet deve importar o contrato central de pedidos");
+for (const field of ["calculateOrderItemSubtotal", "getAllowedOrderTransitions", "ORDER_PAYMENT_METHOD_LABELS", "ORDER_PAYMENT_STATUS_LABELS", "ORDER_STATUS_LABELS", "type Order"]) {
+  assert.match(orderDetailsOrdersImport[1], new RegExp(`\\b${field.replace("type ", "type\\s+")}\\b`), `OrderDetailsSheet deve importar ${field}`);
+}
 assert.match(orderDetailsSheet, /\{formatCurrency\(calculateOrderItemSubtotal\(item\)\)\}/);
 assert.match(orderDetailsSheet, /\{formatCurrency\(order\.total\)\}/);
 assert.match(orderDetailsSheet, /\{item\.quantity\} × \{formatCurrency\(item\.unitPrice\)\}/);
 assert.match(orderDetailsSheet, /\{order\.notes && \(/);
-// Subtotal mora no contrato e o total continua derivando dele — uma única regra de soma.
+// Subtotal mora no contrato e o total continua derivando da MESMA regra — agora em cents inteiros
+// (RELEASE-AUTOMATION-01), nunca somando reais em ponto flutuante (comportamento real testado em
+// script/checkout-payment-tests.ts). calculateOrderItemSubtotal/calculateOrderTotal precisam
+// compartilhar o mesmo helper interno de cents, nunca duas contas divergentes.
 assert.match(ordersLib, /export function calculateOrderItemSubtotal\(item: OrderItem\): number \{/);
-assert.match(ordersLib, /return items\.reduce\(\(sum, item\) => sum \+ calculateOrderItemSubtotal\(item\), 0\);/);
+assert.match(ordersLib, /function calculateOrderItemSubtotalCents\(item: OrderItem\): number \{/, "o helper de cents compartilhado precisa existir");
+assert.match(ordersLib, /return calculateOrderItemSubtotalCents\(item\) \/ 100;/, "calculateOrderItemSubtotal precisa vir do helper de cents, nunca de reais float direto");
+assert.match(ordersLib, /return totalCents \/ 100;/, "calculateOrderTotal precisa somar em cents e converter uma única vez no final");
+assert.doesNotMatch(ordersLib, /Math\.max\(0, Number\(item\.unitPrice\) \|\| 0\) \* Math\.max\(0, Number\(item\.quantity\) \|\| 0\)/, "a multiplicação antiga em reais float não pode voltar a existir fora do helper de cents");
 assert.doesNotMatch(orderDetailsSheet, /unitPrice \* |\* item\.quantity/, "o sheet não pode recalcular subtotal por conta própria");
 // Sheets abertos acompanham o listener (guardam id, não um snapshot congelado do pedido).
 assert.match(ordersPage, /const detailOrder = detailOrderId \? orders\.find\(\(order\) => order\.id === detailOrderId\) \?\? null : null;/);
@@ -5947,11 +6164,14 @@ assert.match(settings, /featureLabels: normalizedFeatureLabels,\s*\n\s*\};/);
 // curta). Causa real desta rodada: 404 de ROTA inexistente no backend atingido ficava indistinguível
 // de "loja não encontrada", mascarando um erro de configuração como se fosse dado ausente.
 assert.match(publicCatalog, /type PublicCatalogFailureReason =/);
-for (const reason of ["store_not_found", "api_route_missing", "permission_denied", "network", "invalid_response", "unexpected"]) {
+for (const reason of ["store_not_found", "store_deactivated", "api_route_missing", "permission_denied", "network", "invalid_response", "unexpected"]) {
   assert.match(publicCatalog, new RegExp(`"${reason}"`), `motivo de falha ${reason} precisa existir no diagnóstico do catálogo público`);
 }
-// 404 JSON (loja não existe) x 404 HTML (rota ausente no backend) são separados pelo content-type.
-assert.match(publicCatalog, /reason = contentType\.includes\("application\/json"\) \? "store_not_found" : "api_route_missing";/);
+// 404 JSON (loja não existe OU desativada pelo dono, distinguidas pelo body) x 404 HTML (rota ausente
+// no backend) são separados pelo content-type; dentro do JSON, HOTFIX-P0-B separa as duas causas em vez
+// de tratar ambas como "store_not_found".
+assert.match(publicCatalog, /reason = "api_route_missing";/);
+assert.match(publicCatalog, /body\?\.error === "CATALOG_DEACTIVATED" \? "store_deactivated" : "store_not_found"/);
 // 401/403 num catálogo PÚBLICO é regressão, nunca "visitante sem permissão" — precisa ser sinalizado.
 assert.match(publicCatalog, /reason = "permission_denied";/);
 // O diagnóstico registra slug e base de API efetiva — sem isso não dá para saber qual backend respondeu.
@@ -6118,8 +6338,16 @@ assert.match(sharedProductPricingSource, /typeof value === "number" && Number\.i
 
 // 6. Snapshot histórico: o item salvo guarda o preço EFETIVAMENTE cobrado, não uma referência ao
 // produto. Uma venda antiga não pode ser recalculada quando o preço/promoção do produto mudar.
-assert.match(saleFinalizeTransactionSource, /return \{ productId: item\.productId, quantity: item\.quantity, price: priceCents \/ 100, stock \};/);
-assert.match(saleFinalizeTransactionSource, /products: saleProducts\.map\(\(product\) => \(\{\s*\n\s*productId: product\.productId,\s*\n\s*quantity: product\.quantity,\s*\n\s*price: product\.price,\s*\n\s*\}\)\),/);
+assert.match(saleFinalizeTransactionSource, /return \{ productId: item\.productId, quantity: item\.quantity, price: priceCents \/ 100, stock, costPriceAtSaleCents \};/);
+assert.match(saleFinalizeTransactionSource, /products: saleProducts\.map\(\(product\) => \(\{\s*\n\s*productId: product\.productId,\s*\n\s*quantity: product\.quantity,\s*\n\s*price: product\.price,/);
+// PLAN-IMPL-07B-COST-SNAPSHOT-FINAL — mesmo princípio de snapshot histórico, agora também para custo:
+// gravado uma única vez a partir do Product relido AQUI DENTRO da transação (nunca do input do cliente,
+// que só carrega productId/quantity — ver SaleFinalizeInput), só quando > 0 (nunca um 0 fabricado como
+// confiável), e omitido (nunca sobrescrito depois) quando o produto não tinha custo confiável no momento.
+assert.match(saleFinalizeTransactionSource, /const rawCostPrice = Number\(product\.costPrice\);/);
+assert.match(saleFinalizeTransactionSource, /costPriceAtSaleCents = Number\.isFinite\(rawCostPrice\) && rawCostPrice > 0 \? Math\.round\(rawCostPrice \* 100\) : null;/);
+assert.match(saleFinalizeTransactionSource, /\.\.\.\(product\.costPriceAtSaleCents !== null \? \{ costPriceAtSale: product\.costPriceAtSaleCents \/ 100 \} : \{\}\),/);
+assert.doesNotMatch(saleFinalizeTransactionSource, /input\.products\[.*\]\.cost|costPriceAtSale:\s*input\./, "custo histórico nunca vem do input do cliente — sempre derivado do Product relido dentro da própria transação");
 {
   const saleDocBlock = saleFinalizeTransactionSource.slice(saleFinalizeTransactionSource.indexOf("const sale = {"), saleFinalizeTransactionSource.indexOf("transaction.create(saleRef, sale);"));
   assert.doesNotMatch(saleDocBlock, /discountPercent|promotionalPrice/, "a venda salva não guarda parâmetros de promoção — só o preço cobrado, senão o histórico mudaria junto com o produto");
@@ -6205,7 +6433,7 @@ assert.match(useOrdersData, /\.\.\.\(storeName \? \{ storeName \} : \{\}\)/);
 
 // 5. updateOrderStatus não reenvia nem altera snapshot algum — só status e updatedAt.
 {
-  const updateBody = useOrdersData.slice(useOrdersData.indexOf("const updateOrderStatus"));
+  const updateBody = useOrdersData.match(/const updateOrderStatus = useCallback\([\s\S]*?\n\s{2}\}, \[\]\);/)?.[0] ?? "";
   for (const field of ["clientPhone", "storeName", "clientName", "clientId", "items", "total", "createdAt"]) {
     assert.doesNotMatch(updateBody, new RegExp(`${field}`), `updateOrderStatus não pode tocar em ${field}`);
   }
@@ -6548,7 +6776,9 @@ for (const [name, source] of [["useProductPickerData (Vendas/Pedidos)", productP
 // localStorage e no Firestore. Com addDoc o servidor criava um id diferente do `local-*` e o merge,
 // que casa por id, enxergava dois registros para a mesma ação.
 assert.match(marketingHistoryLib, /export function createMarketingEntryId\(\): string \{/);
-assert.match(marketingHistoryHook, /const entryId = createMarketingEntryId\(\);/);
+// ADS-PRO-03: recordAction ganhou um explicitId opcional (para o caller Pro nomear o upload de Storage
+// com o MESMO id do documento) — sem ele, o id continua nascendo aqui exatamente como antes.
+assert.match(marketingHistoryHook, /const entryId = explicitId \|\| createMarketingEntryId\(\);/);
 assert.match(marketingHistoryHook, /await setDoc\(doc\(getFirestore\(\), "users", user\.uid, "marketingHistory", entryId\), \{ \.\.\.cleaned, createdAt: serverTimestamp\(\), createdAtISO \}\)/);
 assert.match(marketingHistoryHook, /const optimistic: MarketingHistoryEntry = \{ \.\.\.cleaned, id: entryId, createdAtISO, createdAt: null \}/);
 // (checa a CHAMADA, não a menção em comentário — o comentário explica justamente por que addDoc saiu)
@@ -6607,7 +6837,7 @@ assert.match(marketingPage, /\/\/ Escolher outro produto é começar outro anún
   // reabre o risco do AUD-002 (session identity) que este teste protege.
   const ocorrencias = marketingPage.match(/setWorkspaceView\("editor"\)/g) || [];
   assert.equal(ocorrencias.length, 4, "deep link, startNewAd, applyEntryToEditor, e o fallback de admin da aba Pro");
-  assert.match(marketingPage, /if \(!isProAdsAdmin && workspaceView === "pro"\) setWorkspaceView\("editor"\);/, "o fallback de admin precisa continuar sendo só uma troca de aba, nunca uma entrada de sessão de edição");
+  assert.match(marketingPage, /if \(!isProAdsAdmin && workspaceView === "pro"\) setWorkspaceView\("editor"\);/, "o fallback V1 precisa continuar sendo só uma troca de aba, nunca uma entrada de sessão de edição");
 }
 // O deep link também limpa a sessão anterior.
 assert.match(marketingPage, /setEditingEntryId\(null\);\s*\n\s*setHistoryAssetOverride\(null\);\s*\n\s*setPriceOverride\(""\);\s*\n\s*setMissingProductWarning\(""\);\s*\n\s*setWorkspaceView\("editor"\);/);
@@ -6655,11 +6885,22 @@ assert.match(marketingPage, /assertProductAssetSnapshotMatches\(\{ snapshot: ent
 {
   // Checa DENTRO de cada função de repetição — contar ocorrências no arquivo inteiro pegaria também
   // shareAdBlob, que é do editor atual e já recebia a imagem por parâmetro desde antes desta sprint.
-  for (const [nome, marcador] of [["repeatShare", 'const repeatShare ='], ["repeatDownload", 'const repeatDownload =']] as const) {
+  // ADS-PRO-03 adicionou um ramo Pro (curto-circuita para entry.imageUrl direto, sem resolveEntryImage,
+  // já que um registro Pro já tem a arte final persistida — nunca a resolve de novo) ANTES do caminho
+  // clássico dentro destas mesmas funções — por isso a fatia usa o início da PRÓXIMA função como fim,
+  // nunca um tamanho fixo de caracteres (que ficaria curto demais para cobrir os dois ramos).
+  const marcadores = [
+    ["repeatShare", 'const repeatShare =', 'const repeatDownload ='],
+    ["repeatDownload", 'const repeatDownload =', 'const applyEntryToEditor ='],
+  ] as const;
+  for (const [nome, marcador, proximoMarcador] of marcadores) {
     const inicio = marketingPage.indexOf(marcador);
     assert.ok(inicio > 0, `${nome} precisa existir`);
-    const corpo = marketingPage.slice(inicio, inicio + 1200);
-    assert.match(corpo, /const historicalImage = await resolveEntryImage\(entry\);/, `${nome} precisa resolver a imagem da própria entrada`);
+    const fim = marketingPage.indexOf(proximoMarcador, inicio);
+    assert.ok(fim > inicio, `${nome} precisa ser seguido por ${proximoMarcador}`);
+    const corpo = marketingPage.slice(inicio, fim);
+    assert.match(corpo, /if \(entry\.mode === "pro"\) \{/, `${nome} precisa tratar um registro Pro sem recompor pelo compositor clássico`);
+    assert.match(corpo, /const historicalImage = await resolveEntryImage\(entry\);/, `${nome} precisa resolver a imagem da própria entrada no caminho clássico`);
     assert.match(corpo, /historicalImage\.identityVerified/, `${nome} precisa distinguir snapshot verificado de legacy`);
     assert.match(corpo, /preparedProductImage: historicalImage\.prepared/, `${nome} precisa usar o pacote preservado quando houver snapshot`);
   }
@@ -6800,7 +7041,9 @@ assert.match(firestoreRulesSource, /data\.get\('source', 'manual'\) in \['catalo
 assert.doesNotMatch(firestoreRulesSource, /data\.source is string;/, "source não pode ser aceito como string livre");
 
 // P0-A preservado: nada da sprint anterior pode ter regredido.
-assert.match(marketingHistoryHook, /const entryId = createMarketingEntryId\(\);/);
+// ADS-PRO-03: recordAction ganhou um explicitId opcional (para o caller Pro nomear o upload de Storage
+// com o MESMO id do documento) — sem ele, o id continua nascendo aqui exatamente como antes.
+assert.match(marketingHistoryHook, /const entryId = explicitId \|\| createMarketingEntryId\(\);/);
 assert.match(marketingHistoryHook, /marketingHistory", entryId\), \{ \.\.\.cleaned, createdAt: serverTimestamp\(\), createdAtISO \}/);
 assert.doesNotMatch(marketingHistoryHook, /addDoc\(/);
 assert.match(marketingHistoryLib, /export const isLocalOnlyMarketingEntryId/);
@@ -6859,8 +7102,7 @@ assert.match(marketingFlow, /MarketingWorkspaceView = "editor" \| "pro" \| "hist
 assert.match(marketingPage, /useState<MarketingWorkspaceView>\("editor"\)/);
 assert.doesNotMatch(marketingPage, /workspaceView === "hub"/);
 assert.match(marketingPage, /workspaceView === "editor" &&/);
-// RELEASE V1 §4.2: Anúncios Pro ainda é experimental — a aba/painel só renderiza para admin/dev
-// autorizado (isProAdsAdmin), nunca só por causa do estado da aba sozinho (Premium comum não vê).
+// A aba/painel segue a mesma decisão canônica de entitlement usada pelo backend.
 assert.match(marketingPage, /workspaceView === "pro" && isProAdsAdmin && \(/);
 assert.match(marketingPage, /<MarketingProPanel[\s\S]*products=\{products\}/, "o painel Pro recebe os produtos reais sem abrir uma segunda consulta");
 assert.match(marketingPage, /workspaceView === "history" &&/);
@@ -6929,15 +7171,29 @@ assert.doesNotMatch(marketingPreview, /Foto limpa|Preço visível|CTA direto/);
 // --- PRO-03: a fronteira Pro consome o entitlement sem contaminar o criador Free ---
 assert.match(marketingProPanel, /Anúncio Pro/);
 assert.match(marketingProPanel, /Crie anúncios com mais possibilidades/);
-for (const ferramenta of ["Melhorar foto", "Remover fundo", "Trocar fundo", "Reestilizar anúncio", "Criar variações"]) {
-  assert.ok(marketingProPanel.includes(ferramenta), `o roadmap Pro precisa listar ${ferramenta}`);
+// ADS-PRO-FINAL: as ferramentas que apareciam como "Em desenvolvimento" viraram o estúdio real. A fronteira de
+// produto continua honesta: nada na aba Pro se apresenta como "em desenvolvimento" nem como item fantasma, e
+// cada capacidade que a interface oferece tem implementação de verdade no código do estúdio (nunca um rótulo vazio).
+const adsProStudioDir = "client/src/components/marketing/ads-pro-studio";
+const adsProStudioSource = fs
+  .readdirSync(adsProStudioDir)
+  .filter((file) => /\.(tsx|ts)$/.test(file))
+  .map((file) => read(`${adsProStudioDir}/${file}`))
+  .join("\n");
+for (const [ferramenta, evidencia] of [
+  ["Melhorar foto", /computeAutoAdjust\(analyzePhoto\(/],
+  ["Remover fundo", /generateCutout\(\)/],
+  ["Fundo", /rankAdsProBackgroundsForFacts\(/],
+  ["Opções", /generateAdsProVariations\(/],
+  ["Estilo", /resolveAdsProStyleDirection\(/],
+] as const) {
+  assert.ok(adsProStudioSource.includes(ferramenta), `o estúdio Pro precisa oferecer ${ferramenta}`);
+  assert.match(adsProStudioSource, evidencia, `${ferramenta} precisa ter implementação real, não só rótulo`);
 }
-assert.equal(
-  (marketingProPanel.match(/Em desenvolvimento/g) || []).length,
-  1,
-  "o selo de indisponível é renderizado uma vez para todas as ferramentas da lista",
-);
-assert.match(marketingProPanel, /aria-disabled="true"/);
+assert.doesNotMatch(marketingProPanel, /Em desenvolvimento/, "nenhuma ferramenta da aba Pro pode se declarar em desenvolvimento: o que aparece funciona");
+assert.doesNotMatch(marketingProPanel, /aria-disabled="true"/, "a aba Pro não tem itens fantasma desabilitados");
+assert.doesNotMatch(marketingProPanel, /data-testid="marketing-pro-tools"/, "a lista de ferramentas fictícias foi removida");
+assert.match(marketingProPanel, /\{proAdsEnabled && \(\s*<Suspense[\s\S]*?<AdsProStudio\b/, "o estúdio só carrega com o entitlement proAds");
 assert.match(marketingProPanel, /usePlan\(\)/, "a aba Pro deve consultar a fonte canônica de plano");
 assert.match(marketingProPanel, /canUseFeature\(activePlan, "proAds"\)/, "o acesso deve ser decidido pelo entitlement proAds");
 assert.match(marketingProPanel, /data-pro-ads-state=\{accessState\}/);
@@ -6951,8 +7207,6 @@ assert.equal(
   1,
   "Free tem um único CTA principal de upgrade",
 );
-const proToolsSource = marketingProPanel.slice(marketingProPanel.indexOf('data-testid="marketing-pro-tools"'));
-assert.doesNotMatch(proToolsSource, /<button|<a/, "ferramentas em desenvolvimento não são clicáveis");
 assert.doesNotMatch(marketingProPanel, /premiumActive|hasPremiumAccess|currentPlan/, "a aba Pro não decide acesso por status paralelo");
 assert.doesNotMatch(marketingProPanel, /from ["'](?:openai|@ai-sdk|ai)["']/);
 // PRO-04: usePlan() só existe em marketingPage (ver assert acima, perto da linha ~804) — nenhum outro
@@ -9830,7 +10084,13 @@ runProductImagePreservationTests();
   // Mesmo cutout hash (embutido no assetId) e mesmo assetId nas 3 variações.
   const assetIds = new Set(payloads.map((p) => p.asset.assetId));
   assert.equal(assetIds.size, 1, "as 3 variações precisam usar exatamente o mesmo cutout aprovado (mesmo assetId)");
-  assert.match([...assetIds][0], /sha256:1329c84c0f4b9d7ab8a7814cbe7c76c0ca57b918d18a7fe5ac802052f65cc933$/, "o hash do cutout precisa ser o mesmo aprovado na Fase 2");
+  // TEST-FIX-CUTOUT-SMOKE-01 — hash do fixture determinístico gerado em memória por
+  // getApprovedCutoutPng() (script/product-cutout-smoke/marketing-pro-creative-tokens.ts), nunca mais lido
+  // de um artefato de .tmp/ gerado manualmente uma vez via PhotoRoom (nunca versionado, ausente em
+  // qualquer clone/worktree limpo). A garantia protegida por esta asserção continua a mesma: as 3
+  // variações precisam usar exatamente o mesmo cutout — só a FONTE do cutout deixou de ser um artefato
+  // não reproduzível.
+  assert.match([...assetIds][0], /sha256:a3d76d5e942ef04d52a5035b11b3835a802d0e3690be1029cfea3b535567cbe2$/, "o hash do cutout precisa ser o do fixture determinístico");
 
   // Mesmo ProductTransform (determinístico, independente de estilo) — válido (uniform-contain, sem crop).
   const transforms = new Set(payloads.map((p) => JSON.stringify(p.transform)));
@@ -9948,7 +10208,9 @@ runProductImagePreservationTests();
   assert.equal(new Set(payloads.map((item) => item.asset.assetId)).size, 1);
   assert.equal(new Set(payloads.map((item) => JSON.stringify(item.transform))).size, 1);
   assert.equal(new Set(payloads.map((item) => JSON.stringify(item.safeZones))).size, 1);
-  assert.match(payloads[0].asset.assetId, /sha256:1329c84c0f4b9d7ab8a7814cbe7c76c0ca57b918d18a7fe5ac802052f65cc933$/);
+  // TEST-FIX-CUTOUT-SMOKE-01 — mesmo fixture determinístico do bloco V1 acima (buildMarketingProCreativeV2Payload
+  // delega para buildMarketingProCreativePayload, mesmo asset).
+  assert.match(payloads[0].asset.assetId, /sha256:a3d76d5e942ef04d52a5035b11b3835a802d0e3690be1029cfea3b535567cbe2$/);
 
   // 6–8) Safe zone, crop false e uniform-contain em todas as famílias.
   for (const payload of payloads) {
@@ -10687,17 +10949,144 @@ runProductImagePreservationTests();
   assert.equal(hasMatchingOAuthContinuityCookie(`${MP_OAUTH_CONTINUITY_COOKIE}=${nonce.slice(0, 10)}`, nonce), false, "cookie mais curto -> recusado, nunca lança");
   assert.equal(hasMatchingOAuthContinuityCookie(`other=${nonce}`, nonce), false, "cookie certo mas com nome errado -> recusado");
 
+  // RC-P0-SECURITY-02N: classifyOAuthContinuityCookie() distinguishes "missing" from "mismatch" for
+  // sanitized diagnostic logging — the underlying accept/reject decision (only "match" passes) is
+  // unchanged from hasMatchingOAuthContinuityCookie's boolean contract above.
+  assert.equal(classifyOAuthContinuityCookie(`${MP_OAUTH_CONTINUITY_COOKIE}=${nonce}`, nonce), "match");
+  assert.equal(classifyOAuthContinuityCookie(undefined, nonce), "missing", "sem header Cookie nenhum -> missing, nunca mismatch");
+  assert.equal(classifyOAuthContinuityCookie("", nonce), "missing");
+  assert.equal(classifyOAuthContinuityCookie(`other=${nonce}`, nonce), "missing", "cookie certo mas com nome errado -> missing (o cookie de continuidade em si não está presente)");
+  assert.equal(classifyOAuthContinuityCookie(`${MP_OAUTH_CONTINUITY_COOKIE}=${"0".repeat(64)}`, nonce), "mismatch", "cookie presente mas com valor errado -> mismatch, nunca missing");
+  assert.equal(classifyOAuthContinuityCookie(`${MP_OAUTH_CONTINUITY_COOKIE}=${nonce.slice(0, 10)}`, nonce), "mismatch");
+
   // Estrutural: confirma que a rota de callback aplica o gate de continuidade ANTES de tocar o
   // Firestore, e que uid nunca vem de query/body em nenhum handler deste arquivo.
   const mpConnectionsSource = read("server/mercadopago-connections.ts");
-  assert.match(mpConnectionsSource, /hasMatchingOAuthContinuityCookie\(req\.headers\.cookie, nonce\)/);
+  assert.match(mpConnectionsSource, /classifyOAuthContinuityCookie\(req\.headers\.cookie, nonce\)/);
   assert.doesNotMatch(mpConnectionsSource, /req\.(query|body)\.u?id\b/i, "uid nunca pode vir de query/body em nenhuma rota deste arquivo");
-  assert.match(mpConnectionsSource, /res\.cookie\(MP_OAUTH_CONTINUITY_COOKIE, nonce, \{[\s\S]*?httpOnly: true/, "o cookie de continuidade precisa ser HttpOnly");
+  assert.match(mpConnectionsSource, /res\.cookie\(MP_OAUTH_CONTINUITY_COOKIE, nonce, \{[\s\S]*?httpOnly: true/, "o cookie de continuidade (tentativa do backend, defesa em profundidade) precisa continuar HttpOnly");
   assert.match(mpConnectionsSource, /oauth_attempt_created|oauth_callback_rejected|oauth_attempt_consumed|merchant_connection_created/);
   // Nenhum log deste arquivo pode incluir o code/token/secret em claro.
   assert.doesNotMatch(mpConnectionsSource, /mpInfo\([^)]*code\)|mpWarn\([^)]*code\)/i);
   assert.doesNotMatch(mpConnectionsSource, /CLIENT_SECRET\}`|\$\{CLIENT_SECRET\}/);
+  // As duas razões de rejeição de continuidade precisam ser distinguíveis nos logs, sem nunca expor
+  // o valor do cookie/nonce.
+  assert.match(mpConnectionsSource, /continuity_cookie_missing/);
+  assert.match(mpConnectionsSource, /continuity_cookie_mismatch/);
+  assert.doesNotMatch(mpConnectionsSource, /continuity_mismatch["'`]/, "a razão antiga (não-distinguível) não pode mais existir");
+
+  // RC-P0-SECURITY-02N: MERCADOPAGO_REDIRECT_URI nunca mais cai silenciosamente para um host antigo —
+  // falha fechado (500 sanitizado) exatamente como CLIENT_ID já faz logo acima dele.
+  assert.doesNotMatch(mpConnectionsSource, /164193806378/, "o fallback obsoleto para um host antigo do Cloud Run não pode mais existir");
+  assert.match(
+    mpConnectionsSource,
+    /if \(!REDIRECT_URI\) \{\s*return res\.status\(500\)\.json\(\{\s*error: "MERCADOPAGO_REDIRECT_URI is not configured",/,
+    "REDIRECT_URI ausente precisa falhar fechado com um erro 500 saneado, nunca um fallback silencioso",
+  );
+
+  // client/src/lib/mercadopago-connection-actions.ts: o frontend agora é quem efetivamente garante o
+  // cookie de continuidade (o Set-Cookie do backend não sobrevive de forma confiável ao rewrite
+  // externo do Vercel) — confirma que ele deriva o valor do nonce da própria resposta JSON do
+  // start-auth, nunca de um valor fixo/adivinhado, e usa o mesmo nome de cookie compartilhado.
+  const mpActionsSource = read("client/src/lib/mercadopago-connection-actions.ts");
+  assert.match(mpActionsSource, /document\.cookie\s*=/, "o frontend precisa setar o cookie de continuidade ele mesmo");
+  assert.match(mpActionsSource, /MP_OAUTH_CONTINUITY_COOKIE/, "precisa reusar a constante compartilhada do nome do cookie, nunca reescrever a string");
+  assert.match(mpActionsSource, /body\.nonce/, "o valor do cookie precisa vir do nonce devolvido por start-auth, não de um literal");
+
+  // RC-P0-SECURITY-02P: cloudbuild.yaml usa --update-env-vars/--update-secrets (merge) para o deploy
+  // do Cloud Run, nunca --set-env-vars/--set-secrets (replace-all) — a forma replace-all apagava
+  // silenciosamente qualquer env var/secret setado fora deste arquivo a cada deploy (foi assim que
+  // MERCADOPAGO_REDIRECT_URI e o binding do secret V2 sumiam em produção). E os quatro valores que a
+  // continuidade OAuth/criptografia de token exigem continuam declarados explicitamente no arquivo,
+  // para que o deploy canônico nunca mais dependa de alguém lembrar de setá-los manualmente depois.
+  const cloudbuildSource = read("cloudbuild.yaml");
+  assert.doesNotMatch(cloudbuildSource, /--set-env-vars=/, "deploy do Cloud Run precisa usar --update-env-vars (merge), nunca --set-env-vars (replace-all, apaga env vars setadas fora deste arquivo)");
+  assert.doesNotMatch(cloudbuildSource, /--set-secrets=/, "deploy do Cloud Run precisa usar --update-secrets (merge), nunca --set-secrets (replace-all, apaga secrets setados fora deste arquivo)");
+  assert.match(cloudbuildSource, /--update-env-vars=/);
+  assert.match(cloudbuildSource, /--update-secrets=/);
+  assert.match(cloudbuildSource, /MERCADOPAGO_REDIRECT_URI=https:\/\/revendasmart\.vercel\.app\/api\/mercadopago\/callback/, "MERCADOPAGO_REDIRECT_URI precisa continuar declarado explicitamente no deploy canônico");
+  assert.match(cloudbuildSource, /MERCADOPAGO_TOKEN_ENCRYPTION_ACTIVE_VERSION=v2/, "ACTIVE_VERSION=v2 precisa continuar declarado explicitamente no deploy canônico");
+  assert.match(cloudbuildSource, /MERCADOPAGO_TOKEN_ENCRYPTION_KEY=revendasmart-mercadopago-token-encryption-key:latest/, "o binding do secret V1 precisa continuar declarado no deploy canônico");
+  assert.match(cloudbuildSource, /MERCADOPAGO_TOKEN_ENCRYPTION_KEY_V2=revendasmart-mercadopago-token-encryption-key-v2:latest/, "o binding do secret V2 precisa continuar declarado no deploy canônico");
+
+  // RC-P0-SECURITY-02R: APP_BASE_URL (host que recebe os webhooks assíncronos de pagamento do
+  // Mercado Pago, em server/payments.ts) precisa continuar declarado no deploy canônico com o host
+  // atual confirmado pelo operador via Cloud Run status.url — nunca o host obsoleto 164193806378, e
+  // nunca ausente (o que faria o deploy silenciosamente preservar/depender de um valor não versionado).
+  assert.match(cloudbuildSource, /APP_BASE_URL=https:\/\/revendasmart-backend-cc2743rkmq-uc\.a\.run\.app/, "APP_BASE_URL precisa continuar declarado explicitamente no deploy canônico, com o host de produção confirmado");
+  assert.doesNotMatch(cloudbuildSource, /164193806378/, "o host obsoleto do Cloud Run não pode voltar a aparecer no deploy canônico");
+
+  // RC-P0-SECURITY-02R: mesmo fallback obsoleto removido de server/mercadopago-connections.ts
+  // (RC-P0-SECURITY-02N) não pode reaparecer em payments.ts/subscriptions.ts — nenhum dos dois pode
+  // voltar a substituir silenciosamente um APP_BASE_URL ausente por um host antigo do Cloud Run.
+  const paymentsSource = read("server/payments.ts");
+  assert.doesNotMatch(paymentsSource, /164193806378/, "payments.ts não pode reintroduzir o fallback obsoleto para um host antigo do Cloud Run");
+  assert.match(paymentsSource, /resolvePaymentWebhookBaseUrl\(APP_BASE_URL_RAW, process\.env\.NODE_ENV\)/g, "os dois pontos que criam preferências de pagamento precisam validar APP_BASE_URL antes de chamar o Mercado Pago");
+
+  const subscriptionsSource = read("server/subscriptions.ts");
+  assert.doesNotMatch(subscriptionsSource, /164193806378/, "subscriptions.ts não pode reintroduzir a declaração morta com o fallback obsoleto do Cloud Run");
+  assert.doesNotMatch(subscriptionsSource, /\bAPP_BASE_URL\b/, "APP_BASE_URL era código morto em subscriptions.ts (nunca usado após ser declarado) — não deve voltar sem um uso real");
 }
+
+// --- RC-P0-SECURITY-02R: resolvePaymentWebhookBaseUrl() — validação fail-closed do host usado no
+// notification_url dos webhooks de pagamento do Mercado Pago (server/payments.ts). Pura e testável
+// sem subir servidor/emulador, no mesmo padrão de classifyOAuthContinuityCookie(). ---
+function runPaymentWebhookBaseUrlTests(): void {
+  // T1: configurado corretamente -> origem canônica normalizada, sem barra final.
+  const ok = resolvePaymentWebhookBaseUrl("https://revendasmart-backend-cc2743rkmq-uc.a.run.app", "production");
+  assert.equal(ok.ok, true, "T1: APP_BASE_URL https válido em produção precisa ser aceito");
+  if (ok.ok) {
+    assert.equal(ok.url, "https://revendasmart-backend-cc2743rkmq-uc.a.run.app", "T1: URL válida sem barra final não deve ser alterada");
+  }
+
+  // T2: ausente -> falha fechado (nunca cai para um host hardcoded).
+  const missing = resolvePaymentWebhookBaseUrl("", "production");
+  assert.equal(missing.ok, false, "T2: APP_BASE_URL vazio precisa falhar fechado, nunca substituir por um host hardcoded");
+  if (!missing.ok) assert.equal(missing.reason, "missing");
+  const missingWhitespace = resolvePaymentWebhookBaseUrl("   ", "production");
+  assert.equal(missingWhitespace.ok, false, "T2b: só espaços em branco também conta como ausente");
+
+  // T3: malformado -> falha fechado.
+  const malformed = resolvePaymentWebhookBaseUrl("not a url", "production");
+  assert.equal(malformed.ok, false, "T3: URL malformada precisa falhar fechado");
+  if (!malformed.ok) assert.equal(malformed.reason, "invalid");
+  const wrongProtocol = resolvePaymentWebhookBaseUrl("ftp://revendasmart-backend.example/", "production");
+  assert.equal(wrongProtocol.ok, false, "T3b: protocolo que não é http/https precisa falhar fechado");
+
+  // T4: não-HTTPS em produção -> falha fechado (http só é tolerado fora de produção, ex. dev local).
+  const httpInProd = resolvePaymentWebhookBaseUrl("http://revendasmart-backend-cc2743rkmq-uc.a.run.app", "production");
+  assert.equal(httpInProd.ok, false, "T4: APP_BASE_URL http (não-https) em produção precisa falhar fechado");
+  const httpInDev = resolvePaymentWebhookBaseUrl("http://localhost:5000", "development");
+  assert.equal(httpInDev.ok, true, "T4b: http continua aceito fora de produção (dev local)");
+
+  // T5: normalização de barra final -> notification_url nunca fica com `//`.
+  const trailingSlash = resolvePaymentWebhookBaseUrl("https://revendasmart-backend-cc2743rkmq-uc.a.run.app/", "production");
+  assert.equal(trailingSlash.ok, true);
+  if (trailingSlash.ok) {
+    assert.equal(trailingSlash.url, "https://revendasmart-backend-cc2743rkmq-uc.a.run.app", "T5: barra final precisa ser removida");
+    assert.doesNotMatch(`${trailingSlash.url}/api/payments/webhook`, /[^:]\/\//, "T5: notification_url final não pode conter barra dupla");
+  }
+  const doubleTrailingSlash = resolvePaymentWebhookBaseUrl("https://revendasmart-backend-cc2743rkmq-uc.a.run.app//", "production");
+  if (doubleTrailingSlash.ok) {
+    assert.doesNotMatch(`${doubleTrailingSlash.url}/api/payments/webhook`, /[^:]\/\//, "T5b: múltiplas barras finais também precisam ser normalizadas");
+  }
+
+  // T6: o contrato de binding uid/chargeId no notification_url não foi alterado por esta mudança —
+  // confirmado por asserção de código-fonte (os dois pontos de criação de preferência continuam
+  // interpolando uid/chargeId com encodeURIComponent, exatamente como antes desta mudança).
+  const paymentsSource = read("server/payments.ts");
+  assert.match(
+    paymentsSource,
+    /notification_url: `\$\{appBaseUrlCheck\.url\}\/api\/payments\/webhook\?uid=\$\{encodeURIComponent\(body\.uid\)\}&chargeId=\$\{encodeURIComponent\(chargeId\)\}`/,
+    "T6: binding uid/chargeId em /payments/create-link precisa continuar exatamente igual",
+  );
+  assert.match(
+    paymentsSource,
+    /notification_url: `\$\{appBaseUrlCheck\.url\}\/api\/payments\/webhook\?uid=\$\{encodeURIComponent\(params\.uid\)\}&chargeId=\$\{encodeURIComponent\(params\.chargeId\)\}`/,
+    "T6b: binding uid/chargeId em createOrderMercadoPagoCharge precisa continuar exatamente igual",
+  );
+}
+runPaymentWebhookBaseUrlTests();
 
 // --- RELEASE-05B: robustez do onboarding da conexão Mercado Pago (funções puras) ---
 //
@@ -10920,8 +11309,14 @@ runProductImagePreservationTests();
     "PLAY_BILLING_PACKAGE_NAME precisa bater com capacitor.config.ts — nunca divergir do app real",
   );
 
-  assert.equal(isKnownPlayBillingProductId(PLAY_BILLING_PRODUCT_IDS.premiumMonthly), true);
-  assert.equal(isKnownPlayBillingProductId(PLAY_BILLING_PRODUCT_IDS.premiumYearly), true);
+  assert.equal(isKnownPlayBillingProductId(PLAY_BILLING_PRODUCT_IDS.pro), true);
+  assert.equal(isKnownPlayBillingProductId(PLAY_BILLING_PRODUCT_IDS.premium), true);
+  assert.deepEqual(Object.values(PLAY_BILLING_PRODUCT_IDS).sort(), ["revendasmart_premium", "revendasmart_pro"].sort());
+  assert.deepEqual(resolvePlayBillingPlanAndCycle(PLAY_BILLING_CATALOG.pro.monthly.productId, PLAY_BILLING_CATALOG.pro.monthly.basePlanId), { plan: "pro", cycle: "monthly" });
+  assert.deepEqual(resolvePlayBillingPlanAndCycle(PLAY_BILLING_CATALOG.pro.annual.productId, PLAY_BILLING_CATALOG.pro.annual.basePlanId), { plan: "pro", cycle: "annual" });
+  assert.deepEqual(resolvePlayBillingPlanAndCycle(PLAY_BILLING_CATALOG.premium.monthly.productId, PLAY_BILLING_CATALOG.premium.monthly.basePlanId), { plan: "premium", cycle: "monthly" });
+  assert.deepEqual(resolvePlayBillingPlanAndCycle(PLAY_BILLING_CATALOG.premium.annual.productId, PLAY_BILLING_CATALOG.premium.annual.basePlanId), { plan: "premium", cycle: "annual" });
+  assert.equal(resolvePlayBillingPlanAndCycle(PLAY_BILLING_PRODUCT_IDS.premium, "premium-weekly-autorenew"), null);
   assert.equal(isKnownPlayBillingProductId("revendasmart_free_forever"), false, "um productId forjado nunca é aceito");
   assert.equal(isKnownPlayBillingProductId(undefined), false);
   assert.equal(isKnownPlayBillingProductId(123), false);
@@ -10981,6 +11376,9 @@ runProductImagePreservationTests();
   assert.match(billingSource, /playPurchaseTokenHash: tokenHash/);
   assert.doesNotMatch(billingSource, /playPurchaseToken:\s*purchaseToken/, "nunca um campo com o token cru");
   assert.doesNotMatch(billingSource, /transaction\.set\([^)]*purchaseToken[^)]*\)/s, "nenhum tx.set() grava o purchaseToken bruto");
+  const nativeBillingSource = read("client/src/lib/google-play-billing-client.ts");
+  assert.match(nativeBillingSource, /autoAcknowledgePurchases:\s*false/, "ack do client precisa permanecer desativado até a verificação server-side");
+  assert.match(nativeBillingSource, /Object\.values\(PLAY_BILLING_PRODUCT_IDS\)/, "a consulta nativa precisa usar os dois product IDs canônicos");
 
   // RELEASE-07B instalou o plugin nativo real (@capgo/native-purchases) e substituiu o boundary
   // "sempre lança" por uma orquestração de verdade — cobertura completa mais abaixo.
@@ -11009,7 +11407,8 @@ runProductImagePreservationTests();
     }
   }
 
-  const monthlyProductId = getPlayBillingProductId("monthly");
+  const monthlyOffer = getPlayBillingProduct("premium", "monthly");
+  const monthlyProductId = monthlyOffer.productId;
 
   // Fora de um shell Capacitor nativo (like this Node test, or a plain browser tab), a detecção de
   // plataforma precisa resolver para "não é Android" — nunca lançar, nunca assumir userAgent.
@@ -11026,7 +11425,7 @@ runProductImagePreservationTests();
   // D/E: preço vem do adapter (Play), nunca hardcoded pelo backend/app.
   setGooglePlayBillingClientForTests(buildMockGooglePlayBillingClient({
     available: true,
-    products: [{ productId: monthlyProductId, formattedPrice: "R$ 24,90", currencyCode: "BRL" }],
+    products: [{ ...monthlyOffer, formattedPrice: "R$ 24,90", currencyCode: "BRL" }],
   }));
   {
     const offers = await getAndroidPremiumOffers();
@@ -11037,7 +11436,7 @@ runProductImagePreservationTests();
   // F/G/H: compra "purchased" só ativa Premium se o SERVIDOR confirmar premiumActive — nunca antes.
   setGooglePlayBillingClientForTests(buildMockGooglePlayBillingClient({
     available: true,
-    purchaseResult: { productId: monthlyProductId, purchaseToken: "tok-active", purchaseState: "purchased", isAcknowledged: true },
+    purchaseResult: { ...monthlyOffer, productId: monthlyProductId, purchaseToken: "tok-active", purchaseState: "purchased", isAcknowledged: true },
   }));
   {
     const { fetch: fetchActive, calls } = mockFetchOnce(200, { premiumActive: true, currentPlan: "premium", premiumExpiresAt: "2099-01-01T00:00:00.000Z", autoRenew: true, deduplicated: false });
@@ -11087,7 +11486,7 @@ runProductImagePreservationTests();
   // L: restore consulta o adapter e reenvia ao servidor — nunca ativa Premium localmente.
   setGooglePlayBillingClientForTests(buildMockGooglePlayBillingClient({
     available: true,
-    purchases: [{ productId: monthlyProductId, purchaseToken: "tok-restore", purchaseState: "purchased", isAcknowledged: true }],
+    purchases: [{ ...monthlyOffer, productId: monthlyProductId, purchaseToken: "tok-restore", purchaseState: "purchased", isAcknowledged: true }],
   }));
   {
     const { fetch: fetchRestore, calls } = mockFetchOnce(200, { results: [{ status: 200, premiumActive: true }] });
@@ -11107,7 +11506,7 @@ runProductImagePreservationTests();
   // N: recovery de app morto — getCurrentPurchases() é revalidado contra o servidor, sem exigir nova compra.
   setGooglePlayBillingClientForTests(buildMockGooglePlayBillingClient({
     available: true,
-    purchases: [{ productId: monthlyProductId, purchaseToken: "tok-recover", purchaseState: "purchased", isAcknowledged: true }],
+    purchases: [{ ...monthlyOffer, productId: monthlyProductId, purchaseToken: "tok-recover", purchaseState: "purchased", isAcknowledged: true }],
   }));
   {
     const { fetch: fetchRecover, calls } = mockFetchOnce(200, { premiumActive: true, currentPlan: "premium", premiumExpiresAt: null, autoRenew: true, deduplicated: true });

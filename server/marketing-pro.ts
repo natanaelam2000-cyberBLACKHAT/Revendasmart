@@ -19,7 +19,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import { getFirebaseAdmin } from "./firebase-admin-init";
 import { logError, logInfo, logWarn } from "./logger";
 import { isAdminUid } from "./admin-auth";
-import { PLANS, canUseFeature, isPremiumActive, type PlanData, type PlanType } from "../shared/monetization";
+import { canAccessAdsPro, resolveCommercialPlan, type PlanData, type PlanType } from "../shared/monetization";
 import {
   MARKETING_PRO_FIELD_LIMITS,
   MARKETING_PRO_PRODUCT_ZONE,
@@ -383,9 +383,15 @@ function sendMarketingProError(res: Response, status: number, code: MarketingPro
  * É exatamente o que o PRO-01 já validou para a UI (isPremiumActive + canUseFeature(..., "proAds")),
  * só que aqui é o BACKEND quem decide, a partir do planData lido por Admin SDK.
  */
-export function resolveMarketingProEntitlement(planData: PlanData | null): { readonly allowed: boolean; readonly plan: PlanType } {
-  const plan: PlanType = isPremiumActive(planData) ? PLANS.PREMIUM : PLANS.FREE;
-  return { allowed: canUseFeature(plan, "proAds"), plan };
+export function resolveMarketingProEntitlement(planData: PlanData | null, internalGrant: string | null = null): { readonly allowed: boolean; readonly plan: PlanType } {
+  const plan = resolveCommercialPlan(planData);
+  return { allowed: canAccessAdsPro(plan, false, internalGrant), plan };
+}
+
+/** RELEASE V1 §4.2 — efetivo no middleware: somente admin autorizado ou concessão play_review. */
+export function isMarketingProV1Allowed(_commercialPlan: PlanType, isAdmin: boolean, internalGrant: string | null): boolean {
+  void _commercialPlan;
+  return isAdmin || internalGrant === "play_review";
 }
 
 /** Exportado (PRO-10B) para o Perfil Criativo (`server/marketing-pro-creative-profile.ts`) reaproveitar
@@ -403,16 +409,21 @@ export async function requireProAdsEntitlement(req: Request, res: Response, next
     // é uma permissão de desenvolvimento. Continua computando o entitlement de plano (nunca removido)
     // só para o log de auditoria; ele NUNCA é a autoridade sozinho enquanto Anúncios Pro é admin-only.
     const isAdmin = await isAdminUid(uid);
-    if (isAdmin) {
-      next();
-      return;
-    }
+
 
     const admin = getFirebaseAdmin();
     const db = admin.firestore();
-    const snapshot = await db.collection("users").doc(uid).collection("planData").doc("main").get();
+    const [snapshot, grantSnapshot] = await Promise.all([
+      db.collection("users").doc(uid).collection("planData").doc("main").get(),
+      db.collection("users").doc(uid).collection("internalGrants").doc("main").get(),
+    ]);
     const planData = snapshot.exists ? (snapshot.data() as PlanData) : null;
-    const entitlement = resolveMarketingProEntitlement(planData);
+    const internalGrant = grantSnapshot.data()?.benefitGrant === "play_review" ? "play_review" : null;
+    const entitlement = resolveMarketingProEntitlement(planData, internalGrant);
+    if (isMarketingProV1Allowed(entitlement.plan, isAdmin, internalGrant)) {
+      next();
+      return;
+    }
     logWarn("marketing_pro.entitlement_denied", { requestId: req.requestId, reason: "admin_only_in_v1", plan: entitlement.plan });
     sendMarketingProError(res, 403, "PRO_ADS_REQUIRED");
   } catch (error) {

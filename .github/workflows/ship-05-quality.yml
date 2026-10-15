@@ -1,0 +1,109 @@
+name: SHIP-05 Integrated Quality
+
+on:
+  push:
+    branches: [ci/ship-04-offline-rc]
+
+permissions:
+  contents: read
+
+env:
+  CI: 'true'
+
+jobs:
+  static:
+    name: static-quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.15.0'
+          package-manager-cache: false
+      - name: Record tested identity
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          echo "TESTED_SHA=$GITHUB_SHA"
+          node --version
+          npm --version
+          sha256sum package-lock.json
+      - name: Install locked dependencies without postinstall mutation
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify lockfile unchanged
+        run: git diff --exit-code -- package.json package-lock.json
+      - name: Validate skills
+        run: npm run skills:validate
+      - name: Typecheck
+        run: npm run check
+      - name: Lint
+        run: npm run lint
+
+  tests:
+    name: integrated-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.15.0'
+          package-manager-cache: false
+      - name: Record tested identity
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Install locked dependencies without postinstall mutation
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify lockfile unchanged
+        run: git diff --exit-code -- package.json package-lock.json
+      - name: Install locked Chromium
+        run: ./node_modules/.bin/playwright install --with-deps chromium
+      - name: Run integrated test suite
+        run: npm run test
+
+  build:
+    name: build-and-bundle-budget
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.15.0'
+          package-manager-cache: false
+      - name: Record tested identity
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Install locked dependencies without postinstall mutation
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify lockfile unchanged
+        run: git diff --exit-code -- package.json package-lock.json
+      - name: Build
+        env:
+          RS_BUNDLE_MODULE_EVIDENCE: '1'
+        run: npm run build
+      - name: Create bundle evidence
+        run: node scripts/performance/create-bundle-evidence.mjs
+      - name: Upload bundle evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ship05-bundle-evidence-${{ github.sha }}
+          path: |
+            dist/public/.vite/manifest.json
+            dist/public/.vite/bundle-diagnostics.json
+            dist/public/.vite/rollup-module-diagnostics.json
+          retention-days: 7
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Check bundle budgets
+        run: npm run performance:bundle-check

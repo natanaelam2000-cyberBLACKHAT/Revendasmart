@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from "react";
 import { Layout } from "@/components/layout";
-import { Camera, CheckCircle2, ChevronDown, ScanLine, Sparkles, ChevronLeft, ImagePlus, AlertCircle } from "lucide-react";
-import { useLocation, useParams } from "wouter";
+import { PlanLimitPrompt } from "@/components/PlanLimitPrompt";
+import { Camera, CheckCircle2, ChevronDown, ScanLine, Sparkles, ChevronLeft, ImagePlus } from "lucide-react";
+import { useLocation, useParams, useSearch } from "wouter";
 
 const BarcodeScanner = lazy(
   () => import("@/components/barcode-scanner")
@@ -16,7 +17,8 @@ const ProductPhotoEnhancementTool = lazy(
 );
 import { Product, defaultSettings } from "@/lib/mock-data";
 import type { PlanType } from "@shared/monetization";
-import { getFirebaseAuth, logTelemetryEvent } from "@/lib/firebase";
+import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent, waitForAuthReady } from "@/lib/firebase";
+import { getApiUrl } from "@/lib/api-config";
 import { useAdminAccess } from "@/hooks/useAdminAccess";
 import {
   getFirestore,
@@ -32,6 +34,7 @@ import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { usePlanData } from "@/hooks/usePlanData";
 import { notifyError, notifySuccess } from "@/lib/notify";
 import { buildProductCreatePayload } from "@/lib/product-payload";
+import { createProduct } from "@/lib/product-commands";
 import { rememberRecentProductId } from "@/lib/recent-products";
 import { checkProductLimit } from "@/lib/plan-helpers";
 import {
@@ -157,6 +160,7 @@ function getProductSaveErrorMessage(error: unknown, stage: ProductSaveStage): st
   const code = getErrorCode(error);
   if (typeof navigator !== "undefined" && navigator.onLine === false) return "Sem conexão. Tente novamente.";
   if (code.includes("auth") || stage === "auth_check") return "Sua sessão expirou. Entre novamente para salvar o produto.";
+  if (code === "PLAN_LIMIT_REACHED") return "Você atingiu o limite de produtos do seu plano.";
   if (stage === "plan_limit_read") return code === "permission-denied" ? "Não foi possível validar seu plano. Entre novamente." : "Limite de produtos atingido.";
   if (stage === "storage_upload" || code.startsWith("storage/")) return "Falha ao enviar imagem.";
   if (code === "permission-denied") return "Permissão negada ao salvar. Entre novamente e tente de novo.";
@@ -170,14 +174,29 @@ function logProductSaveDiagnostic(event: string, context: Record<string, unknown
   logTelemetryEvent(event as any, context as any).catch(() => {});
 }
 
+type UploadedProductAsset = { kind: "product" | "product-thumbnail"; storagePath: string };
+
 /** RELEASE-18: storage.rules nega delete direto do client nestes paths — rollback de upload (Firestore
- * write seguinte falhou) precisa passar pelo endpoint server-side, igual ao upload em si. */
-async function cleanupUploadedProductImages(productId: string, token: string, paths: string[]) {
-  if (!paths.length) return;
+ * write seguinte falhou) precisa passar pelo endpoint server-side, igual ao upload em si.
+ * PRODUCT-THUMBNAIL-01: cada entrada carrega seu próprio `kind` (imagem principal ou miniatura) — os dois
+ * paths vivem em namespaces diferentes (`products/` vs `product-thumbnails/`), então o delete precisa
+ * saber qual dos dois para resolver o path corretamente no servidor (ver `storagePathFor` em
+ * server/uploads.ts). */
+async function cleanupUploadedProductImages(productId: string, token: string, assets: UploadedProductAsset[]) {
+  if (!assets.length) return;
   await Promise.allSettled(
-    paths.map((storagePath) => deleteImageViaServer({ kind: "product", targetId: productId, storagePath, token })),
+    assets.map(({ kind, storagePath }) => deleteImageViaServer({ kind, targetId: productId, storagePath, token })),
   );
 }
+
+/** PRODUCT-THUMBNAIL-01 — dimensões deliberadamente bem menores que a imagem principal (1200×1200): um
+ * card/lista de produto nunca renderiza a miniatura maior que ~160-200px de lado mesmo em telas de alto
+ * DPR (2-3x), então 320px de lado já cobre isso com folga sem desperdiçar banda/Storage. targetSize baixo
+ * (60KB) porque compressImage já teria um fallback de qualidade decrescente se não coubesse — na prática
+ * uma imagem 320×320 em webp/jpeg de qualidade 0.75 fica muito abaixo disso. */
+const THUMBNAIL_MAX_DIMENSION = 320;
+const THUMBNAIL_QUALITY = 0.75;
+const THUMBNAIL_TARGET_BYTES = 60 * 1024;
 
 interface ProductFormData {
   name: string;
@@ -191,6 +210,8 @@ interface ProductFormData {
   description: string;
   imageUrl: string;
   storagePath: string;
+  thumbnailUrl: string;
+  thumbnailStoragePath: string;
   extras: Record<string, string>;
   isFeatured: boolean;
   isOnSale: boolean;
@@ -204,6 +225,10 @@ export default function AddProduct() {
 
 const [, setLocation] = useLocation();
   const { id } = useParams();
+  // PLAN-IMPL-09-FINAL §17 — marcador fechado e limitado (nunca uma URL de retorno arbitrária): só diz
+  // "este cadastro veio do onboarding", nunca carrega um destino. Ignorado silenciosamente por qualquer
+  // outro caller (add-product.tsx continua funcionando exatamente igual sem o parâmetro).
+  const isFromOnboarding = new URLSearchParams(useSearch()).get("from") === "onboarding";
   const [success, setSuccess] = useState(false);
   const [scanning, setScanning] = useState(false);
   // RELEASE V1 §4.3/§6/§7: mesma checagem de admin/dev reaproveitada em 3 lugares nesta tela — scanner
@@ -283,6 +308,8 @@ const [, setLocation] = useLocation();
   description: "",
   imageUrl: "",
   storagePath: "",
+  thumbnailUrl: "",
+  thumbnailStoragePath: "",
   extras: {}, // ✅ CORRETO
   isFeatured: false,
   isOnSale: false,
@@ -359,11 +386,19 @@ const [, setLocation] = useLocation();
   // Load existing product for edit
   useEffect(() => {
     if (id) {
-      const auth = getFirebaseAuth();
-      if (auth?.currentUser) {
+      let cancelled = false;
+      // RELEASE-AUTOMATION-01 — waits for Firebase Auth's initial state instead of a synchronous
+      // `auth.currentUser` read, which is null on a fresh page load before the persisted session
+      // restores. The old code silently skipped this whole load with no error and no retry, leaving
+      // the form at its blank defaults — a real data-loss risk, since saving from there would overwrite
+      // the existing product with empty/default values for any field the user didn't manually retype.
+      void waitForAuthReady().then((user) => {
+        if (cancelled || !user) return;
+        if (getFirebaseAuth()?.currentUser?.uid !== user.uid) return;
         const firestore = getFirestore();
-        getDoc(doc(firestore, "users", auth.currentUser.uid, "products", id))
+        getDoc(doc(firestore, "users", user.uid, "products", id))
           .then(docSnap => {
+            if (cancelled || getFirebaseAuth()?.currentUser?.uid !== user.uid) return;
             if (docSnap.exists()) {
               const product = docSnap.data() as Product;
               const inferredNicho = (product.productType as NichoId) ||
@@ -393,6 +428,8 @@ const [, setLocation] = useLocation();
                 description: product.description || "",
                 imageUrl: product.imageUrl || "",
                 storagePath: product.storagePath || "",
+                thumbnailUrl: product.thumbnailUrl || "",
+                thumbnailStoragePath: product.thumbnailStoragePath || "",
                 extras: product.extras || {},
                 isFeatured: product.isFeatured || false,
                 isOnSale: product.isOnSale || false,
@@ -403,7 +440,8 @@ const [, setLocation] = useLocation();
             }
           })
           .catch(() => logTelemetryEvent("add_product_load_failed" as any, { stage: "load" }).catch(() => {}));
-      }
+      });
+      return () => { cancelled = true; };
     }
   }, [id]);
 
@@ -491,7 +529,7 @@ const [, setLocation] = useLocation();
     if (isSaving) return;
 
     let saveStage: ProductSaveStage = "unknown";
-    const uploadedPaths: string[] = [];
+    const uploadedAssets: UploadedProductAsset[] = [];
     let attemptedPayload: Record<string, unknown> | undefined;
     let productPathUid = "";
     setIsSaving(true);
@@ -532,8 +570,18 @@ const [, setLocation] = useLocation();
       if (!id) {
         saveStage = "plan_limit_read";
         const productCountSnapshot = await getCountFromServer(collection(firestore, "users", uid, "products"));
-        const safePlan: PlanType = activePlan === "premium" ? "premium" : "free";
-        const { allowed } = checkProductLimit(safePlan, productCountSnapshot.data().count, true);
+        // PLAN-IMPL-01 §8 — P0 fix: this used to pass a hardcoded `true` as checkProductLimit's
+        // openAccess argument, which made the Free 30-product limit unenforceable for anyone
+        // (plan-helpers.ts short-circuits to allowed:true whenever openAccess is true). There is no
+        // live "genuine reason" for a bypass here: a real premium/tester/premium_plus user is already
+        // covered by checkProductLimit's own internal `plan === "premium"` check (activePlan already
+        // reflects those grants via the server-composed hasPremiumAccess), and the one override that
+        // WOULD be legitimate — the admin "global premium open access" promo (GlobalConfig) — is not
+        // actually wired into usePlanData() (it hardcodes globalConfig: null), so there is nothing
+        // real to pass here today. Preserving activePlan (including "pro") instead of collapsing
+        // anything non-premium to "free" so Pro users get the 500-product limit, not Free's 30.
+        const safePlan: PlanType = activePlan === "premium" || activePlan === "pro" ? activePlan : "free";
+        const { allowed } = checkProductLimit(safePlan, productCountSnapshot.data().count);
         if (!allowed) {
           setShowLimitModal(true);
           setFormError("Limite de produtos atingido.");
@@ -543,6 +591,8 @@ const [, setLocation] = useLocation();
 
       let imageUrl = formData.imageUrl || "";
       let storagePath = formData.storagePath || "";
+      let thumbnailUrl = formData.thumbnailUrl || "";
+      let thumbnailStoragePath = formData.thumbnailStoragePath || "";
       const file = selectedFileRef.current;
 
       if (file) {
@@ -555,14 +605,50 @@ const [, setLocation] = useLocation();
           if (!token) throw new Error("Not authenticated");
           const result = await uploadImageViaServer({ kind: "product", targetId: productId, blob: file, token });
           storagePath = result.storagePath;
-          uploadedPaths.push(storagePath);
+          uploadedAssets.push({ kind: "product", storagePath });
           imageUrl = result.downloadUrl;
+
+          // PRODUCT-THUMBNAIL-01: miniatura é otimização, nunca requisito para salvar o produto — uma
+          // falha aqui só decai para thumbnailUrl/thumbnailStoragePath ausentes (§10), nunca bloqueia o
+          // fluxo principal nem mostra erro fatal ao vendedor. Nova imagem sempre gera nova miniatura
+          // (nunca herda a miniatura antiga junto de uma imagem principal nova, §13).
+          const previousThumbnailStoragePath = thumbnailStoragePath;
+          try {
+            // Nunca o File original: `file` aqui já É o derivado principal (compressão já aplicada em
+            // handleFileChange, muito antes deste ponto) — nome explícito para nunca ser confundido com
+            // uma segunda compressão do original (ver prova estrutural em script/smoke-tests.ts sobre a
+            // ordem entre a avaliação do File cru e a primeira chamada de compressão sobre ele).
+            const compressedMainFile = file;
+            const thumbCompressed = await compressImage(compressedMainFile, THUMBNAIL_MAX_DIMENSION, THUMBNAIL_MAX_DIMENSION, THUMBNAIL_QUALITY, THUMBNAIL_TARGET_BYTES, "image/webp");
+            if (thumbCompressed) {
+              const thumbResult = await uploadImageViaServer({ kind: "product-thumbnail", targetId: productId, blob: thumbCompressed.blob, token });
+              thumbnailStoragePath = thumbResult.storagePath;
+              uploadedAssets.push({ kind: "product-thumbnail", storagePath: thumbnailStoragePath });
+              thumbnailUrl = thumbResult.downloadUrl;
+              // §14 — troca de formato (thumb-v1.jpg <-> thumb-v1.webp): o novo save já sobrescreveu o
+              // path canônico atual; a variante da extensão ANTIGA (se existir e for diferente) fica
+              // órfã e precisa ser removida — best-effort, nunca bloqueia o salvamento.
+              if (previousThumbnailStoragePath && previousThumbnailStoragePath !== thumbnailStoragePath) {
+                deleteImageViaServer({ kind: "product-thumbnail", targetId: productId, storagePath: previousThumbnailStoragePath, token }).catch(() => {});
+              }
+            } else {
+              thumbnailUrl = "";
+              thumbnailStoragePath = "";
+            }
+          } catch (thumbErr) {
+            const thumbErrorCode = thumbErr instanceof ServerUploadError ? (thumbErr.reason || thumbErr.code) : getErrorCode(thumbErr);
+            logTelemetryEvent("add_product_thumbnail_upload_failed" as any, { stage: "thumbnail_upload", errorCode: thumbErrorCode, productType: activeNicho }).catch(() => {});
+            thumbnailUrl = "";
+            thumbnailStoragePath = "";
+          }
         } catch (uploadErr) {
           const errorCode = uploadErr instanceof ServerUploadError ? (uploadErr.reason || uploadErr.code) : getErrorCode(uploadErr);
           logTelemetryEvent("add_product_image_upload_failed" as any, { stage: "upload", errorCode, hasImage: true, productType: activeNicho }).catch(() => {});
           setUploadError(getProductSaveErrorMessage(uploadErr, "storage_upload"));
           imageUrl = "";
           storagePath = "";
+          thumbnailUrl = "";
+          thumbnailStoragePath = "";
         }
       }
 
@@ -570,7 +656,10 @@ const [, setLocation] = useLocation();
         setLocalBrandSuggestions((current) => saveLocalBrandSuggestion(activeNicho, normalizedBrand, current));
       }
 
-      const productData = buildProductCreatePayload({ formData, productName, normalizedBrand, category, costPrice, salePrice, stock, imageUrl, storagePath, activeNicho });
+      const productData = buildProductCreatePayload({
+        formData, productName, normalizedBrand, category, costPrice, salePrice, stock, imageUrl, storagePath, activeNicho,
+        ...(thumbnailUrl && thumbnailStoragePath ? { thumbnailUrl, thumbnailStoragePath } : {}),
+      });
       attemptedPayload = { ...productData, id: id || productId };
       // RELEASE-QUALITY-05 §8: em EDIÇÃO, nunca grava o estoque como valor absoluto — uma venda (em
       // qualquer dispositivo) pode ter decrementado o estoque real entre o formulário carregar e o
@@ -587,13 +676,20 @@ const [, setLocation] = useLocation();
         if (id) {
           await setDoc(productRef, attemptedPayload, { merge: true });
         } else {
-          await setDoc(productRef, attemptedPayload);
+          const created = await createProduct({
+            productId,
+            product: attemptedPayload,
+            idempotencyKey: `product-create-${productId}`,
+          });
+          // PLAN-IMPL-06 §10 — sinal server-authoritative (0 -> 1 dentro da MESMA transação de criação),
+          // nunca inferido do tamanho de uma lista em cache local.
+          if (created.isFirstProduct) trackAnalyticsEvent("first_product_created");
         }
       } catch (writeErr) {
-        if (uploadedPaths.length) {
+        if (uploadedAssets.length) {
           saveStage = "storage_cleanup";
           const cleanupToken = await currentUser.getIdToken().catch(() => "");
-          if (cleanupToken) await cleanupUploadedProductImages(productId, cleanupToken, uploadedPaths);
+          if (cleanupToken) await cleanupUploadedProductImages(productId, cleanupToken, uploadedAssets);
           saveStage = id ? "firestore_update" : "firestore_create";
         }
         throw writeErr;
@@ -602,6 +698,19 @@ const [, setLocation] = useLocation();
       if (!id) rememberRecentProductId(productId);
       setSuccess(true);
       notifySuccess(id ? "Produto atualizado." : "Produto salvo.");
+
+      // PLAN-IMPL-09-FINAL §16/§17 — o produto real já está persistido (o que importa de verdade);
+      // marcar onboarding_completed é um passo best-effort separado — uma falha aqui nunca pode esconder
+      // o sucesso real do cadastro nem trocar o destino de volta para uma tela morta.
+      if (!id && isFromOnboarding) {
+        fetch(getApiUrl(`/api/user/settings/${uid}`), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${await currentUser.getIdToken().catch(() => "")}` },
+          body: JSON.stringify({ onboarding_completed: true }),
+        }).catch(() => logTelemetryEvent("add_product_onboarding_completion_failed" as any, { stage: "onboarding_complete" }).catch(() => {}));
+        setTimeout(() => setLocation("/"), 1500);
+        return;
+      }
 
       setTimeout(() => setLocation("/products"), 1500);
     } catch (err) {
@@ -715,48 +824,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
   if (showLimitModal) {
     return (
       <Layout title="Limite Atingido">
-        <div className="px-6 py-8 flex flex-col items-center justify-center min-h-screen gap-6">
-          <div className="w-20 h-20 bg-amber-100 rounded-full flex items-center justify-center">
-            <AlertCircle className="w-12 h-12 text-amber-600" />
-          </div>
-
-          <div className="text-center space-y-3">
-            <h2 className="text-2xl font-bold text-foreground">Limite de Produtos Atingido</h2>
-            <p className="text-sm text-muted-foreground">
-              Você atingiu o limite de <strong>30 produtos</strong> no plano Grátis.
-            </p>
-            <p className="text-sm text-muted-foreground">
-              Upgrade para Premium para adicionar produtos ilimitados!
-            </p>
-          </div>
-
-          <div className="bg-blue-50 border border-blue-200 rounded-3xl p-4 w-full space-y-2">
-            <p className="text-xs text-blue-700 font-bold">Plano Premium inclui:</p>
-            <ul className="text-xs text-blue-600 space-y-1 list-disc list-inside">
-              <li>Produtos ilimitados</li>
-              <li>Clientes ilimitados</li>
-              <li>Cobranças via Mercado Pago</li>
-              <li>Múltiplos tipos de negócio</li>
-            </ul>
-          </div>
-
-          <div className="flex gap-3 w-full">
-            <button
-              onClick={() => setShowLimitModal(false)}
-              className="flex-1 bg-secondary text-foreground font-bold py-3 rounded-xl"
-              data-testid="button-close-limit-modal"
-            >
-              Entendi
-            </button>
-            <button
-              onClick={() => setLocation('/subscribe')}
-              className="flex-1 bg-primary text-white font-bold py-3 rounded-xl"
-              data-testid="button-upgrade-premium"
-            >
-              Upgrade →
-            </button>
-          </div>
-        </div>
+        <PlanLimitPrompt resource="products" currentPlan={activePlan} onClose={() => setShowLimitModal(false)} />
       </Layout>
     );
   }
@@ -847,13 +915,18 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
           {/* RELEASE V1 §6/§7: PhotoRoom e melhoria de foto exigem um produto JÁ SALVO (a imagem
               original precisa existir no Storage com um productId real) — por isso só aparecem em modo
               de edição, nunca durante o cadastro inicial (a foto ainda é só um blob local até salvar).
-              Premium/admin apenas — Free nunca monta estes componentes (zero chamadas ao provider). */}
+              PLAN-IMPL-05: PhotoRoom (preparação profissional) agora é Pro-ou-Premium/admin, com cota
+              mensal server-authoritative (3/100) — Free continua sem montar o componente (zero chamadas
+              ao provider). Melhoria de foto (100% local, sem custo de provider) continua Premium/admin,
+              política de produto inalterada por este ticket. */}
+          {id && formData.imageUrl && (activePlan === "pro" || activePlan === "premium" || isAdminUser) && (
+            <Suspense fallback={<div className="rounded-2xl border border-border/40 bg-white/70 p-3.5 text-xs font-semibold text-muted-foreground">Carregando ferramentas Premium...</div>}>
+              <PhotoroomCutoutTool productId={id} originalImageUrl={formData.imageUrl} plan={activePlan} />
+            </Suspense>
+          )}
           {id && formData.imageUrl && (activePlan === "premium" || isAdminUser) && (
             <Suspense fallback={<div className="rounded-2xl border border-border/40 bg-white/70 p-3.5 text-xs font-semibold text-muted-foreground">Carregando ferramentas Premium...</div>}>
-              <div className="space-y-3">
-                <PhotoroomCutoutTool productId={id} originalImageUrl={formData.imageUrl} />
-                <ProductPhotoEnhancementTool productId={id} originalImageUrl={formData.imageUrl} />
-              </div>
+              <ProductPhotoEnhancementTool productId={id} originalImageUrl={formData.imageUrl} />
             </Suspense>
           )}
 

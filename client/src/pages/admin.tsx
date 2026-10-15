@@ -1,23 +1,39 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Layout } from "@/components/layout";
-import { 
-  APP_VERSION, getCurrentUserId, getUsers
-} from "@/lib/mock-data";
+import { APP_VERSION } from "@/lib/mock-data";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { useLocation } from "wouter";
-import { getFirebaseAuth, logError } from "@/lib/firebase";
+import { getFirebaseAuth, waitForAuthReady } from "@/lib/firebase";
+import type { User } from "firebase/auth";
 import { 
   ShieldCheck, Package, Users, CircleDollarSign, Receipt, 
   AlertTriangle, Activity, Database, Clock, ChevronRight, ToggleLeft, ToggleRight, Gift
 } from "lucide-react";
 import { format, subDays, isSameDay } from "@/lib/date-utils";
 import { getApiUrl } from "@/lib/api-config";
+import { formatCurrency } from "@/lib/product-pricing";
 
 export default function AdminMetrics() {
   const [, setLocation] = useLocation();
   const auth = getFirebaseAuth();
-  const user = auth?.currentUser;
-  
+  const [user, setUser] = useState<User | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  // RELEASE-AUTOMATION-01 — reading `auth.currentUser` synchronously on mount (the previous behavior)
+  // is guaranteed null on a fresh full-page load, before the persisted session finishes restoring; the
+  // old redirect below ran inside useMemo (a render-phase side effect, worse than useEffect: it fires
+  // on literally every render with no chance to react once auth resolves) and would bounce a genuinely
+  // logged-in admin straight back to /login every time. Waits for the real initial auth state instead.
+  useEffect(() => {
+    let cancelled = false;
+    void waitForAuthReady().then((resolvedUser) => {
+      if (cancelled) return;
+      setUser(resolvedUser);
+      setAuthChecked(true);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
   // Get dashboard data from Firestore
   const { products, sales, clients, loading: dashboardLoading } = useDashboardData();
   
@@ -53,27 +69,18 @@ export default function AdminMetrics() {
 
   const currentUser = useMemo(() => {
     if (!user) return null;
-    try {
-      const id = getCurrentUserId();
-      return getUsers().find(u => u.id === id);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Unknown error";
-      logError("admin_current_user_load_failed", msg, {
-        userId: user.uid,
-        severity: "warning",
-      });
-      return null;
-    }
+    return { email: user.email, storeName: user.displayName || "" };
   }, [user]);
 
   // NOTE: Admin access is validated server-side via Firebase custom claims.
   // Frontend removes admin UI from view if user lacks claim.
   // No hardcoded email check here—backend is source of truth.
-  useMemo(() => {
+  useEffect(() => {
+    if (!authChecked) return;
     if (!user) {
       setLocation("/login");
     }
-  }, [currentUser, setLocation]);
+  }, [authChecked, user, setLocation]);
 
   const stats = useMemo(() => {
     try {
@@ -452,7 +459,7 @@ export default function AdminMetrics() {
                 <span className="text-xs font-bold text-muted-foreground">{day.date}</span>
                 <div className="flex items-center gap-4">
                   <span className="text-[10px] font-black bg-secondary px-2 py-1 rounded-lg uppercase">{day.count} vendas</span>
-                  <span className="text-xs font-black text-primary">R$ {day.total.toFixed(2)}</span>
+                  <span className="text-xs font-black text-primary">{formatCurrency(day.total)}</span>
                 </div>
               </div>
             ))}

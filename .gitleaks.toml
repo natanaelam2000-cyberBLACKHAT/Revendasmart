@@ -42,9 +42,4 @@ paths = [
   '''^android/\.gradle/''',
   '''^android/app/src/main/assets/public/''',
   '''^\.vercel/''',
-  '''^\.gitleaks\.toml$''',
-  '''^scripts/security/run-gitleaks\.mjs$''',
-  '''^scripts/security/validate-agent-skills\.mjs$''',
-  '''^script/smoke-tests\.ts$''',
-  '''^CLOUD_RUN_MIGRATION\.md$''',
 ]

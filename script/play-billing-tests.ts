@@ -34,13 +34,14 @@ function requireLocalEmulators(): void {
 }
 
 const PACKAGE_NAME = "com.revendasmart.app";
-const PRODUCT_ID = "revendasmart_premium_monthly";
+const PRODUCT_ID = "revendasmart_premium";
+const BASE_PLAN_ID = PLAY_BILLING_BASE_PLAN_IDS.premiumMonthly;
 
 function purchase(overrides: Partial<GooglePlaySubscriptionPurchase> = {}): GooglePlaySubscriptionPurchase {
   return {
     subscriptionState: "SUBSCRIPTION_STATE_ACTIVE",
     lineItemProductId: PRODUCT_ID,
-    lineItemBasePlanId: PLAY_BILLING_BASE_PLAN_IDS[PRODUCT_ID],
+    lineItemBasePlanId: BASE_PLAN_ID,
     expiryTimeMillis: Date.now() + 30 * 24 * 60 * 60 * 1000,
     autoRenewing: true,
     acknowledgementState: "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED",
@@ -139,24 +140,24 @@ async function run(): Promise<void> {
   const acknowledged: string[] = [];
   setGooglePlayDeveloperApiClientForTests(buildMockClient(tokenMap, acknowledged));
 
-  const verify = async (user: User, body: { productId: string; purchaseToken: string; packageName: string }) => {
+  const verify = async (user: User, body: { productId: string; basePlanId?: string; purchaseToken: string; packageName: string }) => {
     const token = await user.getIdToken();
     const response = await fetch(`${baseUrl}/api/billing/google-play/verify`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, basePlanId: body.basePlanId ?? BASE_PLAN_ID }),
     });
     let responseBody: any = null;
     try { responseBody = await response.json(); } catch { /* ignore */ }
     return { status: response.status, body: responseBody };
   };
 
-  const restore = async (user: User, purchases: Array<{ productId: string; purchaseToken: string; packageName: string }>) => {
+  const restore = async (user: User, purchases: Array<{ productId: string; basePlanId?: string; purchaseToken: string; packageName: string }>) => {
     const token = await user.getIdToken();
     const response = await fetch(`${baseUrl}/api/billing/google-play/restore`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ purchases }),
+      body: JSON.stringify({ purchases: purchases.map((p) => ({ ...p, basePlanId: p.basePlanId ?? BASE_PLAN_ID })) }),
     });
     let responseBody: any = null;
     try { responseBody = await response.json(); } catch { /* ignore */ }
@@ -164,6 +165,44 @@ async function run(): Promise<void> {
   };
 
   const getPlan = async (uid: string) => (await db.collection("users").doc(uid).collection("planData").doc("main").get()).data();
+
+  async function assertCanonicalRuntimeCase(input: {
+    readonly label: string;
+    readonly productId: string;
+    readonly basePlanId: string;
+    readonly expectedPlan: "pro" | "premium";
+    readonly expectedBillingCycle: "monthly" | "annual";
+  }): Promise<void> {
+    const user = await createTestUser(`matrix-${input.label}`);
+    createdApps.push(user.app);
+    const token = randomToken(`matrix-${input.label}`);
+    tokenMap.set(token, purchase({
+      lineItemProductId: input.productId,
+      lineItemBasePlanId: input.basePlanId,
+    }));
+    const result = await verify(user.user, {
+      productId: input.productId,
+      basePlanId: input.basePlanId,
+      purchaseToken: token,
+      packageName: PACKAGE_NAME,
+    });
+    assert.equal(result.status, 200, `${input.label}: verificação runtime aceita`);
+    assert.equal(result.body.premiumActive, true, `${input.label}: entitlement ativo`);
+    assert.equal(result.body.currentPlan, input.expectedPlan, `${input.label}: plano vem do provider`);
+    assert.equal(result.body.billingCycle, input.expectedBillingCycle, `${input.label}: ciclo vem do provider`);
+    const plan = await getPlan(user.user.uid);
+    assert.equal(plan?.currentPlan, input.expectedPlan, `${input.label}: plano persistido`);
+    assert.equal(plan?.playProductId, input.productId, `${input.label}: productId persistido`);
+    const tokenRecord = (await db.collection("googlePlayPurchaseTokens").doc(hashPurchaseToken(token)).get()).data();
+    assert.equal(tokenRecord?.plan, input.expectedPlan, `${input.label}: plano canônico do provider persistido`);
+    assert.equal(tokenRecord?.billingCycle, input.expectedBillingCycle, `${input.label}: ciclo canônico do provider persistido`);
+  }
+
+  // ===== MATRIX: os quatro pares canônicos passam pela verificação Express + Firestore real =====
+  await assertCanonicalRuntimeCase({ label: "pro-monthly", productId: "revendasmart_pro", basePlanId: PLAY_BILLING_BASE_PLAN_IDS.proMonthly, expectedPlan: "pro", expectedBillingCycle: "monthly" });
+  await assertCanonicalRuntimeCase({ label: "pro-annual", productId: "revendasmart_pro", basePlanId: PLAY_BILLING_BASE_PLAN_IDS.proAnnual, expectedPlan: "pro", expectedBillingCycle: "annual" });
+  await assertCanonicalRuntimeCase({ label: "premium-monthly", productId: "revendasmart_premium", basePlanId: PLAY_BILLING_BASE_PLAN_IDS.premiumMonthly, expectedPlan: "premium", expectedBillingCycle: "monthly" });
+  await assertCanonicalRuntimeCase({ label: "premium-annual", productId: "revendasmart_premium", basePlanId: PLAY_BILLING_BASE_PLAN_IDS.premiumAnnual, expectedPlan: "premium", expectedBillingCycle: "annual" });
 
   // ===== A0/A1: normalizador puro do adapter real, sem rede =====
   const normalized = normalizeGooglePlaySubscriptionPurchase({
@@ -174,11 +213,11 @@ async function run(): Promise<void> {
       expiryTime: new Date(Date.now() + 86_400_000).toISOString(),
       latestSuccessfulOrderId: "GPA.1111-2222-3333-44444",
       autoRenewingPlan: { autoRenewEnabled: true },
-      offerDetails: { basePlanId: PLAY_BILLING_BASE_PLAN_IDS[PRODUCT_ID] },
+      offerDetails: { basePlanId: BASE_PLAN_ID },
     }],
   });
   assert.equal(normalized.lineItemProductId, PRODUCT_ID);
-  assert.equal(normalized.lineItemBasePlanId, PLAY_BILLING_BASE_PLAN_IDS[PRODUCT_ID]);
+  assert.equal(normalized.lineItemBasePlanId, BASE_PLAN_ID);
   assert.equal(normalized.autoRenewing, true);
   assert.equal(normalized.acknowledgementState, "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED");
   assert.throws(
@@ -349,7 +388,7 @@ async function run(): Promise<void> {
       const user = await createTestUser("product-mismatch");
       createdApps.push(user.app);
       const token = randomToken("product-mismatch");
-      tokenMap.set(token, purchase({ lineItemProductId: "revendasmart_premium_yearly" }));
+      tokenMap.set(token, purchase({ lineItemProductId: "revendasmart_pro", lineItemBasePlanId: PLAY_BILLING_BASE_PLAN_IDS.proMonthly }));
       const result = await verify(user.user, { productId: PRODUCT_ID, purchaseToken: token, packageName: PACKAGE_NAME });
       assert.equal(result.status, 400);
       assert.equal(result.body.error, "PRODUCT_ID_MISMATCH");

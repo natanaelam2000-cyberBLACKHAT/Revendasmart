@@ -12,8 +12,9 @@
  * já existente. Replay nunca duplica porque a própria rota já lança `SALE_ALREADY_EXISTS` quando o
  * mesmo `saleId` é reenviado — a fila só precisa tratar esse erro como sucesso.
  */
-import { doc, setDoc, deleteDoc, deleteField, getFirestore } from "firebase/firestore";
+import { doc, setDoc, deleteField, getFirestore, runTransaction } from "firebase/firestore";
 import { getApiUrl } from "./api-config";
+import { classifyPendingSaleResponse, type PendingSaleResponse } from "./pending-sale-response";
 
 export interface PendingSalePayload {
   saleId: string;
@@ -40,9 +41,96 @@ export interface PendingSaleDoc {
   updatedAt: string;
   errorMessage?: string;
   conflictReason?: PendingSaleConflictReason;
+  syncOwner?: string;
+  syncStartedAt?: number;
+  syncLeaseUntil?: number;
+  syncAttempts?: number;
+  nextSyncAt?: number;
+}
+
+/** Runtime guard for data restored from Firestore after a crash or manual corruption. */
+export function isValidPendingSaleDoc(value: unknown): value is PendingSaleDoc {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const doc = value as Partial<PendingSaleDoc>;
+  const payload = doc.payload;
+  if (typeof doc.id !== "string" || !doc.id || typeof doc.createdAt !== "string" || typeof doc.updatedAt !== "string") return false;
+  if (!['pending', 'syncing', 'failed', 'conflict'].includes(String(doc.status))) return false;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const sale = payload as Partial<PendingSalePayload>;
+  return sale.saleId === doc.id
+    && typeof sale.clientId === "string" && sale.clientId.length > 0
+    && Array.isArray(sale.products) && sale.products.length <= 100
+    && sale.products.every((item) => item && typeof item.productId === "string" && item.productId.length > 0
+      && typeof item.quantity === "number" && Number.isSafeInteger(item.quantity) && item.quantity > 0)
+    && (sale.discountType === "percent" || sale.discountType === "fixed")
+    && typeof sale.discountValue === "number" && Number.isFinite(sale.discountValue) && sale.discountValue >= 0
+    && sale.paymentType === "avista"
+    && (sale.paymentMethod === null || typeof sale.paymentMethod === "string");
 }
 
 const PENDING_SALES_COLLECTION = "pendingSales";
+export const SYNC_LEASE_MS = 120_000;
+export const MAX_SYNC_ATTEMPTS = 5;
+export const SYNC_REQUEST_TIMEOUT_MS = 30_000;
+
+/** Only an online Firestore transaction can claim a sale, across tabs/devices/restarts. */
+export async function claimPendingSale(uid: string, saleId: string, owner: string, clock?: number): Promise<PendingSaleDoc | null> {
+  const ref = doc(getFirestore(), "users", uid, PENDING_SALES_COLLECTION, saleId);
+  return runTransaction(getFirestore(), async (tx) => {
+    const snap = await tx.get(ref);
+    const now = clock ?? Date.now();
+    if (!snap.exists()) return null;
+    const sale = snap.data() as PendingSaleDoc;
+    const legacyExpiry = Date.parse(sale.updatedAt) + SYNC_LEASE_MS;
+    const expiry = sale.syncLeaseUntil ?? (Number.isFinite(legacyExpiry) ? legacyExpiry : 0);
+    if (sale.status !== "pending" && !(sale.status === "syncing" && expiry <= now)) return null;
+    if ((sale.nextSyncAt ?? 0) > now) return null;
+    const attempts = sale.syncAttempts ?? 0;
+    if (attempts >= MAX_SYNC_ATTEMPTS) {
+      tx.update(ref, { status: "failed", errorMessage: "Limite de tentativas atingido. Revise a venda antes de tentar novamente.", updatedAt: new Date(now).toISOString(), syncOwner: deleteField(), syncLeaseUntil: deleteField() });
+      return null;
+    }
+    const lease = { status: "syncing" as const, syncOwner: owner, syncStartedAt: now, syncLeaseUntil: now + SYNC_LEASE_MS, syncAttempts: attempts + 1, updatedAt: new Date(now).toISOString() };
+    tx.update(ref, lease);
+    return { ...sale, ...lease };
+  });
+}
+
+export async function renewPendingSaleLease(uid: string, saleId: string, owner: string, clock?: number): Promise<boolean> {
+  const ref = doc(getFirestore(), "users", uid, PENDING_SALES_COLLECTION, saleId);
+  return runTransaction(getFirestore(), async (tx) => {
+    const snap = await tx.get(ref);
+    const now = clock ?? Date.now();
+    const sale = snap.data() as PendingSaleDoc | undefined;
+    if (!sale || sale.status !== "syncing" || sale.syncOwner !== owner || (sale.syncLeaseUntil ?? 0) <= now) return false;
+    tx.update(ref, { syncLeaseUntil: now + SYNC_LEASE_MS });
+    return true;
+  });
+}
+
+/** A late worker can never delete/requeue an item now owned by another worker. */
+export async function settlePendingSale(
+  uid: string, saleId: string, owner: string, result: SyncPendingSaleResult | { outcome: "retry" }, clock?: number,
+): Promise<boolean> {
+  const ref = doc(getFirestore(), "users", uid, PENDING_SALES_COLLECTION, saleId);
+  return runTransaction(getFirestore(), async (tx) => {
+    const snap = await tx.get(ref);
+    const now = clock ?? Date.now();
+    if (!snap.exists()) return false;
+    const sale = snap.data() as PendingSaleDoc;
+    if (sale.status !== "syncing" || sale.syncOwner !== owner) return false;
+    if (result.outcome === "synced" || result.outcome === "already-exists") { tx.delete(ref); return true; }
+    const exhausted = (sale.syncAttempts ?? 0) >= MAX_SYNC_ATTEMPTS;
+    const status = result.outcome === "conflict" ? "conflict" : result.outcome === "retry" && !exhausted ? "pending" : "failed";
+    tx.update(ref, {
+      status, updatedAt: new Date(now).toISOString(), syncOwner: deleteField(), syncLeaseUntil: deleteField(),
+      nextSyncAt: result.outcome === "retry" && !exhausted ? now + Math.min(15_000 * 2 ** ((sale.syncAttempts ?? 1) - 1), 300_000) : deleteField(),
+      errorMessage: result.outcome === "retry" ? (exhausted ? "Limite de tentativas atingido." : deleteField()) : result.message,
+      conflictReason: result.outcome === "conflict" ? result.reason : deleteField(),
+    });
+    return true;
+  });
+}
 
 /**
  * A queda de conexão NO MEIO de uma tentativa de venda não chega sempre como `TypeError` (falha crua
@@ -79,16 +167,15 @@ export async function markPendingSaleSyncing(uid: string, saleId: string): Promi
   );
 }
 
-/** Reverte uma tentativa interrompida por erro de rede de volta para "pending" — nunca fica presa em
- * "syncing" para sempre, e a próxima transição para online tenta de novo. Também é o que "Tentar
- * novamente" chama a partir de um estado "conflict" (§10) — limpa o motivo antigo, já que uma nova
- * tentativa pode ter um resultado diferente (ex.: o vendedor já repôs o estoque). */
+/** Retry manual de uma recusa: limpa o conflito e reinicia o orçamento de tentativas.
+ * Nunca rouba um lease ativo; recovery/retry automático usa claim/settle com owner. */
 export async function markPendingSalePending(uid: string, saleId: string): Promise<void> {
-  await setDoc(
-    doc(getFirestore(), "users", uid, PENDING_SALES_COLLECTION, saleId),
-    { status: "pending", updatedAt: new Date().toISOString(), errorMessage: deleteField(), conflictReason: deleteField() },
-    { merge: true },
-  );
+  const ref = doc(getFirestore(), "users", uid, PENDING_SALES_COLLECTION, saleId);
+  await runTransaction(getFirestore(), async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists() || snap.data().status === "syncing") return;
+    tx.update(ref, { status: "pending", updatedAt: new Date().toISOString(), syncAttempts: 0, syncOwner: deleteField(), syncLeaseUntil: deleteField(), nextSyncAt: deleteField(), errorMessage: deleteField(), conflictReason: deleteField() });
+  });
 }
 
 export async function markPendingSaleFailed(uid: string, saleId: string, errorMessage: string): Promise<void> {
@@ -118,37 +205,26 @@ export async function markPendingSaleConflict(
 }
 
 export async function removePendingSale(uid: string, saleId: string): Promise<void> {
-  await deleteDoc(doc(getFirestore(), "users", uid, PENDING_SALES_COLLECTION, saleId));
+  const ref = doc(getFirestore(), "users", uid, PENDING_SALES_COLLECTION, saleId);
+  await runTransaction(getFirestore(), async (tx) => {
+    const snap = await tx.get(ref);
+    if (snap.exists() && snap.data().status !== "syncing") tx.delete(ref);
+  });
 }
 
-export type SyncPendingSaleResult =
-  | { outcome: "synced" }
-  | { outcome: "already-exists" }
-  | { outcome: "conflict"; reason: PendingSaleConflictReason; message: string }
-  | { outcome: "failed"; message: string };
-
-// RELEASE-QUALITY-05 §9: mapeia os códigos que `/api/sales/finalize` já distingue (server/routes.ts)
-// para um motivo de conflito — nunca um estado novo que o servidor não sabe justificar.
-function resolveConflictReason(code: string): PendingSaleConflictReason | null {
-  if (code === "INSUFFICIENT_STOCK") return "INSUFFICIENT_STOCK";
-  if (code === "PRODUCT_NOT_FOUND") return "PRODUCT_NOT_FOUND";
-  // Preço inválido normalmente significa que o produto mudou (promoção/desconto removido, preço
-  // zerado etc.) entre a venda ser feita offline e a sincronização — mesma família de "o catálogo
-  // mudou debaixo da venda pendente", só que via preço em vez de estoque.
-  if (code === "INVALID_PRODUCT_PRICE") return "PRODUCT_CHANGED";
-  return null;
-}
+export type SyncPendingSaleResult = PendingSaleResponse;
 
 /**
  * Reenvia o MESMO payload para a rota que já existe — nenhuma lógica de negócio nova. `SALE_ALREADY_EXISTS`
  * (a própria rota já lança isso num saleId repetido) conta como sucesso: prova de que a venda já foi
  * processada antes, então a fila local só precisa se limpar, nunca tentar de novo.
  */
-export async function syncPendingSaleToServer(token: string, payload: PendingSalePayload): Promise<SyncPendingSaleResult> {
+export async function syncPendingSaleToServer(token: string, payload: PendingSalePayload, signal?: AbortSignal): Promise<SyncPendingSaleResult> {
   // Erro de rede aqui (ex.: caiu de novo no meio do sync) propaga pro chamador sem tratamento
   // especial — não é falha definitiva, ele decide colocar de volta em "pending" pra tentar de novo.
   const response = await fetch(getApiUrl("/api/sales/finalize"), {
     method: "POST",
+    signal,
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({
       saleId: payload.saleId,
@@ -163,12 +239,5 @@ export async function syncPendingSaleToServer(token: string, payload: PendingSal
       installments: 0,
     }),
   });
-  if (response.ok) return { outcome: "synced" };
-  const result = await response.json().catch(() => ({}) as Record<string, unknown>);
-  const code = typeof result.code === "string" ? result.code : "";
-  if (code === "SALE_ALREADY_EXISTS") return { outcome: "already-exists" };
-  const message = typeof result.message === "string" ? result.message : (typeof result.error === "string" ? result.error : `HTTP ${response.status}`);
-  const conflictReason = resolveConflictReason(code);
-  if (conflictReason) return { outcome: "conflict", reason: conflictReason, message };
-  return { outcome: "failed", message };
+  return classifyPendingSaleResponse(response, payload.saleId);
 }

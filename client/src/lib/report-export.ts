@@ -1,8 +1,9 @@
-import type {
-  FinancialSummary,
-  ReportComparisons,
-  ReportIndicators,
-  ReportRankings,
+import {
+  PROFIT_UNAVAILABLE,
+  type FinancialSummary,
+  type ReportComparisons,
+  type ReportIndicators,
+  type ReportRankings,
 } from "@/lib/report-metrics";
 import { escapeHtmlText, escapeCsvCell } from "@/lib/export-security";
 
@@ -16,8 +17,10 @@ export interface ReportExportPayload {
   indicators: ReportIndicators;
 }
 
-const currency = (value: number) =>
-  value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+// PLAN-IMPL-07B-VERIFY-FINAL §7 — paridade tela/export: nunca escreve um lucro/margem fabricado no
+// PDF/CSV quando a tela também os marcou indisponíveis (custo insuficientemente confiável).
+const currency = (value: number | null) =>
+  value === null ? PROFIT_UNAVAILABLE : value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 const number = (value: number) => value.toLocaleString("pt-BR", { maximumFractionDigits: 1 });
 
@@ -34,6 +37,7 @@ function downloadTextFile(filename: string, content: string, mimeType: string) {
 }
 
 function metricRows(payload: ReportExportPayload): Array<[string, string]> {
+  const margin = payload.indicators.averageMargin;
   return [
     ["Receita hoje", currency(payload.summary.today.revenue)],
     ["Receita semana", currency(payload.summary.week.revenue)],
@@ -46,7 +50,7 @@ function metricRows(payload: ReportExportPayload): Array<[string, string]> {
     ["Ticket médio", currency(payload.summary.averageTicket)],
     ["Clientes ativos", String(payload.summary.activeClients)],
     ["Produtos vendidos", number(payload.summary.totalProductsSold)],
-    ["Margem média", `${payload.indicators.averageMargin}%`],
+    ["Margem média", margin === null ? PROFIT_UNAVAILABLE : `${margin}%`],
   ];
 }
 

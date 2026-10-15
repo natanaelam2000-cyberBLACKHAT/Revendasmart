@@ -65,10 +65,8 @@ async function cleanupLegacyReferrerReferences(db: Firestore, uid: string): Prom
   await Promise.all([
     ...referrerDocs.docs.map((doc) => doc.ref.update({
       referred_users: FieldValue.arrayRemove(uid),
-      // A query já garante que `uid` está presente nesta lista — decrementar exatamente 1 mantém os
-      // contadores em sincronia com o array, sem precisar ler o valor atual (operação atômica).
-      referral_conversions: FieldValue.increment(-1),
-      reward_eligible_conversions: FieldValue.increment(-1),
+      // These counters are historical eligibility totals and must remain monotonic. Only the
+      // user list is scrubbed, so deletion removes unnecessary PII without recycling a milestone.
     })),
     ...referredUserDocs.docs
       .filter((doc) => doc.id !== uid)

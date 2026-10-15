@@ -41,10 +41,22 @@ function run(): void {
   assert.match(settingsSource, /fica visível publicamente/i, "aviso precisa deixar claro que a chave fica pública");
 
   const publicCatalogServer = read("server/public-catalog.ts");
+  // \r?\n: o recorte precisa funcionar igual em checkouts LF e CRLF — com `\n` rígido, em CRLF o match
+  // falhava, o recorte virava "" e a asserção abaixo passava sem verificar nada.
+  const publicCatalogStoreSource = publicCatalogServer.match(/export function buildPublicCatalogStore[\s\S]*?\r?\n}\r?\n/)?.[0] ?? "";
+  assert.ok(publicCatalogStoreSource.length > 0, "recorte de buildPublicCatalogStore não pode ser vazio (senão a asserção de Pix vira falso positivo)");
+  assert.match(publicCatalogStoreSource, /pixAvailable:/, "recorte precisa conter o corpo real de buildPublicCatalogStore");
+  // Ler settings.pixKey para derivar `pixAvailable: Boolean(...)` é permitido; o que não pode é o VALOR
+  // virar campo do payload retornado — nem `pixKey: ...` nem o shorthand `pixKey,` / `pixKey }`.
   assert.doesNotMatch(
-    publicCatalogServer.match(/export function buildPublicCatalogStore[\s\S]*?\n}\n/)?.[0] ?? "",
-    /pixKey/,
-    "buildPublicCatalogStore não pode mais incluir o VALOR da chave Pix na carga pública inicial",
+    publicCatalogStoreSource,
+    /(?<![.\w$])["']?pixKey["']?\s*:/,
+    "buildPublicCatalogStore não pode mais incluir o VALOR da chave Pix na carga pública inicial (campo pixKey: ...)",
+  );
+  assert.doesNotMatch(
+    publicCatalogStoreSource,
+    /(?<![.\w$])pixKey\s*[,}]/,
+    "buildPublicCatalogStore não pode mais incluir o VALOR da chave Pix na carga pública inicial (shorthand pixKey)",
   );
   assert.match(publicCatalogServer, /pixAvailable: Boolean/, "store público precisa expor só um booleano, não o valor");
   assert.match(publicCatalogServer, /export function resolvePublicCatalogPixKey/, "precisa existir uma função dedicada para resolver o valor sob demanda");

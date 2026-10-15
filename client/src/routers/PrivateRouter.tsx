@@ -1,14 +1,18 @@
-import { lazy, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Route, Switch, useLocation } from "wouter";
 import { onAuthStateChanged } from "firebase/auth";
-import { MaintenanceBanner } from "@/components/MaintenanceBanner";
 import { UserFeedbackHost } from "@/components/UserFeedbackHost";
-import { ConnectivityIndicator } from "@/components/ConnectivityIndicator";
 import { getApiUrl } from "@/lib/api-config";
 import { getFirebaseAuth, logTelemetryEvent } from "@/lib/firebase";
-import { isReferralCodeFormat } from "@shared/monetization";
+import { isReferralCodeFormat } from "@shared/referral-code";
 import { PlanProvider } from "@/providers/PlanProvider";
 import { UserSettingsProvider } from "@/providers/UserSettingsProvider";
+import { useUserSettings } from "@/providers/UserSettingsProvider";
+import { resolveBusinessRouteGate } from "@/lib/business-route-gate";
+import { PageSkeleton } from "@/components/PageSkeleton";
+
+const MaintenanceBanner = lazy(() => import("@/components/MaintenanceBanner").then((m) => ({ default: m.MaintenanceBanner })));
+const ConnectivityIndicator = lazy(() => import("@/components/ConnectivityIndicator").then((m) => ({ default: m.ConnectivityIndicator })));
 
 const Dashboard = lazy(() => import("@/pages/dashboard"));
 const AddProduct = lazy(() => import("@/pages/add-product"));
@@ -27,9 +31,18 @@ const Onboarding = lazy(() => import("@/pages/onboarding"));
 const Reports = lazy(() => import("@/pages/reports"));
 const Settings = lazy(() => import("@/pages/settings"));
 const SettingsMercadoPago = lazy(() => import("@/pages/settings-mercadopago"));
+const PlanUsage = lazy(() => import("@/pages/plan-usage"));
+const Plans = lazy(() => import("@/pages/plans"));
+const Opportunities = lazy(() => import("@/pages/opportunities"));
 const Admin = lazy(() => import("@/pages/admin"));
 const SorteiosAdmin = lazy(() => import("@/pages/sorteios-admin"));
 const Subscribe = lazy(() => import("@/pages/subscribe"));
+const ServiceAgenda = lazy(() => import("@/pages/service-agenda"));
+const ServicesList = lazy(() => import("@/pages/services-list"));
+const ServicesNew = lazy(() => import("@/pages/services-new"));
+const ServiceAvailabilitySettings = lazy(() => import("@/pages/service-availability-settings"));
+const ServiceWorksList = lazy(() => import("@/pages/service-works-list"));
+const ServiceWorkDetail = lazy(() => import("@/pages/service-work-detail"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 
 function LegacyMarketingRedirect() {
@@ -44,7 +57,10 @@ function LegacyMarketingRedirect() {
 
 function PrivateRoutes() {
   const [, setLocation] = useLocation();
+  const [location] = useLocation();
+  const { businessModeResolution } = useUserSettings();
   const [authState, setAuthState] = useState<{ uid: string | null; loading: boolean }>({ uid: null, loading: true });
+  const routeGate = resolveBusinessRouteGate(location, businessModeResolution);
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
@@ -114,11 +130,24 @@ function PrivateRoutes() {
     }
   }, [authState.loading, authState.uid, setLocation]);
 
+  useEffect(() => {
+    if (authState.loading || routeGate.kind !== "redirect") return;
+    setLocation(routeGate.to, { replace: true });
+  }, [authState.loading, routeGate.kind, setLocation]);
+
+  if (authState.loading || routeGate.kind === "unresolved" || routeGate.kind === "redirect") {
+    return <PageSkeleton variant="dashboard" />;
+  }
+
   return (
     <>
-      <MaintenanceBanner />
+      <Suspense fallback={null}>
+        <MaintenanceBanner />
+      </Suspense>
       <UserFeedbackHost />
-      <ConnectivityIndicator />
+      <Suspense fallback={null}>
+        <ConnectivityIndicator />
+      </Suspense>
       <Switch>
         <Route path="/onboarding" component={Onboarding} />
         <Route path="/" component={Dashboard} />
@@ -141,7 +170,16 @@ function PrivateRoutes() {
         <Route path="/reports" component={Reports} />
         <Route path="/settings" component={Settings} />
         <Route path="/settings/mercadopago" component={SettingsMercadoPago} />
+        <Route path="/settings/plano-e-uso" component={PlanUsage} />
+        <Route path="/plans" component={Plans} />
+        <Route path="/opportunities" component={Opportunities} />
         <Route path="/subscribe" component={Subscribe} />
+        <Route path="/servicos" component={ServicesList} />
+        <Route path="/servicos/agenda" component={ServiceAgenda} />
+        <Route path="/servicos/novo" component={ServicesNew} />
+        <Route path="/servicos/disponibilidade" component={ServiceAvailabilitySettings} />
+        <Route path="/servicos/atendimentos" component={ServiceWorksList} />
+        <Route path="/servicos/atendimentos/:workId" component={ServiceWorkDetail} />
         <Route path="/admin" component={Admin} />
         <Route path="/sorteios" component={SorteiosAdmin} />
         <Route path="/sorteios/:campaignId" component={SorteiosAdmin} />
