@@ -98,6 +98,7 @@ export async function clearFirestoreOfflineCache(): Promise<boolean> {
 }
 
 let lastKnownAuthUid: string | null | undefined;
+let pendingTenantCacheClear: Promise<boolean> | null = null;
 
 /**
  * LGPD §8 (REVENDASMART-LGPD-ANPD-REMEDIATION-01) — fecha o gap "nenhum caminho de expiração de sessão
@@ -113,7 +114,9 @@ function installOfflineCacheTenantIsolation(auth: Auth): void {
     // Primeira chamada (lastKnownAuthUid ainda `undefined`) é só a leitura inicial da sessão — não é
     // uma transição de usuário, nunca deve limpar nada.
     if (lastKnownAuthUid !== undefined && lastKnownAuthUid !== null && lastKnownAuthUid !== currentUid) {
-      void clearFirestoreOfflineCache();
+      pendingTenantCacheClear = clearFirestoreOfflineCache().finally(() => {
+        pendingTenantCacheClear = null;
+      });
       // Import dinâmico: mock-data.ts é um módulo grande e este caminho só roda numa transição real de
       // usuário, não no boot do app.
       void import("./mock-data").then(({ clearAllImagesFromIndexedDb }) => clearAllImagesFromIndexedDb());
@@ -190,11 +193,16 @@ setPersistence(authInstance, browserLocalPersistence)
       console.warn("[Firebase] Internal telemetry initialization failed, continuing without it");
     }
 
-    // Initialize Firebase Analytics official
-    try {
-      initializeFirebaseAnalytics(app);
-    } catch (err) {
-      console.warn("[Firebase] Firebase Analytics initialization failed, continuing without it");
+    // PLAN-IMPL-06 §38 — nunca inicializa Analytics contra o emulador/dev local: sem este gate, uma
+    // sessão de dev com credenciais REAIS de Analytics no .env.local (ou CI/QA local) mandaria eventos
+    // de teste para a propriedade de produção do Google Analytics, poluindo as métricas reais. Mesmo
+    // flag já usado para Firestore/Auth/Storage emulator — nenhum segundo mecanismo de detecção.
+    if (!shouldUseFirebaseEmulators()) {
+      try {
+        initializeFirebaseAnalytics(app);
+      } catch (err) {
+        console.warn("[Firebase] Firebase Analytics initialization failed, continuing without it");
+      }
     }
 
     // Initialize Firebase Performance Monitoring
@@ -244,6 +252,36 @@ export function getFirebaseError(): string | null {
 export function getCurrentFirebaseUser(): User | null {
   const { auth } = initializeFirebase();
   return auth?.currentUser ?? null;
+}
+
+let authReadyPromise: Promise<void> | null = null;
+
+/**
+ * PRODUCT-QA-02 — resolve com o usuário atual (ou null) assim que o Firebase Auth confirmar o estado
+ * INICIAL da sessão (a primeira emissão de onAuthStateChanged), nunca antes. `getCurrentFirebaseUser()`
+ * sozinho lê `auth.currentUser` de forma síncrona, que é `null` durante essa janela mesmo quando existe
+ * uma sessão persistida válida (localStorage/IndexedDB ainda sendo restaurada) — um efeito de carregamento
+ * que chama uma função dependente de uid nesse momento (ex.: requireCurrentUid() em services-persistence.ts)
+ * lança "UNAUTHENTICATED" e mostra "Sessão inválida" para um usuário genuinamente autenticado, reproduzível
+ * em qualquer navegação de página cheia (não-SPA) para uma rota que busca dados no mount. A promise única
+ * (cacheada) é somente uma barreira de bootstrap — só se inscreve uma vez, nunca uma por chamador. Depois
+ * da barreira, o retorno sempre vem de `auth.currentUser`, que representa a sessão atual da SPA. */
+export async function waitForAuthReady(): Promise<User | null> {
+  const auth = getFirebaseAuth();
+  if (!auth) return null;
+  if (!authReadyPromise) {
+    authReadyPromise = new Promise((resolve) => {
+      const unsubscribe = onAuthStateChanged(auth, () => {
+        unsubscribe();
+        resolve();
+      });
+    });
+  }
+  await authReadyPromise;
+  if (pendingTenantCacheClear) {
+    await pendingTenantCacheClear;
+  }
+  return auth.currentUser;
 }
 
 // Returns true if Firebase is configured and initialized
@@ -297,6 +335,13 @@ export {
   setFirebaseAnalyticsUserId,
   setFirebaseAnalyticsUserProperty,
   type FirebaseAnalyticsEvents,
+  type AnalyticsPaywallReason,
+  type AnalyticsResourceType,
+  type AnalyticsSource,
+  type AnalyticsCheckoutFailureReason,
+  type AnalyticsPreparationFailureCategory,
+  type HousePromotionId,
+  type HousePromotionPlacement,
 } from "./firebase-analytics";
 
 // Export performance monitoring utilities for use in other modules

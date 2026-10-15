@@ -35,6 +35,7 @@ export interface HomeMainInsight {
 }
 
 export interface HomeDashboardViewModel {
+  showProductMetrics: boolean;
   store: {
     name: string;
     periodLabel: string;
@@ -66,6 +67,10 @@ interface HomeDashboardInput {
   clients: Client[];
   sales: Sale[];
   settings: Partial<AppSettings> & Record<string, unknown>;
+  /** PLAN-IMPL-09-FINAL §31/§32 — só a contagem (nunca a lista): a prioridade "sem serviço" só precisa
+   * saber se é zero. Ausência de fetch (modo products) chega aqui como 0, o que é seguro porque essa
+   * prioridade já é condicionada a businessMode "services"/"both" abaixo, nunca só à contagem. */
+  servicesCount?: number;
   referenceDate?: Date;
 }
 
@@ -211,7 +216,7 @@ function buildMainInsight(args: {
   return null;
 }
 
-export function buildHomeDashboardViewModel({ products, clients, sales, settings, referenceDate = new Date() }: HomeDashboardInput): HomeDashboardViewModel {
+export function buildHomeDashboardViewModel({ products, clients, sales, settings, servicesCount = 0, referenceDate = new Date() }: HomeDashboardInput): HomeDashboardViewModel {
   const productsById = new Map(products.map((product) => [product.id, product]));
   const previousMonth = previousMonthOf(referenceDate);
   const lowStockThreshold = safeNumber(settings.lowStockThreshold) > 0 ? safeNumber(settings.lowStockThreshold) : 3;
@@ -261,7 +266,13 @@ export function buildHomeDashboardViewModel({ products, clients, sales, settings
     if (condition) allPriorities.push(item);
   };
 
-  addPriority(products.length === 0, {
+  // PLAN-IMPL-09-FINAL §31/§32 — "sem produto" nunca é prioridade para quem opera só serviços (zero
+  // produto é o estado ESPERADO desse perfil, não um problema); undefined preserva o comportamento
+  // anterior ao ticket (sempre produto), já que só usuários que passaram pelo onboarding adaptativo ou
+  // mudaram em Configurações têm businessMode "services" explícito.
+  const businessMode = settings.businessMode as AppSettings["businessMode"];
+  const showProductMetrics = businessMode !== "services";
+  addPriority(businessMode !== "services" && products.length === 0, {
     id: "no-products",
     label: "Nenhum produto cadastrado",
     detail: "Cadastre produtos para começar a vender.",
@@ -269,7 +280,15 @@ export function buildHomeDashboardViewModel({ products, clients, sales, settings
     severity: 0,
     tone: "danger",
   });
-  addPriority(outOfStockProducts.length > 0, {
+  addPriority((businessMode === "services" || businessMode === "both") && servicesCount === 0, {
+    id: "no-services",
+    label: "Nenhum serviço cadastrado",
+    detail: "Cadastre serviços para começar a receber agendamentos.",
+    path: "/servicos/novo",
+    severity: 0,
+    tone: "danger",
+  });
+  addPriority(showProductMetrics && outOfStockProducts.length > 0, {
     id: "out-of-stock",
     label: `${outOfStockProducts.length} produto(s) sem estoque`,
     detail: "Reponha antes de divulgar.",
@@ -277,7 +296,7 @@ export function buildHomeDashboardViewModel({ products, clients, sales, settings
     severity: 1,
     tone: "danger",
   });
-  addPriority(lowStockProducts.length > 0, {
+  addPriority(showProductMetrics && lowStockProducts.length > 0, {
     id: "low-stock",
     label: `${lowStockProducts.length} produto(s) acabando`,
     detail: `Limite atual: ${lowStockThreshold} unidade(s).`,
@@ -293,7 +312,7 @@ export function buildHomeDashboardViewModel({ products, clients, sales, settings
     severity: 3,
     tone: "warning",
   });
-  addPriority(products.length > 0 && productsWithoutImage.length > 0, {
+  addPriority(showProductMetrics && products.length > 0 && productsWithoutImage.length > 0, {
     id: "products-without-image",
     label: `${productsWithoutImage.length} produto(s) sem imagem`,
     detail: "Imagens ajudam no catálogo e nas divulgações.",
@@ -321,6 +340,7 @@ export function buildHomeDashboardViewModel({ products, clients, sales, settings
   allPriorities.sort((a, b) => a.severity - b.severity || a.label.localeCompare(b.label));
 
   return {
+    showProductMetrics,
     store: {
       name: storeName,
       periodLabel: referenceDate.toLocaleDateString("pt-BR", { month: "long", year: "numeric" }),
@@ -342,7 +362,7 @@ export function buildHomeDashboardViewModel({ products, clients, sales, settings
     priorities: allPriorities.slice(0, 3),
     priorityTotalCount: allPriorities.length,
     hiddenPriorityCount: Math.max(0, allPriorities.length - 3),
-    mainInsight: buildMainInsight({
+    mainInsight: showProductMetrics ? buildMainInsight({
       monthlyRevenue,
       monthlySalesCount,
       previousRevenue,
@@ -350,6 +370,6 @@ export function buildHomeDashboardViewModel({ products, clients, sales, settings
       products,
       outOfStockCount: outOfStockProducts.length,
       lowStockCount: lowStockProducts.length,
-    }),
+    }) : null,
   };
 }

@@ -5,7 +5,10 @@ import {
   createPhotoroomCutoutGenerationRequestId,
   requestPhotoroomCutout,
 } from "@/lib/product-cutout-photoroom";
+import { getCurrentMonthPreparationUsage } from "@/lib/ads-pro-preparation-quota";
+import { trackAnalyticsEvent, type AnalyticsPreparationFailureCategory } from "@/lib/firebase";
 import type { ApprovedProductCutout } from "@shared/approved-product-cutout";
+import type { PlanType } from "@shared/monetization";
 
 /**
  * RELEASE V1 §6.7 — "Remover fundo" com PhotoRoom no cadastro/edição de produto, só para Premium/admin
@@ -16,10 +19,13 @@ import type { ApprovedProductCutout } from "@shared/approved-product-cutout";
  * resposta — a foto original nunca é sobrescrita, o recorte é um asset derivado à parte.
  */
 const PHOTOROOM_ERROR_MESSAGES: Record<string, string> = {
-  PHOTOROOM_PREMIUM_REQUIRED: "Remover fundo com IA é um recurso Premium.",
+  PHOTOROOM_PLAN_REQUIRED: "Remover fundo com IA é um recurso dos planos Pro e Premium.",
   PHOTOROOM_NOT_CONFIGURED: "O recorte com IA está indisponível no momento. Tente novamente mais tarde.",
   RATE_LIMITED: "Você atingiu o limite de recortes por hoje. Tente novamente amanhã.",
   GENERATION_IN_PROGRESS: "Já existe um recorte em andamento para este produto.",
+  // PLAN-IMPL-05 — cota mensal de preparações profissionais (nunca de anúncios/exports/reuso).
+  ADS_PRO_PREPARATION_LIMIT_REACHED: "Você usou as preparações profissionais deste mês. Produtos já preparados continuam disponíveis para novos anúncios.",
+  ADS_PRO_PREPARATION_IN_PROGRESS: "Já existe uma preparação em andamento para este produto. Tente novamente em instantes.",
   NO_PRODUCT_IMAGE: "Este produto não tem uma foto salva para recortar.",
   ORIGINAL_DECODE_UNAVAILABLE: "Não foi possível processar esta foto para o recorte.",
   PIXEL_GATE_REJECTED: "O recorte não passou na validação de preservação do produto — nada foi alterado.",
@@ -32,13 +38,34 @@ type PhotoroomToolState =
   | { readonly phase: "ready"; readonly cutout: ApprovedProductCutout }
   | { readonly phase: "error"; readonly message: string };
 
+// PLAN-IMPL-06 §15/§43 — mapeia os códigos de erro já existentes (PLAN-IMPL-05) para a categoria fechada
+// de analytics; nenhum código novo criado, nenhuma string de erro real do provider exposta. Códigos sem
+// entrada aqui (ex.: PHOTOROOM_PLAN_REQUIRED, inatingível nesta UI — o pai já barra Free antes de montar
+// este componente) caem no fallback "provider_failed", nunca quebram o evento.
+const PREPARATION_FAILURE_CATEGORY_BY_CODE: Record<string, AnalyticsPreparationFailureCategory> = {
+  PHOTOROOM_NOT_CONFIGURED: "provider_unavailable",
+  RATE_LIMITED: "temporary_error",
+  GENERATION_IN_PROGRESS: "temporary_error",
+  ADS_PRO_PREPARATION_IN_PROGRESS: "temporary_error",
+  NO_PRODUCT_IMAGE: "invalid_result",
+  ORIGINAL_DECODE_UNAVAILABLE: "invalid_result",
+  INVALID_IMAGE_DIMENSIONS: "invalid_result",
+  PIXEL_GATE_REJECTED: "invalid_result",
+  CUTOUT_FAILED: "provider_failed",
+  PHOTOROOM_CUTOUT_FAILED: "storage_failed",
+};
+function toPreparationFailureCategory(code: string | undefined): AnalyticsPreparationFailureCategory {
+  return (code && PREPARATION_FAILURE_CATEGORY_BY_CODE[code]) || "provider_failed";
+}
+
 type PhotoroomCutoutToolProps = {
   productId: string;
   originalImageUrl: string;
+  plan: PlanType;
   onApplied?: (cutout: ApprovedProductCutout) => void;
 };
 
-export function PhotoroomCutoutTool({ productId, originalImageUrl, onApplied }: PhotoroomCutoutToolProps) {
+export function PhotoroomCutoutTool({ productId, originalImageUrl, plan, onApplied }: PhotoroomCutoutToolProps) {
   const [state, setState] = useState<PhotoroomToolState>({ phase: "idle" });
   const [applied, setApplied] = useState(false);
   const busyRef = useRef(false);
@@ -48,18 +75,38 @@ export function PhotoroomCutoutTool({ productId, originalImageUrl, onApplied }: 
     busyRef.current = true;
     setApplied(false);
     setState({ phase: "generating" });
+    trackAnalyticsEvent("ads_pro_preparation_started", { plan });
     try {
       const generationRequestId = createPhotoroomCutoutGenerationRequestId();
       const cutout = await requestPhotoroomCutout(productId, generationRequestId);
       setState({ phase: "ready", cutout });
+      if (cutout.reused) {
+        trackAnalyticsEvent("ads_pro_preparation_reused", { plan });
+      } else if (typeof cutout.quotaUsed === "number" && typeof cutout.quotaLimit === "number") {
+        // PLAN-IMPL-06 §15/§43 — quotaUsed/quotaLimit só vêm preenchidos numa reserva real (Pro/Premium);
+        // admin testa sem cota (server/ads-pro-preparation-quota.ts) e não tem "pressão de cota" real
+        // para medir — o evento numérico simplesmente não dispara nesse caso, nunca inventa um número.
+        trackAnalyticsEvent("ads_pro_preparation_completed", { plan, quota_used: cutout.quotaUsed, quota_limit: cutout.quotaLimit });
+      }
     } catch (error) {
       const code = error instanceof ApiError ? error.code : undefined;
       const message = (code && PHOTOROOM_ERROR_MESSAGES[code]) || "Não foi possível remover o fundo agora. Tente novamente.";
       setState({ phase: "error", message });
+      if (code === "ADS_PRO_PREPARATION_LIMIT_REACHED") {
+        try {
+          const usage = await getCurrentMonthPreparationUsage();
+          trackAnalyticsEvent("ads_pro_preparation_limit_reached", { plan, quota_used: usage.used, quota_limit: usage.limit });
+        } catch {
+          // §37 — analytics nunca pode virar um segundo erro para o usuário; se esta leitura auxiliar
+          // falhar, esta tentativa simplesmente fica sem o evento de limite, sem afetar o fluxo real.
+        }
+      } else {
+        trackAnalyticsEvent("ads_pro_preparation_failed", { plan, failure_category: toPreparationFailureCategory(code) });
+      }
     } finally {
       busyRef.current = false;
     }
-  }, [productId]);
+  }, [productId, plan]);
 
   const handleUse = useCallback(() => {
     if (state.phase !== "ready") return;
@@ -75,8 +122,13 @@ export function PhotoroomCutoutTool({ productId, originalImageUrl, onApplied }: 
           <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
             Recorte real do produto (PhotoRoom). A foto original nunca é alterada — o recorte fica salvo à parte.
           </p>
+          {/* PLAN-IMPL-05 §32 — a unidade cobrada é a PREPARAÇÃO do produto, nunca os anúncios feitos com
+              ele depois: reforçado aqui, no único lugar onde o dono decide "gastar" uma preparação. */}
+          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground/80">
+            Conta como 1 preparação profissional do mês. Depois de preparado, reutilize o produto em quantos anúncios quiser sem gastar outra.
+          </p>
         </div>
-        <span className="rounded-full bg-primary/10 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-primary">Premium</span>
+        <span className="rounded-full bg-primary/10 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-primary">Pro</span>
       </div>
 
       {state.phase === "idle" && (

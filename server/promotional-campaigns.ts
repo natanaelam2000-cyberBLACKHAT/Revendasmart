@@ -4,9 +4,11 @@
  * atrás do MESMO `requireAdmin` (server/admin-auth.ts) usado por todas as outras rotas de admin — não
  * existe um segundo mecanismo de autorização aqui.
  *
+ * Autorizações explícitas usam participants/{customerId}.assignedNumberCount.
+ * Participantes legados sem autorização mantêm o cálculo por vendas.
  * Fonte de verdade de "quanto o cliente comprou": as vendas já existentes em `users/{ownerId}/sales`
  * (nunca um banco de compras novo). O servidor recalcula `qualifyingSpend` a partir dessas vendas TODA
- * vez que resolve direitos — o cliente nunca envia esse valor, nem `entriesEarned`/`entriesAvailable`,
+ * vez que resolve direitos legados — o cliente nunca envia esse valor, nem `entriesEarned`/`entriesAvailable`,
  * como verdade (§9 do ticket).
  *
  * `promotionalCampaigns/{campaignId}` e suas subcoleções (`numbers`, `participants`, `accessTokens`) são
@@ -23,28 +25,15 @@ import { getFirebaseAdmin } from "./firebase-admin-init";
 import { requireAdmin } from "./admin-auth";
 import { logInfo, logWarn } from "./logger";
 import {
-  buildEligibleEntries,
-  calculateEntitlementWithManualGrants,
-  calculateMaxSelectable,
-  calculateTokenRemaining,
-  canonicalEligibleSetString,
-  countDistinctParticipants,
+  calculateEntitlement,
   DEFAULT_NUMBER_COUNT,
   DEFAULT_NUMBER_START,
   generateCampaignSlug,
-  isCampaignClosable,
-  isCampaignDrawable,
   isCampaignPubliclyClaimable,
-  isEntitlementPolicy,
-  isManualGrantReason,
   isPromotionalAllocationMode,
   isPromotionalCampaignStatus,
   validateClaimPayloadShape,
-  validateManualGrantQuantity,
   validateNumberCount,
-  validateSelectionLimit,
-  type EntitlementPolicy,
-  type OfficialDrawResult,
   type PromotionalCampaignStatus,
 } from "../shared/promotional-campaigns";
 
@@ -54,17 +43,12 @@ const SORTEIO_ERROR_MESSAGES = {
   VALIDATION_ERROR: "Dados inválidos.",
   CAMPAIGN_NOT_FOUND: "Sorteio não encontrado.",
   CLIENT_NOT_FOUND: "Cliente não encontrado.",
+  QUANTITY_REQUIRED: "Defina a quantidade autorizada para este cliente.",
+  QUANTITY_INVALID: "Quantidade de números inválida.",
+  QUANTITY_BEYOND_CAMPAIGN: "A quantidade não pode exceder os números da campanha.",
+  QUANTITY_BELOW_CLAIMED: "A quantidade não pode ser menor que os números já escolhidos.",
+  CAMPAIGN_FINISHED: "Campanha encerrada não pode ter a quantidade alterada.",
   TOKEN_CREATE_FAILED: "Não foi possível gerar o link. Tente novamente.",
-  NO_ENTRIES_AVAILABLE: "Este cliente não possui participações disponíveis.",
-  MANUAL_GRANT_NOT_ALLOWED: "Este sorteio não permite concessão manual de participações.",
-  MANUAL_GRANT_FAILED: "Não foi possível conceder as participações. Tente novamente.",
-  CAMPAIGN_NOT_CLOSABLE: "Só é possível encerrar participações de uma campanha ativa ou pausada.",
-  CAMPAIGN_LOCKED_BY_DRAW: "Esta campanha já encerrou participações ou já foi sorteada — o status não pode mais ser alterado por aqui.",
-  CLOSE_ENTRIES_FAILED: "Não foi possível encerrar as participações. Tente novamente.",
-  CAMPAIGN_NOT_CLOSED: "Encerre as participações antes de realizar o sorteio.",
-  NO_ELIGIBLE_ENTRIES: "Nenhum número foi escolhido nesta campanha — não há como sortear.",
-  DRAW_FAILED: "Não foi possível realizar o sorteio. Tente novamente.",
-  RESULT_FAILED: "Não foi possível carregar o resultado. Tente novamente.",
   SERVER_ERROR: "Ocorreu um erro temporário. Tente novamente.",
 } as const;
 type SorteioErrorCode = keyof typeof SORTEIO_ERROR_MESSAGES;
@@ -87,27 +71,6 @@ function participantsRef(campaignId: string) {
 }
 function tokensRef(campaignId: string) {
   return campaignsRef().doc(campaignId).collection("accessTokens");
-}
-/**
- * PROMOTIONAL-CAMPAIGNS-MANUAL-INTERNAL-05 — ledger IMUTÁVEL por participante: nunca editado/apagado,
- * só recebe novos eventos (uma correção soma um evento compensatório). Aninhado sob o participante
- * (não top-level) porque toda leitura já acontece no escopo de um customerId conhecido.
- */
-function entitlementEventsRef(campaignId: string, customerId: string) {
-  return participantsRef(campaignId).doc(customerId).collection("entitlementEvents");
-}
-/**
- * PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-06 — a apuração oficial fica SEMPRE no mesmo id de documento
- * ("official"): a proteção contra "sortear de novo até gostar do vencedor" (§8) não depende de nenhum
- * idempotencyKey enviado pelo cliente, depende só deste documento existir ou não — a primeira transação
- * que conseguir criá-lo vence; qualquer chamada depois (mesmo concorrente) só lê o resultado já gravado.
- */
-function officialDrawRef(campaignId: string) {
-  return campaignsRef().doc(campaignId).collection("draws").doc("official");
-}
-/** Log de auditoria imutável em nível de campanha — nunca editado/apagado (§18). */
-function auditEventsRef(campaignId: string) {
-  return campaignsRef().doc(campaignId).collection("auditEvents");
 }
 
 function hashToken(rawToken: string): string {
@@ -146,43 +109,6 @@ async function computeQualifyingSpend(ownerId: string, customerId: string, start
   return totalCents / 100;
 }
 
-/** Campanhas criadas antes desta feature não têm o campo — INTERNAL_ADMIN era o único modo existente. */
-function resolveEntitlementPolicy(campaign: FirebaseFirestore.DocumentData): EntitlementPolicy {
-  return isEntitlementPolicy(campaign.entitlementPolicy) ? campaign.entitlementPolicy : "INTERNAL_ADMIN";
-}
-
-async function computeManualInternalEntries(campaignId: string, customerId: string): Promise<number> {
-  const snapshot = await entitlementEventsRef(campaignId, customerId).get();
-  let total = 0;
-  for (const doc of snapshot.docs) {
-    const amount = Number(doc.data().amount ?? 0);
-    if (Number.isFinite(amount)) total += amount;
-  }
-  return total;
-}
-
-/** Entitlement GLOBAL atual do cliente (não escopado a nenhum token/link específico). */
-async function computeCustomerEntitlement(
-  ownerId: string,
-  campaignId: string,
-  customerId: string,
-  campaign: FirebaseFirestore.DocumentData,
-) {
-  const [participantSnap, qualifyingSpend, manualInternalEntries] = await Promise.all([
-    participantsRef(campaignId).doc(customerId).get(),
-    computeQualifyingSpend(ownerId, customerId, campaign.startsAt, campaign.endsAt),
-    computeManualInternalEntries(campaignId, customerId),
-  ]);
-  const entriesAlreadyClaimed = participantSnap.exists ? Number(participantSnap.data()?.entriesClaimed ?? 0) : 0;
-  return calculateEntitlementWithManualGrants({
-    qualifyingSpend,
-    spendPerEntry: campaign.spendPerEntry,
-    manualInternalEntries,
-    entriesAlreadyClaimed,
-    policy: resolveEntitlementPolicy(campaign),
-  });
-}
-
 function sanitizePositiveNumber(value: unknown): number | null {
   const num = Number(value);
   return Number.isFinite(num) && num > 0 ? num : null;
@@ -194,6 +120,60 @@ function sanitizeIsoDate(value: unknown): string | null {
 }
 function sanitizeText(value: unknown, maxLength: number): string {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+}
+
+function campaignNumberCount(campaign: { numberStart?: unknown; numberEnd?: unknown }): number {
+  const start = Number(campaign.numberStart);
+  const end = Number(campaign.numberEnd);
+  return Number.isInteger(start) && Number.isInteger(end) && end >= start ? end - start + 1 : 0;
+}
+
+function entriesClaimedFromParticipant(data: Record<string, unknown> | undefined): number {
+  const value = Number(data?.entriesClaimed ?? 0);
+  return Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+function assignedNumberCountFromParticipant(data: Record<string, unknown> | undefined): number | null {
+  if (data?.assignedNumberCount === undefined || data?.assignedNumberCount === null) return null;
+  // Campo inválido não pode conceder direitos pela regra de gasto.
+  return typeof data.assignedNumberCount === "number" ? validateNumberCount(data.assignedNumberCount) ?? 0 : 0;
+}
+
+type AssignmentResult =
+  | { ok: true; claimedCount: number }
+  | { ok: false; reason: "CAMPAIGN_NOT_FOUND" | "FORBIDDEN" | "CLIENT_NOT_FOUND" | "CAMPAIGN_FINISHED" | "QUANTITY_BEYOND_CAMPAIGN" | "QUANTITY_BELOW_CLAIMED"; claimedCount?: number };
+
+/** Atualiza a concessão dentro de uma transação para serializar edição administrativa e claim público. */
+async function assignNumberCount(
+  campaignId: string,
+  customerId: string,
+  numberCount: number,
+  actorUid: string,
+): Promise<AssignmentResult> {
+  const campaignRef = campaignsRef().doc(campaignId);
+  const participantRef = participantsRef(campaignId).doc(customerId);
+  return db().runTransaction(async (transaction) => {
+    const [campaignSnap, participantSnap, clientSnap] = await transaction.getAll(campaignRef, participantRef, db().collection("users").doc(actorUid).collection("clients").doc(customerId));
+    if (!campaignSnap.exists) return { ok: false as const, reason: "CAMPAIGN_NOT_FOUND" as const };
+    const campaign = campaignSnap.data()!;
+    if (campaign.ownerId !== actorUid) return { ok: false as const, reason: "FORBIDDEN" as const };
+    if (!clientSnap.exists) return { ok: false as const, reason: "CLIENT_NOT_FOUND" as const };
+    if (campaign.status === "finished") return { ok: false as const, reason: "CAMPAIGN_FINISHED" as const };
+    if (numberCount > campaignNumberCount(campaign)) return { ok: false as const, reason: "QUANTITY_BEYOND_CAMPAIGN" as const };
+
+    const participant = participantSnap.exists ? participantSnap.data() : undefined;
+    const claimedCount = entriesClaimedFromParticipant(participant);
+    if (numberCount < claimedCount) return { ok: false as const, reason: "QUANTITY_BELOW_CLAIMED" as const, claimedCount };
+
+    transaction.set(participantRef, {
+      customerId,
+      assignedNumberCount: numberCount,
+      entriesClaimed: claimedCount,
+      claimedNumbers: Array.isArray(participant?.claimedNumbers) ? participant.claimedNumbers : [],
+      updatedAt: new Date().toISOString(),
+    }, { merge: true });
+    return { ok: true as const, claimedCount };
+  });
 }
 
 export function registerPromotionalCampaignRoutes(
@@ -248,13 +228,9 @@ export function registerPromotionalCampaignRoutes(
         numberStart: DEFAULT_NUMBER_START,
         numberEnd: DEFAULT_NUMBER_START + numberCount - 1,
         allocationMode,
-        // PROMOTIONAL-CAMPAIGNS-MANUAL-INTERNAL-05 — Sorteios é 100% admin-only hoje; toda campanha nasce
-        // INTERNAL_ADMIN. Uma futura versão pública criaria campanhas com REGISTERED_SALES_ONLY aqui.
-        entitlementPolicy: "INTERNAL_ADMIN" as EntitlementPolicy,
         winningNumber: null,
         resultSource: null,
         finishedAt: null,
-        entriesClosedAt: null,
         createdAt: now,
         updatedAt: now,
       };
@@ -282,6 +258,7 @@ export function registerPromotionalCampaignRoutes(
         const numbersTotal = campaign.numberEnd - campaign.numberStart + 1;
         return {
           ...campaign,
+          id: doc.id,
           numbersTotal,
           numbersClaimed: numbersClaimedCount.data().count,
           numbersAvailable: numbersTotal - numbersClaimedCount.data().count,
@@ -307,9 +284,8 @@ export function registerPromotionalCampaignRoutes(
       // §27: owner isolation — mesmo admin, uma campanha de outro owner é invisível, não só "sem botão".
       if (campaign.ownerId !== actorUid) return sendSorteioError(res, 403, "FORBIDDEN");
 
-      const [initialParticipantsSnap, tokensSnap, qualifiedSalesTotal] = await Promise.all([
+      const [participantsSnap, qualifiedSalesTotal] = await Promise.all([
         participantsRef(campaignId).get(),
-        tokensRef(campaignId).get(),
         (async () => {
           const salesSnap = await db().collection("users").doc(actorUid).collection("sales")
             .where("date", ">=", campaign.startsAt).where("date", "<=", campaign.endsAt).get();
@@ -320,68 +296,21 @@ export function registerPromotionalCampaignRoutes(
         })(),
       ]);
 
-      // PROMOTIONAL-CAMPAIGNS-PARTICIPANT-SYNC-06A §13 — self-heal progressivo: campanhas criadas antes
-      // desta correção podem ter clientes com token/link válido mas sem participant projection (o bug
-      // real). Nunca uma migração ampla — só materializa, ao carregar o detalhe, quem já provou ter um
-      // link emitido e ainda está faltando. `merge:true` é seguro mesmo sob concorrência (nunca duplica,
-      // nunca sobrescreve entriesClaimed/claimedNumbers de quem já existe).
-      const existingParticipantIds = new Set(initialParticipantsSnap.docs.map((doc) => doc.id));
-      const missingParticipantIds = new Set<string>();
-      for (const tokenDoc of tokensSnap.docs) {
-        const tokenCustomerId = tokenDoc.data().customerId as string | undefined;
-        if (tokenCustomerId && !existingParticipantIds.has(tokenCustomerId)) missingParticipantIds.add(tokenCustomerId);
-      }
-      let participantsSnap = initialParticipantsSnap;
-      if (missingParticipantIds.size > 0) {
-        const healBatch = db().batch();
-        const healedAt = new Date().toISOString();
-        for (const missingId of Array.from(missingParticipantIds)) {
-          healBatch.set(participantsRef(campaignId).doc(missingId), { customerId: missingId, updatedAt: healedAt }, { merge: true });
-        }
-        await healBatch.commit();
-        logInfo("promotional_campaigns.participants_self_healed", { campaignId, actorUid, count: missingParticipantIds.size });
-        participantsSnap = await participantsRef(campaignId).get();
-      }
-
       const clientRefs = participantsSnap.docs.map((doc) => db().collection("users").doc(actorUid).collection("clients").doc(doc.id));
       const clientSnaps = clientRefs.length ? await db().getAll(...clientRefs) : [];
-      const policy = resolveEntitlementPolicy(campaign);
       const participants = await Promise.all(participantsSnap.docs.map(async (doc, index) => {
         const participant = doc.data();
         const client = clientSnaps[index]?.data();
-        const [qualifyingSpend, eventsSnap] = await Promise.all([
-          computeQualifyingSpend(actorUid, doc.id, campaign.startsAt, campaign.endsAt),
-          entitlementEventsRef(campaignId, doc.id).orderBy("createdAt", "asc").get(),
-        ]);
-        // §11 — histórico expansível: cada evento manual fica visível individualmente (nunca só a soma),
-        // preservado mesmo depois de um ajuste compensatório futuro.
-        const manualEvents = eventsSnap.docs.map((eventDoc) => {
-          const data = eventDoc.data();
-          return {
-            id: eventDoc.id,
-            type: data.type as string,
-            amount: Number(data.amount ?? 0),
-            reason: (data.reason as string | null) ?? null,
-            note: (data.note as string | null) ?? null,
-            createdAt: data.createdAt as string,
-          };
-        });
-        const manualInternalEntries = manualEvents.reduce((sum, event) => sum + event.amount, 0);
-        const entitlement = calculateEntitlementWithManualGrants({
-          qualifyingSpend,
-          spendPerEntry: campaign.spendPerEntry,
-          manualInternalEntries,
-          entriesAlreadyClaimed: participant.entriesClaimed ?? 0,
-          policy,
-        });
+        const qualifyingSpend = await computeQualifyingSpend(actorUid, doc.id, campaign.startsAt, campaign.endsAt);
+        const assignedNumberCount = assignedNumberCountFromParticipant(participant);
+        const entitlement = calculateEntitlement(qualifyingSpend, campaign.spendPerEntry, participant.entriesClaimed ?? 0, assignedNumberCount);
         return {
           customerId: doc.id,
           clientName: client?.name ?? "Cliente removido",
           clientPhone: client?.phone ?? null,
           qualifyingSpend,
-          automaticEntries: entitlement.automaticEntries,
-          manualInternalEntries: entitlement.manualInternalEntries,
-          manualEvents,
+          assignedNumberCount,
+          entriesAuthorized: entitlement.entriesEarned,
           entriesClaimed: participant.entriesClaimed ?? 0,
           claimedNumbers: participant.claimedNumbers ?? [],
           entriesAvailable: entitlement.entriesAvailable,
@@ -393,7 +322,7 @@ export function registerPromotionalCampaignRoutes(
       const numbersClaimedCount = (await numbersRef(campaignId).where("status", "==", "claimed").count().get()).data().count;
 
       return res.status(200).json({
-        campaign,
+        campaign: { ...campaign, id: campaignId },
         metrics: {
           numbersTotal,
           numbersClaimed: numbersClaimedCount,
@@ -410,6 +339,43 @@ export function registerPromotionalCampaignRoutes(
     }
   });
 
+  // ===== PATCH /api/admin/sorteios/campaigns/:campaignId/participants/:customerId/quantity =====
+  // A quantidade é uma concessão por campanha/cliente, não uma propriedade do link. Repetir o mesmo
+  // PATCH é idempotente; reduzir abaixo do já escolhido é recusado para não invalidar participação.
+  app.patch("/api/admin/sorteios/campaigns/:campaignId/participants/:customerId/quantity", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    const actorUid = (req as Request & { firebaseUid?: string }).firebaseUid;
+    if (!actorUid) return sendSorteioError(res, 401, "UNAUTHORIZED");
+    const campaignId = String(req.params.campaignId);
+    const customerId = String(req.params.customerId);
+    const numberCount = typeof req.body?.numberCount === "number" ? validateNumberCount(req.body.numberCount) : null;
+    if (numberCount === null) return sendSorteioError(res, 400, "QUANTITY_INVALID", { field: "numberCount" });
+
+    try {
+      const campaignSnap = await campaignsRef().doc(campaignId).get();
+      if (!campaignSnap.exists) return sendSorteioError(res, 404, "CAMPAIGN_NOT_FOUND");
+      const campaign = campaignSnap.data()!;
+      if (campaign.ownerId !== actorUid) return sendSorteioError(res, 403, "FORBIDDEN");
+
+      const clientSnap = await db().collection("users").doc(actorUid).collection("clients").doc(customerId).get();
+      if (!clientSnap.exists) return sendSorteioError(res, 404, "CLIENT_NOT_FOUND");
+      if (numberCount > campaignNumberCount(campaign)) return sendSorteioError(res, 400, "QUANTITY_BEYOND_CAMPAIGN", { field: "numberCount" });
+
+      const result = await assignNumberCount(campaignId, customerId, numberCount, actorUid);
+      if (!result.ok) {
+        if (result.reason === "CAMPAIGN_NOT_FOUND" || result.reason === "CLIENT_NOT_FOUND") return sendSorteioError(res, 404, result.reason);
+        if (result.reason === "FORBIDDEN") return sendSorteioError(res, 403, "FORBIDDEN");
+        if (result.reason === "CAMPAIGN_FINISHED") return sendSorteioError(res, 409, "CAMPAIGN_FINISHED");
+        if (result.reason === "QUANTITY_BELOW_CLAIMED") return sendSorteioError(res, 409, "QUANTITY_BELOW_CLAIMED", { claimedCount: result.claimedCount });
+        return sendSorteioError(res, 400, "QUANTITY_BEYOND_CAMPAIGN", { field: "numberCount" });
+      }
+      logInfo("promotional_campaigns.quantity_assigned", { campaignId, customerId, numberCount, actorUid });
+      return res.status(200).json({ success: true, customerId, assignedNumberCount: numberCount, entriesClaimed: result.claimedCount });
+    } catch (error) {
+      logWarn("promotional_campaigns.quantity_assign_failed", { message: error instanceof Error ? error.message : String(error) });
+      return sendSorteioError(res, 500, "SERVER_ERROR");
+    }
+  });
+
   // ===== PATCH /api/admin/sorteios/campaigns/:campaignId/status — draft/active/paused/finished =====
   app.patch("/api/admin/sorteios/campaigns/:campaignId/status", requireAuth, requireAdmin, async (req: Request, res: Response) => {
     const actorUid = (req as Request & { firebaseUid?: string }).firebaseUid;
@@ -417,21 +383,11 @@ export function registerPromotionalCampaignRoutes(
     const campaignId = String(req.params.campaignId);
     const { status } = req.body ?? {};
     if (!isPromotionalCampaignStatus(status)) return sendSorteioError(res, 400, "VALIDATION_ERROR", { field: "status" });
-    // PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-06 — "entries_closed"/"drawn" só são atingíveis pelas rotas
-    // dedicadas (close-entries/draw), que constroem o snapshot elegível e o resultado oficial. Aceitar
-    // esses valores aqui deixaria um admin "pular" a apuração real só trocando o status. Pelo mesmo
-    // motivo, uma campanha já encerrada/sorteada não aceita mais NENHUMA troca por este PATCH genérico —
-    // não existe "reabrir" simples nesta rodada (§11).
-    if (status === "entries_closed" || status === "drawn") return sendSorteioError(res, 400, "VALIDATION_ERROR", { field: "status" });
     try {
       const ref = campaignsRef().doc(campaignId);
       const snap = await ref.get();
       if (!snap.exists) return sendSorteioError(res, 404, "CAMPAIGN_NOT_FOUND");
       if (snap.data()!.ownerId !== actorUid) return sendSorteioError(res, 403, "FORBIDDEN");
-      const currentStatus = snap.data()!.status as PromotionalCampaignStatus;
-      if (currentStatus === "entries_closed" || currentStatus === "drawn") {
-        return sendSorteioError(res, 400, "CAMPAIGN_LOCKED_BY_DRAW");
-      }
       const now = new Date().toISOString();
       await ref.update({
         status,
@@ -446,156 +402,62 @@ export function registerPromotionalCampaignRoutes(
     }
   });
 
-  // ===== GET .../clients/:customerId/entitlement — direitos ATUAIS do cliente, para o admin ver antes
-  // de decidir quanto liberar num link (não cria nem reserva nada — só leitura). =====
-  app.get("/api/admin/sorteios/campaigns/:campaignId/clients/:customerId/entitlement", requireAuth, requireAdmin, async (req: Request, res: Response) => {
-    const actorUid = (req as Request & { firebaseUid?: string }).firebaseUid;
-    if (!actorUid) return sendSorteioError(res, 401, "UNAUTHORIZED");
-    const campaignId = String(req.params.campaignId);
-    const customerId = String(req.params.customerId);
-    try {
-      const campaignSnap = await campaignsRef().doc(campaignId).get();
-      if (!campaignSnap.exists) return sendSorteioError(res, 404, "CAMPAIGN_NOT_FOUND");
-      const campaign = campaignSnap.data()!;
-      if (campaign.ownerId !== actorUid) return sendSorteioError(res, 403, "FORBIDDEN");
-
-      const clientSnap = await db().collection("users").doc(actorUid).collection("clients").doc(customerId).get();
-      if (!clientSnap.exists) return sendSorteioError(res, 404, "CLIENT_NOT_FOUND");
-
-      const entitlement = await computeCustomerEntitlement(actorUid, campaignId, customerId, campaign);
-      return res.status(200).json(entitlement);
-    } catch (error) {
-      logWarn("promotional_campaigns.entitlement_failed", { message: error instanceof Error ? error.message : String(error) });
-      return sendSorteioError(res, 500, "SERVER_ERROR");
-    }
-  });
-
-  // ===== POST .../clients/:customerId/manual-entries — concessão manual interna (INTERNAL_ADMIN only) =====
-  // PROMOTIONAL-CAMPAIGNS-MANUAL-INTERNAL-05 — cobre o caso real de venda externa/revista nunca
-  // registrada no RevendaSmart: o admin libera participações sem precisar cadastrar uma venda fictícia.
-  // NUNCA toca qualifyingSpend/sales/estoque — é um evento de auditoria à parte, somado ao entitlement
-  // só sob a policy INTERNAL_ADMIN (nunca sob REGISTERED_SALES_ONLY, mesmo que o request tente).
-  app.post("/api/admin/sorteios/campaigns/:campaignId/clients/:customerId/manual-entries", requireAuth, requireAdmin, async (req: Request, res: Response) => {
-    const actorUid = (req as Request & { firebaseUid?: string }).firebaseUid;
-    if (!actorUid) return sendSorteioError(res, 401, "UNAUTHORIZED");
-    const campaignId = String(req.params.campaignId);
-    const customerId = String(req.params.customerId);
-    const body = req.body ?? {};
-
-    const quantity = validateManualGrantQuantity(body.quantity);
-    if (quantity === null) return sendSorteioError(res, 400, "VALIDATION_ERROR", { field: "quantity" });
-    const reason = isManualGrantReason(body.reason) ? body.reason : null;
-    const note = typeof body.note === "string" ? body.note.trim().slice(0, 500) : null;
-    // Idempotência no mesmo padrão já usado em server/sale-finalize-transaction.ts: o CLIENTE gera o id
-    // (não o servidor), reenviar o mesmo id nunca duplica o evento — só devolve o resultado já gravado.
-    const idempotencyKey = typeof body.idempotencyKey === "string" ? body.idempotencyKey.trim() : "";
-    if (!idempotencyKey) return sendSorteioError(res, 400, "VALIDATION_ERROR", { field: "idempotencyKey" });
-
-    try {
-      const campaignSnap = await campaignsRef().doc(campaignId).get();
-      if (!campaignSnap.exists) return sendSorteioError(res, 404, "CAMPAIGN_NOT_FOUND");
-      const campaign = campaignSnap.data()!;
-      if (campaign.ownerId !== actorUid) return sendSorteioError(res, 403, "FORBIDDEN");
-
-      // §2/§7: a policy vem SOMENTE do documento da campanha (server-authoritative) — nada no corpo da
-      // requisição pode fingir ser INTERNAL_ADMIN. Sob REGISTERED_SALES_ONLY, concessão manual é negada
-      // mesmo para um admin, porque essa policy representa "só vendas reais contam" por definição.
-      if (resolveEntitlementPolicy(campaign) !== "INTERNAL_ADMIN") {
-        return sendSorteioError(res, 403, "MANUAL_GRANT_NOT_ALLOWED");
-      }
-
-      const clientSnap = await db().collection("users").doc(actorUid).collection("clients").doc(customerId).get();
-      if (!clientSnap.exists) return sendSorteioError(res, 404, "CLIENT_NOT_FOUND");
-
-      const eventRef = entitlementEventsRef(campaignId, customerId).doc(idempotencyKey);
-      const participantRef = participantsRef(campaignId).doc(customerId);
-      await db().runTransaction(async (transaction) => {
-        const existing = await transaction.get(eventRef);
-        if (existing.exists) return; // replay do mesmo idempotencyKey — não duplica
-        transaction.set(eventRef, {
-          customerId,
-          type: "MANUAL_INTERNAL_GRANT",
-          amount: quantity,
-          reason,
-          note,
-          createdAt: new Date().toISOString(),
-          createdBy: actorUid,
-        });
-        // Sem isto, um cliente que só recebeu concessão manual (nunca fez claim) não aparece na lista de
-        // PARTICIPANTES — subcoleções não materializam o documento pai sozinhas no Firestore. `merge`
-        // nunca sobrescreve entriesClaimed/claimedNumbers se o participante já existir por ter escolhido
-        // números antes.
-        transaction.set(participantRef, { customerId, updatedAt: new Date().toISOString() }, { merge: true });
-      });
-
-      const entitlement = await computeCustomerEntitlement(actorUid, campaignId, customerId, campaign);
-      logInfo("promotional_campaigns.manual_entries_granted", { campaignId, customerId, actorUid, quantity, reason });
-      return res.status(201).json({ eventId: idempotencyKey, quantity, entitlement });
-    } catch (error) {
-      logWarn("promotional_campaigns.manual_entries_failed", { message: error instanceof Error ? error.message : String(error) });
-      return sendSorteioError(res, 500, "MANUAL_GRANT_FAILED");
-    }
-  });
-
   // ===== POST /api/admin/sorteios/campaigns/:campaignId/links — gera link individual (campanha + cliente) =====
   app.post("/api/admin/sorteios/campaigns/:campaignId/links", requireAuth, requireAdmin, async (req: Request, res: Response) => {
     const actorUid = (req as Request & { firebaseUid?: string }).firebaseUid;
     if (!actorUid) return sendSorteioError(res, 401, "UNAUTHORIZED");
     const campaignId = String(req.params.campaignId);
     const customerId = typeof req.body?.customerId === "string" ? req.body.customerId : "";
+    const hasNumberCount = Object.prototype.hasOwnProperty.call(req.body ?? {}, "numberCount");
+    const numberCount = hasNumberCount && typeof req.body?.numberCount === "number" ? validateNumberCount(req.body.numberCount) : null;
     if (!customerId) return sendSorteioError(res, 400, "VALIDATION_ERROR", { field: "customerId" });
+    if (hasNumberCount && numberCount === null) return sendSorteioError(res, 400, "QUANTITY_INVALID", { field: "numberCount" });
     try {
       const campaignSnap = await campaignsRef().doc(campaignId).get();
       if (!campaignSnap.exists) return sendSorteioError(res, 404, "CAMPAIGN_NOT_FOUND");
       const campaign = campaignSnap.data()!;
       if (campaign.ownerId !== actorUid) return sendSorteioError(res, 403, "FORBIDDEN");
+      if (campaign.status === "finished") return sendSorteioError(res, 409, "CAMPAIGN_FINISHED");
 
       const clientSnap = await db().collection("users").doc(actorUid).collection("clients").doc(customerId).get();
       if (!clientSnap.exists) return sendSorteioError(res, 404, "CLIENT_NOT_FOUND");
 
-      // PROMOTIONAL-CAMPAIGNS-LINK-SELECTION-LIMIT-04 — o link NUNCA cria ou reserva direitos: só decide
-      // um teto (selectionLimit) para quantos dos direitos JÁ EXISTENTES este link específico libera.
-      // Sem valor enviado, o default é o saldo atual inteiro (comportamento idêntico ao anterior à esta
-      // feature). Recalcular aqui é deliberado — o admin pode ter aberto a tela há um tempo.
-      const entitlement = await computeCustomerEntitlement(actorUid, campaignId, customerId, campaign);
-      if (entitlement.entriesAvailable <= 0) return sendSorteioError(res, 400, "NO_ENTRIES_AVAILABLE");
-
-      const rawSelectionLimit = req.body?.selectionLimit;
-      const selectionLimit = rawSelectionLimit === undefined || rawSelectionLimit === null
-        ? entitlement.entriesAvailable
-        : validateSelectionLimit(rawSelectionLimit, entitlement.entriesAvailable);
-      if (selectionLimit === null) return sendSorteioError(res, 400, "VALIDATION_ERROR", { field: "selectionLimit" });
-
       const rawToken = crypto.randomBytes(32).toString("base64url");
       const tokenRef = tokensRef(campaignId).doc();
       const now = new Date().toISOString();
-      // PROMOTIONAL-CAMPAIGNS-PARTICIPANT-SYNC-06A — ROOT CAUSE do bug real: esta rota nunca upsertava o
-      // participant, então um cliente cujo direito vem só de registered_sale (nunca passou pela rota de
-      // manual-entries, que já fazia esse upsert) ficava com link válido e claim funcionando, mas invisível
-      // na lista PARTICIPANTES até o primeiro claim. `merge:true` num id determinístico (customerId) nunca
-      // duplica, mesmo gerando vários links para o mesmo cliente (§6), e nunca sobrescreve
-      // entriesClaimed/claimedNumbers se o participante já existir. Batch (não transaction) porque não há
-      // leitura dependente aqui — as duas escritas só precisam ser atômicas entre si (§11: nunca token
-      // criado com participant perdido por falha subsequente).
-      const batch = db().batch();
-      batch.set(tokenRef, {
-        customerId,
-        tokenHash: hashToken(rawToken),
-        createdAt: now,
-        expiresAt: null,
-        revokedAt: null,
-        selectionLimit,
-        claimedThroughToken: 0,
+      // Autorização e token são persistidos juntos; edições e claims disputam o mesmo participante.
+      const error = await db().runTransaction(async (transaction) => {
+        const participantRef = participantsRef(campaignId).doc(customerId);
+        const [freshCampaign, participantSnap, freshClient] = await transaction.getAll(
+          campaignsRef().doc(campaignId), participantRef,
+          db().collection("users").doc(actorUid).collection("clients").doc(customerId),
+        );
+        if (!freshCampaign.exists) return "CAMPAIGN_NOT_FOUND" as const;
+        const currentCampaign = freshCampaign.data()!;
+        if (currentCampaign.ownerId !== actorUid) return "FORBIDDEN" as const;
+        if (currentCampaign.status === "finished") return "CAMPAIGN_FINISHED" as const;
+        if (!freshClient.exists) return "CLIENT_NOT_FOUND" as const;
+        const participant = participantSnap.data();
+        if (!hasNumberCount && assignedNumberCountFromParticipant(participant) === null) return "QUANTITY_REQUIRED" as const;
+        if (numberCount !== null) {
+          if (numberCount > campaignNumberCount(currentCampaign)) return "QUANTITY_BEYOND_CAMPAIGN" as const;
+          const claimedCount = entriesClaimedFromParticipant(participant);
+          if (numberCount < claimedCount) return "QUANTITY_BELOW_CLAIMED" as const;
+          transaction.set(participantRef, {
+            customerId, assignedNumberCount: numberCount, entriesClaimed: claimedCount,
+            claimedNumbers: Array.isArray(participant?.claimedNumbers) ? participant.claimedNumbers : [], updatedAt: now,
+          }, { merge: true });
+        }
+        transaction.set(tokenRef, { customerId, tokenHash: hashToken(rawToken), createdAt: now, expiresAt: null, revokedAt: null });
+        return null;
       });
-      batch.set(participantsRef(campaignId).doc(customerId), { customerId, updatedAt: now }, { merge: true });
-      await batch.commit();
-      logInfo("promotional_campaigns.link_created", { campaignId, actorUid, tokenId: tokenRef.id, selectionLimit });
+      if (error) return sendSorteioError(res, error === "FORBIDDEN" ? 403 : error.endsWith("NOT_FOUND") ? 404 : error === "CAMPAIGN_FINISHED" || error === "QUANTITY_BELOW_CLAIMED" ? 409 : 400, error);
+      logInfo("promotional_campaigns.link_created", { campaignId, actorUid, tokenId: tokenRef.id });
       return res.status(201).json({
         tokenId: tokenRef.id,
         slug: campaign.slug,
         token: rawToken,
         path: `/sorteio/${campaign.slug}?t=${rawToken}`,
-        selectionLimit,
       });
     } catch (error) {
       logWarn("promotional_campaigns.link_create_failed", { message: error instanceof Error ? error.message : String(error) });
@@ -621,145 +483,6 @@ export function registerPromotionalCampaignRoutes(
     }
   });
 
-  // ===== POST .../close-entries — encerra participações (admin-only). NUNCA escolhe vencedor (§3): só
-  // bloqueia novos claims. Servidor é a autoridade — o mesmo bloqueio já é imposto pela transação de
-  // claim, que relê o status da campanha de dentro da própria transação (isCampaignPubliclyClaimable
-  // exige status "active"), então uma claim concorrente perde a corrida contra este fechamento mesmo sem
-  // nenhum código extra aqui. =====
-  app.post("/api/admin/sorteios/campaigns/:campaignId/close-entries", requireAuth, requireAdmin, async (req: Request, res: Response) => {
-    const actorUid = (req as Request & { firebaseUid?: string }).firebaseUid;
-    if (!actorUid) return sendSorteioError(res, 401, "UNAUTHORIZED");
-    const campaignId = String(req.params.campaignId);
-    try {
-      const campaignRef = campaignsRef().doc(campaignId);
-      const preSnap = await campaignRef.get();
-      if (!preSnap.exists) return sendSorteioError(res, 404, "CAMPAIGN_NOT_FOUND");
-      if (preSnap.data()!.ownerId !== actorUid) return sendSorteioError(res, 403, "FORBIDDEN");
-
-      const result = await db().runTransaction(async (transaction) => {
-        const snap = await transaction.get(campaignRef);
-        const campaign = snap.data()!;
-        if (campaign.status === "entries_closed") {
-          return { ok: true as const, alreadyClosed: true, entriesClosedAt: campaign.entriesClosedAt as string };
-        }
-        if (!isCampaignClosable(campaign.status)) return { ok: false as const, code: "CAMPAIGN_NOT_CLOSABLE" as const };
-        const now = new Date().toISOString();
-        transaction.update(campaignRef, { status: "entries_closed", entriesClosedAt: now, updatedAt: now });
-        transaction.set(auditEventsRef(campaignId).doc(), {
-          type: "ENTRIES_CLOSED", campaignId, actor: actorUid, timestamp: now,
-        });
-        return { ok: true as const, alreadyClosed: false, entriesClosedAt: now };
-      });
-
-      if (!result.ok) return sendSorteioError(res, 400, result.code);
-      logInfo("promotional_campaigns.entries_closed", { campaignId, actorUid, alreadyClosed: result.alreadyClosed });
-      return res.status(200).json({ success: true, status: "entries_closed", entriesClosedAt: result.entriesClosedAt });
-    } catch (error) {
-      logWarn("promotional_campaigns.close_entries_failed", { message: error instanceof Error ? error.message : String(error) });
-      return sendSorteioError(res, 500, "CLOSE_ENTRIES_FAILED");
-    }
-  });
-
-  // ===== POST .../draw — apuração oficial (admin-only). Este é o ÚNICO lugar em todo o sistema que
-  // decide um vencedor: crypto.randomInt (não Math.random — §7), nunca aceita nenhum valor vindo do corpo
-  // da requisição (§15/§21 — o corpo desta rota nem é lido, então um `winningNumber` injetado é
-  // simplesmente ignorado, nunca validado nem próximo de influenciar o resultado). =====
-  app.post("/api/admin/sorteios/campaigns/:campaignId/draw", requireAuth, requireAdmin, async (req: Request, res: Response) => {
-    const actorUid = (req as Request & { firebaseUid?: string }).firebaseUid;
-    if (!actorUid) return sendSorteioError(res, 401, "UNAUTHORIZED");
-    const campaignId = String(req.params.campaignId);
-    try {
-      const campaignRef = campaignsRef().doc(campaignId);
-      const preSnap = await campaignRef.get();
-      if (!preSnap.exists) return sendSorteioError(res, 404, "CAMPAIGN_NOT_FOUND");
-      if (preSnap.data()!.ownerId !== actorUid) return sendSorteioError(res, 403, "FORBIDDEN");
-      const drawRef = officialDrawRef(campaignId);
-
-      const result = await db().runTransaction(async (transaction) => {
-        // ---- LEITURAS (todas antes de qualquer escrita) ----
-        const [campaignSnap, existingDrawSnap] = await Promise.all([transaction.get(campaignRef), transaction.get(drawRef)]);
-        const campaign = campaignSnap.data()!;
-        // §8/§9 — a primeira apuração oficial já persistida GANHA para sempre; qualquer chamada depois
-        // (mesmo concorrente, mesmo repetida) só devolve o mesmo resultado, nunca escreve de novo.
-        if (existingDrawSnap.exists) {
-          return { ok: true as const, alreadyDrawn: true, draw: existingDrawSnap.data() as OfficialDrawResult };
-        }
-        if (!isCampaignDrawable(campaign.status)) return { ok: false as const, code: "CAMPAIGN_NOT_CLOSED" as const };
-
-        const claimedNumbersSnap = await transaction.get(numbersRef(campaignId).where("status", "==", "claimed"));
-        const eligible = buildEligibleEntries(
-          claimedNumbersSnap.docs.map((doc) => ({ number: Number(doc.id), customerId: doc.data().customerId as string })),
-        );
-        if (eligible.length === 0) return { ok: false as const, code: "NO_ELIGIBLE_ENTRIES" as const };
-
-        const eligibleSetHash = crypto.createHash("sha256").update(canonicalEligibleSetString(eligible)).digest("hex");
-        // §7 — crypto.randomInt é um gerador criptograficamente seguro do Node; Math.random() nunca é
-        // usado para decidir o vencedor em nenhum ponto deste arquivo.
-        const winnerIndex = crypto.randomInt(eligible.length);
-        const winner = eligible[winnerIndex];
-
-        const winnerClientSnap = await transaction.get(db().collection("users").doc(campaign.ownerId).collection("clients").doc(winner.clientId));
-        const winnerDisplayNameSnapshot = (winnerClientSnap.data()?.name as string | undefined) ?? "Cliente removido";
-
-        const now = new Date().toISOString();
-        const draw: OfficialDrawResult = {
-          drawId: crypto.randomUUID(),
-          campaignId,
-          campaignOwnerId: campaign.ownerId,
-          closedAt: (campaign.entriesClosedAt as string | null) ?? null,
-          drawnAt: now,
-          eligibleNumberCount: eligible.length,
-          participantCount: countDistinctParticipants(eligible),
-          algorithm: "crypto.randomInt",
-          algorithmVersion: 1,
-          eligibleSetHash,
-          winningNumber: winner.number,
-          winningClientId: winner.clientId,
-          winnerDisplayNameSnapshot,
-          prizeNameSnapshot: campaign.prizeName as string,
-          prizeImageUrlSnapshot: (campaign.prizeImageUrl as string | null) ?? null,
-          createdBy: actorUid,
-        };
-
-        // ---- ESCRITAS (só depois de TODAS as leituras acima) ----
-        transaction.set(drawRef, draw);
-        transaction.update(campaignRef, {
-          status: "drawn", winningNumber: draw.winningNumber, resultSource: "internal_admin_draw", updatedAt: now,
-        });
-        transaction.set(auditEventsRef(campaignId).doc(), {
-          type: "DRAW_EXECUTED", campaignId, actor: actorUid, timestamp: now, drawId: draw.drawId,
-        });
-
-        return { ok: true as const, alreadyDrawn: false, draw };
-      });
-
-      if (!result.ok) return sendSorteioError(res, 400, result.code);
-      logInfo("promotional_campaigns.draw_executed", { campaignId, actorUid, alreadyDrawn: result.alreadyDrawn, drawId: result.draw.drawId });
-      return res.status(result.alreadyDrawn ? 200 : 201).json({ alreadyDrawn: result.alreadyDrawn, draw: result.draw });
-    } catch (error) {
-      logWarn("promotional_campaigns.draw_failed", { message: error instanceof Error ? error.message : String(error) });
-      return sendSorteioError(res, 500, "DRAW_FAILED");
-    }
-  });
-
-  // ===== GET .../result — resultado oficial da apuração (admin-only nesta rodada — §20). =====
-  app.get("/api/admin/sorteios/campaigns/:campaignId/result", requireAuth, requireAdmin, async (req: Request, res: Response) => {
-    const actorUid = (req as Request & { firebaseUid?: string }).firebaseUid;
-    if (!actorUid) return sendSorteioError(res, 401, "UNAUTHORIZED");
-    const campaignId = String(req.params.campaignId);
-    try {
-      const campaignSnap = await campaignsRef().doc(campaignId).get();
-      if (!campaignSnap.exists) return sendSorteioError(res, 404, "CAMPAIGN_NOT_FOUND");
-      const campaign = campaignSnap.data()!;
-      if (campaign.ownerId !== actorUid) return sendSorteioError(res, 403, "FORBIDDEN");
-      const drawSnap = await officialDrawRef(campaignId).get();
-      return res.status(200).json({ status: campaign.status as PromotionalCampaignStatus, draw: drawSnap.exists ? (drawSnap.data() as OfficialDrawResult) : null });
-    } catch (error) {
-      logWarn("promotional_campaigns.result_failed", { message: error instanceof Error ? error.message : String(error) });
-      return sendSorteioError(res, 500, "RESULT_FAILED");
-    }
-  });
-
   // ===== GET /api/public/sorteios/:slug — página pública, sem login, dados mínimos sanitizados =====
   app.get("/api/public/sorteios/:slug", async (req: Request, res: Response) => {
     if (!publicSorteioRateLimit(req.ip ?? "unknown")) return res.status(429).json({ error: "RATE_LIMITED" });
@@ -776,32 +499,18 @@ export function registerPromotionalCampaignRoutes(
       const tokenSnap = await tokensRef(campaignId).where("tokenHash", "==", hashToken(token)).limit(1).get();
       if (tokenSnap.empty) return sendSorteioError(res, 403, "FORBIDDEN");
       const tokenData = tokenSnap.docs[0].data();
-      if (tokenData.revokedAt) return sendSorteioError(res, 403, "FORBIDDEN");
+      if (tokenData.revokedAt || (tokenData.expiresAt && Date.now() > Date.parse(tokenData.expiresAt))) return sendSorteioError(res, 403, "FORBIDDEN");
       const customerId = tokenData.customerId as string;
 
-      const [participantSnap, numbersSnap, qualifyingSpend, manualInternalEntries] = await Promise.all([
-        participantsRef(campaignId).doc(customerId).get(),
-        numbersRef(campaignId).get(),
-        computeQualifyingSpend(campaign.ownerId, customerId, campaign.startsAt, campaign.endsAt),
-        computeManualInternalEntries(campaignId, customerId),
+      const [participantSnap, numbersSnap] = await Promise.all([
+        participantsRef(campaignId).doc(customerId).get(), numbersRef(campaignId).get(),
       ]);
-      const entriesAlreadyClaimed = participantSnap.exists ? Number(participantSnap.data()?.entriesClaimed ?? 0) : 0;
-      const entitlement = calculateEntitlementWithManualGrants({
-        qualifyingSpend,
-        spendPerEntry: campaign.spendPerEntry,
-        manualInternalEntries,
-        entriesAlreadyClaimed,
-        policy: resolveEntitlementPolicy(campaign),
-      });
-
-      // PROMOTIONAL-CAMPAIGNS-LINK-SELECTION-LIMIT-04 — o que este link específico ainda libera pode ser
-      // MENOR que o saldo global do cliente (o admin pode ter limitado o link, ou o cliente pode ter
-      // outro link com saldo já consumido). `selectionLimit` ausente no documento (link legado, criado
-      // antes desta feature) normaliza para `null` = sem teto próprio, capado só pelo saldo global.
-      const tokenSelectionLimit = typeof tokenData.selectionLimit === "number" ? tokenData.selectionLimit : null;
-      const tokenClaimedThroughToken = Number(tokenData.claimedThroughToken ?? 0);
-      const tokenRemaining = calculateTokenRemaining(tokenSelectionLimit, tokenClaimedThroughToken);
-      const maxSelectable = calculateMaxSelectable(entitlement.entriesAvailable, tokenRemaining);
+      const qualifyingSpend = assignedNumberCountFromParticipant(participantSnap.data()) === null
+        ? await computeQualifyingSpend(campaign.ownerId, customerId, campaign.startsAt, campaign.endsAt) : 0;
+      const participant = participantSnap.exists ? participantSnap.data() : undefined;
+      const entriesAlreadyClaimed = entriesClaimedFromParticipant(participant);
+      const assignedNumberCount = assignedNumberCountFromParticipant(participant);
+      const entitlement = calculateEntitlement(qualifyingSpend, campaign.spendPerEntry, entriesAlreadyClaimed, assignedNumberCount);
 
       // §16/§26: público nunca sabe QUEM escolheu — só se o número está livre, ou "claimed" (bloqueado),
       // ou é um dos SEUS PRÓPRIOS números (mine: true), nunca customerId/telefone de terceiros.
@@ -810,7 +519,7 @@ export function registerPromotionalCampaignRoutes(
         const data = doc.data();
         claimedByOthers.set(Number(doc.id), data.status === "claimed" && data.customerId !== customerId);
       }
-      const myNumbers = new Set<number>(participantSnap.exists ? (participantSnap.data()?.claimedNumbers ?? []) : []);
+      const myNumbers = new Set<number>(participantSnap.exists && Array.isArray(participant?.claimedNumbers) ? participant.claimedNumbers : []);
       const numbers: { number: number; status: "available" | "claimed" }[] = [];
       for (let n = campaign.numberStart; n <= campaign.numberEnd; n += 1) {
         numbers.push({ number: n, status: (claimedByOthers.get(n) || myNumbers.has(n)) ? "claimed" : "available" });
@@ -828,9 +537,9 @@ export function registerPromotionalCampaignRoutes(
           numberEnd: campaign.numberEnd,
         },
         claimable: isCampaignPubliclyClaimable({ status: campaign.status, startsAt: campaign.startsAt, endsAt: campaign.endsAt }),
-        // Escopado a ESTE link/token — nunca o saldo global bruto (que pode incluir direitos reservados
-        // a outros links do mesmo cliente). Ver comentário acima sobre maxSelectable.
-        entriesAvailable: maxSelectable,
+        entriesAuthorized: entitlement.entriesEarned,
+        entriesClaimed: entriesAlreadyClaimed,
+        entriesAvailable: entitlement.entriesAvailable,
         myNumbers: Array.from(myNumbers).sort((a, b) => a - b),
         numbers,
       });
@@ -846,7 +555,9 @@ export function registerPromotionalCampaignRoutes(
     const slug = String(req.params.slug);
     const token = typeof req.body?.token === "string" ? req.body.token : "";
     const rawNumbers = Array.isArray(req.body?.numbers) ? req.body.numbers : [];
-    const numbers = rawNumbers.every((value: unknown) => typeof value === "number") ? (rawNumbers as number[]).map((n) => Math.trunc(n)) : null;
+    const numbers = rawNumbers.every((value: unknown) => typeof value === "number") ? (rawNumbers as number[]) : null;
+    if (numbers && numbers.some((number) => !Number.isSafeInteger(number))) return res.status(200).json({ ok: false, denyReason: "NUMBER_OUT_OF_RANGE" });
+    if (numbers && numbers.length > 2000) return res.status(200).json({ ok: false, denyReason: "EXCEEDS_AVAILABLE_ENTRIES" });
     if (!token || !numbers) return res.status(200).json({ ok: false, denyReason: "NO_NUMBERS_SELECTED" });
 
     try {
@@ -864,15 +575,10 @@ export function registerPromotionalCampaignRoutes(
 
         const tokenQuerySnap = await transaction.get(tokensRef(campaignId).where("tokenHash", "==", tokenHash).limit(1));
         if (tokenQuerySnap.empty) return { ok: false as const, denyReason: "INVALID_TOKEN" as const };
-        const tokenDoc = tokenQuerySnap.docs[0];
-        const tokenData = tokenDoc.data();
+        const tokenData = tokenQuerySnap.docs[0].data();
         if (tokenData.revokedAt) return { ok: false as const, denyReason: "REVOKED_TOKEN" as const };
         if (tokenData.expiresAt && Date.now() > Date.parse(tokenData.expiresAt)) return { ok: false as const, denyReason: "EXPIRED_TOKEN" as const };
         const customerId = tokenData.customerId as string;
-        // PROMOTIONAL-CAMPAIGNS-LINK-SELECTION-LIMIT-04 — `selectionLimit` ausente (link legado) normaliza
-        // para null = sem teto próprio, comportamento idêntico ao anterior a esta feature.
-        const tokenSelectionLimit = typeof tokenData.selectionLimit === "number" ? tokenData.selectionLimit : null;
-        const tokenClaimedThroughToken = Number(tokenData.claimedThroughToken ?? 0);
 
         if (!isCampaignPubliclyClaimable({ status: campaign.status, startsAt: campaign.startsAt, endsAt: campaign.endsAt })) {
           return { ok: false as const, denyReason: campaign.status !== "active" ? "CAMPAIGN_NOT_ACTIVE" as const : "OUTSIDE_CAMPAIGN_PERIOD" as const };
@@ -882,72 +588,65 @@ export function registerPromotionalCampaignRoutes(
         const numberRefs = numbers.map((n) => numbersRef(campaignId).doc(String(n)));
         const [participantSnap, ...numberSnaps] = await transaction.getAll(participantRef, ...numberRefs);
 
-        const salesQuerySnap = await transaction.get(
-          db().collection("users").doc(campaign.ownerId).collection("sales")
-            .where("clientId", "==", customerId)
-            .where("date", ">=", campaign.startsAt)
-            .where("date", "<=", campaign.endsAt),
-        );
+        const participant = participantSnap.exists ? participantSnap.data() : undefined;
+        const entriesAlreadyClaimed = entriesClaimedFromParticipant(participant);
+        const assignedNumberCount = assignedNumberCountFromParticipant(participant);
         let qualifyingSpendCents = 0;
-        for (const doc of salesQuerySnap.docs) {
-          const value = Number(doc.data().total ?? doc.data().totalPrice ?? 0);
-          if (Number.isFinite(value)) qualifyingSpendCents += Math.round(value * 100);
+        // Autorizações explícitas não dependem de vendas nem de índices de vendas.
+        if (assignedNumberCount === null) {
+          const salesQuerySnap = await transaction.get(
+            db().collection("users").doc(campaign.ownerId).collection("sales")
+              .where("clientId", "==", customerId).where("date", ">=", campaign.startsAt).where("date", "<=", campaign.endsAt),
+          );
+          for (const doc of salesQuerySnap.docs) {
+            const value = Number(doc.data().total ?? doc.data().totalPrice ?? 0);
+            if (Number.isFinite(value)) qualifyingSpendCents += Math.round(value * 100);
+          }
         }
         const qualifyingSpend = qualifyingSpendCents / 100;
-        const entriesAlreadyClaimed = participantSnap.exists ? Number(participantSnap.data()?.entriesClaimed ?? 0) : 0;
+        const entitlement = calculateEntitlement(qualifyingSpend, campaign.spendPerEntry, entriesAlreadyClaimed, assignedNumberCount);
 
-        // PROMOTIONAL-CAMPAIGNS-MANUAL-INTERNAL-05 — lido DENTRO da mesma transação (não antes dela) para
-        // que uma concessão manual concorrente nunca fique fora da leitura que decide o teto desta claim.
-        const manualEventsQuerySnap = await transaction.get(entitlementEventsRef(campaignId, customerId));
-        let manualInternalEntries = 0;
-        for (const doc of manualEventsQuerySnap.docs) {
-          const amount = Number(doc.data().amount ?? 0);
-          if (Number.isFinite(amount)) manualInternalEntries += amount;
-        }
-        const entitlement = calculateEntitlementWithManualGrants({
-          qualifyingSpend,
-          spendPerEntry: campaign.spendPerEntry,
-          manualInternalEntries,
-          entriesAlreadyClaimed,
-          policy: resolveEntitlementPolicy(campaign),
-        });
-
-        // O teto real desta claim é o MENOR entre o saldo global (recalculado fresco, nunca confiado do
-        // client) e o que resta do teto próprio deste token — nunca um dos dois isoladamente. Protege
-        // contra múltiplos links do mesmo cliente juntos excederem o saldo real (concorrência incluída,
-        // já que toda esta leitura acontece dentro da mesma transação Firestore).
-        const tokenRemaining = calculateTokenRemaining(tokenSelectionLimit, tokenClaimedThroughToken);
-        const maxSelectable = calculateMaxSelectable(entitlement.entriesAvailable, tokenRemaining);
-
+        // A validação estrutural sempre usa o payload original para manter duplicidade/range inválidos
+        // como erro, mesmo quando o cliente está repetindo uma requisição já concluída.
         const shapeError = validateClaimPayloadShape({
           numbers,
           numberStart: campaign.numberStart,
           numberEnd: campaign.numberEnd,
-          entriesAvailable: maxSelectable,
+          entriesAvailable: Number.MAX_SAFE_INTEGER,
         });
         if (shapeError) return { ok: false as const, denyReason: shapeError };
 
+        const alreadyOwned = numberSnaps.map((snap) => snap.exists && snap.data()?.status === "claimed" && snap.data()?.customerId === customerId);
+        const newNumbers = numbers.filter((_number, index) => !alreadyOwned[index]);
+        if (newNumbers.length > entitlement.entriesAvailable) {
+          return { ok: false as const, denyReason: "EXCEEDS_AVAILABLE_ENTRIES" as const };
+        }
+
         for (let i = 0; i < numberSnaps.length; i += 1) {
           const snap = numberSnaps[i];
-          if (snap.exists && snap.data()?.status === "claimed") {
+          if (snap.exists && snap.data()?.status === "claimed" && !alreadyOwned[i]) {
             return { ok: false as const, denyReason: "NUMBER_ALREADY_CLAIMED" as const, conflictingNumber: numbers[i] };
           }
         }
 
+        // Retry do mesmo payload já persistido é sucesso sem nova concessão/escrita. Isso também torna
+        // um retry parcial seguro: somente números ainda livres consomem o saldo restante.
+        if (newNumbers.length === 0) return { ok: true as const, claimedNumbers: numbers };
+
         // ---- ESCRITAS (só depois de TODAS as leituras acima) ----
         const now = new Date().toISOString();
-        const previousClaimed: number[] = participantSnap.exists ? (participantSnap.data()?.claimedNumbers ?? []) : [];
+        const previousClaimed: number[] = participantSnap.exists && Array.isArray(participant?.claimedNumbers)
+          ? participant.claimedNumbers.filter((value: unknown): value is number => typeof value === "number")
+          : [];
         for (let i = 0; i < numberRefs.length; i += 1) {
-          transaction.set(numberRefs[i], { number: numbers[i], status: "claimed", customerId, claimedAt: now });
+          if (!alreadyOwned[i]) transaction.set(numberRefs[i], { number: numbers[i], status: "claimed", customerId, claimedAt: now });
         }
         transaction.set(participantRef, {
           customerId,
-          entriesClaimed: entriesAlreadyClaimed + numbers.length,
-          claimedNumbers: [...previousClaimed, ...numbers],
+          entriesClaimed: entriesAlreadyClaimed + newNumbers.length,
+          claimedNumbers: Array.from(new Set([...previousClaimed, ...newNumbers])),
           updatedAt: now,
         }, { merge: true });
-        // Consumo específico DESTE token — nunca reseta, mesmo que o cliente tenha outros links.
-        transaction.update(tokenDoc.ref, { claimedThroughToken: tokenClaimedThroughToken + numbers.length });
 
         return { ok: true as const, claimedNumbers: numbers };
       });

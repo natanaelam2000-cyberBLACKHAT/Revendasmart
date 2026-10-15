@@ -56,3 +56,14 @@ firestore-debug.log
 # script/product-cutout-smoke: local $-budget ledger for real Photoroom API spend during manual testing
 # (script/product-cutout-smoke/ledger.ts) — accumulates per-machine, not deterministic/shareable state.
 script/product-cutout-smoke/spend-ledger.json
+
+# ADS PRO R2: originals stay local; publish only audited WebP and source inventory.
+source-assets/ads-pro-backgrounds/images/
+
+# Signing material is local-only at every repository depth.
+*.jks
+*.keystore
+signing.env.ps1
+
+# Generated local SBOMs are CI/delivery artifacts.
+/docs/security/sbom/*.json

@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import { compareFindings, osvFindings } from '../scripts/security/sca-policy.mjs';
+const finding = { package: 'fixture', version: '1', ids: ['TEST-001'], severity: '9.8', runtime: true };
+assert.equal(compareFindings([finding], [finding]).critical.length, 0);
+assert.equal(compareFindings([{ ...finding, version: '2' }], [finding]).critical.length, 1);
+assert.equal(compareFindings([{ ...finding, severity: '7.5' }], []).high.length, 1);
+assert.equal(compareFindings([{ ...finding, severity: '' }], []).unknown.length, 1);
+assert.throws(() => osvFindings({}), /Invalid/);
+assert.deepEqual(osvFindings({ results: [] }), []);
+console.log('PASS SCA policy: preexisting, version delta, critical/high/unknown, malformed report');

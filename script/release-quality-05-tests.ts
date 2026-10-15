@@ -8,12 +8,13 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { classifyPendingSaleResponse } from "../client/src/lib/pending-sale-response";
 
 function read(path: string): string {
   return fs.readFileSync(path, "utf8");
 }
 
-function run(): void {
+async function run(): Promise<void> {
   // ===== §1/§2/§3 — servidor como autoridade, delta atômico =====
   const saleTransactionSource = read("server/sale-finalize-transaction.ts");
   assert.match(saleTransactionSource, /FieldValue\.increment\(-item\.quantity\)/, "decremento de estoque precisa ser um delta atômico (FieldValue.increment), nunca um valor absoluto");
@@ -41,20 +42,24 @@ function run(): void {
   assert.match(offlineQueueSource, /export type PendingSaleConflictReason = "INSUFFICIENT_STOCK" \| "PRODUCT_NOT_FOUND" \| "PRODUCT_CHANGED"/, "motivos de conflito precisam ser um conjunto pequeno e explícito, não inventado à toa");
   assert.match(offlineQueueSource, /status: "pending" \| "syncing" \| "failed" \| "conflict"/, "status da fila precisa incluir 'conflict', distinto de 'failed' genérico");
   assert.match(offlineQueueSource, /export async function markPendingSaleConflict/, "precisa existir uma função dedicada para marcar conflito (com motivo), não reaproveitar markPendingSaleFailed genérico");
-  assert.match(offlineQueueSource, /function resolveConflictReason/, "precisa mapear os códigos que o servidor já distingue para um motivo de conflito, não inventar um novo vocabulário desconectado do backend");
-  assert.match(offlineQueueSource, /if \(code === "INSUFFICIENT_STOCK"\) return "INSUFFICIENT_STOCK";/, "INSUFFICIENT_STOCK do servidor precisa virar conflito, não falha genérica");
+  assert.match(offlineQueueSource, /return classifyPendingSaleResponse\(response, payload.saleId\)/, "sync usa o classificador de confirmação e conflitos testado");
+  for (const [code, reason] of [["INSUFFICIENT_STOCK", "INSUFFICIENT_STOCK"], ["PRODUCT_NOT_FOUND", "PRODUCT_NOT_FOUND"], ["INVALID_PRODUCT_PRICE", "PRODUCT_CHANGED"]]) {
+    const result = await classifyPendingSaleResponse(new Response(JSON.stringify({ code }), { status: 409 }), "sale-local");
+    assert.equal(result.outcome, "conflict", "recusa de estoque/produto não vira falha genérica");
+    assert.ok("reason" in result && result.reason === reason);
+  }
 
   const pendingSalesSyncSource = read("client/src/hooks/usePendingSalesSync.ts");
-  assert.match(pendingSalesSyncSource, /result\.outcome === "conflict"/, "o hook de sync precisa distinguir o outcome de conflito do outcome de falha genérica");
-  assert.match(pendingSalesSyncSource, /await markPendingSaleConflict\(user\.uid, item\.id, result\.reason, result\.message\)/, "conflito precisa ser persistido com o motivo, não só uma mensagem genérica");
+  assert.match(pendingSalesSyncSource, /await settlePendingSale\(user.uid, item.id, workerId.current, result\)/, "hook delega o resultado ao settlement proprietário");
+  assert.match(offlineQueueSource, /conflictReason: result\.outcome === "conflict" \? result\.reason/, "settlement persiste o motivo de conflito");
   assert.match(pendingSalesSyncSource, /conflictCount: docs\.filter/, "estado exposto pelo hook precisa incluir uma contagem de conflitos, separada de pendentes/sincronizando/falhas");
   assert.match(pendingSalesSyncSource, /retryPendingSale|cancelPendingSale/, "hook precisa expor ações de retry/cancelamento para a UI agir sobre um conflito, não só mostrar e travar");
 
   // Nunca apaga a venda pendente sozinho por causa de um conflito — só remoção EXPLÍCITA (cancelPendingSale)
   // ou sucesso real (removePendingSale em outcome synced/already-exists) podem apagar o documento.
   assert.doesNotMatch(
-    pendingSalesSyncSource.match(/if \(result\.outcome === "conflict"\)[\s\S]{0,120}/)?.[0] ?? "",
-    /removePendingSale/,
+    offlineQueueSource.match(/const status = result\.outcome === "conflict"[\s\S]*?return true;/)?.[0] ?? "",
+    /tx\.delete/,
     "marcar conflito NUNCA pode remover a venda pendente — dado não pode sumir silenciosamente",
   );
 

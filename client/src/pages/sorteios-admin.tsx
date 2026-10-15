@@ -1,14 +1,14 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { useLocation, useParams } from "wouter";
-import { Ticket, Plus, Minus, ChevronRight, ArrowLeft, Share2, Copy, Play, Pause, Ban } from "lucide-react";
+import { Ticket, Plus, ChevronRight, ArrowLeft, Share2, Copy, Play, Pause, CheckCircle2, Ban } from "lucide-react";
 import { Layout } from "@/components/layout";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { useAdminAccess } from "@/hooks/useAdminAccess";
 import { useClientsLiteData } from "@/hooks/useClientsLiteData";
 import { apiRequest, ApiError } from "@/lib/api-client";
+import { buildSorteioPublicUrl, copySorteioLink, shareSorteioLink } from "@/lib/sorteios-link";
 import { notifyError, notifySuccess } from "@/lib/notify";
-import { formatCampaignNumber, MANUAL_GRANT_REASONS, MANUAL_GRANT_REASON_LABELS } from "@shared/promotional-campaigns";
-import type { EntitlementPolicy, ManualGrantReason, OfficialDrawResult, PromotionalCampaign, PromotionalCampaignStatus, PromotionalEntitlement } from "@shared/promotional-campaigns";
+import type { PromotionalCampaign, PromotionalCampaignStatus } from "@shared/promotional-campaigns";
 
 /**
  * PROMOTIONAL-CAMPAIGNS-01B §2 — listagem + detalhe/participantes/link num único chunk (evita pagar
@@ -20,22 +20,13 @@ import type { EntitlementPolicy, ManualGrantReason, OfficialDrawResult, Promotio
  * campanha"), então separá-la é economia real de carregamento sem custo de duplicar o gate de admin.
  */
 const SorteiosCreate = lazy(() => import("./sorteios-create"));
-/** SECURE-DRAW-VISUAL-07 — só é aberta ao clicar "Realizar sorteio"/"Reproduzir animação" (nunca no
- * carregamento normal do detalhe da campanha), então fica em chunk próprio pelo mesmo raciocínio de
- * `SorteiosCreate` acima. */
-const SorteioDrawExperience = lazy(() => import("./sorteio-draw-experience"));
 
-const CARD = "rounded-2xl border border-border/60 bg-white p-4";
+const CARD = "rounded-2xl border border-border/60 bg-card text-card-foreground p-4";
 const LABEL = "text-xs font-black uppercase tracking-wide text-muted-foreground";
-const STEPPER_BUTTON_CLASS = "flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white shadow-sm active:scale-95 disabled:opacity-30";
-const STATUS_LABEL: Record<PromotionalCampaignStatus, string> = {
-  draft: "Rascunho", active: "Ativo", paused: "Pausado",
-  entries_closed: "Participações encerradas", drawn: "Sorteado", finished: "Finalizado",
-};
+const STATUS_LABEL: Record<PromotionalCampaignStatus, string> = { draft: "Rascunho", active: "Ativo", paused: "Pausado", finished: "Finalizado" };
 const STATUS_COLOR: Record<PromotionalCampaignStatus, string> = {
   draft: "bg-slate-100 text-slate-700", active: "bg-emerald-100 text-emerald-700",
-  paused: "bg-amber-100 text-amber-700", entries_closed: "bg-sky-100 text-sky-700",
-  drawn: "bg-violet-100 text-violet-700", finished: "bg-slate-200 text-slate-600",
+  paused: "bg-amber-100 text-amber-700", finished: "bg-slate-200 text-slate-600",
 };
 function formatDateRange(startsAt: string, endsAt: string): string {
   const fmt = (iso: string) => new Date(iso).toLocaleDateString("pt-BR");
@@ -98,7 +89,7 @@ function CampaignList() {
         </div>
         {loading && <PageSkeleton variant="cards" />}
         {!loading && campaigns.length === 0 && (
-          <div className="rounded-2xl border border-dashed border-border/60 bg-white p-8 text-center">
+          <div className="rounded-2xl border border-dashed border-border/60 bg-card p-8 text-center">
             <Ticket className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
             <p className="text-sm font-bold text-muted-foreground">Você ainda não criou nenhum sorteio promocional.</p>
           </div>
@@ -118,13 +109,9 @@ function CampaignList() {
   );
 }
 
-interface ManualEntitlementEvent {
-  id: string; type: string; amount: number; reason: ManualGrantReason | null; note: string | null; createdAt: string;
-}
 interface Participant {
   customerId: string; clientName: string; clientPhone: string | null; qualifyingSpend: number;
-  automaticEntries: number; manualInternalEntries: number; manualEvents: ManualEntitlementEvent[];
-  entriesClaimed: number; claimedNumbers: number[]; entriesAvailable: number;
+  assignedNumberCount: number | null; entriesAuthorized: number; entriesClaimed: number; claimedNumbers: number[]; entriesAvailable: number;
 }
 interface Metrics {
   numbersTotal: number; numbersClaimed: number; numbersAvailable: number;
@@ -132,95 +119,51 @@ interface Metrics {
 }
 interface DetailResponse { campaign: PromotionalCampaign; metrics: Metrics; participants: Participant[] }
 
-// LEGACY-FINISHED-DRAW-06B §6/§7 — "Finalizar" (PATCH direto para "finished") permitia pular a apuração
-// inteira: uma campanha ativa virava "finished" sem nunca passar por "entries_closed", ficando presa sem
-// acesso a "Realizar sorteio" até este hotfix ensinar o backend a tratar "finished" como também elegível
-// para apuração. Removido daqui para que NENHUMA campanha nova volte a cair nesse estado — o fluxo
-// correto agora é sempre Ativa → Encerrar participações → Realizar sorteio.
 const STATUS_ACTIONS: { status: PromotionalCampaignStatus; label: string; icon: typeof Play }[] = [
   { status: "active", label: "Ativar", icon: Play },
   { status: "paused", label: "Pausar", icon: Pause },
+  { status: "finished", label: "Finalizar", icon: CheckCircle2 },
 ];
 
-/** Linha label/valor reaproveitada entre o resumo de entitlement e o detalhe do participante — evita
- * repetir as mesmas classes Tailwind em cada linha (peso no bundle, não só legibilidade). */
-function EntitlementRow({ label, value, testId, dense }: { label: string; value: React.ReactNode; testId?: string; dense?: boolean }) {
-  return (
-    <div className={`flex justify-between${dense ? "" : " text-xs"}`}>
-      <span className="text-muted-foreground">{label}</span>
-      <span className="font-bold text-foreground" data-testid={testId}>{value}</span>
-    </div>
-  );
-}
-
-function GenerateLinkSection({ campaignId, entitlementPolicy }: { campaignId: string; entitlementPolicy: EntitlementPolicy }) {
+function GenerateLinkSection({ campaignId, participants, maxCount, onChanged }: { campaignId: string; participants: Participant[]; maxCount: number; onChanged: () => Promise<void> }) {
   const { clients } = useClientsLiteData();
   const [customerId, setCustomerId] = useState("");
-  const [entitlement, setEntitlement] = useState<PromotionalEntitlement | null>(null);
-  const [loadingEntitlement, setLoadingEntitlement] = useState(false);
-  const [selectionLimit, setSelectionLimit] = useState(1);
-  const [manualReason, setManualReason] = useState<ManualGrantReason>(MANUAL_GRANT_REASONS[0]);
+  const [numberCount, setNumberCount] = useState("");
+  const participant = participants.find((item) => item.customerId === customerId);
   const [generating, setGenerating] = useState(false);
   const [link, setLink] = useState<{ tokenId: string; url: string } | null>(null);
   const [revoking, setRevoking] = useState(false);
   const [revoked, setRevoked] = useState(false);
-
-  const canGrantManual = entitlementPolicy === "INTERNAL_ADMIN";
-
-  // PROMOTIONAL-CAMPAIGNS-LINK-SELECTION-LIMIT-04 §8 — o admin precisa ver quantos direitos o cliente já
-  // possui ANTES de gerar o link, para decidir quantos deste total o link libera. Isso é só leitura —
-  // não cria nem reserva nada (gerar o link em si também não reserva, ver server/promotional-campaigns.ts).
-  useEffect(() => {
-    setEntitlement(null);
-    setLink(null);
-    setRevoked(false);
-    if (!customerId) return;
-    setLoadingEntitlement(true);
-    apiRequest<PromotionalEntitlement>(`/api/admin/sorteios/campaigns/${campaignId}/clients/${customerId}/entitlement`, { auth: true })
-      .then((result) => {
-        setEntitlement(result);
-        setSelectionLimit(Math.max(1, result.entriesAvailable));
-      })
-      .catch((error) => notifyError(error instanceof Error ? error.message : "Não foi possível carregar os direitos do cliente."))
-      .finally(() => setLoadingEntitlement(false));
-  }, [campaignId, customerId]);
-
-  // PROMOTIONAL-CAMPAIGNS-MANUAL-INTERNAL-05 §7/§8 — quando o admin pede mais do que o saldo já
-  // existente (automático + manual já concedido), a diferença precisa virar uma concessão manual
-  // ANTES do link nascer com um teto que dependa dela. Um único clique ("Gerar link") faz as duas
-  // chamadas em sequência — nunca telas separadas — mas o servidor grava a concessão de forma durável
-  // (idempotente) antes de emitir o token, exatamente como o ticket exige.
-  const manualNeeded = canGrantManual && entitlement ? Math.max(0, selectionLimit - entitlement.entriesAvailable) : 0;
+  const [shareFallback, setShareFallback] = useState<string | null>(null);
 
   const handleGenerate = async () => {
     if (!customerId) { notifyError("Selecione um cliente."); return; }
-    if (!entitlement) { notifyError("Aguarde o carregamento dos direitos do cliente."); return; }
-    if (!canGrantManual && entitlement.entriesAvailable <= 0) { notifyError("Este cliente não possui participações disponíveis."); return; }
     setGenerating(true);
-    setLink(null);
-    setRevoked(false);
+    if (numberCount && (!Number.isInteger(Number(numberCount)) || Number(numberCount) < 1 || Number(numberCount) > maxCount)) { notifyError("Informe uma quantidade válida."); setGenerating(false); return; }
+    if (!numberCount && participant?.assignedNumberCount == null) { notifyError("Defina a quantidade autorizada."); setGenerating(false); return; }
     try {
-      if (manualNeeded > 0) {
-        await apiRequest(`/api/admin/sorteios/campaigns/${campaignId}/clients/${customerId}/manual-entries`, {
-          auth: true, method: "POST",
-          body: { quantity: manualNeeded, reason: manualReason, idempotencyKey: crypto.randomUUID() },
-        });
-      }
-      const result = await apiRequest<{ tokenId: string; path: string }>(`/api/admin/sorteios/campaigns/${campaignId}/links`, { auth: true, method: "POST", body: { customerId, selectionLimit } });
-      setLink({ tokenId: result.tokenId, url: `${window.location.origin}${result.path}` });
+      const result = await apiRequest<{ tokenId: string; path: string }>(`/api/admin/sorteios/campaigns/${campaignId}/links`, { auth: true, method: "POST", body: { customerId, ...(numberCount ? { numberCount: Number(numberCount) } : {}) } });
+      setLink({ tokenId: result.tokenId, url: buildSorteioPublicUrl(result.path) });
+      setRevoked(false);
+      setShareFallback(null);
+      await onChanged();
     } catch (error) {
       notifyError(error instanceof Error ? error.message : "Não foi possível gerar o link.");
     } finally {
       setGenerating(false);
     }
   };
+  const handleCopy = async () => {
+    if (!link) return;
+    try { await copySorteioLink(link.url); notifySuccess("Link copiado."); }
+    catch { setShareFallback("Não foi possível copiar. Selecione o URL abaixo e copie manualmente."); }
+  };
   const handleShare = async () => {
     if (!link) return;
-    if (navigator.share) {
-      try { await navigator.share({ title: "Sorteio Promocional", url: link.url }); return; } catch { /* cancelado — cai no fallback */ }
-    }
-    await navigator.clipboard.writeText(link.url);
-    notifySuccess("Link copiado.");
+    setShareFallback(null);
+    const outcome = await shareSorteioLink(link.url);
+    if (outcome === "unavailable") setShareFallback("Compartilhamento indisponível. Use Copiar link ou selecione o URL abaixo.");
+    if (outcome === "failed") setShareFallback("Não foi possível compartilhar. Use Copiar link ou selecione o URL abaixo.");
   };
   const handleRevoke = async () => {
     if (!link || !window.confirm("Revogar este link? O cliente não conseguirá mais abri-lo.")) return;
@@ -238,96 +181,82 @@ function GenerateLinkSection({ campaignId, entitlementPolicy }: { campaignId: st
 
   return (
     <div className={`space-y-3 ${CARD}`}>
-      <h3 className={LABEL}>Gerar link individual</h3>
-      <select value={customerId} onChange={(event) => setCustomerId(event.target.value)} className="rs-input flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm" data-testid="select-link-customer">
-        <option value="">Selecione um cliente…</option>
-        {clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}
+      <h3 className={LABEL}>Autorizar números e gerar link</h3>
+      <select value={customerId} onChange={(event) => { setCustomerId(event.target.value); setNumberCount(""); }} className="rs-input flex h-9 w-full rounded-md border border-input bg-background text-foreground [color-scheme:light] dark:[color-scheme:dark] px-3 text-sm" data-testid="select-link-customer">
+        <option className="bg-background text-foreground" value="">Selecione um cliente…</option>
+        {clients.map((client) => <option className="bg-background text-foreground" key={client.id} value={client.id}>{client.name}</option>)}
       </select>
-
-      {loadingEntitlement && <p className="text-xs text-muted-foreground">Carregando direitos do cliente…</p>}
-
-      {entitlement && !loadingEntitlement && (
-        entitlement.entriesAvailable > 0 || canGrantManual ? (
-          <div className="space-y-2 rounded-xl bg-secondary/40 p-3" data-testid="section-customer-entitlement">
-            <EntitlementRow label="Compras qualificadas" value={formatBRL(entitlement.qualifyingSpend)} />
-            {canGrantManual && (
-              <>
-                <EntitlementRow label="Direitos automáticos" value={entitlement.automaticEntries} testId="text-automatic-entries" />
-                <EntitlementRow label="Direitos manuais" value={entitlement.manualInternalEntries} testId="text-manual-entries" />
-              </>
-            )}
-            <EntitlementRow label="Disponíveis" value={entitlement.entriesAvailable} testId="text-entries-available" />
-            <div className="space-y-1.5 pt-1">
-              <span className="text-xs font-bold text-foreground">Quantidade liberada neste link</span>
-              <div className="flex items-center justify-center gap-4">
-                <button type="button" onClick={() => setSelectionLimit((value) => Math.max(1, value - 1))} disabled={selectionLimit <= 1} aria-label="Diminuir quantidade" data-testid="button-selection-limit-decrease" className={STEPPER_BUTTON_CLASS}><Minus className="h-4 w-4" /></button>
-                <span className="w-10 text-center text-3xl font-black text-foreground" data-testid="text-selection-limit">{selectionLimit}</span>
-                <button type="button" onClick={() => setSelectionLimit((value) => canGrantManual ? value + 1 : Math.min(entitlement.entriesAvailable, value + 1))} disabled={!canGrantManual && selectionLimit >= entitlement.entriesAvailable} aria-label="Aumentar quantidade" data-testid="button-selection-limit-increase" className={STEPPER_BUTTON_CLASS}><Plus className="h-4 w-4" /></button>
-              </div>
-            </div>
-            <p className="text-center text-[11px] text-muted-foreground">Este link permitirá escolher até {selectionLimit} {selectionLimit === 1 ? "número" : "números"}.</p>
-
-            {manualNeeded > 0 && (
-              <div className="space-y-2 rounded-xl border border-primary/20 bg-primary/5 p-2.5" data-testid="section-manual-grant">
-                <p className="text-xs font-bold text-primary">Serão adicionadas {manualNeeded} {manualNeeded === 1 ? "participação manual" : "participações manuais"}.</p>
-                <select value={manualReason} onChange={(event) => setManualReason(event.target.value as ManualGrantReason)} className="rs-input flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-xs" data-testid="select-manual-grant-reason">
-                  {MANUAL_GRANT_REASONS.map((reason) => <option key={reason} value={reason}>{MANUAL_GRANT_REASON_LABELS[reason]}</option>)}
-                </select>
-              </div>
-            )}
-          </div>
-        ) : (
-          <p className="text-xs font-bold text-amber-700" data-testid="text-no-entries-available">Este cliente não possui participações disponíveis.</p>
-        )
-      )}
-
-      <button type="button" onClick={handleGenerate} disabled={generating || !entitlement || (!canGrantManual && entitlement.entriesAvailable <= 0)} data-testid="button-generate-link" className="flex w-full items-center justify-center rounded-full bg-primary py-2.5 text-xs font-black text-white disabled:opacity-60">
+      {customerId && <div className="space-y-2">
+        <p className="text-xs text-muted-foreground">Autorizados: {participant?.entriesAuthorized ?? 0} · Escolhidos: {participant?.entriesClaimed ?? 0} · Restantes: {participant?.entriesAvailable ?? 0}</p>
+        <label className="block text-sm font-bold text-foreground">Quantidade total autorizada
+          <input type="number" min={Math.max(1, participant?.entriesClaimed ?? 0)} max={maxCount} value={numberCount} onChange={(event) => setNumberCount(event.target.value)} placeholder={participant?.assignedNumberCount != null ? `Manter ${participant.assignedNumberCount}` : "Informe a quantidade"} data-testid="input-authorized-number-count" className="mt-1 h-11 w-full rounded-md border border-input bg-background px-3 text-foreground" />
+        </label>
+        <p className="text-xs text-muted-foreground">O cliente pode confirmar parcialmente e voltar depois. Esta autorização vale para todos os links dele.</p>
+      </div>}
+      <button type="button" onClick={handleGenerate} disabled={generating} data-testid="button-generate-link" className="flex w-full items-center justify-center rounded-full bg-primary py-2.5 text-xs font-black text-white disabled:opacity-60">
         {generating ? "Gerando…" : "Gerar link"}
       </button>
       {link && !revoked && (
-        <div className="flex items-center gap-2 rounded-xl bg-slate-50 p-2.5">
-          <span className="flex-1 truncate text-[11px] text-muted-foreground">{link.url}</span>
+        <div className="flex items-center gap-2 rounded-xl bg-muted p-2.5">
+          <a href={link.url} className="min-w-0 flex-1 select-text break-all text-[11px] text-foreground underline" data-testid="sorteio-public-link">{link.url}</a>
           <button type="button" onClick={handleShare} aria-label="Compartilhar link" className="shrink-0 rounded-full bg-primary p-2 text-white"><Share2 className="h-3.5 w-3.5" /></button>
-          <button type="button" onClick={() => { void navigator.clipboard.writeText(link.url); notifySuccess("Link copiado."); }} aria-label="Copiar link" className="shrink-0 rounded-full bg-slate-200 p-2 text-slate-700"><Copy className="h-3.5 w-3.5" /></button>
+          <button type="button" onClick={handleCopy} aria-label="Copiar link" className="shrink-0 rounded-full bg-slate-200 p-2 text-slate-700"><Copy className="h-3.5 w-3.5" /></button>
           <button type="button" onClick={handleRevoke} disabled={revoking} aria-label="Revogar link" data-testid="button-revoke-link" className="shrink-0 rounded-full bg-rose-100 p-2 text-rose-700 disabled:opacity-60"><Ban className="h-3.5 w-3.5" /></button>
         </div>
       )}
+      {shareFallback && <p role="alert" className="text-xs text-foreground">{shareFallback}</p>}
       {revoked && <p className="text-[11px] font-bold text-rose-700" data-testid="text-link-revoked">Link revogado — gere um novo se precisar.</p>}
     </div>
   );
 }
 
-/** PROMOTIONAL-CAMPAIGNS-MANUAL-INTERNAL-05 §11 — card principal fica compacto; detalhe (automáticos vs
- * manuais, números, histórico de concessões) só aparece se o admin pedir, sem poluir a lista. */
-function ParticipantRow({ participant }: { participant: Participant }) {
-  const [expanded, setExpanded] = useState(false);
+function ParticipantQuantityEditor({
+  campaignId,
+  customerId,
+  initialValue,
+  maxNumberCount,
+  onSaved,
+}: {
+  campaignId: string;
+  customerId: string;
+  initialValue: number | null;
+  maxNumberCount: number;
+  onSaved: () => Promise<void>;
+}) {
+  const [value, setValue] = useState(initialValue === null ? "" : String(initialValue));
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    const numberCount = Number(value);
+    if (!Number.isInteger(numberCount) || numberCount <= 0 || numberCount > maxNumberCount) {
+      notifyError(`Informe uma quantidade inteira entre 1 e ${maxNumberCount}.`);
+      return;
+    }
+    setSaving(true);
+    try {
+      await apiRequest(`/api/admin/sorteios/campaigns/${campaignId}/participants/${encodeURIComponent(customerId)}/quantity`, {
+        auth: true,
+        method: "PATCH",
+        body: { numberCount },
+      });
+      notifySuccess("Quantidade liberada atualizada.");
+      await onSaved();
+    } catch (error) {
+      notifyError(error instanceof Error ? error.message : "Não foi possível atualizar a quantidade.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
-    <div className="py-2.5" data-testid={`row-participant-${participant.customerId}`}>
-      <button type="button" onClick={() => setExpanded((value) => !value)} className="flex w-full items-center justify-between text-left">
-        <span className="text-sm font-black text-foreground">{participant.clientName}</span>
-        <span className="text-[11px] font-bold text-muted-foreground">{participant.entriesClaimed} escolhidos · {participant.entriesAvailable} restantes</span>
+    <div className="mt-2 flex items-end gap-2 rounded-xl bg-muted p-2">
+      <label className="min-w-0 flex-1">
+        <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Liberados pelo admin</span>
+        <input type="number" min="1" max={maxNumberCount} step="1" value={value} placeholder="Definir" onChange={(event) => setValue(event.target.value)} className="rs-input flex h-11 w-full rounded-md border border-input bg-background text-foreground px-2 text-xs" data-testid={`input-participant-number-count-${customerId}`} />
+      </label>
+      <button type="button" onClick={handleSave} disabled={saving} className="h-11 rounded-full bg-primary px-3 text-[11px] font-black text-white disabled:opacity-60" data-testid={`button-save-participant-number-count-${customerId}`}>
+        {saving ? "Salvando…" : "Salvar"}
       </button>
-      {expanded && (
-        <div className="mt-1.5 space-y-1 rounded-xl bg-secondary/30 p-2.5 text-[11px]" data-testid={`detail-participant-${participant.customerId}`}>
-          {participant.clientPhone && <div className="text-muted-foreground">{participant.clientPhone}</div>}
-          <EntitlementRow dense label="Compras qualificadas" value={formatBRL(participant.qualifyingSpend)} />
-          <EntitlementRow dense label="Automáticos" value={participant.automaticEntries} />
-          {participant.manualInternalEntries !== 0 && <EntitlementRow dense label="Manuais" value={participant.manualInternalEntries} />}
-          {participant.claimedNumbers.length > 0 && (
-            <div className="flex justify-between gap-2"><span className="shrink-0 text-muted-foreground">Números</span><span className="text-right font-bold text-foreground">{participant.claimedNumbers.slice().sort((a, b) => a - b).map(formatCampaignNumber).join(" · ")}</span></div>
-          )}
-          {participant.manualEvents.length > 0 && (
-            <div className="space-y-0.5 border-t border-border/40 pt-1.5">
-              {participant.manualEvents.map((event) => (
-                <div key={event.id} className="flex justify-between gap-2 text-muted-foreground">
-                  <span>{event.amount > 0 ? `+${event.amount}` : event.amount} {event.reason ? MANUAL_GRANT_REASON_LABELS[event.reason] : "Ajuste"}</span>
-                  <span>{new Date(event.createdAt).toLocaleDateString("pt-BR")}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -337,54 +266,24 @@ function CampaignDetail({ campaignId }: { campaignId: string }) {
   const [data, setData] = useState<DetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [changingStatus, setChangingStatus] = useState(false);
-  const [draw, setDraw] = useState<OfficialDrawResult | null>(null);
-  const [pipelineBusy, setPipelineBusy] = useState(false);
-  const [drawExperience, setDrawExperience] = useState<{ mode: "new" | "replay" } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
-      const detail = await apiRequest<DetailResponse>(`/api/admin/sorteios/campaigns/${campaignId}`, { auth: true });
-      setData(detail);
-      // LEGACY-FINISHED-DRAW-06B — "finished" também busca o resultado: pode ser uma campanha legada
-      // sem draw ainda (result: null, mostra o painel de apuração) ou uma que já foi sorteada.
-      if (detail.campaign.status === "drawn" || detail.campaign.status === "finished") {
-        const result = await apiRequest<{ draw: OfficialDrawResult | null }>(`/api/admin/sorteios/campaigns/${campaignId}/result`, { auth: true });
-        setDraw(result.draw);
-      }
+      setData(await apiRequest<DetailResponse>(`/api/admin/sorteios/campaigns/${campaignId}`, { auth: true }));
     } catch (error) {
-      notifyError(error instanceof Error ? error.message : "Não foi possível carregar a campanha.");
+      setLoadError(error instanceof Error ? error.message : "Não foi possível carregar a campanha.");
     } finally {
       setLoading(false);
     }
   };
   useEffect(() => { void load(); }, [campaignId]);
 
-  const runPipelineAction = async (confirmText: string, path: string, successText: string, failText: string) => {
-    if (!window.confirm(confirmText)) return;
-    setPipelineBusy(true);
-    try {
-      await apiRequest(`/api/admin/sorteios/campaigns/${campaignId}/${path}`, { auth: true, method: "POST" });
-      notifySuccess(successText);
-      await load();
-    } catch (error) {
-      notifyError(error instanceof Error ? error.message : failText);
-    } finally {
-      setPipelineBusy(false);
-    }
-  };
-  const handleCloseEntries = () => runPipelineAction("Depois de encerrar, os clientes não poderão escolher novos números.", "close-entries", "Participações encerradas.", "Não foi possível encerrar as participações.");
-  // SECURE-DRAW-VISUAL-07 — "Realizar sorteio" não chama mais /draw diretamente: abre a experiência
-  // visual, que É QUEM chama /draw internamente e só anima depois de receber o resultado oficial (§1).
-  // A confirmação continua aqui, antes de qualquer chamada de rede, exatamente como antes.
-  const handleDraw = () => {
-    if (drawExperience) return; // duplo clique nunca abre uma segunda experiência
-    if (!window.confirm("Esta ação realizará a apuração oficial da campanha.")) return;
-    setDrawExperience({ mode: "new" });
-  };
-  const handleReplayDraw = () => {
-    if (drawExperience || !draw) return;
-    setDrawExperience({ mode: "replay" });
+  const refreshParticipants = async () => {
+    try { setData(await apiRequest<DetailResponse>(`/api/admin/sorteios/campaigns/${campaignId}`, { auth: true })); }
+    catch { notifyError("Não foi possível atualizar os participantes; recarregue a página."); }
   };
 
   const handleStatusChange = async (status: PromotionalCampaignStatus) => {
@@ -392,7 +291,7 @@ function CampaignDetail({ campaignId }: { campaignId: string }) {
     try {
       await apiRequest(`/api/admin/sorteios/campaigns/${campaignId}/status`, { auth: true, method: "PATCH", body: { status } });
       notifySuccess("Status atualizado.");
-      await load();
+      await refreshParticipants();
     } catch (error) {
       if (error instanceof ApiError) {
         console.error("[sorteios-admin] falha ao mudar status da campanha", { status, httpStatus: error.status, code: error.code, requestId: error.requestId });
@@ -405,6 +304,7 @@ function CampaignDetail({ campaignId }: { campaignId: string }) {
     }
   };
 
+  if (loadError) return <Layout title="Sorteio"><div className="p-6 text-foreground"><p role="alert">{loadError}</p><button type="button" onClick={() => setLocation("/sorteios")} className="mt-3 underline">Voltar aos sorteios</button></div></Layout>;
   if (loading || !data) return <Layout title="Sorteio"><PageSkeleton variant="cards" /></Layout>;
 
   const { campaign, metrics, participants } = data;
@@ -439,70 +339,13 @@ function CampaignDetail({ campaignId }: { campaignId: string }) {
               Restam apenas {metrics.numbersAvailable} números disponíveis.
             </p>
           )}
-          {/* PROMOTIONAL-CAMPAIGNS-SECURE-DRAW-06 — os botões genéricos (Ativar/Pausar/Finalizar) só fazem
-            * sentido antes de entrar no motor de apuração; uma vez "entries_closed"/"drawn" só as ações
-            * dedicadas abaixo (Encerrar/Sortear) decidem o próximo passo (§11 — sem "reabrir" simples). */}
-          {(campaign.status === "draft" || campaign.status === "active" || campaign.status === "paused") && (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {STATUS_ACTIONS.filter((action) => action.status !== campaign.status).map(({ status, label, icon: Icon }) => (
-                <button key={status} type="button" disabled={changingStatus} onClick={() => handleStatusChange(status)} data-testid={`button-status-${status}`} className="flex items-center gap-1.5 rounded-full border border-border/60 px-3 py-1.5 text-xs font-bold disabled:opacity-60">
-                  <Icon className="h-3.5 w-3.5" /> {label}
-                </button>
-              ))}
-            </div>
-          )}
-          {(campaign.status === "active" || campaign.status === "paused") && (
-            <div className="mt-3">
-              <button type="button" disabled={pipelineBusy} onClick={handleCloseEntries} data-testid="button-close-entries" className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-xs font-black text-white disabled:opacity-60">
-                <Ban className="h-3.5 w-3.5" /> Encerrar participações
+          <div className="mt-3 flex flex-wrap gap-2">
+            {STATUS_ACTIONS.filter((action) => action.status !== campaign.status).map(({ status, label, icon: Icon }) => (
+              <button key={status} type="button" disabled={changingStatus} onClick={() => handleStatusChange(status)} data-testid={`button-status-${status}`} className="flex items-center gap-1.5 rounded-full border border-border/60 px-3 py-1.5 text-xs font-bold disabled:opacity-60">
+                <Icon className="h-3.5 w-3.5" /> {label}
               </button>
-            </div>
-          )}
-          {/* LEGACY-FINISHED-DRAW-06B — uma campanha "finished" pelo fluxo antigo (sem draw ainda) mostra
-            * o MESMO painel de apuração pendente que "entries_closed": nunca só "Finalizado" sem saída,
-            * nunca reabre participações, só libera a etapa de apuração que ficou inacessível (§5/§7). */}
-          {(campaign.status === "entries_closed" || (campaign.status === "finished" && !draw)) && (
-            <div className="mt-3 rounded-xl bg-sky-100 p-3">
-              <p className="text-xs font-black text-sky-700">Participações encerradas</p>
-              <p className="text-xs text-sky-700">{metrics.numbersClaimed} números elegíveis</p>
-              <p className="text-xs text-sky-700">{metrics.participantsCount} participantes</p>
-              <button type="button" disabled={pipelineBusy || !!drawExperience} onClick={handleDraw} data-testid="button-draw-campaign" className="mt-2 flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-xs font-black text-white disabled:opacity-60">
-                <Ticket className="h-3.5 w-3.5" /> Realizar sorteio
-              </button>
-            </div>
-          )}
-          {(campaign.status === "drawn" || campaign.status === "finished") && draw && (
-            <div className="mt-3 rounded-xl bg-violet-100 p-4 text-center" data-testid="draw-result">
-              <p className="text-[10px] font-black uppercase tracking-wide text-violet-700">Número sorteado</p>
-              <p className="text-3xl font-black text-violet-700" data-testid="text-winning-number">{formatCampaignNumber(draw.winningNumber)}</p>
-              <p className="text-sm font-bold text-violet-700" data-testid="text-winner-name">{draw.winnerDisplayNameSnapshot}</p>
-              <p className="text-xs text-violet-700">{draw.prizeNameSnapshot}</p>
-              {/* SECURE-DRAW-VISUAL-07 §11/§12 — nunca chama /draw de novo: só reproduz a apresentação
-                * visual em cima do officialDraw já persistido. */}
-              <button type="button" disabled={!!drawExperience} onClick={handleReplayDraw} data-testid="button-replay-draw" className="mt-3 rounded-full border border-violet-300 px-4 py-1.5 text-[11px] font-black text-violet-700 disabled:opacity-60">
-                Reproduzir animação
-              </button>
-            </div>
-          )}
-          {drawExperience && (
-            <Suspense fallback={null}>
-              <SorteioDrawExperience
-                campaignId={campaignId}
-                campaignTitle={campaign.title}
-                numberStart={campaign.numberStart}
-                numberEnd={campaign.numberEnd}
-                mode={drawExperience.mode}
-                existingDraw={drawExperience.mode === "replay" ? draw : null}
-                // BUGFIX (achado no QA visual) — `load()` liga `loading`, e o early-return
-                // `if (loading || !data)` acima troca a árvore inteira por um skeleton, o que
-                // DESMONTARIA esta própria experiência no meio da animação se fosse chamado aqui dentro.
-                // `onDrawComplete` só atualiza o resultado localmente; o refresh completo (status,
-                // métricas, participantes) só acontece quando o usuário FECHA a experiência.
-                onDrawComplete={(newDraw) => setDraw(newDraw)}
-                onClose={() => { setDrawExperience(null); void load(); }}
-              />
-            </Suspense>
-          )}
+            ))}
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -513,20 +356,36 @@ function CampaignDetail({ campaignId }: { campaignId: string }) {
             ["Vendas qualificadas", formatBRL(metrics.qualifiedSalesTotal)],
             ["Taxa de utilização", `${metrics.utilizationRate}%`],
           ].map(([label, value]) => (
-            <div key={label} className="rounded-2xl border border-border/60 bg-white p-3">
+            <div key={label} className="rounded-2xl border border-border/60 bg-card p-3">
               <div className="text-lg font-black text-foreground">{value}</div>
               <div className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">{label}</div>
             </div>
           ))}
         </div>
 
-        <GenerateLinkSection campaignId={campaignId} entitlementPolicy={campaign.entitlementPolicy ?? "INTERNAL_ADMIN"} />
+        <GenerateLinkSection campaignId={campaignId} participants={participants} maxCount={campaign.numberEnd - campaign.numberStart + 1} onChanged={refreshParticipants} />
 
         <div className={CARD}>
           <h3 className={`mb-3 ${LABEL}`}>Participantes</h3>
           {participants.length === 0 && <p className="text-xs text-muted-foreground">Nenhum participante ainda.</p>}
           <div className="divide-y divide-border/50">
-            {participants.map((participant) => <ParticipantRow key={participant.customerId} participant={participant} />)}
+            {participants.map((participant) => (
+              <div key={participant.customerId} className="py-2.5" data-testid={`row-participant-${participant.customerId}`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-black text-foreground">{participant.clientName}</span>
+                  <span className="text-xs text-muted-foreground">{formatBRL(participant.qualifyingSpend)}</span>
+                </div>
+                {participant.clientPhone && <div className="text-[11px] text-muted-foreground">{participant.clientPhone}</div>}
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
+                  <span className="font-bold text-foreground">Autorizados: {participant.entriesAuthorized} · Escolhidos: {participant.entriesClaimed}</span>
+                  {participant.claimedNumbers.length > 0 && (
+                    <span className="text-muted-foreground">Números: {participant.claimedNumbers.slice().sort((a, b) => a - b).join(", ")}</span>
+                  )}
+                  <span className="text-muted-foreground">Restantes: {participant.entriesAvailable}</span>
+                </div>
+                <ParticipantQuantityEditor key={`${participant.customerId}-${participant.assignedNumberCount}`} campaignId={campaignId} customerId={participant.customerId} initialValue={participant.assignedNumberCount} maxNumberCount={campaign.numberEnd - campaign.numberStart + 1} onSaved={refreshParticipants} />
+              </div>
+            ))}
           </div>
         </div>
       </div>

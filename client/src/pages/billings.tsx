@@ -18,12 +18,23 @@ import { PartialPaymentModal } from "@/components/PartialPaymentModal";
 import { getApiUrl } from "@/lib/api-config";
 import { notifyError, notifyInfo, notifySuccess } from "@/lib/notify";
 import { toCsvRow } from "@/lib/export-security";
+import { formatCurrency } from "@/lib/product-pricing";
 import type { Charge } from "../../../shared/charges";
 
 type BillingTab = "installments" | "charges";
 type InstallmentFilter = "today" | "late" | "next" | "all";
 const INSTALLMENTS_PAGE_SIZE = 30;
 const CLIENT_LOOKUP_BATCH_SIZE = 10;
+
+/** PRODUCT-GROWTH-04 — mesmo padrão de leitura de query string (lida uma vez, na montagem) já usado por
+ * products.tsx/clients.tsx (PRIORITY_QUERY_PARAM): permite que a ação "Ver cobrança" de uma oportunidade
+ * de parcela vencida (client/src/lib/opportunity-actions.ts) abra Cobranças já na aba Parcelas, em vez
+ * de deixar o dono clicar a aba manualmente. Nunca escreve de volta na URL, nunca reage a mudanças
+ * depois da montagem — só o estado inicial. */
+function readInitialBillingTab(): BillingTab {
+  if (typeof window === "undefined") return "charges";
+  return new URLSearchParams(window.location.search).get("tab") === "installments" ? "installments" : "charges";
+}
 
 interface BillingClient { id: string; name: string; phone?: string }
 type ClientSnapshotFields = { clientName?: string; clientPhone?: string };
@@ -75,7 +86,7 @@ export default function Billings() {
   const [clientLookup, setClientLookup] = useState<BillingClient[]>([]);
   const [modalClients, setModalClients] = useState<BillingClient[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<BillingTab>("charges");
+  const [activeTab, setActiveTab] = useState<BillingTab>(readInitialBillingTab);
   const [filter, setFilter] = useState<InstallmentFilter>("all");
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -340,13 +351,13 @@ export default function Billings() {
   const sendWhatsApp = (billing: Installment, type: "reminder" | "received" | "thanks") => {
     const client = getRecordClient(billing as InstallmentWithClientSnapshot);
     if (!client?.phone) return;
-    const amount = (billing.amount - billing.paidAmount).toFixed(2);
+    const amount = formatCurrency(billing.amount - billing.paidAmount);
     const date = format(parseISO(billing.dueDate), "dd/MM");
     let message: string;
 if (type === "reminder") {
-      message = `Olá ${client.name}! Passando para lembrar da sua parcela de R$ ${amount} que vence dia ${date}. Pode enviar o comprovante por aqui? ✨`;
+      message = `Olá ${client.name}! Passando para lembrar da sua parcela de ${amount} que vence dia ${date}. Pode enviar o comprovante por aqui? ✨`;
     } else if (type === "received") {
-      message = `Olá ${client.name}! Recebi seu pagamento de R$ ${billing.paidAmount.toFixed(2)}. Saldo atualizado com sucesso! ✅`;
+      message = `Olá ${client.name}! Recebi seu pagamento de ${formatCurrency(billing.paidAmount)}. Saldo atualizado com sucesso! ✅`;
     } else {
       message = `Olá ${client.name}! Passando para agradecer pela preferência. Espero que esteja amando seus produtinhos! 💖`;
     }
@@ -408,7 +419,7 @@ if (type === "reminder") {
   const shareChargeWhatsApp = (charge: Charge) => {
     const client = getRecordClient(charge as ChargeWithClientSnapshot);
     const name = client?.name ?? "cliente";
-    const msg = `Olá ${name}! Segue o link para pagamento de R$ ${charge.amount.toFixed(2)}: ${charge.paymentUrl} 💳`;
+    const msg = `Olá ${name}! Segue o link para pagamento de ${formatCurrency(charge.amount)}: ${charge.paymentUrl} 💳`;
     window.open(`https://wa.me/${client?.phone ?? ""}?text=${encodeURIComponent(msg)}`, "_blank");
     notifyInfo("Cobrança aberta no WhatsApp.");
   };
@@ -599,7 +610,7 @@ if (type === "reminder") {
 
                       {/* Amount + title */}
                       <div className="mb-3">
-                        <p className="text-xl font-semibold">R$ {charge.amount.toFixed(2)}</p>
+                        <p className="text-xl font-semibold">{formatCurrency(charge.amount)}</p>
                         <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{charge.title}</p>
                         {charge.paidAt && (
                           <p className="text-[10px] text-green-600 font-bold mt-0.5">
@@ -767,9 +778,9 @@ if (type === "reminder") {
 
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="text-xl font-semibold">R$ {b.status === "paid" ? b.amount.toFixed(2) : (b.amount - b.paidAmount).toFixed(2)}</p>
+                        <p className="text-xl font-semibold">{formatCurrency(b.status === "paid" ? b.amount : b.amount - b.paidAmount)}</p>
                         {b.paidAmount > 0 && b.status !== "paid" && (
-                          <p className="text-[9px] text-muted-foreground">Pago: R$ {b.paidAmount.toFixed(2)}</p>
+                          <p className="text-[9px] text-muted-foreground">Pago: {formatCurrency(b.paidAmount)}</p>
                         )}
                         {b.status === "paid" && (
                           <p className="text-[9px] text-green-600 font-bold">Pagamento confirmado</p>

@@ -85,6 +85,7 @@ try {
     db.doc(`users/${uidC}/products/c-product`).set({ owner: uidC }),
     db.doc(`referralEvents/c-event`).set({ referrerUID: uidB, referredUID: uidC }),
     db.doc(`users/${uidB}/planData/main/validatedReferrals/${uidC}`).set({ referrerUID: uidB, referredUID: uidC, validated: true }),
+    db.doc(`users/${uidB}/planData/main/referralRewardLedger/c-event-ledger`).set({ milestone: 3, outcome: "referral_reward_granted" }),
     // RELEASE-17: A também aparece como REFERRED (B indicou A) — prova que o cleanup remove A tanto
     // quando A é referrerUID quanto quando A é referredUID, e limpa o validatedReferrals correspondente
     // sob a árvore de B (que sobrevive).
@@ -109,6 +110,8 @@ try {
   await assert.rejects(auth.getUser(uidC), (error: any) => error?.code === "auth/user-not-found");
   assert.equal(await exists("referralEvents/c-event"), false);
   assert.equal(await exists(`users/${uidB}/planData/main/validatedReferrals/${uidC}`), false);
+  assert.equal(await exists(`users/${uidB}/planData/main/referralRewardLedger/c-event-ledger`), true,
+    "ledger server-side permanece após a exclusão da conta indicada");
 
   // Active external state fails closed and leaves Auth/data intact.
   await db.doc(`users/${uidA}/planData/main`).set({ subscriptionId: "sub-a", subscriptionStatus: "active" });
@@ -171,8 +174,8 @@ try {
     "G: validatedReferrals de A (sob a árvore do referrer B, que sobrevive) é removido");
   const userSettingsAfterDeleteA = await db.doc(`user_settings/${uidB}`).get();
   assert.deepEqual(userSettingsAfterDeleteA.data()?.referred_users, [uidD], "K/L: referred_users legado remove apenas a edge A↔B");
-  assert.equal(userSettingsAfterDeleteA.data()?.referral_conversions, 1, "K/L: referral_conversions legado acompanha a remoção da edge");
-  assert.equal(userSettingsAfterDeleteA.data()?.reward_eligible_conversions, 1, "K/L: reward_eligible_conversions legado acompanha a remoção da edge");
+  assert.equal(userSettingsAfterDeleteA.data()?.referral_conversions, 2, "K/L: contador histórico não recicla milestone ao apagar indicado");
+  assert.equal(userSettingsAfterDeleteA.data()?.reward_eligible_conversions, 2, "K/L: elegibilidade histórica permanece monotônica");
   assert.equal((await bucket.file(`users/${uidA}/products/a.png`).exists())[0], false);
 
   // Tenant B remains untouched.
@@ -237,6 +240,7 @@ try {
     db.doc("mercadopago_oauth_states/a-state").delete(), db.doc("mercadopago_oauth_states/b-state").delete(),
     db.doc("referralEvents/a-event").delete(),
     db.doc("referralEvents/c-event").delete(),
+    db.doc(`users/${uidB}/planData/main/referralRewardLedger/c-event-ledger`).delete(),
     db.doc("referralEvents/pre-a-event").delete(),
     db.doc("referralEvents/b-to-d-event").delete(),
     db.doc(`${accountDeletion.ACCOUNT_DELETION_COLLECTION}/${uidA}`).delete(),

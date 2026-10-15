@@ -2,8 +2,9 @@ import { useState } from "react";
 import { useLocation, Link } from "wouter";
 import { bootstrapUserData } from "@/lib/mock-data";
 import { createUserWithEmailAndPassword } from "firebase/auth";
-import { getFirebaseAuth, getFirebaseError, logTelemetryEvent, setTelemetryUserId, trackAnalyticsEvent, setFirebaseAnalyticsUserId, logError } from "@/lib/firebase";
+import { getFirebaseAuth, getFirebaseError, logTelemetryEvent, setTelemetryUserId, trackAnalyticsEvent, setFirebaseAnalyticsUserId } from "@/lib/firebase";
 import { getApiUrl } from "@/lib/api-config";
+import { classifySignupFailure, logSignupFailure, signupUserMessage, type SignupFailureStage } from "@/lib/signup-diagnostics";
 import { UserPlus } from "lucide-react";
 
 export default function Signup() {
@@ -18,6 +19,7 @@ export default function Signup() {
     e.preventDefault();
     setError("");
     setLoading(true);
+    let failureStage: SignupFailureStage = "AUTH_ACCOUNT_CREATION";
 
     try {
       // Get Firebase Auth instance
@@ -25,6 +27,7 @@ export default function Signup() {
       
       if (!auth) {
         const firebaseError = getFirebaseError();
+        logSignupFailure(classifySignupFailure({ code: "auth/internal-error" }, failureStage));
         setError(firebaseError || "Erro ao configurar autenticação.");
         setLoading(false);
         return;
@@ -60,7 +63,9 @@ export default function Signup() {
           }
           
           // 3. Call backend API to validate and persist referral in Firestore
+          failureStage = "AUTH_TOKEN_ACQUISITION";
           const token = await user.getIdToken();
+          failureStage = "BACKEND_PROFILE_CREATION";
           const settingsUrl = getApiUrl(`/api/user/settings/${user.uid}`);
           const apiResponse = await fetch(settingsUrl, {
             method: "POST",
@@ -82,7 +87,7 @@ export default function Signup() {
             }, user.uid).catch(() => {});
           } else {
             const errorData = await apiResponse.json();
-            console.warn("[signup] Backend referral validation failed:", errorData);
+            console.warn("[signup] Backend referral validation failed");
             
             // Log the specific failure reason
             const failureReason = errorData.referralValidation?.result || "error";
@@ -103,10 +108,8 @@ export default function Signup() {
               result: failureReason as any
             }, user.uid).catch(() => {});
           }
-        } catch (e) {
-          console.warn("[signup] Referral application error:", e);
-          const errorMsg = e instanceof Error ? e.message : "Unknown error";
-          logError("signup_referral_failed", errorMsg, { userId: user.uid });
+        } catch {
+          console.warn("[signup] Referral application failed");
           logTelemetryEvent("referral_rejected", { 
             reason: "api_error"
           }, user.uid).catch(() => {});
@@ -119,8 +122,8 @@ export default function Signup() {
       // Save user ID to localStorage for session tracking
       try {
         localStorage.setItem("rs:session", user.uid);
-      } catch (e) {
-        console.warn("Failed to save session:", e);
+      } catch {
+        console.warn("Failed to save session");
       }
 
       // Bootstrap user data with store name from signup form
@@ -134,29 +137,17 @@ export default function Signup() {
           settings.storeName = storeName || email.split('@')[0];
           localStorage.setItem(settingsKey, JSON.stringify(settings));
         }
-      } catch (bootstrapErr) {
-        logError("signup_bootstrap_failed", "Erro ao inicializar conta", {
-          error: bootstrapErr instanceof Error ? bootstrapErr : new Error(String(bootstrapErr)),
-        });
+      } catch {
         // Don't throw — account is created, just warn but proceed to onboarding
-        console.warn("Failed to bootstrap user data, but account was created:", bootstrapErr);
+        console.warn("Failed to bootstrap user data, but account was created");
       }
 
       // Redirect to onboarding
+      failureStage = "NAVIGATION";
       setLocation("/onboarding");
     } catch (err: unknown) {
-      const code = err && typeof err === "object" && "code" in err ? String(err.code) : "";
-      console.error("[signup] Firebase error:", err);
-      
-      if (code === "auth/email-already-in-use") {
-        setError("Este email já está cadastrado");
-      } else if (code === "auth/weak-password") {
-        setError("Senha muito fraca. Use pelo menos 6 caracteres.");
-      } else if (code === "auth/invalid-email") {
-        setError("Email inválido");
-      } else {
-        setError("Erro ao criar conta. Tente novamente.");
-      }
+      logSignupFailure(classifySignupFailure(err, failureStage));
+      setError(signupUserMessage(err));
     } finally {
       setLoading(false);
     }

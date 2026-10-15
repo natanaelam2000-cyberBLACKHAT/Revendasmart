@@ -1,5 +1,6 @@
 import { memo } from "react";
 import { Product } from "@/lib/mock-data";
+import { formatCurrency } from "@/lib/product-pricing";
 import { ProductImageCard } from "./ProductImageCard";
 import { StockBadge } from "./StockBadge";
 
@@ -24,9 +25,9 @@ const ProductCardComponent = ({ product, lowStockThreshold }: ProductCardProps) 
           </p>
         )}
         <div className="grid grid-cols-2 gap-x-2 gap-y-2 mt-3 pt-3 border-t border-border/40">
-          <div><span className="block text-[8px] text-muted-foreground uppercase">Venda</span><strong className="block text-[10px] sm:text-xs text-primary truncate">R$ {sale.toFixed(2)}</strong></div>
-          <div><span className="block text-[8px] text-muted-foreground uppercase">Custo</span><strong className="block text-[10px] sm:text-xs truncate">R$ {cost.toFixed(2)}</strong></div>
-          <div><span className="block text-[8px] text-muted-foreground uppercase">Lucro</span><strong className={`block text-[10px] sm:text-xs truncate ${profit >= 0 ? "text-green-600" : "text-red-600"}`}>R$ {profit.toFixed(2)}</strong></div>
+          <div><span className="block text-[8px] text-muted-foreground uppercase">Venda</span><strong className="block text-[10px] sm:text-xs text-primary truncate">{formatCurrency(sale)}</strong></div>
+          <div><span className="block text-[8px] text-muted-foreground uppercase">Custo</span><strong className="block text-[10px] sm:text-xs truncate">{formatCurrency(cost)}</strong></div>
+          <div><span className="block text-[8px] text-muted-foreground uppercase">Lucro</span><strong className={`block text-[10px] sm:text-xs truncate ${profit >= 0 ? "text-green-600" : "text-red-600"}`}>{formatCurrency(profit)}</strong></div>
           <div><span className="block text-[8px] text-muted-foreground uppercase">Unidades</span><strong className="block text-[10px] sm:text-xs">{product.stock} un</strong></div>
         </div>
       </div>

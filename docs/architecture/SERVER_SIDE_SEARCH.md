@@ -6,7 +6,7 @@ Produtos e catálogo ainda preservam busca local para compatibilidade. Isso func
 
 ## Estratégia escolhida
 
-Busca server-side de produtos preparada, mas desligada por padrão:
+Busca server-side de produtos preparada e ativada para o catálogo interno:
 
 ```text
 input do usuário
@@ -15,15 +15,15 @@ input do usuário
   -> consulta Firestore limitada
   -> paginação por cursor
   -> dedupe e ordenação estável no cliente
-  -> fallback local quando a flag está desligada
+  -> refinamento local apenas sobre a página já carregada quando o termo ainda é curto
 ```
 
-`SERVER_SIDE_PRODUCT_SEARCH_ENABLED=false` mantém o comportamento atual.
+`SERVER_SIDE_PRODUCT_SEARCH_ENABLED=true` ativa a busca autenticada do catálogo interno sem abrir leitura pública de products.
 
 ## Telas auditadas
 
 - Produtos: usa `usePaginatedProductsData()` para primeira página e filtra localmente a página carregada.
-- Catálogo interno: usa `useProductsData()` e filtra localmente a coleção já carregada.
+- Catálogo interno: usa `/api/catalog/products` com paginação por cursor e refinamento local apenas para termo curto.
 - Venda: usa pickers paginados e filtro local na página carregada.
 - Clientes: tem paginação, mas busca por telefone/nome ainda local e não foi migrada para evitar indexar PII.
 - Cobranças/vendas/marketing: fora do escopo da Sprint 17.
@@ -33,7 +33,8 @@ input do usuário
 Firestore não oferece full-text search nativo. Esta sprint não tenta simular Algolia. Estratégias permitidas:
 
 - código de barras: igualdade em `barcodeNormalized`;
-- termo único: prefixo em `nameNormalized`;
+- termo único curto: prefixo em `nameNormalized`;
+- termo único estável: `array-contains` em `searchTokens`;
 - múltiplas palavras: `array-contains` em `searchTokens`, limitado;
 - termo curto: fallback/local ou mensagem de termo curto;
 - filtro de categoria: igualdade em `categoryNormalized`, somente quando a categoria normalizada não está vazia e não é `todos`.
@@ -50,22 +51,19 @@ Todas as consultas server-side preparadas ordenam por `nameNormalized`. Os campo
 | Token com categoria | `categoryNormalized == valor` + `searchTokens array-contains token` | `nameNormalized ASC` | `categoryNormalized ASC, searchTokens CONTAINS, nameNormalized ASC` |
 | Código sem categoria | `barcodeNormalized == valor` | `nameNormalized ASC` | `barcodeNormalized ASC, nameNormalized ASC` |
 | Código com categoria | `categoryNormalized == valor` + `barcodeNormalized == valor` | `nameNormalized ASC` | `categoryNormalized ASC, barcodeNormalized ASC, nameNormalized ASC` |
-| Listagem sem categoria | sem filtro | `nameNormalized ASC` | índice simples automático |
-| Listagem com categoria | `categoryNormalized == valor` | `nameNormalized ASC` | `categoryNormalized ASC, nameNormalized ASC` |
+| Listagem sem categoria | sem filtro | `name ASC`, `__name__ ASC` | índice simples automático |
+| Listagem com categoria | `category == valor` | `name ASC`, `__name__ ASC` | `category ASC, name ASC, __name__ ASC` |
 
 A paginação usa cursor por `DocumentSnapshot`. O cursor é reiniciado quando termo, categoria ou plano de busca muda.
 
 ## Rollout
 
 ```text
-flag desligada
+flag ligada no catálogo interno
   -> testes puros
   -> fixture grande
   -> Emulator
-  -> backfill sintético
+  -> backfill sintético/idempotente para legado
   -> tenant interno
-  -> comparação local vs server-side
-  -> beta fechado
+  -> monitorar cobertura dos campos indexados
 ```
-
-Nenhuma etapa remota foi ativada nesta sprint.

@@ -1,16 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Minus, Plus, Send, ShoppingCart, Trash2, X } from "lucide-react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { CalendarClock, Minus, Plus, Send, ShoppingCart, Trash2, X } from "lucide-react";
+import { Link } from "wouter";
 import { CatalogShowcase } from "@/components/catalog/CatalogShowcase";
-import { ShareCatalogSheet } from "@/components/catalog/ShareCatalogSheet";
 import { PageSkeleton } from "@/components/PageSkeleton";
-import { ProductImageCard } from "@/components/ProductImageCard";
 import { Layout } from "@/components/layout";
-import { useProductsData } from "@/hooks/useProductsData";
+import { useCatalogProductsData } from "@/hooks/useCatalogProductsData";
 import { useSalesData } from "@/hooks/useSalesData";
 import { resolveCatalogExperience } from "@/lib/catalog-experience";
 import { getFirebaseAuth, logTelemetryEvent, trackAnalyticsEvent } from "@/lib/firebase";
 import type { AppSettings, Product } from "@/lib/mock-data";
 import { notifyInfo, notifyWarning } from "@/lib/notify";
+import { formatCurrency, getPromotionalPrice } from "@/lib/product-pricing";
 import { buildPublicCatalogUrl } from "@/lib/public-url";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
 
@@ -21,50 +21,52 @@ type CatalogStoreSettings = AppSettings & {
   storeDescription?: string;
 };
 
+const ShareCatalogSheet = lazy(async () => {
+  const mod = await import("@/components/catalog/ShareCatalogSheet");
+  return { default: mod.ShareCatalogSheet };
+});
+
+/**
+ * CATALOG-GOLDEN-RESTORE-05 §1/§3/§7 — restaurado fielmente do commit histórico (6de2c85): carrinho de
+ * PRÉVIA local à aba interna do catálogo, nunca uma venda — nenhuma Sale/Payment/StockMovement é criada
+ * aqui, nenhuma reserva de estoque acontece. "Ver pedido" só monta e abre uma mensagem de WhatsApp
+ * (handleSendOrderWhatsApp abaixo); pagamento online (Pix/Cartão/Mercado Pago) permanece exclusivo do
+ * catálogo público (client/src/pages/public-catalog.tsx), deliberadamente não reintroduzido aqui.
+ */
 interface CartItem {
   product: Product;
   quantity: number;
 }
 
-// REVENDASMART-CATALOG-GOLDEN-RESTORE-05 — o carrinho de prévia foi restaurado fielmente do commit
-// histórico (6de2c85: card com estoque real limitando quantidade, carrinho no header com badge). O que
-// NÃO foi trazido de volta: o botão antigo de "Pagar com Mercado Pago" que existia no drawer daquele
-// commit (endpoint legado, não-idempotente) — preservar o contrato atual de checkout (público, com
-// Pix/idempotência) significa não recriar um checkout paralelo aqui. "Ver pedido" na aba
-// interna serve só para o vendedor pré-visualizar/montar um pedido e enviá-lo por WhatsApp — nunca para
-// processar pagamento nem decrementar estoque de verdade (isso continua exclusivo de Vendas).
-
 export default function Catalog() {
-  const { products, loading, error: productsError } = useProductsData();
-  const { sales, loading: salesLoading, error: salesError } = useSalesData();
-  const dataError = productsError || salesError;
-  const { settings } = useUserSettings();
+  const { settings, businessModeResolution, refresh: refreshSettings } = useUserSettings();
   const [search, setSearch] = useState("");
   const [genderFilter, setGenderFilter] = useState("todos");
   const [categoryFilter, setCategoryFilter] = useState("todos");
+  const {
+    products,
+    loading,
+    loadingMore,
+    error: productsError,
+    hasMore,
+    loadMore,
+    refresh,
+    searchFallbackRequired,
+  } = useCatalogProductsData({
+    searchTerm: search,
+    categoryFilter,
+  });
+  const { sales, loading: salesLoading, error: salesError } = useSalesData();
   const [showShareModal, setShowShareModal] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [showCart, setShowCart] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [copied, setCopied] = useState(false);
   const copyResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const experienceNowRef = useRef(new Date());
 
-  useEffect(() => () => {
-    if (copyResetTimeoutRef.current) clearTimeout(copyResetTimeoutRef.current);
-  }, []);
-
-  const experience = useMemo(() => resolveCatalogExperience({
-    businessType: settings?.businessType,
-    businessTypes: settings?.businessTypes,
-    customCategoriesByNicho: settings?.customCategoriesByNicho,
-    products,
-    sales,
-    lowStockThreshold: settings?.lowStockThreshold ?? 3,
-    now: experienceNowRef.current,
-  }), [products, sales, settings?.businessType, settings?.businessTypes, settings?.customCategoriesByNicho, settings?.lowStockThreshold]);
-
-  const productById = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
-
+  // CATALOG-GOLDEN-RESTORE-05 — mesma lógica pura já usada em client/src/pages/public-catalog.tsx
+  // (addToCart/removeFromCart/updateQuantity/cartQuantities/cartCount): estoque nunca é reservado aqui,
+  // só limita quanto o vendedor pode adicionar à prévia local do pedido.
   const addToCart = (product: Product) => {
     const stock = Math.max(0, Number(product.stock || 0));
     if (stock <= 0) return;
@@ -82,24 +84,54 @@ export default function Catalog() {
     setCart((previous) => previous.filter((item) => item.product.id !== productId));
   };
 
-  const updateQuantity = (productId: string, newQuantity: number) => {
-    if (newQuantity <= 0) {
+  const updateQuantity = (productId: string, quantity: number) => {
+    if (quantity <= 0) {
       removeFromCart(productId);
       return;
     }
-    const product = productById.get(productId);
-    if (!product || newQuantity > Number(product.stock || 0)) return;
-    setCart((previous) => previous.map((item) => item.product.id === productId ? { ...item, quantity: newQuantity } : item));
+    setCart((previous) => {
+      const item = previous.find((cartItem) => cartItem.product.id === productId);
+      if (!item || quantity > Number(item.product.stock || 0)) return previous;
+      return previous.map((cartItem) => cartItem.product.id === productId ? { ...cartItem, quantity } : cartItem);
+    });
   };
 
   const cartQuantities = useMemo(() => new Map(cart.map((item) => [item.product.id, item.quantity])), [cart]);
-  const cartTotal = useMemo(() => cart.reduce((sum, item) => sum + Number(item.product.salePrice || 0) * item.quantity, 0), [cart]);
+  // P0 (mesmo raciocínio de public-catalog.tsx): uma ÚNICA fonte de preço para carrinho/subtotal/
+  // mensagem do WhatsApp — nunca salePrice bruto, que ignora promoção/desconto ativos.
+  const cartEffectivePrices = useMemo(
+    () => new Map(cart.map((item) => [item.product.id, getPromotionalPrice(item.product) ?? Number(item.product.salePrice || 0)])),
+    [cart],
+  );
+  const cartTotal = useMemo(
+    () => cart.reduce((sum, item) => sum + (cartEffectivePrices.get(item.product.id) ?? 0) * item.quantity, 0),
+    [cart, cartEffectivePrices],
+  );
   const cartCount = useMemo(() => cart.reduce((sum, item) => sum + item.quantity, 0), [cart]);
+
+  useEffect(() => () => {
+    if (copyResetTimeoutRef.current) clearTimeout(copyResetTimeoutRef.current);
+  }, []);
+
+  const experience = useMemo(() => resolveCatalogExperience({
+    businessType: settings?.businessType,
+    businessTypes: settings?.businessTypes,
+    customCategoriesByNicho: settings?.customCategoriesByNicho,
+    products,
+    sales,
+    lowStockThreshold: settings?.lowStockThreshold ?? 3,
+    now: experienceNowRef.current,
+  }), [products, sales, settings?.businessType, settings?.businessTypes, settings?.customCategoriesByNicho, settings?.lowStockThreshold]);
 
   const catalogSettings = settings as CatalogStoreSettings | undefined;
   const hasCatalogSlug = Boolean(settings?.catalogSlug || settings?.catalog_slug);
   const catalogSlug = settings?.catalogSlug || settings?.catalog_slug || "seu-catalogo";
   const catalogUrl = buildPublicCatalogUrl(catalogSlug);
+  const trackCatalogShare = (method: "copy" | "whatsapp" | "instagram") => {
+    const user = getFirebaseAuth()?.currentUser;
+    logTelemetryEvent("catalog_link_shared", { catalogSlug }, user?.uid);
+    trackAnalyticsEvent("catalog_shared", { method });
+  };
 
   const handleCopyLink = async () => {
     if (!hasCatalogSlug) {
@@ -111,9 +143,7 @@ export default function Catalog() {
       setCopied(true);
       if (copyResetTimeoutRef.current) clearTimeout(copyResetTimeoutRef.current);
       copyResetTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
-      const user = getFirebaseAuth()?.currentUser;
-      logTelemetryEvent("catalog_link_shared", { catalogSlug }, user?.uid);
-      trackAnalyticsEvent("catalog_shared", { method: "copy" });
+      trackCatalogShare("copy");
     } catch {
       setCopied(false);
     }
@@ -127,9 +157,7 @@ export default function Catalog() {
     const message = `Confira meu catálogo de produtos! ${catalogUrl}`;
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, "_blank");
     setShowShareModal(false);
-    const user = getFirebaseAuth()?.currentUser;
-    logTelemetryEvent("catalog_link_shared", { catalogSlug }, user?.uid);
-    trackAnalyticsEvent("catalog_shared", { method: "whatsapp" });
+    trackCatalogShare("whatsapp");
   };
 
   const handleShareInstagram = async () => {
@@ -137,13 +165,11 @@ export default function Catalog() {
       notifyWarning("Configure o link do seu catálogo em Configurações antes de compartilhar.");
       return;
     }
-    const user = getFirebaseAuth()?.currentUser;
     const text = `Confira meu catálogo de produtos! ${catalogUrl}`;
     if (typeof navigator.share === "function") {
       try {
         await navigator.share({ title: "Meu catálogo", text, url: catalogUrl });
-        logTelemetryEvent("catalog_link_shared", { catalogSlug }, user?.uid);
-        trackAnalyticsEvent("catalog_shared", { method: "instagram" });
+        trackCatalogShare("instagram");
       } catch {
         // Usuário cancelou o share sheet nativo — nenhuma ação necessária.
       }
@@ -152,37 +178,83 @@ export default function Catalog() {
     try {
       await navigator.clipboard.writeText(catalogUrl);
       notifyInfo("Link copiado. Cole no Instagram.");
-      logTelemetryEvent("catalog_link_shared", { catalogSlug }, user?.uid);
-      trackAnalyticsEvent("catalog_shared", { method: "instagram" });
+      trackCatalogShare("instagram");
     } catch {
       notifyWarning("Não foi possível copiar o link.");
     }
   };
 
+  // CATALOG-GOLDEN-RESTORE-05 §3 — "Ver pedido" monta e abre a mensagem de WhatsApp, nunca processa
+  // pagamento/estoque (mesmo comportamento fiel ao commit histórico 6de2c85, sem o botão de checkout
+  // Pix/Cartão que esse commit tinha — pagamento online continua exclusivo do catálogo público).
   const handleSendOrderWhatsApp = () => {
     if (cart.length === 0) return;
-    let message = "🛍️ *Pedido montado no catálogo*\n\n";
+    let message = "🛍️ *Novo Pedido*\n\n";
     for (const item of cart) {
+      const unitPrice = cartEffectivePrices.get(item.product.id) ?? 0;
       message += `• ${item.product.name}\n`;
-      message += `  Qtd: ${item.quantity} | R$ ${(Number(item.product.salePrice || 0) * item.quantity).toFixed(2)}\n\n`;
+      message += `  Qtd: ${item.quantity} | ${formatCurrency(unitPrice * item.quantity)}\n\n`;
     }
-    message += `💰 *Total: R$ ${cartTotal.toFixed(2)}*`;
+    message += `💰 *Total: ${formatCurrency(cartTotal)}*\n\n`;
+    message += `Visite meu catálogo: ${catalogUrl}`;
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, "_blank");
   };
 
-  if (loading || salesLoading) {
+  if (businessModeResolution.status === "loading" || loading || salesLoading) {
     return <Layout title="Catálogo"><PageSkeleton variant="cards" /></Layout>;
   }
 
+  if (businessModeResolution.status === "error") {
+    return (
+      <Layout title="Catálogo">
+        <div className="mx-auto max-w-3xl px-4 py-8 text-center">
+          <p className="mb-2 font-bold text-destructive">Não foi possível carregar as configurações do negócio.</p>
+          <p className="mb-4 text-sm text-muted-foreground">Verifique sua conexão e tente novamente para abrir a experiência correta.</p>
+          <button type="button" onClick={refreshSettings} className="rounded-xl bg-primary px-5 py-3 text-sm font-bold text-white">Tentar novamente</button>
+        </div>
+      </Layout>
+    );
+  }
+
+  const blockingError = salesError || (products.length === 0 ? productsError : "");
+
   // P1-03: antes, uma falha de leitura (rede/Firestore) caía direto no render normal com arrays vazios —
   // indistinguível de "catálogo sem produtos ainda". Mesmo padrão de erro+retry já usado em dashboard.tsx.
-  if (dataError) {
+  if (blockingError) {
     return (
       <Layout title="Catálogo">
         <div className="mx-auto max-w-3xl px-4 py-8 text-center">
           <p className="mb-2 font-bold text-destructive">Ocorreu um erro temporário.</p>
-          <p className="mb-4 text-sm text-muted-foreground">Não foi possível carregar seu catálogo.</p>
-          <button type="button" onClick={() => window.location.reload()} className="rounded-xl bg-primary px-5 py-3 text-sm font-bold text-white">Tentar novamente</button>
+          <p className="mb-4 text-sm text-muted-foreground">Não foi possível carregar o catálogo.</p>
+          <button type="button" onClick={refresh} className="rounded-xl bg-primary px-5 py-3 text-sm font-bold text-white">Tentar novamente</button>
+        </div>
+      </Layout>
+    );
+  }
+
+  // HOTFIX-P0-D — esta aba sempre foi inteiramente sobre produto (carrinho de prévia, busca de
+  // produto, "cobrar catálogo de produtos"), sem nenhuma noção de serviço. Para "Somente serviços",
+  // mostrar o grid de produtos vazio (ou pior, produtos de exemplo) contraria diretamente o requisito
+  // de remover "gestão de estoque... e busca de produtos" e "não mostrar cards cobrando catálogo de
+  // produtos". Construir aqui uma experiência de navegação de serviços com a mesma profundidade desta
+  // aba (que tem carrinho/WhatsApp/QR/etc próprios) é um trabalho real, não algo que cabe com segurança
+  // dentro deste hotfix — ver relatório final, riscos restantes. Direciona para os destinos reais de
+  // serviço em vez de mostrar algo que não se aplica ao negócio do dono.
+  if (businessModeResolution.mode === "services") {
+    return (
+      <Layout title="Catálogo">
+        <div className="mx-auto flex max-w-md flex-col items-center px-6 py-16 text-center">
+          <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-secondary">
+            <CalendarClock className="h-10 w-10 text-muted-foreground" />
+          </div>
+          <h2 className="mb-2 text-lg font-black">Este catálogo é para produtos</h2>
+          <p className="mb-6 text-sm text-muted-foreground">
+            Seu negócio está configurado para serviços. Gerencie seus serviços e horários pela Agenda —
+            o link de agendamento público fica disponível por lá.
+          </p>
+          <Link href="/servicos/agenda">
+            <div className="rounded-2xl bg-primary px-6 py-3 text-sm font-bold text-white">Ir para Agenda</div>
+          </Link>
         </div>
       </Layout>
     );
@@ -190,6 +262,25 @@ export default function Catalog() {
 
   return (
     <Layout title="Catálogo">
+      {(productsError || searchFallbackRequired) && (
+        <div className="mx-auto mb-4 max-w-6xl px-4 pt-4 sm:px-6">
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            {productsError
+              ? "Não foi possível atualizar a busca."
+              : "Com termo curto, a busca refina só os itens já carregados."}
+            {productsError && (
+              <button
+                type="button"
+                onClick={refresh}
+                className="ml-3 rounded-full bg-amber-900 px-3 py-1 text-xs font-bold text-white"
+              >
+                Tentar novamente
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <CatalogShowcase
         context="seller"
         experience={experience}
@@ -216,74 +307,71 @@ export default function Catalog() {
         onOpenCart={() => setShowCart(true)}
         onShareCatalog={() => setShowShareModal(true)}
         onCreateProduct={() => { window.location.href = "/add-product"; }}
+        hasMore={hasMore}
+        loadingMore={loadingMore}
+        onLoadMore={loadMore}
       />
 
-      <ShareCatalogSheet
-        open={showShareModal}
-        onClose={() => setShowShareModal(false)}
-        catalogUrl={catalogUrl}
-        hasCatalogSlug={hasCatalogSlug}
-        copied={copied}
-        onCopyLink={handleCopyLink}
-        onShareWhatsApp={handleShareWhatsApp}
-        onShareInstagram={handleShareInstagram}
-      />
-
-      {/* Prévia do pedido — monta e envia por WhatsApp. Nunca processa pagamento nem decrementa
-          estoque real (isso é exclusivo do fluxo de Vendas, com sua própria transação server-side). */}
+      {/* CATALOG-GOLDEN-RESTORE-05 — drawer mínimo de prévia de pedido, restaurado fielmente do commit
+          histórico (6de2c85) MENOS o botão de checkout Pix/Cartão que esse commit tinha: aqui só existe
+          "Enviar Pedido no WhatsApp" — nunca processa pagamento/estoque, nunca cria Sale/Payment. */}
       {showCart && (
-        <div className="fixed inset-0 z-[70] flex flex-col bg-background" role="dialog" aria-modal="true" aria-label="Prévia do pedido">
-          <div className="flex items-center justify-between border-b border-border/40 px-5 pb-4 pt-[max(1.25rem,env(safe-area-inset-top))]">
-            <button type="button" onClick={() => setShowCart(false)} className="flex h-10 w-10 items-center justify-center rounded-full bg-secondary" aria-label="Fechar"><X className="h-5 w-5" /></button>
-            <h3 className="text-lg font-bold">Prévia do pedido</h3>
-            <div className="w-10" />
-          </div>
+        <div className="fixed inset-0 z-40 flex flex-col justify-end bg-black/40" role="dialog" aria-modal="true" aria-label="Pedido">
+          <div className="max-h-[85vh] overflow-y-auto rounded-t-[2rem] bg-white p-5">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-slate-900">Pedido</h2>
+              <button type="button" onClick={() => setShowCart(false)} className="rs-icon-press flex h-10 w-10 items-center justify-center rounded-full bg-secondary" aria-label="Fechar pedido"><X className="h-5 w-5" /></button>
+            </div>
 
-          <div className="flex-1 space-y-4 overflow-y-auto p-6">
             {cart.length === 0 ? (
-              <div className="flex h-full flex-col items-center justify-center px-6 text-center">
-                <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-[2rem] bg-primary/10">
-                  <ShoppingCart className="h-9 w-9 text-primary/45" />
-                </div>
-                <p className="font-semibold text-foreground">Nenhum item ainda</p>
-                <p className="mt-2 max-w-[240px] text-xs leading-relaxed text-muted-foreground">Adicione produtos na vitrine para montar um pedido de teste.</p>
+              <div className="flex flex-col items-center py-10 text-center">
+                <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-[2rem] bg-primary/10"><ShoppingCart className="h-9 w-9 text-primary/45" /></div>
+                <p className="text-sm font-semibold text-slate-700">Seu pedido está vazio</p>
+                <p className="mt-2 max-w-[240px] text-xs leading-relaxed text-muted-foreground">Adicione produtos ao pedido para enviar pelo WhatsApp.</p>
+                <button type="button" onClick={() => setShowCart(false)} className="rs-pressable mt-5 rounded-2xl bg-primary px-5 py-3 text-xs font-semibold text-white">Continuar navegando</button>
               </div>
             ) : (
-              cart.map((item) => (
-                <div key={item.product.id} className="flex gap-4 rounded-[2rem] border border-border/40 bg-secondary/30 p-4">
-                  <div className="h-16 w-16 shrink-0 overflow-hidden rounded-2xl border border-border/20 bg-white">
-                    <ProductImageCard product={item.product} size="md" objectFit="contain" />
-                  </div>
-                  <div className="flex-1">
-                    <h4 className="mb-1 line-clamp-2 text-xs font-bold leading-tight">{item.product.name}</h4>
-                    <p className="text-xs font-semibold text-primary">Subtotal: R$ {(Number(item.product.salePrice || 0) * item.quantity).toFixed(2)}</p>
-                    <div className="mt-3 flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <button type="button" onClick={() => updateQuantity(item.product.id, item.quantity - 1)} className="flex h-7 w-7 items-center justify-center rounded-full bg-white shadow-sm" data-testid={`button-decrease-${item.product.id}`}><Minus className="h-3 w-3" /></button>
-                        <span className="text-xs font-semibold" data-testid={`text-quantity-${item.product.id}`}>{item.quantity}</span>
-                        <button type="button" onClick={() => updateQuantity(item.product.id, item.quantity + 1)} disabled={item.quantity >= Number(item.product.stock || 0)} className="flex h-7 w-7 items-center justify-center rounded-full bg-white shadow-sm disabled:opacity-30" data-testid={`button-increase-${item.product.id}`}><Plus className="h-3 w-3" /></button>
+              <div className="space-y-3">
+                {cart.map((item) => (
+                  <div key={item.product.id} className="flex items-center justify-between gap-3 rounded-2xl bg-slate-50 p-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-bold text-slate-900">{item.product.name}</p>
+                      <p className="text-[11px] text-muted-foreground">{formatCurrency(cartEffectivePrices.get(item.product.id) ?? 0)}</p>
+                      <div className="mt-1 flex items-center gap-2">
+                        <button type="button" onClick={() => updateQuantity(item.product.id, item.quantity - 1)} className="rs-icon-press flex h-7 w-7 items-center justify-center rounded-full bg-white shadow-sm" aria-label="Diminuir quantidade"><Minus className="h-3 w-3" /></button>
+                        <span className="w-5 text-center text-xs font-bold">{item.quantity}</span>
+                        <button type="button" onClick={() => updateQuantity(item.product.id, item.quantity + 1)} disabled={item.quantity >= Number(item.product.stock || 0)} className="rs-icon-press flex h-7 w-7 items-center justify-center rounded-full bg-white shadow-sm disabled:opacity-40" aria-label="Aumentar quantidade"><Plus className="h-3 w-3" /></button>
                       </div>
-                      <button type="button" onClick={() => removeFromCart(item.product.id)} className="flex items-center gap-1 text-[10px] font-bold text-destructive"><Trash2 className="h-3.5 w-3.5" />Remover</button>
                     </div>
+                    <button type="button" onClick={() => removeFromCart(item.product.id)} className="rs-pressable flex items-center gap-1 text-[9px] font-bold text-red-600"><Trash2 className="h-3.5 w-3.5" /> Remover</button>
                   </div>
-                </div>
-              ))
+                ))}
+              </div>
+            )}
+
+            {cart.length > 0 && (
+              <div className="mt-4 space-y-3 border-t border-border/30 pt-4">
+                <div className="flex items-center justify-between"><span className="text-xs font-bold text-muted-foreground">Itens</span><span className="text-sm font-semibold">{cartCount}</span></div>
+                <div className="flex items-center justify-between"><span className="text-xs font-semibold text-muted-foreground">Total</span><span className="text-2xl font-semibold text-foreground">{formatCurrency(cartTotal)}</span></div>
+                <button type="button" onClick={handleSendOrderWhatsApp} className="rs-pressable flex w-full items-center justify-center gap-3 rounded-[2rem] bg-[#25D366] py-4 font-semibold text-white shadow-xl shadow-green-200"><Send className="h-5 w-5" /> Enviar Pedido no WhatsApp</button>
+              </div>
             )}
           </div>
-
-          {cart.length > 0 && (
-            <div className="space-y-3 border-t border-border/40 bg-background px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4">
-              <div className="flex items-center justify-between rounded-2xl bg-secondary/30 p-4">
-                <span className="text-xs font-semibold text-muted-foreground">Total</span>
-                <span className="text-xl font-bold">R$ {cartTotal.toFixed(2)}</span>
-              </div>
-              <button type="button" onClick={handleSendOrderWhatsApp} className="flex min-h-14 w-full items-center justify-center gap-3 rounded-[2rem] bg-[#25D366] font-bold text-white shadow-lg" data-testid="button-send-order-whatsapp">
-                <Send className="h-5 w-5" /> Enviar pedido no WhatsApp
-              </button>
-            </div>
-          )}
         </div>
       )}
+
+      <Suspense fallback={null}>
+        <ShareCatalogSheet
+          open={showShareModal}
+          onClose={() => setShowShareModal(false)}
+          catalogUrl={catalogUrl}
+          hasCatalogSlug={hasCatalogSlug}
+          copied={copied}
+          onCopyLink={handleCopyLink}
+          onShareWhatsApp={handleShareWhatsApp}
+          onShareInstagram={handleShareInstagram}
+        />
+      </Suspense>
     </Layout>
   );
 }

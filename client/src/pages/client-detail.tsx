@@ -8,8 +8,8 @@ import { EmptyState } from "@/components/EmptyState";
 import { Activity, AlertTriangle, BarChart3, Calendar, ChevronLeft, Clock, Heart, MessageSquare, Phone, ShoppingBag, Star, UserRound } from "lucide-react";
 import { format } from "@/lib/date-utils";
 import { calculateClientCrmMetrics, filterClientSales, type ClientClassificationTone, type ClientPreferenceItem } from "@/lib/client-metrics";
+import { formatCurrency } from "@/lib/product-pricing";
 
-const currency = (value: number) => `R$ ${value.toFixed(2)}`;
 const formatDate = (date: Date | null) => date ? format(date, "dd/MM/yyyy") : "Sem registro";
 
 const classificationClasses: Record<ClientClassificationTone, string> = {
@@ -47,7 +47,7 @@ function PreferenceList({ title, items }: { title: string; items: ClientPreferen
           {items.map(item => (
             <div key={item.label} className="flex items-center justify-between gap-3 rounded-2xl bg-secondary/30 px-3 py-2">
               <div className="min-w-0"><p className="text-xs font-bold truncate">{item.label}</p><p className="text-[10px] text-muted-foreground">{item.quantity} unidade(s)</p></div>
-              <p className="text-xs font-black text-primary whitespace-nowrap">{currency(item.revenue)}</p>
+              <p className="text-xs font-black text-primary whitespace-nowrap">{formatCurrency(item.revenue)}</p>
             </div>
           ))}
         </div>
@@ -131,26 +131,26 @@ export default function ClientDetail() {
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
             <MetricCard label="Cliente desde" value={formatDate(crm.summary.firstPurchaseDate)} />
             <MetricCard label="Última compra" value={formatDate(crm.summary.lastPurchaseDate)} />
-            <MetricCard label="Ticket médio" value={currency(crm.summary.averageTicket)} />
-            <MetricCard label="Total gasto" value={currency(crm.summary.totalSpent)} />
+            <MetricCard label="Ticket médio" value={formatCurrency(crm.summary.averageTicket)} />
+            <MetricCard label="Total gasto" value={formatCurrency(crm.summary.totalSpent)} />
             <MetricCard label="Compras" value={String(crm.summary.purchaseCount)} />
           </div>
         </section>
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-          <MetricCard label="Total gasto" value={currency(crm.summary.totalSpent)} />
-          <MetricCard label="Ticket médio" value={currency(crm.summary.averageTicket)} />
+          <MetricCard label="Total gasto" value={formatCurrency(crm.summary.totalSpent)} />
+          <MetricCard label="Ticket médio" value={formatCurrency(crm.summary.averageTicket)} />
           <MetricCard label="Compras" value={String(crm.summary.purchaseCount)} />
           <MetricCard label="Dias sem comprar" value={crm.summary.daysWithoutPurchase === null ? "Sem histórico" : String(crm.summary.daysWithoutPurchase)} />
           <MetricCard label="Primeira compra" value={formatDate(crm.summary.firstPurchaseDate)} />
           <MetricCard label="Última compra" value={formatDate(crm.summary.lastPurchaseDate)} />
-          <MetricCard label="Maior compra" value={crm.summary.biggestPurchase ? currency(crm.summary.biggestPurchase.totalPrice) : "Sem registro"} />
-          <MetricCard label="Menor compra" value={crm.summary.smallestPurchase ? currency(crm.summary.smallestPurchase.totalPrice) : "Sem registro"} />
+          <MetricCard label="Maior compra" value={crm.summary.biggestPurchase ? formatCurrency(crm.summary.biggestPurchase.totalPrice) : "Sem registro"} />
+          <MetricCard label="Menor compra" value={crm.summary.smallestPurchase ? formatCurrency(crm.summary.smallestPurchase.totalPrice) : "Sem registro"} />
         </div>
 
         <div className="bg-destructive/5 border border-destructive/10 p-6 rounded-[2.5rem] mb-8">
           <p className="text-[10px] font-bold text-destructive uppercase tracking-widest mb-1">Saldo Devedor</p>
-          <div className="flex items-end justify-between gap-4"><h3 className="text-3xl font-black text-destructive">{currency(totalDebt)}</h3><button onClick={() => sendWhatsApp(`Olá ${client.name}, passando para lembrar do seu saldo pendente de ${currency(totalDebt)}. Como podemos acertar? 😊`)} className="rs-pressable text-[10px] font-bold bg-destructive text-white px-3 py-2 rounded-full uppercase">Cobrar</button></div>
+          <div className="flex items-end justify-between gap-4"><h3 className="text-3xl font-black text-destructive">{formatCurrency(totalDebt)}</h3><button onClick={() => sendWhatsApp(`Olá ${client.name}, passando para lembrar do seu saldo pendente de ${formatCurrency(totalDebt)}. Como podemos acertar? 😊`)} className="rs-pressable text-[10px] font-bold bg-destructive text-white px-3 py-2 rounded-full uppercase">Cobrar</button></div>
         </div>
 
         <div className="grid lg:grid-cols-3 gap-5 mb-8"><PreferenceList title="Produtos favoritos" items={crm.favoriteProducts} /><PreferenceList title="Categorias favoritas" items={crm.favoriteCategories} /><PreferenceList title="Marcas favoritas" items={crm.favoriteBrands} /></div>
@@ -163,7 +163,7 @@ export default function ClientDetail() {
             <div className="space-y-3">
               {crm.monthlyEvolution.map(item => {
                 const width = Math.max(8, Math.round((item.total / maxMonthlyEvolutionTotal) * 100));
-                return <div key={item.monthKey}><div className="mb-1 flex items-center justify-between text-xs"><span className="font-bold capitalize">{item.monthLabel}</span><span className="text-muted-foreground">{currency(item.total)} · {item.purchases} compra(s)</span></div><div className="h-2 rounded-full bg-secondary overflow-hidden"><div className="h-full rounded-full bg-primary" style={{ width: `${width}%` }} /></div></div>;
+                return <div key={item.monthKey}><div className="mb-1 flex items-center justify-between text-xs"><span className="font-bold capitalize">{item.monthLabel}</span><span className="text-muted-foreground">{formatCurrency(item.total)} · {item.purchases} compra(s)</span></div><div className="h-2 rounded-full bg-secondary overflow-hidden"><div className="h-full rounded-full bg-primary" style={{ width: `${width}%` }} /></div></div>;
               })}
             </div>
           )}
@@ -178,7 +178,7 @@ export default function ClientDetail() {
                   <div className="sticky top-16 z-10 w-fit rounded-full bg-primary/10 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-primary backdrop-blur capitalize">{group.monthLabel}</div>
                   {group.items.map((item, index) => (
                     <div key={item.sale.id} className="bg-white p-4 rounded-3xl border border-border/40 shadow-sm">
-                      <div className="flex justify-between items-start gap-3 mb-3"><div><span className="text-[10px] font-bold text-muted-foreground uppercase">{item.date ? format(item.date, "dd 'de' MMMM 'de' yyyy") : "Data indisponível"}</span><p className="mt-1 text-xs text-muted-foreground flex items-center gap-1"><Clock className="w-3 h-3" /> Compra #{crm.timeline.length - index}</p></div><span className="text-base font-black text-primary">{currency(item.sale.totalPrice)}</span></div>
+                      <div className="flex justify-between items-start gap-3 mb-3"><div><span className="text-[10px] font-bold text-muted-foreground uppercase">{item.date ? format(item.date, "dd 'de' MMMM 'de' yyyy") : "Data indisponível"}</span><p className="mt-1 text-xs text-muted-foreground flex items-center gap-1"><Clock className="w-3 h-3" /> Compra #{crm.timeline.length - index}</p></div><span className="text-base font-black text-primary">{formatCurrency(item.sale.totalPrice)}</span></div>
                       <div className="flex flex-wrap gap-1.5">{item.products.map(product => <span key={`${item.sale.id}-${product.productId}`} className="text-[10px] bg-secondary px-2 py-1 rounded-full">{product.name} ({product.quantity}x)</span>)}</div>
                     </div>
                   ))}
@@ -193,7 +193,7 @@ export default function ClientDetail() {
           <MetricCard label="Perfil" value={crm.classification.label} hint="Classificação automática" />
           <MetricCard label="Preferência" value={crm.favoriteCategories[0]?.label || "Sem dados"} hint="Categoria mais comprada" />
           <MetricCard label="Marca top" value={crm.favoriteBrands[0]?.label || "Sem dados"} hint="Marca mais comprada" />
-          <MetricCard label="Melhor compra" value={crm.summary.biggestPurchase ? currency(crm.summary.biggestPurchase.totalPrice) : "Sem dados"} hint="Maior pedido registrado" />
+          <MetricCard label="Melhor compra" value={crm.summary.biggestPurchase ? formatCurrency(crm.summary.biggestPurchase.totalPrice) : "Sem dados"} hint="Maior pedido registrado" />
         </div>
       </div>
     </Layout>

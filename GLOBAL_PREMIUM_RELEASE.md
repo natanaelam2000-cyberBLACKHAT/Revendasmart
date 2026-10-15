@@ -73,7 +73,7 @@ Você pode usar `curl`, Postman, ou qualquer ferramenta HTTP.
 ```bash
 curl -X POST https://reseller-catalog-hub.replit.app/api/admin/global-config \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <SEU_TOKEN_AQUI>" \
+  -H "Authorization: Bearer <SYNTHETIC_BEARER_TOKEN>" \
   -d '{
     "premiumOpenAccess": true,
     "premiumOpenAccessMessage": "Bem-vindo! Recursos Premium desbloqueados para o lançamento da V2."
@@ -100,7 +100,7 @@ curl -X POST https://reseller-catalog-hub.replit.app/api/admin/global-config \
 ```bash
 curl -X POST https://reseller-catalog-hub.replit.app/api/admin/global-config \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <SEU_TOKEN_AQUI>" \
+  -H "Authorization: Bearer <SYNTHETIC_BEARER_TOKEN>" \
   -d '{
     "premiumOpenAccess": true,
     "premiumOpenAccessUntil": "2026-04-15T23:59:59.000Z",
@@ -115,7 +115,7 @@ curl -X POST https://reseller-catalog-hub.replit.app/api/admin/global-config \
 ```bash
 curl -X POST https://reseller-catalog-hub.replit.app/api/admin/global-config \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <SEU_TOKEN_AQUI>" \
+  -H "Authorization: Bearer <SYNTHETIC_BEARER_TOKEN>" \
   -d '{
     "premiumOpenAccess": false
   }'
@@ -142,7 +142,7 @@ Para ver a configuração atual:
 
 ```bash
 curl https://reseller-catalog-hub.replit.app/api/admin/global-config \
-  -H "Authorization: Bearer <SEU_TOKEN_AQUI>"
+  -H "Authorization: Bearer <SYNTHETIC_BEARER_TOKEN>"
 ```
 
 **Resposta:**
@@ -254,7 +254,7 @@ Para desbloquear também os limites, você precisa passar `globalConfig` a todas
 # 1. Ativar premium para todos até dia 15
 curl -X POST https://reseller-catalog-hub.replit.app/api/admin/global-config \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..." \
+  -H "Authorization: Bearer <SYNTHETIC_BEARER_TOKEN>" \
   -d '{
     "premiumOpenAccess": true,
     "premiumOpenAccessUntil": "2026-04-15T23:59:59Z",
@@ -277,7 +277,7 @@ Todos os recursos premium estão disponíveis por tempo limitado. Aproveite!
 # 2. Em 15 de abril, desativar
 curl -X POST https://reseller-catalog-hub.replit.app/api/admin/global-config \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..." \
+  -H "Authorization: Bearer <SYNTHETIC_BEARER_TOKEN>" \
   -d '{
     "premiumOpenAccess": false
   }'
@@ -380,7 +380,7 @@ Comando para ativar:
 ```bash
 curl -X POST https://reseller-catalog-hub.replit.app/api/admin/global-config \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <SEU_TOKEN>" \
+  -H "Authorization: Bearer <SYNTHETIC_BEARER_TOKEN>" \
   -d '{"premiumOpenAccess": true, "premiumOpenAccessMessage": "V2 Lançado!"}'
 ```
 

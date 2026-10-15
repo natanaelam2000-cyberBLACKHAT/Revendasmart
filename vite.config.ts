@@ -23,6 +23,9 @@ export default defineConfig(({ mode }) => ({
   esbuild: mode === "production" ? { pure: ["console.log", "console.debug", "console.info"] } : undefined,
 
   resolve: {
+    // Opt-in for Windows validation through a SUBST project drive: avoid loading
+    // the same React context through both its drive alias and physical path.
+    preserveSymlinks: process.env.RS_BUILD_PRESERVE_SYMLINKS === "true",
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),
       "@shared": path.resolve(import.meta.dirname, "shared"),
@@ -42,6 +45,11 @@ export default defineConfig(({ mode }) => ({
     sourcemap: mode !== "production",
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    // PERF-BUDGET-ARCH-01 — só metadata auxiliar (dist/public/.vite/manifest.json), não afeta chunking nem
+    // o conteúdo/hash de nenhum asset gerado. Usado por scripts/performance/check-bundle-budgets.mjs para
+    // distinguir eager (boot) de lazy (rota) via os imports/dynamicImports reais do entry, em vez de regex
+    // frágil sobre nomes de arquivo.
+    manifest: true,
     rollupOptions: {
       output: {
         manualChunks(id: string) {

@@ -16,10 +16,14 @@ import {
   subYears,
 } from "@/lib/date-utils";
 import type { Client, Product, Sale } from "@/lib/mock-data";
+import { STALLED_PRODUCT_THRESHOLD_DAYS } from "@shared/opportunity-rules";
+
+export const PROFIT_UNAVAILABLE = "Indisponível";
 
 export interface PeriodFinancialMetric {
   revenue: number;
-  profit: number;
+  /** null = custo insuficientemente confiável no período (nunca 0 fabricado — ver isTrustedCost). */
+  profit: number | null;
   salesCount: number;
   productsSold: number;
   activeClients: number;
@@ -39,7 +43,7 @@ export interface RankingItem {
   id: string;
   label: string;
   revenue: number;
-  profit: number;
+  profit: number | null;
   quantity: number;
   salesCount: number;
 }
@@ -62,7 +66,7 @@ export interface ReportComparisons {
 export interface MonthlyChartItem {
   label: string;
   revenue: number;
-  profit: number;
+  profit: number | null;
 }
 
 export interface SimpleChartItem {
@@ -81,7 +85,7 @@ export interface ReportCharts {
 }
 
 export interface ReportIndicators {
-  averageMargin: number;
+  averageMargin: number | null;
   averageQuantityPerSale: number;
   averageInventoryValue: number;
   productsWithoutTurnover: Product[];
@@ -116,10 +120,22 @@ function createClientMap(clients: Client[]): Map<string, Client> {
   return new Map(clients.map(client => [client.id, client]));
 }
 
-function addRankingValue(map: Map<string, RankingItem>, id: string, label: string, revenue: number, profit: number, quantity: number) {
+/**
+ * PLAN-IMPL-07B-COST-SNAPSHOT-FINAL — a autoridade de custo é o snapshot gravado no momento da venda
+ * (sale.products[].costPriceAtSale, server/sale-finalize-transaction.ts), nunca o Product.costPrice
+ * atual: se o lojista editar o custo depois, vendas passadas não podem "reescrever" seu próprio lucro
+ * histórico. Ausente = venda legada (anterior a este snapshot) ou custo não confiável no momento da
+ * venda — em ambos os casos o item fica permanentemente indisponível, nunca recalculado a partir do
+ * custo atual do produto (isso seria exatamente o bug que este ticket corrige).
+ */
+function isTrustedSaleCost(item: { costPriceAtSale?: number }): item is { costPriceAtSale: number } {
+  return typeof item.costPriceAtSale === "number" && item.costPriceAtSale > 0;
+}
+
+function addRankingValue(map: Map<string, RankingItem>, id: string, label: string, revenue: number, profit: number | null, quantity: number) {
   const current = map.get(id) || { id, label, revenue: 0, profit: 0, quantity: 0, salesCount: 0 };
   current.revenue += revenue;
-  current.profit += profit;
+  current.profit = current.profit !== null && profit !== null ? current.profit + profit : null;
   current.quantity += quantity;
   current.salesCount += 1;
   map.set(id, current);
@@ -137,14 +153,13 @@ function addRankingValue(map: Map<string, RankingItem>, id: string, label: strin
  * diretamente — aquilo é outro problema (ratear um desconto de carrinho entre itens), fora do escopo
  * desta correção; documentado, não corrigido aqui.
  */
-function getSaleItemMetrics(sale: Sale, productById: Map<string, Product>) {
-  let cost = 0;
+function getSaleItemMetrics(sale: Sale) {
+  let cost: number | null = 0;
   let quantity = 0;
 
   for (const item of sale.products || []) {
     const itemQuantity = Number(item.quantity || 0);
-    const product = productById.get(item.productId);
-    if (product) cost += itemQuantity * Number(product.costPrice || 0);
+    if (cost !== null) cost = isTrustedSaleCost(item) ? cost + itemQuantity * item.costPriceAtSale : null;
     quantity += itemQuantity;
   }
 
@@ -153,13 +168,12 @@ function getSaleItemMetrics(sale: Sale, productById: Map<string, Product>) {
 
 function calculatePeriod(
   sales: Sale[],
-  productById: Map<string, Product>,
   start: Date,
   end: Date
 ): PeriodFinancialMetric {
   const activeClients = new Set<string>();
   let revenue = 0;
-  let profit = 0;
+  let profit: number | null = 0;
   let productsSold = 0;
   let salesCount = 0;
 
@@ -167,22 +181,16 @@ function calculatePeriod(
     const date = safeParseDate(sale.date);
     if (!date || !isWithinInterval(date, { start, end })) continue;
 
-    const itemMetrics = getSaleItemMetrics(sale, productById);
+    const itemMetrics = getSaleItemMetrics(sale);
     const saleRevenue = saleTotal(sale);
     revenue += saleRevenue;
-    profit += saleRevenue - itemMetrics.cost;
+    profit = profit !== null && itemMetrics.cost !== null ? profit + saleRevenue - itemMetrics.cost : null;
     productsSold += itemMetrics.quantity;
     salesCount += 1;
     if (sale.clientId) activeClients.add(sale.clientId);
   }
 
-  return {
-    revenue,
-    profit,
-    salesCount,
-    productsSold,
-    activeClients: activeClients.size,
-  };
+  return { revenue, profit, salesCount, productsSold, activeClients: activeClients.size };
 }
 
 function changePercent(current: number, previous: number): number {
@@ -204,17 +212,15 @@ function comparison(label: string, current: number, previous: number): Compariso
 
 export function calculateFinancialSummary(
   sales: Sale[],
-  products: Product[],
   referenceDate = new Date()
 ): FinancialSummary {
-  const productById = createProductMap(products);
-  const today = calculatePeriod(sales, productById, startOfDay(referenceDate), endOfDay(referenceDate));
-  const week = calculatePeriod(sales, productById, startOfWeek(referenceDate, { weekStartsOn: 1 }), endOfWeek(referenceDate, { weekStartsOn: 1 }));
-  const month = calculatePeriod(sales, productById, startOfMonth(referenceDate), endOfMonth(referenceDate));
-  const year = calculatePeriod(sales, productById, startOfYear(referenceDate), endOfYear(referenceDate));
+  const today = calculatePeriod(sales, startOfDay(referenceDate), endOfDay(referenceDate));
+  const week = calculatePeriod(sales, startOfWeek(referenceDate, { weekStartsOn: 1 }), endOfWeek(referenceDate, { weekStartsOn: 1 }));
+  const month = calculatePeriod(sales, startOfMonth(referenceDate), endOfMonth(referenceDate));
+  const year = calculatePeriod(sales, startOfYear(referenceDate), endOfYear(referenceDate));
   const allRevenue = sales.reduce((sum, sale) => sum + saleTotal(sale), 0);
   const activeClients = new Set(sales.map(sale => sale.clientId).filter(Boolean));
-  const totalProductsSold = sales.reduce((sum, sale) => sum + getSaleItemMetrics(sale, productById).quantity, 0);
+  const totalProductsSold = sales.reduce((sum, sale) => sum + getSaleItemMetrics(sale).quantity, 0);
 
   return {
     today,
@@ -241,15 +247,16 @@ export function calculateRanking(
 
   for (const sale of sales) {
     const saleRevenue = saleTotal(sale);
-    const saleMetrics = getSaleItemMetrics(sale, productById);
+    const saleMetrics = getSaleItemMetrics(sale);
     const clientName = clientById.get(sale.clientId)?.name || sale.clientName || "Cliente não identificado";
-    addRankingValue(clientMap, sale.clientId || "unknown", clientName, saleRevenue, saleRevenue - saleMetrics.cost, saleMetrics.quantity);
+    const clientProfit = saleMetrics.cost !== null ? saleRevenue - saleMetrics.cost : null;
+    addRankingValue(clientMap, sale.clientId || "unknown", clientName, saleRevenue, clientProfit, saleMetrics.quantity);
 
     for (const item of sale.products || []) {
       const product = productById.get(item.productId);
       const quantity = Number(item.quantity || 0);
       const revenue = quantity * Number(item.price || 0);
-      const profit = product ? quantity * (Number(item.price || 0) - Number(product.costPrice || 0)) : 0;
+      const profit = isTrustedSaleCost(item) ? quantity * (Number(item.price || 0) - item.costPriceAtSale) : null;
       const productName = product?.name || "Produto n?o dispon?vel";
       addRankingValue(productMap, item.productId, productName, revenue, profit, quantity);
       addRankingValue(categoryMap, product?.category || "Sem categoria", product?.category || "Sem categoria", revenue, profit, quantity);
@@ -258,7 +265,7 @@ export function calculateRanking(
   }
 
   const byQuantity = (a: RankingItem, b: RankingItem) => b.quantity - a.quantity;
-  const byProfit = (a: RankingItem, b: RankingItem) => b.profit - a.profit;
+  const byProfit = (a: RankingItem, b: RankingItem) => (b.profit ?? 0) - (a.profit ?? 0);
   const byRevenue = (a: RankingItem, b: RankingItem) => b.revenue - a.revenue;
   const byPurchases = (a: RankingItem, b: RankingItem) => b.salesCount - a.salesCount;
 
@@ -274,25 +281,23 @@ export function calculateRanking(
 
 export function calculateComparisons(
   sales: Sale[],
-  products: Product[],
   referenceDate = new Date()
 ): ReportComparisons {
-  const productById = createProductMap(products);
-  const currentDay = calculatePeriod(sales, productById, startOfDay(referenceDate), endOfDay(referenceDate));
+  const currentDay = calculatePeriod(sales, startOfDay(referenceDate), endOfDay(referenceDate));
   const previousDayDate = subDays(referenceDate, 1);
-  const previousDay = calculatePeriod(sales, productById, startOfDay(previousDayDate), endOfDay(previousDayDate));
+  const previousDay = calculatePeriod(sales, startOfDay(previousDayDate), endOfDay(previousDayDate));
 
-  const currentWeek = calculatePeriod(sales, productById, startOfWeek(referenceDate, { weekStartsOn: 1 }), endOfWeek(referenceDate, { weekStartsOn: 1 }));
+  const currentWeek = calculatePeriod(sales, startOfWeek(referenceDate, { weekStartsOn: 1 }), endOfWeek(referenceDate, { weekStartsOn: 1 }));
   const previousWeekDate = subWeeks(referenceDate, 1);
-  const previousWeek = calculatePeriod(sales, productById, startOfWeek(previousWeekDate, { weekStartsOn: 1 }), endOfWeek(previousWeekDate, { weekStartsOn: 1 }));
+  const previousWeek = calculatePeriod(sales, startOfWeek(previousWeekDate, { weekStartsOn: 1 }), endOfWeek(previousWeekDate, { weekStartsOn: 1 }));
 
-  const currentMonth = calculatePeriod(sales, productById, startOfMonth(referenceDate), endOfMonth(referenceDate));
+  const currentMonth = calculatePeriod(sales, startOfMonth(referenceDate), endOfMonth(referenceDate));
   const previousMonthDate = subMonths(referenceDate, 1);
-  const previousMonth = calculatePeriod(sales, productById, startOfMonth(previousMonthDate), endOfMonth(previousMonthDate));
+  const previousMonth = calculatePeriod(sales, startOfMonth(previousMonthDate), endOfMonth(previousMonthDate));
 
-  const currentYear = calculatePeriod(sales, productById, startOfYear(referenceDate), endOfYear(referenceDate));
+  const currentYear = calculatePeriod(sales, startOfYear(referenceDate), endOfYear(referenceDate));
   const previousYearDate = subYears(referenceDate, 1);
-  const previousYear = calculatePeriod(sales, productById, startOfYear(previousYearDate), endOfYear(previousYearDate));
+  const previousYear = calculatePeriod(sales, startOfYear(previousYearDate), endOfYear(previousYearDate));
 
   return {
     today: comparison("Hoje x ontem", currentDay.revenue, previousDay.revenue),
@@ -307,10 +312,9 @@ export function calculateReportCharts(
   products: Product[],
   referenceDate = new Date()
 ): ReportCharts {
-  const productById = createProductMap(products);
   const months = Array.from({ length: 12 }, (_, index) => startOfMonth(subMonths(referenceDate, 11 - index)));
   const revenueByMonth = months.map(month => {
-    const period = calculatePeriod(sales, productById, startOfMonth(month), endOfMonth(month));
+    const period = calculatePeriod(sales, startOfMonth(month), endOfMonth(month));
     return {
       label: format(month, "MM/yy"),
       revenue: period.revenue,
@@ -322,9 +326,9 @@ export function calculateReportCharts(
   return {
     revenueByMonth,
     profitByMonth: revenueByMonth,
-    salesByCategory: rankings.mostProfitableCategories.slice(0, 8).map(item => ({ name: item.label, revenue: item.revenue, profit: item.profit, quantity: item.quantity })),
-    salesByBrand: rankings.mostProfitableBrands.slice(0, 8).map(item => ({ name: item.label, revenue: item.revenue, profit: item.profit, quantity: item.quantity })),
-    topProducts: rankings.topSellingProducts.slice(0, 10).map(item => ({ name: item.label, revenue: item.revenue, profit: item.profit, quantity: item.quantity })),
+    salesByCategory: rankings.mostProfitableCategories.slice(0, 8).map(item => ({ name: item.label, revenue: item.revenue, quantity: item.quantity })),
+    salesByBrand: rankings.mostProfitableBrands.slice(0, 8).map(item => ({ name: item.label, revenue: item.revenue, quantity: item.quantity })),
+    topProducts: rankings.topSellingProducts.slice(0, 10).map(item => ({ name: item.label, revenue: item.revenue, quantity: item.quantity })),
   };
 }
 
@@ -334,28 +338,32 @@ export function calculateIndicators(
   referenceDate = new Date(),
   lowStockThreshold = 3
 ): ReportIndicators {
-  const productById = createProductMap(products);
-  let totalProfit = 0;
+  let totalProfit: number | null = 0;
   let totalRevenue = 0;
   let totalQuantity = 0;
 
   for (const sale of sales) {
     const saleRevenue = saleTotal(sale);
     totalRevenue += saleRevenue;
-    const metrics = getSaleItemMetrics(sale, productById);
-    totalProfit += saleRevenue - metrics.cost;
+    const metrics = getSaleItemMetrics(sale);
+    totalProfit = totalProfit !== null && metrics.cost !== null ? totalProfit + saleRevenue - metrics.cost : null;
     totalQuantity += metrics.quantity;
   }
 
   const inventoryValue = products.reduce((sum, product) => sum + Number(product.costPrice || 0) * Number(product.stock || 0), 0);
+  // PLAN-IMPL-07B §12 — antes usava um limiar de 90 dias próprio, redeclarado aqui e conceitualmente
+  // idêntico ao "produto parado" já canonizado em shared/opportunity-rules.ts (PLAN-IMPL-07A) — mesma
+  // regra (stock > 0 + sem vender há N dias), duas fontes divergentes. Consolidado para o limiar único
+  // (60 dias): o número exibido em "Sem giro" muda (mostra mais produtos que antes, já que 60 é um teto
+  // mais baixo que 90), mudança intencional desta ticket, nunca um efeito colateral escondido.
   const productsWithoutTurnover = products.filter(product => {
     const lastSold = safeParseDate(product.lastSoldDate);
     if (!lastSold) return Number(product.stock || 0) > 0;
-    return Number(product.stock || 0) > 0 && isWithinInterval(lastSold, { start: new Date(0), end: subDays(referenceDate, 90) });
+    return Number(product.stock || 0) > 0 && isWithinInterval(lastSold, { start: new Date(0), end: subDays(referenceDate, STALLED_PRODUCT_THRESHOLD_DAYS) });
   });
 
   return {
-    averageMargin: totalRevenue > 0 ? Math.round((totalProfit / totalRevenue) * 100) : 0,
+    averageMargin: totalProfit === null ? null : totalRevenue > 0 ? Math.round((totalProfit / totalRevenue) * 100) : 0,
     averageQuantityPerSale: sales.length > 0 ? totalQuantity / sales.length : 0,
     averageInventoryValue: products.length > 0 ? inventoryValue / products.length : 0,
     productsWithoutTurnover,

@@ -1,0 +1,82 @@
+name: SHIP-04 Offline Validation
+
+on:
+  push:
+    branches: [ci/ship-04-offline-rc]
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    name: offline-${{ matrix.test }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        test: [response, corruption, browser]
+    env:
+      CI: 'true'
+      FIREBASE_PROJECT_ID: demo-revendasmart
+      GCLOUD_PROJECT: demo-revendasmart
+      GOOGLE_CLOUD_PROJECT: demo-revendasmart
+      FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
+      FIREBASE_AUTH_EMULATOR_HOST: 127.0.0.1:9099
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.15.0'
+          package-manager-cache: false
+      - name: Record tested identity
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          echo "TESTED_SHA=$GITHUB_SHA"
+          node --version
+          npm --version
+          sha256sum package-lock.json
+      - name: Install locked project dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify lockfile unchanged
+        run: git diff --exit-code -- package.json package-lock.json
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        if: matrix.test == 'browser'
+        with:
+          distribution: temurin
+          java-version: '21.0.8+9'
+      - name: Install locked Chromium
+        if: matrix.test == 'browser'
+        run: ./node_modules/.bin/playwright install --with-deps chromium
+      - name: Pending-sale responses
+        if: matrix.test == 'response'
+        shell: bash
+        run: |
+          set +e
+          timeout 120s node script/pending-sale-response-tests.mjs
+          result=$?
+          echo "TEST_EXIT_CODE=$result"
+          exit "$result"
+      - name: Queue corruption
+        if: matrix.test == 'corruption'
+        shell: bash
+        run: |
+          set +e
+          timeout 120s ./node_modules/.bin/tsx script/security-queue-corruption-tests.ts
+          result=$?
+          echo "TEST_EXIT_CODE=$result"
+          exit "$result"
+      - name: Browser queue leases and retries
+        if: matrix.test == 'browser'
+        shell: bash
+        run: |
+          set +e
+          timeout 900s npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore "./node_modules/.bin/tsx script/hardening-offline-browser-tests.ts"
+          result=$?
+          echo "TEST_EXIT_CODE=$result"
+          exit "$result"

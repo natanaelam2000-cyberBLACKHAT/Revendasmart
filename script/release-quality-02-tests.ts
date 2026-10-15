@@ -100,10 +100,33 @@ async function run(): Promise<void> {
     assert.equal(__getDismissibleStackSizeForTests(), 1, "E: a pilha perde 1 entrada ao fechar o topo");
     popA(); popB();
     assert.equal(dismissTopmost(), false, "E: sem overlay nenhum, back devolve false (deixa a navegação normal acontecer)");
+
+    // E.2. cleanup de um overlay aberto remove sua entrada e impede callback residual após unmount.
+    __resetDismissibleStackForTests();
+    let residualCallbackCalled = false;
+    const cleanupOpenOverlay = pushDismissible(() => { residualCallbackCalled = true; });
+    assert.equal(__getDismissibleStackSizeForTests(), 1, "E.2: overlay aberto registra uma entrada");
+    cleanupOpenOverlay();
+    assert.equal(__getDismissibleStackSizeForTests(), 0, "E.2: unmount/close executa cleanup e remove a entrada");
+    assert.equal(dismissTopmost(), false, "E.2: back após unmount não encontra overlay residual");
+    assert.equal(residualCallbackCalled, false, "E.2: callback de overlay desmontado não é chamado");
+
+    // E.3. abrir/fechar repetidamente não acumula entradas; a entrada corrente continua topmost.
+    let closeCount = 0;
+    const cleanupFirstOpen = pushDismissible(() => { closeCount += 1; });
+    cleanupFirstOpen();
+    const cleanupSecondOpen = pushDismissible(() => { closeCount += 10; });
+    assert.equal(__getDismissibleStackSizeForTests(), 1, "E.3: reabertura mantém uma única entrada ativa");
+    assert.equal(dismissTopmost(), true, "E.3: back trata a abertura corrente");
+    assert.equal(closeCount, 10, "E.3: callback corrente é o único callback chamado");
+    cleanupSecondOpen();
     __resetDismissibleStackForTests();
   }
 
   const backButtonSource = read("client/src/lib/android-back-button.ts");
+  const dismissibleHookSource = read("client/src/hooks/useDismissibleOnBack.ts");
+  assert.match(dismissibleHookSource, /onDismissRef\.current = onDismiss/, "E: callback atualiza a ref sem recriar a entrada a cada render");
+  assert.match(dismissibleHookSource, /pushDismissible\(\(\) => onDismissRef\.current\(\)\)/, "E: a entrada chama o callback mais recente, sem callback residual");
   assert.match(backButtonSource, /if \(dismissTopmost\(\)\) return;/, "E: o handler real checa overlays abertos ANTES de navegar/sair");
   assert.match(backButtonSource, /canGoBack/, "E: distingue navegar (canGoBack) de sair do app (exitApp)");
   assert.match(backButtonSource, /App\.exitApp\(\)/, "E: só sai do app quando não há mais para onde voltar");

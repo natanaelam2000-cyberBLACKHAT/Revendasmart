@@ -16,6 +16,13 @@ export interface EncryptedToken {
   authTag: string;              // hex-encoded authentication tag (16 bytes)
   algorithm: "aes-256-gcm";    // constant — for future-proofing
   encryptedAt: string;          // ISO 8601 — when encryption happened
+  /** RC-P0-SECURITY-02B — which MERCADOPAGO_TOKEN_ENCRYPTION_KEY[_V2] encrypted this value.
+   * Absent on every document written before this field existed — server/mercadopago-crypto.ts
+   * treats a missing keyVersion as "v1" (the only key that could have produced it), never as an
+   * error and never by guessing/trying multiple keys. Once present, decryption uses ONLY the
+   * named version's key — no cross-key fallback, ever (fail closed on a wrong/missing key for a
+   * known version, and on any version string that isn't a currently-known one). */
+  keyVersion?: "v1" | "v2";
 }
 
 // ---------------------------------------------------------------------------

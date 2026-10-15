@@ -12,7 +12,7 @@ import { DEFAULT_NUMBER_COUNT, DEFAULT_NUMBER_START, MAX_CAMPAIGN_NUMBERS } from
  * custo deste código. Expõe todos os campos do MVP (nenhum escondido para economizar bundle); os menos
  * usados ficam numa seção "Configurações avançadas" colapsável, não removidos.
  */
-const FIELD_CLASS = "rs-input flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm text-foreground placeholder:text-muted-foreground";
+const FIELD_CLASS = "rs-input flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground";
 
 /** PROMOTIONAL-CAMPAIGNS-HOTFIX-01 — mensagens amigáveis por `reason` real do servidor
  * (`shared/image-validation.ts`), em vez de repassar o código técnico cru (`UPLOAD_REJECTED: ...`)
@@ -119,7 +119,7 @@ export default function SorteiosCreate({ onClose, onCreated }: { onClose: () => 
 
   return (
     <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/40 sm:items-center" onClick={onClose}>
-      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:rounded-3xl" onClick={(event) => event.stopPropagation()}>
+      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-card p-5 shadow-2xl sm:rounded-3xl" onClick={(event) => event.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-base font-black text-foreground">Criar campanha</h2>
           <button type="button" onClick={onClose} aria-label="Fechar" className="rounded-full p-1.5 hover:bg-slate-100"><X className="h-5 w-5" /></button>

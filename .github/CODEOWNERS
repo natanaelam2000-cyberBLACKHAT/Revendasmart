@@ -1,0 +1,13 @@
+# Repository owner only; require CODEOWNERS approval through a repository ruleset.
+/.github/ @natanaelam2000-cyberBLACKHAT
+/android/ @natanaelam2000-cyberBLACKHAT
+/server/ @natanaelam2000-cyberBLACKHAT
+/client/ @natanaelam2000-cyberBLACKHAT
+/firestore.rules @natanaelam2000-cyberBLACKHAT
+/storage.rules @natanaelam2000-cyberBLACKHAT
+/package.json @natanaelam2000-cyberBLACKHAT
+/package-lock.json @natanaelam2000-cyberBLACKHAT
+/scripts/security/ @natanaelam2000-cyberBLACKHAT
+/script/*security* @natanaelam2000-cyberBLACKHAT
+/.gitleaks.toml @natanaelam2000-cyberBLACKHAT
+/SECURITY.md @natanaelam2000-cyberBLACKHAT

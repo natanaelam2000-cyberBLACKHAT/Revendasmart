@@ -227,7 +227,7 @@ Se algo não funcionar, use o endpoint de diagnóstico:
 
 ```bash
 curl -X GET https://reseller-catalog-hub.replit.app/api/app-subscription/diagnose \
-  -H "Authorization: Bearer SEU_TOKEN"
+  -H "Authorization: Bearer <SYNTHETIC_BEARER_TOKEN>"
 ```
 
 Resposta (sucesso):

@@ -15,6 +15,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import * as crypto from "crypto";
 import { MercadoPagoConfig, Preference, Payment as MPPayment } from "mercadopago";
 import { getFirebaseAdmin } from "./firebase-admin-init";
+import { applyChargePaymentUpdate } from "./payment-state-transitions";
 import {
   findMPConnectionByMerchantId,
   getMPAccessTokenForCharge,
@@ -65,11 +66,46 @@ function logPaymentError(
 // ---------------------------------------------------------------------------
 const CENTRAL_ACCESS_TOKEN = process.env.MERCADOPAGO_ACCESS_TOKEN ?? "";
 const WEBHOOK_SECRET = process.env.MERCADOPAGO_WEBHOOK_SECRET ?? "";
-const APP_BASE_URL = process.env.APP_BASE_URL ?? "https://revendasmart-backend-164193806378.us-central1.run.app";
+// RC-P0-SECURITY-02R: no hardcoded fallback host — a previous version of this constant silently fell
+// back to a specific obsolete Cloud Run URL whenever the env var was unset, which could send Mercado
+// Pago's payment-status webhooks to a host that no longer exists without anyone noticing. Same
+// fail-closed posture as MERCADOPAGO_REDIRECT_URI in mercadopago-connections.ts: an empty/invalid
+// value here is rejected via resolvePaymentWebhookBaseUrl() before any Mercado Pago preference is
+// created, never silently substituted.
+const APP_BASE_URL_RAW = (process.env.APP_BASE_URL ?? "").trim();
 const FRONTEND_URL = process.env.FRONTEND_URL ?? "https://revendasmart.vercel.app";
 const PAYMENT_WEBHOOK_MAX_AGE_MS = 5 * 60 * 1000;
 const PAYMENT_RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const PAYMENT_RATE_LIMIT_MAX_KEYS = 10_000;
+
+export type AppBaseUrlCheck =
+  | { ok: true; url: string }
+  | { ok: false; reason: "missing" | "invalid" };
+
+/**
+ * Pure function (no Express/env dependency at call time) so it's directly unit-testable — mirrors
+ * the classifyOAuthContinuityCookie() convention in mercadopago-connections.ts. Fails closed rather
+ * than ever falling back to a hardcoded host: `notification_url` is where Mercado Pago's servers send
+ * asynchronous payment-status webhooks, so a wrong/stale value here silently breaks payment
+ * confirmation in production instead of failing loudly at request time.
+ */
+export function resolvePaymentWebhookBaseUrl(rawAppBaseUrl: string, nodeEnv: string | undefined): AppBaseUrlCheck {
+  const trimmed = rawAppBaseUrl.trim();
+  if (!trimmed) return { ok: false, reason: "missing" };
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return { ok: false, reason: "invalid" };
+  }
+
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return { ok: false, reason: "invalid" };
+  if (nodeEnv === "production" && parsed.protocol !== "https:") return { ok: false, reason: "invalid" };
+
+  // Strip trailing slash(es) so `${url}/api/payments/webhook` never contains a double slash.
+  return { ok: true, url: trimmed.replace(/\/+$/, "") };
+}
 
 type RateLimitDecision = {
   allowed: boolean;
@@ -207,15 +243,6 @@ async function resolveChargeClientSnapshot(
     });
     return {};
   }
-}
-
-async function updateCharge(
-  uid: string,
-  chargeId: string,
-  updates: Partial<Charge>
-): Promise<void> {
-  const ref = await getChargeRef(uid, chargeId);
-  await ref.update({ ...updates, updatedAt: now() });
 }
 
 /** Fetch Charge from Firestore. Returns null if not found. */
@@ -356,12 +383,6 @@ async function syncPaymentFromMP(
     const rawStatus = (mpData as any).status ?? "pending";
     const newStatus = resolveChargeStatus(rawStatus);
 
-    // Idempotency: skip if this exact event was already processed
-    if (webhookEventId && charge.webhookLastEventId === webhookEventId) {
-      paymentInfo("[payments/sync] Event already processed — skipping");
-      return charge;
-    }
-
     const updates: Partial<Charge> = {
       providerRawStatus: rawStatus,
       status: newStatus,
@@ -383,16 +404,11 @@ async function syncPaymentFromMP(
       updates.refundedAt = now();
     }
 
-    await updateCharge(uid, chargeId, updates);
-    paymentInfo(`[payments/sync] Charge status updated: ${charge.status} → ${newStatus}`);
+    const persisted = await applyChargePaymentUpdate(getFirebaseAdmin().firestore(), uid, chargeId, updates);
+    paymentInfo(`[payments/sync] Persisted charge status: ${charge.status} → ${persisted.status}`);
 
-    // §6: propaga para o pedido do catálogo público quando esta charge tem um. A Charge (fonte de
-    // verdade financeira) já está persistida no passo acima — isto é side-effect best-effort.
-    if (newStatus === "paid" && charge.orderId) {
-      await syncOrderPaymentStatusFromCharge(uid, charge.orderId);
-    }
-
-    return { ...charge, ...updates } as Charge;
+    // Charge e pedido associado são confirmados atomicamente na transação acima.
+    return persisted;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logPaymentError("sync_payment_from_mp", uid, msg, {
@@ -531,13 +547,19 @@ async function handleCreateLink(req: Request, res: Response) {
     
     // Validate critical fields before building payload
     const FRONTEND_URL_VALID = FRONTEND_URL && FRONTEND_URL.startsWith("http");
-    const APP_BASE_URL_VALID = APP_BASE_URL && APP_BASE_URL.startsWith("http");
-    
-    if (!FRONTEND_URL_VALID || !APP_BASE_URL_VALID) {
+    if (!FRONTEND_URL_VALID) {
       paymentLogError("[payments/create-link] Invalid payment redirect configuration");
       return res.status(500).json({
         error: "Configuration error: invalid URLs",
-        details: "FRONTEND_URL ou APP_BASE_URL não configurados corretamente",
+        details: "FRONTEND_URL não configurado corretamente",
+      });
+    }
+
+    const appBaseUrlCheck = resolvePaymentWebhookBaseUrl(APP_BASE_URL_RAW, process.env.NODE_ENV);
+    if (!appBaseUrlCheck.ok) {
+      paymentLogError("[payments/create-link] Invalid payment webhook configuration", { reason: appBaseUrlCheck.reason });
+      return res.status(500).json({
+        error: appBaseUrlCheck.reason === "missing" ? "APP_BASE_URL is not configured" : "APP_BASE_URL is invalid",
       });
     }
 
@@ -563,7 +585,7 @@ async function handleCreateLink(req: Request, res: Response) {
         failure: `${FRONTEND_URL}/catalog?payment=failure`,
       },
       auto_return: "approved",
-      notification_url: `${APP_BASE_URL}/api/payments/webhook?uid=${encodeURIComponent(body.uid)}&chargeId=${encodeURIComponent(chargeId)}`,
+      notification_url: `${appBaseUrlCheck.url}/api/payments/webhook?uid=${encodeURIComponent(body.uid)}&chargeId=${encodeURIComponent(chargeId)}`,
       metadata: {
         ...(safeMetadata ?? {}),
         uid: body.uid,
@@ -765,17 +787,28 @@ async function handleCreateLink(req: Request, res: Response) {
 // resolution, cliente MP, buildExternalReference, persistência de Charge, mapeamento de erro) sem
 // duplicar a lógica de negócio nem criar um segundo sistema de pagamento.
 // ---------------------------------------------------------------------------
+/**
+ * PEDIDOS EDITÁVEIS Etapa 2C — onde a falha aconteceu em relação ao Mercado Pago:
+ * - "not_started": antes de qualquer chamada ao provedor (nada foi criado lá);
+ * - "rejected": o provedor respondeu com recusa definitiva (4xx de validação/autorização/limite) — nada criado;
+ * - "ambiguous": o provedor pode ter criado a preferência (timeout, rede, 5xx, resposta inutilizável ou falha
+ *   local depois do sucesso). Reserva de cobrança NUNCA é liberada nesse caso.
+ */
+export type MercadoPagoProviderCallPhase = "not_started" | "rejected" | "ambiguous";
+
 export class MercadoPagoOrderChargeError extends Error {
   readonly code: string;
   readonly userMessage: string;
   readonly httpStatus: number;
+  readonly providerCall: MercadoPagoProviderCallPhase;
 
-  constructor(code: string, userMessage: string, httpStatus = 502, cause?: unknown) {
+  constructor(code: string, userMessage: string, httpStatus = 502, cause?: unknown, providerCall: MercadoPagoProviderCallPhase = "ambiguous") {
     super(code, { cause });
     this.name = "MercadoPagoOrderChargeError";
     this.code = code;
     this.userMessage = userMessage;
     this.httpStatus = httpStatus;
+    this.providerCall = providerCall;
   }
 }
 
@@ -799,6 +832,40 @@ export interface CreateOrderMercadoPagoChargeParams {
   amount: number;
   title: string;
   storeSlug: string;
+  /** PEDIDOS EDITÁVEIS Etapa 2C — chave estável da intenção (a MESMA em qualquer retry da mesma reserva). */
+  idempotencyKey: string;
+  /** Aguardado imediatamente antes do POST ao provedor; se lançar, o provedor não é chamado. */
+  markProviderCallStarted: () => Promise<void>;
+}
+
+export interface FindOrderMercadoPagoChargeParams {
+  uid: string;
+  chargeId: string;
+  orderId: string;
+  /** Valor congelado na reserva: a preferência encontrada precisa ter exatamente esse valor. */
+  amount: number;
+  title: string;
+}
+
+/**
+ * Depois de `provider_started`, nenhum status HTTP do POST prova sozinho que o provedor
+ * não criou uma preferência. Isso inclui 4xx (em especial 429): a reserva fica fechada e
+ * a intenção só pode avançar por reconciliação explícita.
+ */
+function classifyPreferenceFailure(): MercadoPagoProviderCallPhase {
+  return "ambiguous";
+}
+
+type PreferenceRequestOptions = NonNullable<Parameters<Preference["create"]>[0]["requestOptions"]>;
+
+/**
+ * Uma tentativa só, com a chave estável da intenção. O SDK (3.2.0) reenvia sozinho o POST em timeout/5xx
+ * (`retryWithExponentialBackoff`, DEFAULT_RETRIES = 2) — e o endpoint de preferências não documenta
+ * X-Idempotency-Key, então esse reenvio poderia criar uma SEGUNDA preferência. `retries` não está tipado no
+ * SDK, mas é lido por `RestClient.fetch`.
+ */
+function singleAttemptPreferenceOptions(idempotencyKey: string): PreferenceRequestOptions {
+  return { idempotencyKey, retries: 1 } as PreferenceRequestOptions;
 }
 
 export interface CreateOrderMercadoPagoChargeResult {
@@ -818,6 +885,20 @@ export async function createOrderMercadoPagoCharge(
       "MP_TOKEN_UNAVAILABLE",
       "Pagamento por cartão indisponível no momento. Escolha Pix ou combine pelo WhatsApp.",
       503,
+      undefined,
+      "not_started",
+    );
+  }
+
+  const appBaseUrlCheck = resolvePaymentWebhookBaseUrl(APP_BASE_URL_RAW, process.env.NODE_ENV);
+  if (!appBaseUrlCheck.ok) {
+    paymentLogError("[payments/order-charge] Invalid payment webhook configuration", { reason: appBaseUrlCheck.reason });
+    throw new MercadoPagoOrderChargeError(
+      appBaseUrlCheck.reason === "missing" ? "APP_BASE_URL_MISSING" : "APP_BASE_URL_INVALID",
+      "Pagamento indisponível no momento. Tente novamente em instantes.",
+      500,
+      undefined,
+      "not_started",
     );
   }
 
@@ -827,6 +908,8 @@ export async function createOrderMercadoPagoCharge(
   const externalReference = buildExternalReference(params.uid, params.chargeId, { kind: "order", id: params.orderId });
   const backUrls = buildPublicOrderBackUrls(params.storeSlug, params.orderId);
 
+  // PEDIDOS EDITÁVEIS Etapa 2C: a partir daqui o provedor pode receber o pedido — a reserva é marcada antes.
+  await params.markProviderCallStarted();
   let preference: any;
   try {
     preference = await preferenceClient.create({
@@ -843,7 +926,7 @@ export async function createOrderMercadoPagoCharge(
         external_reference: externalReference,
         back_urls: backUrls,
         auto_return: "approved",
-        notification_url: `${APP_BASE_URL}/api/payments/webhook?uid=${encodeURIComponent(params.uid)}&chargeId=${encodeURIComponent(params.chargeId)}`,
+        notification_url: `${appBaseUrlCheck.url}/api/payments/webhook?uid=${encodeURIComponent(params.uid)}&chargeId=${encodeURIComponent(params.chargeId)}`,
         metadata: {
           uid: params.uid,
           chargeId: params.chargeId,
@@ -852,6 +935,7 @@ export async function createOrderMercadoPagoCharge(
           mpConnectionId: connectionId,
         },
       },
+      requestOptions: singleAttemptPreferenceOptions(params.idempotencyKey),
     });
   } catch (mpError) {
     paymentLogError("[payments/order-charge] Mercado Pago request failed", {
@@ -862,18 +946,70 @@ export async function createOrderMercadoPagoCharge(
       "Não foi possível iniciar o pagamento por cartão agora. Escolha Pix ou combine pelo WhatsApp.",
       502,
       mpError,
+      classifyPreferenceFailure(),
     );
   }
 
+  return await persistOrderMercadoPagoCharge(params, preference, { accessToken, tokenSource, connectionId, externalReference, chargeEnvironment });
+}
+
+/**
+ * PEDIDOS EDITÁVEIS Etapa 2C — reconciliação: procura no Mercado Pago a preferência desta MESMA intenção
+ * (external_reference único por reserva) e, se houver exatamente uma coerente com o valor congelado, grava a
+ * cobrança local igual à criação teria gravado. NUNCA cria preferência. `null` = não encontrada (ou sem como
+ * consultar agora); ambiguidade (mais de uma, valor divergente, sem URL) lança — o chamador fica fechado.
+ */
+export async function findOrderMercadoPagoCharge(params: FindOrderMercadoPagoChargeParams): Promise<CreateOrderMercadoPagoChargeResult | null> {
+  const { accessToken, tokenSource, connectionId } = await getValidMPAccessToken(params.uid, null);
+  if (!accessToken || accessToken.trim().length < 20) return null;
+  const preferenceClient = new Preference(new MercadoPagoConfig({ accessToken, options: { timeout: 10000 } }));
+  const chargeEnvironment = detectEnvironment(accessToken);
+  const externalReference = buildExternalReference(params.uid, params.chargeId, { kind: "order", id: params.orderId });
+
+  const found = await preferenceClient.search({ options: { external_reference: externalReference } });
+  const matches = (found?.elements ?? []).filter((element) => element?.external_reference === externalReference && element?.id);
+  if (matches.length === 0) return null;
+  if (matches.length > 1) {
+    throw new MercadoPagoOrderChargeError("PAYMENT_PREFERENCE_AMBIGUOUS", "Não foi possível confirmar a cobrança deste pedido.", 409);
+  }
+  const preference: any = await preferenceClient.get({ preferenceId: String(matches[0].id) });
+  const unitPrice = Number(preference?.items?.[0]?.unit_price);
+  if (preference?.external_reference !== externalReference || unitPrice !== params.amount) {
+    throw new MercadoPagoOrderChargeError("PAYMENT_PREFERENCE_MISMATCH", "Não foi possível confirmar a cobrança deste pedido.", 409);
+  }
+  return await persistOrderMercadoPagoCharge(params, preference, { accessToken, tokenSource, connectionId, externalReference, chargeEnvironment });
+}
+
+type MPAccessTokenResolution = Awaited<ReturnType<typeof getValidMPAccessToken>>;
+
+interface OrderChargeProviderContext {
+  accessToken: string;
+  tokenSource: MPAccessTokenResolution["tokenSource"];
+  connectionId: MPAccessTokenResolution["connectionId"];
+  externalReference: string;
+  chargeEnvironment: ReturnType<typeof detectEnvironment>;
+}
+
+/** Grava a Charge local a partir da preferência que o Mercado Pago devolveu (criada agora ou reconciliada). */
+async function persistOrderMercadoPagoCharge(
+  params: Pick<CreateOrderMercadoPagoChargeParams, "uid" | "chargeId" | "orderId" | "amount" | "title">,
+  preference: any,
+  context: OrderChargeProviderContext,
+): Promise<CreateOrderMercadoPagoChargeResult> {
+  const { tokenSource, connectionId, externalReference, chargeEnvironment } = context;
   const rawPaymentUrl = preference?.init_point ?? "";
   const sandboxUrl = preference?.sandbox_init_point ?? "";
   const preferenceId = preference?.id ?? "";
   const finalPaymentUrl = chargeEnvironment === "sandbox" ? (sandboxUrl || rawPaymentUrl) : rawPaymentUrl;
   if (!finalPaymentUrl) {
     paymentLogError("[payments/order-charge] No init_point received from MP");
+    // A preferência pode existir no provedor: resultado ambíguo, nunca liberar a reserva por causa disso.
     throw new MercadoPagoOrderChargeError(
       "PAYMENT_URL_MISSING",
       "Não foi possível iniciar o pagamento por cartão agora. Escolha Pix ou combine pelo WhatsApp.",
+      502,
+      undefined,
+      "ambiguous",
     );
   }
 
@@ -902,27 +1038,6 @@ export async function createOrderMercadoPagoCharge(
   await getFirebaseAdmin().firestore().collection("users").doc(params.uid).collection("charges").doc(params.chargeId).set(charge);
 
   return { chargeId: params.chargeId, paymentUrl: finalPaymentUrl, preferenceId, externalReference, environment: chargeEnvironment };
-}
-
-/**
- * §6 — quando o webhook (ou um resync manual) confirma pagamento de uma cobrança vinculada a um
- * pedido do catálogo, propaga o status para o PEDIDO. Nunca deixa uma falha aqui derrubar o
- * processamento do webhook — a Charge (fonte de verdade financeira) já foi atualizada com sucesso
- * antes desta função ser chamada; se o pedido não sincronizar, fica só para investigação manual, não
- * para reprocessar o pagamento.
- */
-async function syncOrderPaymentStatusFromCharge(uid: string, orderId: string): Promise<void> {
-  try {
-    const db = getFirebaseAdmin().firestore();
-    const orderRef = db.collection("users").doc(uid).collection("orders").doc(orderId);
-    const snap = await orderRef.get();
-    if (!snap.exists) return;
-    if (snap.data()?.paymentStatus === "paid") return; // já sincronizado — replay do webhook é idempotente
-    await orderRef.set({ paymentStatus: "paid", updatedAt: now() }, { merge: true });
-    paymentInfo("[payments/sync] Order payment status synced to paid", { orderId });
-  } catch (err) {
-    logPaymentError("sync_order_from_charge", uid, err instanceof Error ? err.message : String(err), { orderId });
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1164,9 +1279,10 @@ export function registerPaymentRoutes(
   app.delete("/api/payments/:chargeId", requireAuth, paymentDeleteRateLimit, handleDeleteCharge);
 
   // Subscription stubs — wired but not implemented (prevents 404 in future)
-  app.post("/api/subscriptions/create", requireAuth, (_req, res) => {
-    res.status(501).json({ message: "Subscription billing coming soon", prepared: true });
-  });
+  // PLAN-IMPL-04B: /create agora tem uma implementação real em registerSubscriptionRoutes
+  // (server/subscriptions.ts) — o stub aqui foi removido porque, sendo registrado antes
+  // (registerPaymentRoutes roda antes de registerSubscriptionRoutes em routes.ts), ele
+  // interceptava TODA requisição para essa rota e a implementação real nunca era alcançada.
   app.post("/api/subscriptions/cancel", requireAuth, (_req, res) => {
     res.status(501).json({ message: "Subscription billing coming soon", prepared: true });
   });

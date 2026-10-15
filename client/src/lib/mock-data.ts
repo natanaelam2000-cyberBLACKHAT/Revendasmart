@@ -1,5 +1,6 @@
 import { notifyWarning } from "@/lib/notify";
 import type { ApprovedProductCutout } from "@shared/approved-product-cutout";
+import type { PlanAccessSelectionSource, PlanAccessState } from "@shared/monetization";
 
 export type Category = string;
 /** Brand agora é string livre — suporta marcas pré-definidas e digitadas manualmente */
@@ -39,6 +40,16 @@ export interface Product {
   productTypeNormalized?: string;
   searchTokens?: string[];
   searchSchemaVersion?: number;
+  /** PLAN-IMPL-02B1 — ausente ou "active" = opera normalmente; "preserved" = excedente de um downgrade
+   * de plano (server/plan-access-reconciliation.ts): preservado/visível ao dono, fora do catálogo
+   * público e indisponível para uma NOVA venda. Nunca escrito pelo client — só o servidor (Admin SDK)
+   * grava este campo (ver firestore.rules, isValidProductUpdate). */
+  planAccessState?: PlanAccessState;
+  /** PLAN-IMPL-02B2 — "user" quando `planAccessState` veio de uma escolha explícita salva em
+   * setActiveProductSelection (server/plan-access-selection.ts); ausente/"automatic" quando veio do
+   * default determinístico de reconcilePlanAccess. Nunca escrito pelo client — mesmo servidor-somente de
+   * planAccessState (ver firestore.rules). */
+  planAccessSelectionSource?: PlanAccessSelectionSource;
 }
 
 // IndexedDB for Images
@@ -138,6 +149,14 @@ export interface Client {
   phone: string;
   email?: string;
   notes?: string;
+  /** PLAN-IMPL-07A — data ISO da venda mais recente, escrita transacionalmente dentro de
+   * finalizeSaleTransaction (mesmo padrão de Product.lastSoldDate) toda vez que uma venda REAL
+   * envolvendo este cliente é finalizada. Ausente para clientes sem nenhuma venda registrada DEPOIS
+   * deste campo existir — nunca preenchido por um backfill automático nesta ticket (§7 do pedido) —,
+   * o que é intencionalmente distinto de "inativo": ausência é "sem histórico conhecido", nunca tratado
+   * como inatividade automática (a query de oportunidade usa um filtro de intervalo que já exclui
+   * documentos sem o campo, nunca precisa de um branch especial para isso). */
+  lastPurchaseAt?: string;
 }
 
 export interface Installment {
@@ -156,7 +175,14 @@ export interface Sale {
   id: string;
   clientId: string;
   clientName?: string;
-  products: { productId: string; quantity: number; price: number }[];
+  /**
+   * PLAN-IMPL-07B-COST-SNAPSHOT-FINAL — costPriceAtSale é gravado uma única vez, server-side, dentro da
+   * mesma transação que finaliza a venda (server/sale-finalize-transaction.ts); nunca recalculado nem
+   * aceito como input do cliente. Ausente em vendas legadas (anteriores a este campo) e em itens cujo
+   * Product.costPrice não era confiável (<= 0) no momento exato da venda — nesses casos o lucro do item
+   * fica permanentemente indisponível, nunca refeito a partir do custo atual do produto.
+   */
+  products: { productId: string; quantity: number; price: number; costPriceAtSale?: number }[];
   totalPrice: number;
   paymentType: 'cash' | 'installments' | 'avista' | 'prazo';
   legacyPaymentType?: 'cash' | 'installments';
@@ -260,6 +286,11 @@ export interface AppSettings {
   businessType: string;
   /** Novo: array de tipos de negócio (suporta múltiplos nichos) */
   businessTypes?: string[];
+  /** PLAN-IMPL-09-FINAL — orientação de produtos vs. serviços (nunca entitlement/plano/permissão),
+   * inteiramente distinta de businessType/businessTypes acima (aquilo é nicho/categoria de produto —
+   * Cosméticos, Roupas etc. — este é "o que você vende": produtos, serviços, ou os dois). Ausente =
+   * ainda não escolhido (nunca um default silencioso — nem no onboarding nem numa falha de leitura). */
+  businessMode?: "products" | "services" | "both";
   /** Futuro-proof: nomes de loja específicos por nicho (ex: { "Roupas": "Boutique Bella", "Cosméticos & Perfumes": "Beleza da Adri" }) */
   storeNamesByNicho?: Record<string, string>;
   catalogSlug: string;
@@ -287,7 +318,7 @@ const AUTH_KEYS = {
 export const getCurrentUserId = () => {
   try {
     return localStorage.getItem('rs:session');
-  } catch (e) {
+  } catch {
     return null;
   }
 };
@@ -385,7 +416,7 @@ export const signup = (user: Omit<User, 'id' | 'createdAt'>) => {
     localStorage.setItem(scopedSettingsKey, JSON.stringify(settingsWithNoBusiness));
     
     return { success: true, user: newUser };
-  } catch (e) {
+  } catch {
     return { success: false, message: 'Erro ao salvar (armazenamento cheio)' };
   }
 };

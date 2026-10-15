@@ -46,7 +46,7 @@ Plano: Premium
 **Request:**
 ```bash
 curl -X POST https://reseller-catalog-hub.replit.app/api/app-subscription/sync-now \
-  -H "Authorization: Bearer SEU_TOKEN_FIREBASE" \
+  -H "Authorization: Bearer <SYNTHETIC_BEARER_TOKEN>" \
   -H "Content-Type: application/json"
 ```
 

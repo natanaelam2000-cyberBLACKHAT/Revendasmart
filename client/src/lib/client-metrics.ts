@@ -1,5 +1,6 @@
 import { differenceInDays, format, parseISO } from "@/lib/date-utils";
 import type { Product, Sale } from "@/lib/mock-data";
+import { INACTIVE_CLIENT_THRESHOLD_DAYS } from "@shared/opportunity-rules";
 
 export type ClientClassification = "Novo Cliente" | "Cliente Frequente" | "Cliente VIP" | "Cliente Inativo";
 export type ClientClassificationTone = "blue" | "green" | "purple" | "amber";
@@ -74,7 +75,10 @@ export interface ClientCrmMetrics {
   behaviorSummary: ClientBehaviorItem[];
 }
 
-const INACTIVE_DAYS = 60;
+// PLAN-IMPL-07A §4/§9 — antes uma declaração independente do mesmo valor (60), redeclarada aqui à parte
+// de client-activity.ts's INACTIVE_CLIENT_THRESHOLD_DAYS (mesmo número, sem nunca compartilhar uma
+// única fonte — exatamente a duplicação que a auditoria desta ticket encontrou e consolidou).
+const INACTIVE_DAYS = INACTIVE_CLIENT_THRESHOLD_DAYS;
 const VIP_MIN_TOTAL = 1000;
 const VIP_MIN_PURCHASES = 5;
 const FREQUENT_MIN_PURCHASES = 3;

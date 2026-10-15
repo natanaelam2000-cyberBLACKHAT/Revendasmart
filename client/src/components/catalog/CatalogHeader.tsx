@@ -12,13 +12,11 @@ interface CatalogHeaderProps {
   onShareCatalog: () => void;
 }
 
-// `mode` não muda mais o que este header renderiza (carrinho+Compartilhar aparecem juntos em qualquer
-// contexto, ver comentário abaixo) — mantido na interface só porque CatalogShowcase ainda o repassa.
-export function CatalogHeader({ storeName, storeLogoUrl, searchTerm, onSearchTermChange, cartCount, onOpenCart, onShareCatalog }: CatalogHeaderProps) {
+export function CatalogHeader({ mode, storeName, storeLogoUrl, searchTerm, onSearchTermChange, cartCount, onOpenCart, onShareCatalog }: CatalogHeaderProps) {
   const [logoFailed, setLogoFailed] = useState(false);
 
   return (
-    <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-xl">
+    <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-xl" data-catalog-header-mode={mode}>
       <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-2.5 sm:px-6">
         <div className="flex min-w-0 shrink-0 items-center gap-2">
           {storeLogoUrl && !logoFailed && (
@@ -46,28 +44,30 @@ export function CatalogHeader({ storeName, storeLogoUrl, searchTerm, onSearchTer
           />
         </div>
 
-        {/* CATALOG-GOLDEN-RESTORE-05 §1/§3 — no commit histórico (6de2c85) carrinho+badge e Compartilhar
-            apareciam JUNTOS, em qualquer contexto (nunca um substituindo o outro) — a troca "seller vê só
-            Compartilhar, público vê só Carrinho" foi uma simplificação de um sprint posterior. Restaurado
-            fielmente: os dois botões sempre juntos, do jeito que os screenshots históricos mostram. */}
-        <button
-          type="button"
-          onClick={onShareCatalog}
-          aria-label="Compartilhar catálogo"
-          className="flex min-h-9 shrink-0 items-center gap-1.5 rounded-full bg-primary px-3 text-xs font-bold text-white"
-        >
-          <Share2 className="h-4 w-4" /> <span className="hidden sm:inline">Compartilhar</span>
-        </button>
-        <button
-          type="button"
-          onClick={onOpenCart}
-          data-testid="button-open-cart"
-          aria-label={cartCount > 0 ? `Abrir carrinho, ${cartCount} item${cartCount === 1 ? "" : "s"}` : "Abrir carrinho"}
-          className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary text-white"
-        >
-          <ShoppingCart className="h-4 w-4" />
-          {cartCount > 0 && <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[9px] font-black text-white ring-2 ring-white">{cartCount}</span>}
-        </button>
+        {/* CATALOG-GOLDEN-RESTORE-05 §1/§3 — no commit histórico (6de2c85) Compartilhar e Carrinho
+            apareciam JUNTOS, em qualquer contexto (`mode`); restaurado fielmente, sem a exclusividade
+            "seller vê só um, público vê só o outro" que um sprint posterior tinha introduzido. `mode`
+            permanece na prop (identidade visual/futuro uso), só não decide mais quais botões aparecem. */}
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={onShareCatalog}
+            aria-label="Compartilhar catálogo"
+            className="flex min-h-9 shrink-0 items-center gap-1.5 rounded-full bg-primary px-3 text-xs font-bold text-white"
+          >
+            <Share2 className="h-4 w-4" /> <span className="hidden sm:inline">Compartilhar</span>
+          </button>
+          <button
+            type="button"
+            onClick={onOpenCart}
+            data-testid="button-open-cart"
+            aria-label={cartCount > 0 ? `Abrir carrinho, ${cartCount} item${cartCount === 1 ? "" : "s"}` : "Abrir carrinho"}
+            className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary text-white"
+          >
+            <ShoppingCart className="h-4 w-4" />
+            {cartCount > 0 && <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[9px] font-black text-white ring-2 ring-white">{cartCount}</span>}
+          </button>
+        </div>
       </div>
     </header>
   );

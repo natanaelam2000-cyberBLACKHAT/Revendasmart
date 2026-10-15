@@ -1,0 +1,73 @@
+import { expect, test } from "@playwright/test";
+import { initializeFirebaseAdmin } from "../../server/firebase-admin-init";
+
+test("Opportunity outcomes: Premium, persistence, Free and 375px", async ({ page }) => {
+  test.setTimeout(150_000);
+  expect(process.env.FIRESTORE_EMULATOR_HOST).toBe("127.0.0.1:8080");
+  await page.setViewportSize({ width: 375, height: 812 });
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.addStyleTag({ content: "vite-error-overlay { display:none !important; }" }).catch(() => {});
+  await page.addInitScript(() => {
+    document.addEventListener("DOMContentLoaded", () => {
+      const style = document.createElement("style"); style.textContent = "vite-error-overlay { display:none !important; }"; document.head.append(style);
+    });
+  });
+  process.env.FIREBASE_PROJECT_ID = "demo-revendasmart";
+  const admin = initializeFirebaseAdmin();
+  const email = "outcomes-" + Date.now() + "@example.test";
+  const { uid } = await admin.auth().createUser({ email, password: "LocalTestPassword!123" });
+  const db = admin.firestore();
+  const owner = db.collection("users").doc(uid);
+  await db.collection("user_settings").doc(uid).set({ userId: uid, storeName: "Loja Outcomes QA", onboarding_completed: true, businessType: "products", businessTypes: ["products"] });
+  await owner.collection("planData").doc("main").set({ currentPlan:"premium",premiumActive:true,premiumExpiresAt:null,premiumSource:"manual",premiumStartedAt:new Date().toISOString() });
+  for (const [id,name] of [["one","Cliente Um"],["two","Cliente Dois"],["three","Cliente Três"]]) {
+    await owner.collection("clients").doc(id).set({ id,name,phone:"",lastPurchaseAt:new Date(Date.now()-100*86400000).toISOString() });
+  }
+  await owner.collection("sales").doc("qa-sale").set({ id: "qa-sale", date: new Date().toISOString(), totalPrice: 125, clientId: "one" });
+  await page.goto("/login");
+  await page.getByRole("textbox", { name: "E-mail", exact: true }).fill(email);
+  await page.locator('input[type="password"]').fill("LocalTestPassword!123");
+  await page.getByRole("button", { name: "Entrar agora", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Loja Outcomes QA", exact: true })).toBeVisible();
+  await page.goto("/opportunities");
+  const mark=page.locator('[data-testid^="button-opportunity-mark-acted-"]');
+  await expect(mark).toHaveCount(3);
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await mark.first().click(); await expect(mark).toHaveCount(2);
+  await page.getByTestId("tab-opportunities-history").click();
+  await expect(page.getByText("Feito — aguardando resultado",{exact:true})).toBeVisible();
+  await page.getByRole("checkbox").check();
+  await page.getByLabel("Identificador do registro").fill("qa-sale");
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({path:".tmp/outcomes-awaiting-mobile.png",fullPage:true});
+  await page.getByRole("button",{name:"Gerou resultado",exact:true}).click();
+  await page.getByRole("button",{name:"Abrir resultado associado"}).click();
+  await expect(page.getByRole("region",{name:"Resultado associado"})).toContainText("125,00");
+  await page.screenshot({path:".tmp/outcomes-linked-mobile.png",fullPage:true});
+  await page.getByRole("button",{name:"Fechar resultado"}).click();
+  await expect(page.getByText("Gerou resultado",{exact:true})).toBeVisible();
+  await page.reload();
+  await page.getByTestId("tab-opportunities-history").click();
+  await expect(page.getByText("Gerou resultado",{exact:true})).toBeVisible();
+  await page.getByTestId("tab-opportunities-active").click();
+  await mark.first().click(); await expect(mark).toHaveCount(1);
+  await page.locator('[data-testid^="button-opportunity-dismiss-"]').click(); await expect(mark).toHaveCount(0);
+  await page.getByTestId("tab-opportunities-history").click();
+  await page.getByRole("button",{name:"Não gerou resultado",exact:true}).click();
+  await expect(page.getByText("Dispensada",{exact:true})).toBeVisible();
+  await expect(page.getByText("50%",{exact:true})).toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({path:".tmp/outcomes-mobile.png",fullPage:true});
+  await page.setViewportSize({width:1280,height:900});
+  await expect(page.getByText("50%",{exact:true})).toBeVisible();
+  await page.screenshot({path:".tmp/outcomes-desktop.png",fullPage:true});
+  await owner.collection("planData").doc("main").set({currentPlan:"free",premiumActive:false,trialStatus:"expired",trialEndsAt:"2020-01-01T00:00:00.000Z",trialStartedAt:"2019-12-01T00:00:00.000Z"});
+  const premiumRequests:string[]=[];
+  page.on("request",request=>{if(request.url().includes("/api/opportunities")) premiumRequests.push(request.url());});
+  await page.reload();
+  await expect(page.getByTestId("button-opportunities-upgrade")).toBeVisible({timeout:30000});
+  expect(premiumRequests).toEqual([]);
+  await page.screenshot({path:".tmp/outcomes-free.png",fullPage:true});
+  expect(errors.filter(error => !/config-fetch-failed|API key not valid|analytics/i.test(error))).toEqual([]);
+});
