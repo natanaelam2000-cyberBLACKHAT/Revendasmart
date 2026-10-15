@@ -5242,8 +5242,9 @@ if (hasShipSnapshotWorkflows) {
   const securityFinalWorkflow = fs.existsSync(".github/workflows/security-final.yml")
     ? fs.readFileSync(".github/workflows/security-final.yml", "utf8")
     : null;
-  assert.match(offlineWorkflow, /branches:\s*\n\s*- ci\/ship-04-offline-rc/);
-  assert.match(qualityWorkflow, /branches:\s*\n\s*- ci\/ship-04-offline-rc/);
+  const shipBranchTrigger = /^on:\r?\n  push:\r?\n    branches:\s*\[\s*ci\/ship-04-offline-rc\s*\]\s*$/m;
+  assert.match(offlineWorkflow, shipBranchTrigger);
+  assert.match(qualityWorkflow, shipBranchTrigger);
   assert.match(offlineWorkflow, /permissions:\s*\n\s+contents:\s*read/);
   assert.match(qualityWorkflow, /permissions:\s*\n\s+contents:\s*read/);
   assert.match(offlineWorkflow, /persist-credentials:\s*false/);
