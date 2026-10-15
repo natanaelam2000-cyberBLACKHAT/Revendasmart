@@ -388,6 +388,12 @@ export function resolveMarketingProEntitlement(planData: PlanData | null, intern
   return { allowed: canAccessAdsPro(plan, false, internalGrant), plan };
 }
 
+/** RELEASE V1 §4.2 — efetivo no middleware: somente admin autorizado ou concessão play_review. */
+export function isMarketingProV1Allowed(_commercialPlan: PlanType, isAdmin: boolean, internalGrant: string | null): boolean {
+  void _commercialPlan;
+  return isAdmin || internalGrant === "play_review";
+}
+
 /** Exportado (PRO-10B) para o Perfil Criativo (`server/marketing-pro-creative-profile.ts`) reaproveitar
  * a MESMA checagem — nunca uma segunda implementação divergente de "o que é Premium para Anúncios Pro".
  *
@@ -414,11 +420,7 @@ export async function requireProAdsEntitlement(req: Request, res: Response, next
     const planData = snapshot.exists ? (snapshot.data() as PlanData) : null;
     const internalGrant = grantSnapshot.data()?.benefitGrant === "play_review" ? "play_review" : null;
     const entitlement = resolveMarketingProEntitlement(planData, internalGrant);
-    if (isAdmin) {
-      next();
-      return;
-    }
-    if (internalGrant === "play_review") {
+    if (isMarketingProV1Allowed(entitlement.plan, isAdmin, internalGrant)) {
       next();
       return;
     }

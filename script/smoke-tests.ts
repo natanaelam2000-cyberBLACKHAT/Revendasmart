@@ -2705,6 +2705,7 @@ assert.match(privateRouter, /PlanProvider/);
     checkMarketingProNewGenerationRateLimit,
     resetMarketingProRateLimitStateForTests,
     resolveMarketingProEntitlement,
+    isMarketingProV1Allowed,
     runProviderWithTimeout,
     MARKETING_PRO_DEFAULT_MAX_NEW_GENERATIONS_PER_MINUTE,
     registerMarketingProRoutes,
@@ -2740,7 +2741,7 @@ assert.match(privateRouter, /PlanProvider/);
   // Sem requireOwnership redundante: não há :userId na URL para comparar.
   assert.doesNotMatch(marketingProSource, /requireOwnership\(/, "as rotas do PRO-06A não usam requireOwnership — o escopo já é o do token");
 
-  // 4) Entitlement — decisão pura, testável sem Firestore.
+  // 4) Contrato comercial futuro — decisão pura, preservada e testável sem Firestore.
   assert.equal(resolveMarketingProEntitlement(null).allowed, false, "sem planData é Free, sem acesso");
   assert.equal(resolveMarketingProEntitlement({ currentPlan: "pro", pricingVersion: "v2", subscriptionStatus: "authorized" } as any).allowed, true, "Pro ativo tem acesso");
   assert.equal(resolveMarketingProEntitlement({ currentPlan: "premium", pricingVersion: "v2", subscriptionStatus: "authorized" } as any).allowed, true, "Premium ativo tem acesso");
@@ -2750,13 +2751,22 @@ assert.match(privateRouter, /PlanProvider/);
   assert.equal(canAccessAdsPro(PLANS.PREMIUM), true, "Premium é permitido");
   assert.equal(canAccessAdsPro(PLANS.FREE, true), true, "Admin é permitido");
   assert.equal(canAccessAdsPro(PLANS.FREE, false, "play_review"), true, "play_review é permitido");
+  // 4b) Rollout efetivo V1 — não confundir entitlement comercial futuro com autorização atual.
+  assert.equal(isMarketingProV1Allowed(PLANS.FREE, false, null), false, "Free sem privilégio é negado");
+  assert.equal(isMarketingProV1Allowed(PLANS.PRO, false, null), false, "Pro comercial sem privilégio é negado");
+  assert.equal(isMarketingProV1Allowed(PLANS.PREMIUM, false, null), false, "Premium comercial sem privilégio é negado");
+  assert.equal(isMarketingProV1Allowed(PLANS.FREE, true, null), true, "admin autorizado é permitido");
+  assert.equal(isMarketingProV1Allowed(PLANS.FREE, false, "play_review"), true, "play_review válido é permitido");
+  assert.equal(isMarketingProV1Allowed(PLANS.PREMIUM, false, "revoked"), false, "grant revogado é negado");
+  assert.equal(isMarketingProV1Allowed(PLANS.PRO, false, "unknown"), false, "grant ausente/desconhecido é negado");
   assert.match(marketingProSource, /resolveCommercialPlan\(planData\)/);
   assert.match(marketingProSource, /canAccessAdsPro\(entitlement\.plan, isAdmin, internalGrant\)/);
+  assert.match(marketingProSource, /isMarketingProV1Allowed\(entitlement\.plan, isAdmin, internalGrant\)/);
   assert.match(marketingProSource, /collection\("planData"\)\.doc\("main"\)/);
   assert.match(marketingProSource, /collection\("internalGrants"\)\.doc\("main"\)/);
   assert.match(marketingProSource, /benefitGrant === "play_review"/);
   assert.match(marketingProSource, /PRO_ADS_REQUIRED/);
-  assert.doesNotMatch(marketingProSource, /admin_only_in_v1/);
+  assert.match(marketingProSource, /admin_only_in_v1/);
   assert.doesNotMatch(marketingProSource, /if \(plan(Data)? === ["']premium["']\)/, "sem atalho reimplementando a regra de plano");
 
   // 5) Input: só style/format/productId — nada de MarketingProInput inteiro nem texto comercial livre.
@@ -6823,7 +6833,7 @@ assert.match(marketingPage, /\/\/ Escolher outro produto é começar outro anún
   // reabre o risco do AUD-002 (session identity) que este teste protege.
   const ocorrencias = marketingPage.match(/setWorkspaceView\("editor"\)/g) || [];
   assert.equal(ocorrencias.length, 4, "deep link, startNewAd, applyEntryToEditor, e o fallback de admin da aba Pro");
-  assert.match(marketingPage, /if \(!canUseAdsPro && workspaceView === "pro"\) setWorkspaceView\("editor"\);/, "o fallback de entitlement precisa continuar sendo só uma troca de aba, nunca uma entrada de sessão de edição");
+  assert.match(marketingPage, /if \(!isProAdsAdmin && workspaceView === "pro"\) setWorkspaceView\("editor"\);/, "o fallback V1 precisa continuar sendo só uma troca de aba, nunca uma entrada de sessão de edição");
 }
 // O deep link também limpa a sessão anterior.
 assert.match(marketingPage, /setEditingEntryId\(null\);\s*\n\s*setHistoryAssetOverride\(null\);\s*\n\s*setPriceOverride\(""\);\s*\n\s*setMissingProductWarning\(""\);\s*\n\s*setWorkspaceView\("editor"\);/);
@@ -7089,11 +7099,11 @@ assert.match(marketingPage, /useState<MarketingWorkspaceView>\("editor"\)/);
 assert.doesNotMatch(marketingPage, /workspaceView === "hub"/);
 assert.match(marketingPage, /workspaceView === "editor" &&/);
 // A aba/painel segue a mesma decisão canônica de entitlement usada pelo backend.
-assert.match(marketingPage, /workspaceView === "pro" && canUseAdsPro && \(/);
+assert.match(marketingPage, /workspaceView === "pro" && isProAdsAdmin && \(/);
 assert.match(marketingPage, /<MarketingProPanel[\s\S]*products=\{products\}/, "o painel Pro recebe os produtos reais sem abrir uma segunda consulta");
 assert.match(marketingPage, /workspaceView === "history" &&/);
 // Trocar de aba só troca a aba: o botão não dispara nenhum reset da configuração em andamento.
-assert.match(marketingPage, /<MarketingTabs activeView=\{workspaceView\} onChange=\{setWorkspaceView\} showProTab=\{canUseAdsPro\} \/>/);
+assert.match(marketingPage, /<MarketingTabs activeView=\{workspaceView\} onChange=\{setWorkspaceView\} showProTab=\{isProAdsAdmin\} \/>/);
 assert.doesNotMatch(marketingTabs, /startNewAd|setSelectedProductId|setTemplate|setPriceOverride/);
 // A cor ativa das abas vem do tema, nunca de um valor fixo.
 assert.match(marketingTabs, /text-primary/);

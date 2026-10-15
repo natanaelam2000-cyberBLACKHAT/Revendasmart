@@ -183,10 +183,9 @@ export default function MarketingPage() {
   // resto (Free e Premium comum), e um usuário que já estivesse na aba "pro" antes de perder o acesso
   // (ou um estado inicial otimista qualquer) é levado de volta para o editor, nunca deixado lá.
   const { isAdmin: isProAdsAdmin } = useAdminAccess();
-  const canUseAdsPro = isProAdsAdmin;
   useEffect(() => {
-    if (!canUseAdsPro && workspaceView === "pro") setWorkspaceView("editor");
-  }, [canUseAdsPro, workspaceView]);
+    if (!isProAdsAdmin && workspaceView === "pro") setWorkspaceView("editor");
+  }, [isProAdsAdmin, workspaceView]);
   const [showWhatsappSetupNotice, setShowWhatsappSetupNotice] = useState(false);
   const generatedKeys = useRef(new Set<string>());
   const launchSelectionAppliedRef = useRef(false);
@@ -865,7 +864,7 @@ export default function MarketingPage() {
             nunca rolou — mas, sendo um "scroll container", impedia qualquer `position: sticky` dentro dele
             (a prévia fixa do estúdio Pro). `clip` continua cortando o que vazar de lado e não cria scroll. */}
         <div className={`mx-auto grid w-full ${workspaceView === "pro" ? "max-w-5xl" : "max-w-2xl"} grid-cols-[minmax(0,1fr)] gap-3 overflow-x-clip px-4 pb-[max(8rem,calc(8rem+env(safe-area-inset-bottom)))] pt-3 sm:px-6 sm:pt-5`}>
-          <MarketingTabs activeView={workspaceView} onChange={setWorkspaceView} showProTab={canUseAdsPro} />
+          <MarketingTabs activeView={workspaceView} onChange={setWorkspaceView} showProTab={isProAdsAdmin} />
 
           {workspaceView === "editor" && (
             <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3">
@@ -1001,7 +1000,7 @@ export default function MarketingPage() {
             </div>
           )}
 
-          {workspaceView === "pro" && canUseAdsPro && (
+          {workspaceView === "pro" && isProAdsAdmin && (
             <MarketingProPanel
               products={products}
               storeName={storeDisplayName}

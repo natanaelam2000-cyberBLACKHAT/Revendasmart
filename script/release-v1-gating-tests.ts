@@ -35,7 +35,8 @@ async function run(): Promise<void> {
   );
   // Backend: admin/dev bypassa o plano; sem admin, NENHUM plano libera (comentado explicitamente no código).
   assert.match(marketingProSource, /const isAdmin = await isAdminUid\(uid\);/, "C: o backend reaproveita a MESMA checagem de admin");
-  assert.match(marketingProSource, /if \(isAdmin\) \{\s*\n\s*next\(\);\s*\n\s*return;\s*\n\s*\}/, "C: admin/dev tem acesso independente de plano comercial");
+  assert.match(marketingProSource, /export function isMarketingProV1Allowed\(\_commercialPlan: PlanType, isAdmin: boolean, internalGrant: string \| null\)/, "C: a decisão V1 é uma função pura e explícita");
+  assert.match(marketingProSource, /if \(isMarketingProV1Allowed\(entitlement\.plan, isAdmin, internalGrant\)\)/, "C: o middleware aplica a decisão V1 independente do plano comercial");
   assert.match(marketingProSource, /admin_only_in_v1/, "B: a razão de negação explicita que NENHUM plano libera Anúncios Pro nesta release");
 
   // ===== D — deep link comum não burla =====
