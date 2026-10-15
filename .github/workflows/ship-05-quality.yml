@@ -89,6 +89,8 @@ jobs:
       - name: Verify lockfile unchanged
         run: git diff --exit-code -- package.json package-lock.json
       - name: Build
+        env:
+          RS_BUNDLE_MODULE_EVIDENCE: '1'
         run: npm run build
       - name: Create bundle evidence
         run: node scripts/performance/create-bundle-evidence.mjs
@@ -99,6 +101,7 @@ jobs:
           path: |
             dist/public/.vite/manifest.json
             dist/public/.vite/bundle-diagnostics.json
+            dist/public/.vite/rollup-module-diagnostics.json
           retention-days: 7
           include-hidden-files: true
           if-no-files-found: error

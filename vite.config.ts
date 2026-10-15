@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 import { metaImagesPlugin } from "./vite-plugin-meta-images";
+import { rollupModuleDiagnostics } from "./scripts/performance/rollup-module-diagnostics.mjs";
 
 const appVersion = String(JSON.parse(readFileSync(path.resolve(import.meta.dirname, "package.json"), "utf8")).version || "").trim();
 
@@ -14,6 +15,7 @@ export default defineConfig(({ mode }) => ({
     runtimeErrorOverlay(),
     tailwindcss(),
     metaImagesPlugin(),
+    ...(process.env.RS_BUNDLE_MODULE_EVIDENCE === "1" ? [rollupModuleDiagnostics({ projectRoot: import.meta.dirname })] : []),
   ],
 
   define: {
