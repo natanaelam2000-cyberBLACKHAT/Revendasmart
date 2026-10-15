@@ -2760,7 +2760,11 @@ assert.match(privateRouter, /PlanProvider/);
   assert.equal(isMarketingProV1Allowed(PLANS.PREMIUM, false, "revoked"), false, "grant revogado é negado");
   assert.equal(isMarketingProV1Allowed(PLANS.PRO, false, "unknown"), false, "grant ausente/desconhecido é negado");
   assert.match(marketingProSource, /resolveCommercialPlan\(planData\)/);
-  assert.match(marketingProSource, /canAccessAdsPro\(entitlement\.plan, isAdmin, internalGrant\)/);
+  assert.doesNotMatch(
+    marketingProSource,
+    /canAccessAdsPro\(entitlement\.plan,\s*isAdmin,\s*internalGrant\)/,
+    "o entitlement comercial futuro não pode ser autorização direta do middleware V1",
+  );
   assert.match(marketingProSource, /isMarketingProV1Allowed\(entitlement\.plan, isAdmin, internalGrant\)/);
   assert.match(marketingProSource, /collection\("planData"\)\.doc\("main"\)/);
   assert.match(marketingProSource, /collection\("internalGrants"\)\.doc\("main"\)/);
