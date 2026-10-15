@@ -5215,7 +5215,9 @@ const gitleaksConfig = read(".gitleaks.toml");
 const gitleaksRunner = read("scripts/security/run-gitleaks.mjs");
 const dependabotConfig = read(".github/dependabot.yml");
 const knipConfig = read("knip.json");
-const qualityWorkflow = read(".github/workflows/quality-gates.yml");
+const hasShipSnapshotWorkflows = fs.existsSync(".github/workflows/ship-04-offline.yml") && fs.existsSync(".github/workflows/ship-05-quality.yml");
+const qualityWorkflowPath = hasShipSnapshotWorkflows ? ".github/workflows/ship-05-quality.yml" : ".github/workflows/quality-gates.yml";
+const qualityWorkflow = read(qualityWorkflowPath);
 const androidSkill = read(".codex/skills/revendasmart-android-release/SKILL.md");
 const skillIndex = JSON.parse(read(".codex/skills/index.json"));
 
@@ -5235,12 +5237,36 @@ assert.match(gitleaksRunner, /failed \|\|= result\.status !== 0/);
 assert.match(dependabotConfig, /open-pull-requests-limit: 5/);
 assert.doesNotMatch(dependabotConfig, /automerge/i);
 assert.match(knipConfig, /client\/src/);
-const securityFinalWorkflow = fs.readFileSync(".github/workflows/security-final.yml", "utf8");
-assert.match(securityFinalWorkflow, /npm run security:final/);
-assert.match(securityFinalWorkflow, /persist-credentials: false/);
-assert.doesNotMatch(securityFinalWorkflow, /pull_request_target/);
-assert.match(qualityWorkflow, /npm run quality:knip/);
-assert.doesNotMatch(qualityWorkflow, /deploy|vercel|cloud run|AAB|keystore/i);
+if (hasShipSnapshotWorkflows) {
+  const offlineWorkflow = read(".github/workflows/ship-04-offline.yml");
+  const securityFinalWorkflow = fs.existsSync(".github/workflows/security-final.yml")
+    ? fs.readFileSync(".github/workflows/security-final.yml", "utf8")
+    : null;
+  assert.match(offlineWorkflow, /branches:\s*\n\s*- ci\/ship-04-offline-rc/);
+  assert.match(qualityWorkflow, /branches:\s*\n\s*- ci\/ship-04-offline-rc/);
+  assert.match(offlineWorkflow, /permissions:\s*\n\s+contents:\s*read/);
+  assert.match(qualityWorkflow, /permissions:\s*\n\s+contents:\s*read/);
+  assert.match(offlineWorkflow, /persist-credentials:\s*false/);
+  assert.match(qualityWorkflow, /persist-credentials:\s*false/);
+  assert.doesNotMatch(`${offlineWorkflow}\n${qualityWorkflow}`, /pull_request_target|deploy|vercel|cloud run|AAB|keystore|production/i);
+  assert.match(offlineWorkflow, /node script\/pending-sale-response-tests\.mjs/);
+  assert.match(offlineWorkflow, /tsx script\/security-queue-corruption-tests\.ts/);
+  assert.match(offlineWorkflow, /tsx script\/hardening-offline-browser-tests\.ts/);
+  assert.match(qualityWorkflow, /npm run skills:validate/);
+  assert.match(qualityWorkflow, /npm run check/);
+  assert.match(qualityWorkflow, /npm run lint/);
+  assert.match(qualityWorkflow, /npm run test/);
+  assert.match(qualityWorkflow, /npm run build/);
+  assert.match(qualityWorkflow, /npm run performance:bundle-check/);
+  assert.equal(securityFinalWorkflow, null, "SHIP snapshot must not require historical security-final.yml");
+} else {
+  const securityFinalWorkflow = fs.readFileSync(".github/workflows/security-final.yml", "utf8");
+  assert.match(securityFinalWorkflow, /npm run security:final/);
+  assert.match(securityFinalWorkflow, /persist-credentials: false/);
+  assert.doesNotMatch(securityFinalWorkflow, /pull_request_target/);
+  assert.match(qualityWorkflow, /npm run quality:knip/);
+  assert.doesNotMatch(qualityWorkflow, /deploy|vercel|cloud run|AAB|keystore/i);
+}
 assert.match(androidSkill, /Não fazer commit/);
 assert.match(androidSkill, /android:sync/);
 assert.match(androidSkill, /SHA-256/);
