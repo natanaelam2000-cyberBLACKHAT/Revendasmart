@@ -16,7 +16,6 @@ import { MarketingSelectedProduct } from "@/components/marketing/MarketingSelect
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { MarketingProPanel } from "@/components/marketing/MarketingProPanel";
 import { useAdminAccess } from "@/hooks/useAdminAccess";
-import { canAccessAdsPro } from "@shared/monetization";
 import { MarketingTabs } from "@/components/marketing/MarketingTabs";
 import { MarketingProductSelector } from "@/components/marketing/MarketingProductSelector";
 import { MarketingTemplateSelector } from "@/components/marketing/MarketingTemplateSelector";
@@ -184,7 +183,7 @@ export default function MarketingPage() {
   // resto (Free e Premium comum), e um usuário que já estivesse na aba "pro" antes de perder o acesso
   // (ou um estado inicial otimista qualquer) é levado de volta para o editor, nunca deixado lá.
   const { isAdmin: isProAdsAdmin } = useAdminAccess();
-  const canUseAdsPro = canAccessAdsPro(activePlan, isProAdsAdmin);
+  const canUseAdsPro = isProAdsAdmin;
   useEffect(() => {
     if (!canUseAdsPro && workspaceView === "pro") setWorkspaceView("editor");
   }, [canUseAdsPro, workspaceView]);

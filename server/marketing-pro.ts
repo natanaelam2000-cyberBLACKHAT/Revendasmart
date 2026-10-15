@@ -414,11 +414,15 @@ export async function requireProAdsEntitlement(req: Request, res: Response, next
     const planData = snapshot.exists ? (snapshot.data() as PlanData) : null;
     const internalGrant = grantSnapshot.data()?.benefitGrant === "play_review" ? "play_review" : null;
     const entitlement = resolveMarketingProEntitlement(planData, internalGrant);
-    if (canAccessAdsPro(entitlement.plan, isAdmin, internalGrant)) {
+    if (isAdmin) {
       next();
       return;
     }
-    logWarn("marketing_pro.entitlement_denied", { requestId: req.requestId, reason: "plan_or_admin_required", plan: entitlement.plan });
+    if (internalGrant === "play_review") {
+      next();
+      return;
+    }
+    logWarn("marketing_pro.entitlement_denied", { requestId: req.requestId, reason: "admin_only_in_v1", plan: entitlement.plan });
     sendMarketingProError(res, 403, "PRO_ADS_REQUIRED");
   } catch (error) {
     logError("marketing_pro.entitlement_check_failed", error, { requestId: req.requestId });
