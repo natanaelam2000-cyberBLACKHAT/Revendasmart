@@ -90,5 +90,17 @@ jobs:
         run: git diff --exit-code -- package.json package-lock.json
       - name: Build
         run: npm run build
+      - name: Create bundle evidence
+        run: node scripts/performance/create-bundle-evidence.mjs
+      - name: Upload bundle evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ship05-bundle-evidence-${{ github.sha }}
+          path: |
+            dist/public/.vite/manifest.json
+            dist/public/.vite/bundle-diagnostics.json
+          retention-days: 7
+          include-hidden-files: true
+          if-no-files-found: error
       - name: Check bundle budgets
         run: npm run performance:bundle-check
