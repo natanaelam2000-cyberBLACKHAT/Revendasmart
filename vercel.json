@@ -1,18 +1,51 @@
 {
-  "buildCommand": "npm run build",
+  "git": {
+    "deploymentEnabled": {
+      "codex/rs-web-continuity-20261024": false
+    }
+  },
+  "buildCommand": "node script/rs-infra-recovery-01-routing-tests.mjs . && node script/rs-infra-recovery-01-target-gate.mjs --live && npm run build",
   "outputDirectory": "dist/public",
-  "rewrites": [
+  "headers": [
     {
-      "source": "/privacy-policy",
-      "destination": "https://revendasmart-backend-cc2743rkmq-uc.a.run.app/privacy-policy"
-    },
-    {
-      "source": "/terms-of-service",
-      "destination": "https://revendasmart-backend-cc2743rkmq-uc.a.run.app/terms-of-service"
+      "source": "/api/:path*",
+      "has": [
+        { "type": "header", "key": "origin", "value": "^https://localhost$" }
+      ],
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "https://localhost" },
+        { "key": "Access-Control-Allow-Credentials", "value": "true" },
+        { "key": "Access-Control-Allow-Headers", "value": "Authorization, Content-Type, X-Request-Id" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET, POST, PUT, PATCH, DELETE, OPTIONS" },
+        { "key": "Vary", "value": "Origin" }
+      ]
     },
     {
       "source": "/api/:path*",
-      "destination": "https://revendasmart-backend-cc2743rkmq-uc.a.run.app/api/:path*"
+      "has": [
+        { "type": "header", "key": "authorization" }
+      ],
+      "headers": [
+        { "key": "Cache-Control", "value": "private, no-store" }
+      ]
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/privacy-policy",
+      "destination": "https://revendasmart-backend-164193806378.us-central1.run.app/privacy-policy"
+    },
+    {
+      "source": "/terms-of-service",
+      "destination": "https://revendasmart-backend-164193806378.us-central1.run.app/terms-of-service"
+    },
+    {
+      "source": "/api/health",
+      "destination": "https://revendasmart-backend-164193806378.us-central1.run.app/health"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "https://revendasmart-backend-164193806378.us-central1.run.app/api/:path*"
     },
     {
       "source": "/u/:storeSlug",
@@ -23,7 +56,7 @@
           "value": ".*(facebookexternalhit|Facebot|WhatsApp|Twitterbot|LinkedInBot|Slackbot|TelegramBot).*"
         }
       ],
-      "destination": "https://revendasmart-backend-cc2743rkmq-uc.a.run.app/u/:storeSlug"
+      "destination": "https://revendasmart-backend-164193806378.us-central1.run.app/u/:storeSlug"
     },
     {
       "source": "/u/:storeSlug",

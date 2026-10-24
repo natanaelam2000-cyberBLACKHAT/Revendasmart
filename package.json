@@ -5,6 +5,8 @@
   "license": "MIT",
   "scripts": {
     "postinstall": "node scripts/android/apply-native-purchases-hardening.mjs",
+    "android:verify-native-purchases-hardening": "node scripts/android/apply-native-purchases-hardening.mjs verify",
+    "test:android-native-purchases-hardening": "node scripts/android/native-purchases-hardening-tests.mjs",
     "test:rc-p0-pricing:run": "tsx script/rc-p0-pricing-tests.ts",
     "test:rc-p0-pricing": "npx --yes firebase-tools@15.24.0 emulators:exec --project demo-revendasmart --only auth,firestore \"npm run test:rc-p0-pricing:run\"",
     "dev:client": "vite dev --port 5000",

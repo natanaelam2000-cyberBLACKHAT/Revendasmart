@@ -1,12 +1,17 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, Link } from "wouter";
 import { sendPasswordResetEmail, signInWithEmailAndPassword } from "firebase/auth";
-import { getFirebaseAuth, getFirebaseError, logTelemetryEvent, setTelemetryUserId, trackAnalyticsEvent, setFirebaseAnalyticsUserId } from "@/lib/firebase";
+import { getFirebaseAuth, logTelemetryEvent, setTelemetryUserId, trackAnalyticsEvent, setFirebaseAnalyticsUserId } from "@/lib/firebase";
 import { getApiUrl } from "@/lib/api-config";
+import { AccountBootstrapError, getAccountFailureFeedback, requestAccountSettings, runBoundedAccountOperation, type AccountBootstrapUser } from "@/lib/account-bootstrap";
+import { createAuthSdkGate, getPasswordResetFeedback, getSignInFeedback, PASSWORD_RESET_ACCEPTED_MESSAGE } from "@/lib/auth-feedback";
 import "@/styles/login.css";
 import { ArrowRight, CheckCircle2, Eye, EyeOff, LockKeyhole, Mail } from "lucide-react";
 
 const REMEMBER_EMAIL_KEY = "rs:login:remembered-email";
+// Survives this screen's unmount/remount while an uncancellable SDK call is pending.
+const authSdkGate = createAuthSdkGate();
+interface LoginOperation { generation: number; controller: AbortController; }
 
 function getRememberedEmail() {
   if (typeof window === "undefined") return "";
@@ -41,6 +46,10 @@ export default function Login() {
   const [resetLoading, setResetLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const loginInFlightRef = useRef(false);
+  const mountedRef = useRef(true);
+  const generationRef = useRef(0);
+  const operationRef = useRef<LoginOperation | null>(null);
+  const [sdkPending, setSdkPending] = useState(() => authSdkGate.isPending());
   // ONBOARDING-ROUTING-SAFETY-01 — distingue "não sabemos ainda" de "onboarding incompleto": só existe
   // porque uma falha real (rede/servidor) na busca de settings NUNCA pode virar um redirecionamento para
   // /onboarding (isso trataria um usuário existente como conta nova). O servidor já devolve 200 com
@@ -48,53 +57,83 @@ export default function Login() {
   // false aqui é sempre uma falha real (401/403/500), nunca "conta nova"; só este flag habilita o CTA
   // "Tentar novamente", que só refaz a MESMA busca (o login com Firebase Auth já foi concluído).
   const [settingsError, setSettingsError] = useState(false);
+  const [settingsMessage, setSettingsMessage] = useState("");
   const [retryingSettings, setRetryingSettings] = useState(false);
 
-  // Busca o status de onboarding do usuário JÁ autenticado e decide o destino — usada tanto no fluxo de
-  // login quanto no retry manual (nunca re-autentica: getFirebaseAuth()?.currentUser já é o suficiente).
-  const resolveOnboardingRoute = useCallback(async () => {
-    const auth = getFirebaseAuth();
-    const user = auth?.currentUser;
-    if (!user) {
-      setSettingsError(true);
-      return;
-    }
+  useEffect(() => {
+    mountedRef.current = true;
+    setSdkPending(authSdkGate.isPending());
+    const unsubscribe = authSdkGate.subscribe((pending) => {
+      if (mountedRef.current) setSdkPending(pending);
+    });
+    return () => {
+      mountedRef.current = false;
+      generationRef.current += 1;
+      operationRef.current?.controller.abort();
+      operationRef.current = null;
+      unsubscribe();
+    };
+  }, []);
+
+  const isActive = useCallback((operation: LoginOperation) =>
+    mountedRef.current && operationRef.current === operation
+      && generationRef.current === operation.generation && !operation.controller.signal.aborted, []);
+
+  const beginOperation = (): LoginOperation | null => {
+    // Synchronous and shared by login, reset and settings retry (React state is not a lock).
+    if (!mountedRef.current || operationRef.current || authSdkGate.isPending()) return null;
+    const operation = { generation: ++generationRef.current, controller: new AbortController() };
+    operationRef.current = operation;
+    setError("");
+    setSuccess("");
+    setSettingsError(false);
+    setSettingsMessage("");
+    return operation;
+  };
+
+  const finishOperation = (operation: LoginOperation) => {
+    if (!isActive(operation)) return;
+    operationRef.current = null;
+    operation.controller.abort();
+    setLoading(false);
+    setResetLoading(false);
+    setRetryingSettings(false);
+  };
+
+  // Retry refetches the same authenticated account; failure or unknown data never means onboarding.
+  const resolveOnboardingRoute = useCallback(async (operation: LoginOperation, user?: AccountBootstrapUser | null) => {
+    const isCurrentUser = () => isActive(operation)
+      && Boolean(user?.uid) && getFirebaseAuth()?.currentUser?.uid === user?.uid;
     try {
-      const token = await user.getIdToken();
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-
-      const settingsUrl = getApiUrl(`/api/user/settings/${user.uid}`);
-      const response = await fetch(settingsUrl, { headers });
-
-      if (response.ok) {
-        const data = await response.json();
-        setSettingsError(false);
-        if (data.settings?.onboarding_completed === true) {
-          setLocation("/");
-        } else {
-          setLocation("/onboarding");
-        }
-        return;
-      }
-      // Não-OK aqui é SEMPRE uma falha real (401/403/500) — o servidor já responde 200 com
-      // onboarding_completed:false para uma conta nova sem settings ainda, então isto nunca significa
-      // "conta nova". Nunca redireciona para /onboarding a partir daqui.
-      console.warn("[login] Settings request returned non-OK status:", response.status);
+      if (!user || !isCurrentUser()) throw new AccountBootstrapError("auth", "token");
+      const settings = await requestAccountSettings(user, {
+        url: getApiUrl(`/api/user/settings/${encodeURIComponent(user.uid)}`),
+        signal: operation.controller.signal,
+        isCurrentUser,
+      });
+      if (!isCurrentUser()) return;
+      // The shared helper accepts only a validated, explicit boolean (including new-account false).
+      if (settings.onboarding_completed === true) setLocation("/");
+      else if (settings.onboarding_completed === false) setLocation("/onboarding");
+      else throw new AccountBootstrapError("invalid-response");
+    } catch (error: unknown) {
+      if (!isActive(operation)) return;
+      const feedback = getAccountFailureFeedback(error);
       setSettingsError(true);
-    } catch (settingsErr) {
-      console.warn("[login] Failed to fetch settings:", settingsErr);
-      setSettingsError(true);
+      setSettingsMessage(feedback.kind === "cancelled"
+        ? "A sessão mudou durante o carregamento. Entre novamente para continuar."
+        : feedback.message);
     }
-  }, [setLocation]);
+  }, [isActive, setLocation]);
 
   const handleRetrySettings = async () => {
-    if (retryingSettings) return;
+    const operation = beginOperation();
+    if (!operation) return;
     setRetryingSettings(true);
     try {
-      await resolveOnboardingRoute();
+      await resolveOnboardingRoute(operation, getFirebaseAuth()?.currentUser);
     } finally {
-      setRetryingSettings(false);
+      finishOperation(operation);
     }
   };
 
@@ -103,26 +142,24 @@ export default function Login() {
     // A disabled button only updates after React renders. Two Enter/click events in the
     // same turn previously started two Firebase sign-ins and two settings requests.
     if (loginInFlightRef.current) return;
+    const operation = beginOperation();
+    if (!operation) return;
     loginInFlightRef.current = true;
-    setError("");
     setLoading(true);
 
     try {
       const trimmedEmail = email.trim();
-      // Get Firebase Auth instance (safe lazy initialization)
       const auth = getFirebaseAuth();
-      
-      // Check for Firebase initialization errors
-      if (!auth) {
-        const firebaseError = getFirebaseError();
-        setError(firebaseError || "Erro ao configurar autenticação. Tente novamente mais tarde.");
-        setLoading(false);
-        return;
-      }
+      if (!auth) throw new AccountBootstrapError("configuration", "auth");
 
       // Authenticate with Firebase Auth (real authentication - NOT mock data)
-      const userCredential = await signInWithEmailAndPassword(auth, trimmedEmail, password);
+      const userCredential = await runBoundedAccountOperation(
+        () => authSdkGate.run(() => signInWithEmailAndPassword(auth, trimmedEmail, password)),
+        { signal: operation.controller.signal, phase: "auth" },
+      );
+      if (!isActive(operation)) return;
       const user = userCredential.user;
+      if (auth.currentUser?.uid !== user.uid) throw new AccountBootstrapError("auth", "auth");
       const uid = user.uid;
       setRememberedEmail(trimmedEmail, rememberEmail);
       
@@ -135,63 +172,42 @@ export default function Login() {
 
       // Decide o destino (onboarding vs app) só depois de autenticado — nunca redireciona para
       // /onboarding a partir de uma falha real na busca de status (ver resolveOnboardingRoute acima).
-      await resolveOnboardingRoute();
-    } catch (err: any) {
-      // Diagnóstico: log detalhado do erro do Firebase
-      console.error("[login] Firebase auth error:", err);
-      
-      // User-friendly error messages
-      if (err.code === "auth/user-not-found" || err.code === "auth/wrong-password") {
-        setError("Email ou senha incorretos");
-      } else if (err.code === "auth/invalid-email") {
-        setError("Email inválido");
-      } else if (err.code === "auth/too-many-requests") {
-        setError("Muitas tentativas. Tente novamente mais tarde.");
-      } else {
-        setError("Erro ao fazer login. Tente novamente.");
-      }
+      await resolveOnboardingRoute(operation, user);
+    } catch (error: unknown) {
+      if (isActive(operation)) setError(getSignInFeedback(error).message);
     } finally {
       loginInFlightRef.current = false;
-      setLoading(false);
+      finishOperation(operation);
     }
   };
 
   const handlePasswordReset = async () => {
-    setError("");
-    setSuccess("");
-
-    if (!email.trim()) {
-      setError("Informe seu e-mail para redefinir a senha");
-      return;
-    }
-
+    const operation = beginOperation();
+    if (!operation) return;
     setResetLoading(true);
     try {
-      const auth = getFirebaseAuth();
-      if (!auth) {
-        setError(getFirebaseError() || "Autenticação indisponível no momento.");
+      if (!email.trim()) {
+        setError("Informe seu e-mail para redefinir a senha.");
         return;
       }
-
-      await sendPasswordResetEmail(auth, email.trim());
-      setSuccess("Enviamos um link para redefinir sua senha.");
-    } catch (err: any) {
-      const code = err?.code;
-      if (code === "auth/invalid-email") {
-        setError("E-mail inválido");
-      } else if (code === "auth/user-not-found") {
-        setSuccess("Enviamos um link para redefinir sua senha.");
-      } else if (code === "auth/network-request-failed") {
-        setError("Falha de rede. Tente novamente.");
-      } else if (code === "auth/unauthorized-continue-uri" || code === "auth/invalid-continue-uri") {
-        setError("Configuração de recuperação de senha ausente.");
-      } else {
-        setError("Não foi possível enviar o link agora. Tente novamente.");
-      }
+      const auth = getFirebaseAuth();
+      if (!auth) throw new AccountBootstrapError("configuration", "reset");
+      await runBoundedAccountOperation(
+        () => authSdkGate.run(() => sendPasswordResetEmail(auth, email.trim())),
+        { signal: operation.controller.signal, phase: "reset" },
+      );
+      if (isActive(operation)) setSuccess(PASSWORD_RESET_ACCEPTED_MESSAGE);
+    } catch (error: unknown) {
+      if (!isActive(operation)) return;
+      const feedback = getPasswordResetFeedback(error);
+      if (feedback.accepted) setSuccess(feedback.message);
+      else setError(feedback.message);
     } finally {
-      setResetLoading(false);
+      finishOperation(operation);
     }
   };
+
+  const busy = loading || resetLoading || retryingSettings || sdkPending;
 
   // Demo mode disabled - login only via Firebase real authentication
   // const handleDemo = () => {
@@ -237,18 +253,24 @@ export default function Login() {
           {settingsError && (
             <div className="rs-login-message-area" aria-live="polite">
               <p className="rs-login-alert rs-login-alert-error" data-testid="text-settings-error">
-                Não foi possível carregar sua conta. Tente novamente.
+                {settingsMessage || "Não foi possível carregar sua conta. Tente novamente."}
               </p>
               <button
                 type="button"
                 onClick={handleRetrySettings}
-                disabled={retryingSettings}
+                disabled={busy}
                 className="rs-login-link-button"
                 data-testid="button-retry-settings"
               >
                 {retryingSettings ? "Tentando novamente..." : "Tentar novamente"}
               </button>
             </div>
+          )}
+
+          {sdkPending && !loading && !resetLoading && (
+            <p className="rs-login-alert" role="status" data-testid="text-auth-pending">
+              A solicitação anterior de autenticação ainda está em andamento. Aguarde sua conclusão antes de tentar novamente.
+            </p>
           )}
 
           <label className="rs-login-field">
@@ -264,7 +286,7 @@ export default function Login() {
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               placeholder="E-mail"
-              disabled={loading}
+              disabled={busy}
               data-testid="input-login-email"
             />
           </label>
@@ -280,7 +302,7 @@ export default function Login() {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               placeholder="Senha"
-              disabled={loading}
+              disabled={busy}
               data-testid="input-login-password"
             />
             <button
@@ -288,7 +310,7 @@ export default function Login() {
               className="rs-login-eye"
               onClick={() => setShowPassword((current) => !current)}
               aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}
-              disabled={loading}
+              disabled={busy}
             >
               {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
             </button>
@@ -299,6 +321,7 @@ export default function Login() {
               <input
                 type="checkbox"
                 checked={rememberEmail}
+                disabled={busy}
                 onChange={(event) => setRememberEmail(event.target.checked)}
               />
               <span aria-hidden="true"><CheckCircle2 /></span>
@@ -307,7 +330,7 @@ export default function Login() {
             <button
               type="button"
               onClick={handlePasswordReset}
-              disabled={loading || resetLoading}
+              disabled={busy}
               className="rs-login-link-button"
               data-testid="button-forgot-password"
             >
@@ -315,7 +338,7 @@ export default function Login() {
             </button>
           </div>
 
-          <button type="submit" disabled={loading} className="rs-login-submit">
+          <button type="submit" disabled={busy} className="rs-login-submit">
             <span>{loading ? "Entrando..." : "Entrar agora"}</span>
             {loading ? <span className="rs-login-spinner" aria-hidden="true" /> : <ArrowRight aria-hidden="true" />}
           </button>

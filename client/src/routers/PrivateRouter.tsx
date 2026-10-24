@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Route, Switch, useLocation } from "wouter";
 import { onAuthStateChanged } from "firebase/auth";
 import { UserFeedbackHost } from "@/components/UserFeedbackHost";
@@ -10,6 +10,7 @@ import { UserSettingsProvider } from "@/providers/UserSettingsProvider";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
 import { resolveBusinessRouteGate } from "@/lib/business-route-gate";
 import { PageSkeleton } from "@/components/PageSkeleton";
+import { ACCOUNT_BOOTSTRAP_TIMEOUT_MS } from "@/lib/account-bootstrap";
 
 const MaintenanceBanner = lazy(() => import("@/components/MaintenanceBanner").then((m) => ({ default: m.MaintenanceBanner })));
 const ConnectivityIndicator = lazy(() => import("@/components/ConnectivityIndicator").then((m) => ({ default: m.ConnectivityIndicator })));
@@ -55,11 +56,27 @@ function LegacyMarketingRedirect() {
   return null;
 }
 
+function BootstrapFailure({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <main className="min-h-screen flex items-center justify-center p-6">
+      <section className="w-full max-w-sm rounded-2xl border bg-background p-6 text-center" role="alert">
+        <h1 className="text-lg font-semibold">Não foi possível concluir o carregamento</h1>
+        <p className="mt-3 text-sm text-muted-foreground">{message}</p>
+        <button type="button" onClick={onRetry} className="mt-5 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground">
+          Tentar novamente
+        </button>
+      </section>
+    </main>
+  );
+}
+
 function PrivateRoutes() {
   const [, setLocation] = useLocation();
   const [location] = useLocation();
-  const { businessModeResolution } = useUserSettings();
-  const [authState, setAuthState] = useState<{ uid: string | null; loading: boolean }>({ uid: null, loading: true });
+  const { businessModeResolution, loading: settingsLoading, error: settingsError, refresh } = useUserSettings();
+  const [authState, setAuthState] = useState<{ uid: string | null; loading: boolean; error?: string }>({ uid: null, loading: true });
+  const [authAttempt, setAuthAttempt] = useState(0);
+  const authRef = useRef<ReturnType<typeof getFirebaseAuth>>(null);
   const routeGate = resolveBusinessRouteGate(location, businessModeResolution);
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -95,17 +112,27 @@ function PrivateRoutes() {
 
   useEffect(() => {
     const auth = getFirebaseAuth();
+    authRef.current = auth;
     if (!auth) {
       setAuthState({ uid: null, loading: false });
       return;
     }
 
+    let active = true;
+    setAuthState({ uid: null, loading: true });
+    const failAuth = () => {
+      if (active) setAuthState({ uid: null, loading: false, error: "Não foi possível confirmar sua sessão. Tente novamente." });
+    };
+    const timeout = setTimeout(failAuth, ACCOUNT_BOOTSTRAP_TIMEOUT_MS);
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!active) return;
+      clearTimeout(timeout);
       setAuthState({ uid: user?.uid || null, loading: false });
 
       if (user?.uid) {
         try {
           const token = await user.getIdToken();
+          if (!active || auth.currentUser?.uid !== user.uid) return;
           await fetch(getApiUrl(`/api/plan/initialize/${user.uid}`), {
             method: "POST",
             headers: {
@@ -117,26 +144,55 @@ function PrivateRoutes() {
           // Plano inicial é revalidado pelo provider; falha aqui não bloqueia navegação.
         }
       }
+    }, () => {
+      clearTimeout(timeout);
+      failAuth();
     });
 
-    return () => unsubscribe();
-  }, []);
+    return () => {
+      active = false;
+      clearTimeout(timeout);
+      unsubscribe();
+    };
+  }, [authAttempt]);
 
   useEffect(() => {
-    if (authState.loading) return;
+    if (authState.loading || authState.error) return;
 
     if (!authState.uid) {
       setLocation("/login");
     }
-  }, [authState.loading, authState.uid, setLocation]);
+  }, [authState.error, authState.loading, authState.uid, setLocation]);
 
   useEffect(() => {
-    if (authState.loading || routeGate.kind !== "redirect") return;
+    if (authState.loading || authState.error || !authState.uid || authRef.current?.currentUser?.uid !== authState.uid || routeGate.kind !== "redirect") return;
     setLocation(routeGate.to, { replace: true });
-  }, [authState.loading, routeGate.kind, setLocation]);
+  }, [authState.error, authState.loading, authState.uid, routeGate.kind, setLocation]);
 
-  if (authState.loading || routeGate.kind === "unresolved" || routeGate.kind === "redirect") {
+  const retryAuthentication = () => {
+    setAuthState({ uid: null, loading: true });
+    setAuthAttempt(c => c + 1);
+    refresh();
+  };
+  if (authState.error) {
+    return <BootstrapFailure message={authState.error} onRetry={retryAuthentication} />;
+  }
+  if (authState.loading) {
     return <PageSkeleton variant="dashboard" />;
+  }
+  // Navigation effects are asynchronous: never mount a private page while redirecting a logout.
+  if (!authState.uid) return null;
+  if (authRef.current?.currentUser?.uid !== authState.uid) {
+    return <BootstrapFailure message="Sua sessão mudou. Confirme-a novamente para continuar." onRetry={retryAuthentication} />;
+  }
+  if (settingsError || businessModeResolution.status === "error") {
+    return <BootstrapFailure message={settingsError || "Não foi possível carregar as configurações da sua conta."} onRetry={refresh} />;
+  }
+  if (settingsLoading || businessModeResolution.status === "loading" || routeGate.kind === "redirect") {
+    return <PageSkeleton variant="dashboard" />;
+  }
+  if (routeGate.kind === "unresolved") {
+    return <BootstrapFailure message="Não foi possível confirmar as configurações da sua conta. Tente novamente." onRetry={refresh} />;
   }
 
   return (

@@ -56,6 +56,26 @@ async function main() {
         if (scenario === 'NEW_USER') await db.doc(`user_settings/${user.uid}`).set({unrelatedExistingField: 'preserve'}, {merge: true});
       }
       assert.equal((await db.doc(`user_settings/${user.uid}`).get()).data().unrelatedExistingField, 'preserve');
+
+      const completedBefore = await db.doc(`user_settings/${user.uid}`).get();
+      const completedAtBefore = completedBefore.data()?.completedAt;
+      const onboardingCompletedAtBefore = completedBefore.data()?.onboarding_completed_at;
+      const downgrade = await request('POST', {
+        ...payload,
+        onboarding_completed: false,
+        completedAt: '2000-01-01T00:00:00.000Z',
+        onboarding_completed_at: '2000-01-01T00:00:00.000Z',
+        onboarding_current_step: 1,
+      });
+      const downgradeData = await downgrade.json() as any;
+      assert.equal(downgrade.status, 200);
+      assert.equal(downgradeData.onboarding_completed, true);
+      assert.equal(downgradeData.settings.onboarding_completed, true);
+      const completedAfter = (await db.doc(`user_settings/${user.uid}`).get()).data();
+      assert.equal(completedAfter?.onboarding_completed, true);
+      assert.equal(completedAfter?.completedAt, completedAtBefore);
+      assert.equal(completedAfter?.onboarding_completed_at, onboardingCompletedAtBefore);
+      assert.equal(completedAfter?.onboarding_current_step, 1);
       await new Promise<void>(resolve => server.close(resolve)); base = await start();
       const read = await request('GET'); const saved = await read.json() as any;
       assert.equal(read.status, 200); assert.equal(saved.settings.businessMode, mode);

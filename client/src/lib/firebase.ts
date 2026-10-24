@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from "firebase/app";
 import { getAuth, connectAuthEmulator, Auth, User, setPersistence, browserLocalPersistence, onAuthStateChanged } from "firebase/auth";
-import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, terminate, clearIndexedDbPersistence } from "firebase/firestore";
+import { initializeFirestore, getFirestore, getPersistentCacheIndexManager, persistentLocalCache, persistentMultipleTabManager, terminate, clearIndexedDbPersistence } from "firebase/firestore";
 import { initializeErrorLogging, logError, setUserContext } from "./error-logging";
 import { initializeInternalTelemetry } from "./internal-telemetry";
 import { initializeFirebaseAnalytics } from "./firebase-analytics";
@@ -40,6 +40,15 @@ async function connectFirestoreAndStorageEmulators(firebaseApp: FirebaseApp) {
 }
 
 let firestorePersistenceInitialized = false;
+let firestorePersistentCacheConfigured = false;
+
+function hasPersistentFirestoreCache(firebaseApp: FirebaseApp): boolean {
+  try {
+    return getPersistentCacheIndexManager(getFirestore(firebaseApp)) !== null;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * RELEASE-QUALITY-04 §2/§4 — liga a persistência offline do Firestore (IndexedDB) UMA vez, antes de
@@ -52,14 +61,35 @@ function initializeFirestoreWithOfflinePersistence(firebaseApp: FirebaseApp): vo
   if (firestorePersistenceInitialized) return;
   firestorePersistenceInitialized = true;
   try {
-    initializeFirestore(firebaseApp, {
+    const firestore = initializeFirestore(firebaseApp, {
       localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
     });
+    firestorePersistentCacheConfigured = getPersistentCacheIndexManager(firestore) !== null;
   } catch (err) {
-    // Só pode acontecer se algo já tiver chamado getFirestore(app) antes disto (ex.: HMR em dev
-    // reexecutando este módulo) — o app continua funcionando, só sem cache persistente até reload.
+    // An instance may already exist (for example after HMR). Inspect its configured cache instead of
+    // assuming every failed-precondition means that persistent storage is active.
+    firestorePersistentCacheConfigured = hasPersistentFirestoreCache(firebaseApp);
     console.warn("[Firebase] Persistent Firestore cache not applied:", err);
   }
+}
+
+/** Reports the configured Firestore cache; the sale journal separately confirms its own IndexedDB commit. */
+export function isFirestorePersistentCacheConfigured(): boolean {
+  if (!app && getApps().length > 0) {
+    app = getApp();
+  }
+
+  if (!app) {
+    initializeFirebase();
+  } else if (!firestorePersistenceInitialized) {
+    initializeFirestoreWithOfflinePersistence(app);
+  }
+
+  if (!app) return false;
+  if (!firestorePersistentCacheConfigured) {
+    firestorePersistentCacheConfigured = hasPersistentFirestoreCache(app);
+  }
+  return firestorePersistentCacheConfigured;
 }
 
 /**
@@ -93,6 +123,7 @@ export async function clearFirestoreOfflineCache(): Promise<boolean> {
     // usuário logando na mesma aba, sem reload de página) criaria uma instância nova SEM cache
     // persistente, e o próximo logout não teria nada para limpar de propósito.
     firestorePersistenceInitialized = false;
+    firestorePersistentCacheConfigured = false;
     initializeFirestoreWithOfflinePersistence(app);
   }
 }
@@ -355,4 +386,11 @@ export {
 export function getFirebaseApp(): FirebaseApp | null {
   const { app } = initializeFirebase();
   return app;
+}
+
+/** Reads the already-created Firebase project's identity without triggering service initialization. */
+export function getFirebaseProjectId(): string | null {
+  const existingApp = app ?? getApps().find((candidate) => candidate.name === "[DEFAULT]");
+  const projectId = existingApp?.options.projectId;
+  return typeof projectId === "string" && projectId ? projectId : null;
 }

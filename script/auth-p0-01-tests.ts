@@ -205,14 +205,32 @@ const bundled = await build({
         ` };
         return { loader: "js", contents: `
           const io = globalThis.__io;
-          export const initializeFirestore = () => {};
-          export const getFirestore = () => ({});
-          export const persistentLocalCache = () => ({});
+          // Model cache capability by registered instance; a memory/unknown DB is never persistent.
+          const firestoreInstances = new WeakMap();
+          let firestore;
+          const createFirestore = (localCache) => {
+            const instance = {};
+            firestoreInstances.set(instance, localCache?.kind === "persistent"
+              ? { type: "PersistentCacheIndexManager" } : null);
+            return instance;
+          };
+          export const initializeFirestore = (_app, settings) => {
+            if (firestore) throw new Error("Firestore fixture already initialized");
+            firestore = createFirestore(settings?.localCache);
+            return firestore;
+          };
+          export const getFirestore = () => firestore ?? (firestore = createFirestore());
+          export const getPersistentCacheIndexManager = (instance) => {
+            if (!firestoreInstances.has(instance)) throw new Error("Unknown Firestore fixture instance");
+            return firestoreInstances.get(instance);
+          };
+          export const persistentLocalCache = (options) => ({ ...options, kind: "persistent" });
           export const persistentMultipleTabManager = () => ({});
           export const terminate = async () => {
             io.cacheClearStarted = true;
             await new Promise((resolve) => { io.cacheClearRelease = resolve; });
             io.cacheClearReleased = true;
+            firestore = undefined;
           };
           export const clearIndexedDbPersistence = async () => {};
         ` };

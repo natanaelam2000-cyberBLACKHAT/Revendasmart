@@ -3,6 +3,8 @@ import path from "path";
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import { initializeFirebaseAdmin, getFirebaseAdmin } from "./firebase-admin-init";
+import { createRequireAuth, createRequireOwnership } from "./auth-authorization-middleware";
+import { createGetUserSettingsHandler } from "./user-settings-read";
 import { registerPaymentRoutes, createOrderMercadoPagoCharge, findOrderMercadoPagoCharge, MercadoPagoOrderChargeError } from "./payments";
 import { OrderChargeReservationError, startOrderMercadoPagoCharge, type StartOrderChargeResult } from "./public-catalog-order-payment-idempotency";
 import { registerConnectionRoutes } from "./mercadopago-connections";
@@ -356,49 +358,15 @@ function errorResponse(
   });
 }
 
-// Middleware: verify Firebase ID token and attach uid to request
-async function requireAuth(req: Request, res: Response, next: NextFunction) {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader?.startsWith("Bearer ")) {
-      routeWarn("[auth] Missing Authorization header for:", req.path);
-      return res.status(401).json({ error: "Unauthorized: missing token" });
-    }
-    const token = authHeader.slice(7);
-    const admin = getFirebaseAdmin();
-    // checkRevoked=true makes disabled/deleted account tokens fail immediately on server APIs.
-    // Firestore/Storage Rules independently consult the deletion tombstone for direct SDK access.
-    const decoded = await admin.auth().verifyIdToken(token, true);
-    const deletionRequest = await admin.firestore().collection("account_deletion_requests").doc(decoded.uid).get();
-    const isDeletionRetry = req.method === "DELETE" && req.path === "/api/account";
-    if (deletionRequest.exists && !isDeletionRetry) {
-      return res.status(403).json({ error: "Forbidden: account deletion is in progress" });
-    }
-    (req as any).firebaseUid = decoded.uid;
-    next();
-  } catch (e) {
-    routeWarn("[auth] Token verification failed:", (e as any)?.message);
-    return res.status(401).json({ error: "Unauthorized: invalid token" });
-  }
-}
-
-// Middleware: verify the authenticated user owns the resource
-function requireOwnership(req: Request, res: Response, next: NextFunction) {
-  const firebaseUid = (req as any).firebaseUid;
-  const { userId } = req.params;
-
-  // If we have a verified token, enforce ownership
-  if (firebaseUid && userId && firebaseUid !== userId) {
-    // HOTFIX OBSERVABILIDADE — este bloqueio já existia e já é a defesa real (403); só faltava ficar
-    // visível quando dispara. Os dois campos batem exatamente com IDENTIFIER_KEYS ("firebaseuid"/
-    // "uid"), então server/logger.ts já mascara os dois automaticamente — nunca loga req.path aqui de
-    // propósito, porque para esta rota o valor cru do :userId alvo vem embutido no próprio path.
-    logWarn("tenant_scope_violation", { firebaseUid, uid: userId });
-    return res.status(403).json({ error: "Forbidden: you can only access your own data" });
-  }
-
-  next();
-}
+const requireAuth = createRequireAuth(getFirebaseAdmin);
+const requireOwnership = createRequireOwnership((firebaseUid, userId) => {
+  // These keys are masked by server/logger.ts. Never log the route because it contains the raw target UID.
+  logWarn("tenant_scope_violation", { firebaseUid, uid: userId });
+});
+const getUserSettings = createGetUserSettingsHandler({
+  getFirebaseAdmin,
+  errorResponse,
+});
 
 // RELEASE V1 §4.1: `requireAdmin` foi extraído para server/admin-auth.ts — reaproveitado também por
 // marketing-pro.ts (gate de Anúncios Pro) sem criar um segundo mecanismo de admin nem import circular.
@@ -1206,35 +1174,7 @@ export async function registerRoutes(
     }
   });
   // GET /api/user/settings/:userId - Load user settings from Firestore
-  app.get("/api/user/settings/:userId", requireAuth, requireOwnership, async (req, res) => {
-    const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
-    try {
-      if (!userId) {
-        return res.status(400).json({ error: "userId required" });
-      }
-
-      // Load from Firestore via firebase-admin
-      const admin = getFirebaseAdmin();
-      const db = admin.firestore();
-      
-      const settingsDoc = await db.collection("user_settings").doc(userId).get();
-      const settings = settingsDoc.exists ? settingsDoc.data() : {};
-
-      return res.json({
-        onboarding_completed: settings?.onboarding_completed === true,
-        settings: settings
-      });
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : "Unknown error";
-      return errorResponse(
-        res,
-        500,
-        "SETTINGS_LOAD_FAILED",
-        msg,
-        { userId, errorName: error instanceof Error ? error.name : "UnknownError" }
-      );
-    }
-  });
+  app.get("/api/user/settings/:userId", requireAuth, requireOwnership, getUserSettings);
 
   // POST /api/public-catalog/ensure/:userId — autoridade server-side para o link público.
   // O frontend nunca deve prometer `/u/:slug` sem esta confirmação: aqui o servidor lê o estado atual,

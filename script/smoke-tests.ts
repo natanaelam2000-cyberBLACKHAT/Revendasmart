@@ -4066,7 +4066,7 @@ const spaFallbackIndex = vercel.rewrites.findIndex((rule: any) => rule.source ==
 assert.ok(apiRewriteIndex >= 0, "Vercel must route /api/:path* before the SPA fallback");
 assert.ok(spaFallbackIndex >= 0, "Vercel must keep the SPA fallback for frontend routes");
 assert.ok(apiRewriteIndex < spaFallbackIndex, "Vercel API rewrite must be evaluated before SPA fallback");
-assert.equal(vercel.rewrites[apiRewriteIndex].destination, "https://revendasmart-backend-cc2743rkmq-uc.a.run.app/api/:path*");
+assert.equal(vercel.rewrites[apiRewriteIndex].destination, "https://revendasmart-backend-164193806378.us-central1.run.app/api/:path*");
 assert.doesNotMatch(JSON.stringify(vercel.rewrites), /api\/api/);
 assert.equal(existsSync("api/index.ts"), false);
 assert.equal(existsSync("api/[...path].ts"), false);
@@ -5256,7 +5256,7 @@ if (hasShipSnapshotWorkflows) {
   const securityFinalWorkflow = fs.existsSync(".github/workflows/security-final.yml")
     ? fs.readFileSync(".github/workflows/security-final.yml", "utf8")
     : null;
-  const shipBranchTrigger = /^on:\r?\n  push:\r?\n    branches:\s*\[\s*ci\/ship-04-offline-rc\s*\]\s*$/m;
+  const shipBranchTrigger = /^on:\r?\n {2}push:\r?\n {4}branches:\s*\[\s*ci\/ship-04-offline-rc\s*\]\s*$/m;
   assert.match(offlineWorkflow, shipBranchTrigger);
   assert.match(qualityWorkflow, shipBranchTrigger);
   assert.match(offlineWorkflow, /permissions:\s*\n\s+contents:\s*read/);

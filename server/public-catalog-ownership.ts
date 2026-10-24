@@ -224,6 +224,18 @@ export async function persistUserSettingsWithCatalogOwnership(input: {
       catalogOwnerUid: FieldValue.delete(),
     };
 
+    // A conclusão do onboarding é monotônica neste endpoint: um snapshot antigo pode
+    // continuar enviando `false` depois que outra gravação já confirmou `true`.
+    // A decisão ocorre dentro da mesma transação que lê e grava o documento, portanto
+    // não depende da ordem dos requests nem de um GET separado no cliente.
+    if (currentSettings.onboarding_completed === true) {
+      settingsUpdate.onboarding_completed = true;
+      // Timestamps antigos vindos no snapshot também não podem substituir os valores
+      // de conclusão já persistidos. Ausentes no merge, eles permanecem intactos.
+      delete settingsUpdate.completedAt;
+      delete settingsUpdate.onboarding_completed_at;
+    }
+
     if (effectiveSlug) {
       settingsUpdate.catalogSlug = effectiveSlug;
       settingsUpdate.catalog_slug = effectiveSlug;

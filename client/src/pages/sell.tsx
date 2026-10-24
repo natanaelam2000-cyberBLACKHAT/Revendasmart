@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Client, Product } from "@/lib/mock-data";
 import { Layout } from "@/components/layout";
@@ -21,7 +21,7 @@ import { apiRequest } from "@/lib/api-client";
 import { resolveEffectiveProductPrice, formatCurrency } from "@/lib/product-pricing";
 import { resolveProductGender } from "@/lib/product-gender";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
-import { queuePendingSale, isNetworkFailure } from "@/lib/offline-sales-queue";
+import { queuePendingSale, isNetworkFailure, OfflineSaleQueueError } from "@/lib/offline-sales-queue";
 
 const GENDER_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: "todos", label: "Todos" },
@@ -87,6 +87,13 @@ async function createSaleCharge(token: string, payload: SaleChargePayload): Prom
   return { ok: true };
 }
 
+function getOfflineQueueFailureMessage(error: unknown): string {
+  if (error instanceof OfflineSaleQueueError && error.code === "OFFLINE_PERSISTENCE_UNAVAILABLE") {
+    return "Este dispositivo não confirmou armazenamento offline. Conecte-se para registrar a venda.";
+  }
+  return "Não foi possível confirmar o salvamento offline. Verifique as vendas pendentes antes de tentar novamente.";
+}
+
 export default function Sell() {
   const [, setLocation] = useLocation();
   const { products, loading: productsLoading, loadingMore: productsLoadingMore, error: productsError, hasMore: hasMoreProducts, search, setSearch, loadMore: loadMoreProducts } = useProductPickerData();
@@ -105,6 +112,7 @@ export default function Sell() {
   const [downPayment, setDownPayment] = useState(0);
   const [success, setSuccess] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const checkoutInFlightRef = useRef(false);
   const [saveError, setSaveError] = useState("");
   // §5: falha ao vincular a cobrança de uma venda já confirmada — nunca desfaz a venda, mas precisa
   // continuar visível na tela de sucesso (não só um toast) e oferecer um retry idempotente.
@@ -248,7 +256,7 @@ export default function Sell() {
   }, [isSummaryOpen]);
 
   const handleCheckout = async () => {
-    if (isSaving) return;
+    if (isSaving || checkoutInFlightRef.current || success) return;
     if (cart.length === 0) {
       setSaveError("Adicione produtos ao carrinho");
       return;
@@ -291,30 +299,26 @@ export default function Sell() {
 
     const uid = currentUser.uid;
 
+    // A prazo exige rede; rejeite antes de adquirir o lock do checkout.
+    if (!isOnline && paymentType === "installments") {
+      setSaveError("Venda a prazo exige conexão com a internet. Conecte-se e tente novamente, ou registre como à vista.");
+      return;
+    }
+
+    checkoutInFlightRef.current = true;
     setIsSaving(true);
     setSaveError("");
     setSavedOffline(false);
 
     const saleId = Math.random().toString(36).substring(2, 11);
 
-    // RELEASE-QUALITY-04 §3/§10: venda a prazo depende de uma cobrança online (Mercado Pago) logo em
-    // seguida — nunca inventa parcelamento offline, mensagem clara em vez de deixar o fetch falhar feio.
-    if (!isOnline && paymentType === "installments") {
-      setIsSaving(false);
-      setSaveError("Venda a prazo exige conexão com a internet. Conecte-se e tente novamente, ou registre como à vista.");
-      return;
-    }
-
     // §3: sem rede e é uma venda à vista — vira "salva localmente" (fila offline), nunca um erro.
     // Nenhuma baixa de estoque acontece aqui — só quando o servidor processar de verdade, exatamente
     // como no fluxo online (ver `offline-sales-queue.ts`).
     if (!isOnline && paymentType === "cash") {
       try {
-        // A Promise do Firestore só resolve quando o ack do servidor chega — offline, isso nunca
-        // acontece até reconectar. A escrita já fica durável no cache local (e visível a qualquer
-        // onSnapshot) assim que a chamada é disparada, então aguardá-la aqui prenderia o vendedor na
-        // tela de carregando até a conexão voltar — o oposto de "aparece imediatamente".
-        queuePendingSale(uid, {
+        // Só confirma a venda depois que o journal IndexedDB conclui a transação local.
+        await queuePendingSale(uid, {
           saleId,
           clientId: selectedClient,
           products: cart.map((item) => ({ productId: item.product.id, quantity: item.quantity })),
@@ -322,18 +326,20 @@ export default function Sell() {
           discountValue,
           paymentType: "avista",
           paymentMethod,
-        }).catch((err) => {
-          logError("offline_sale_queue_write_failed", err instanceof Error ? err.message : String(err), {
-            context: { saleId, clientId: selectedClient },
-          });
         });
         setSavedOffline(true);
         setSuccess(true);
         notifySuccess("Venda salva. Será enviada quando a conexão voltar.");
         setTimeout(() => setLocation("/"), 2000);
-      } catch {
-        setSaveError("Não foi possível salvar a venda offline. Tente novamente.");
+      } catch (error) {
+        const message = getOfflineQueueFailureMessage(error);
+        setSaveError(message);
+        notifyError(message);
+        logError("offline_sale_queue_write_failed", error instanceof Error ? error.message : String(error), {
+          context: { saleId },
+        });
       } finally {
+        checkoutInFlightRef.current = false;
         setIsSaving(false);
       }
       return;
@@ -466,8 +472,8 @@ export default function Sell() {
       // de mostrar um erro técnico de rede.
       if (isNetworkFailure(err) && paymentType === "cash") {
         try {
-          // Mesmo motivo do branch acima: não aguarda o ack do servidor, só a escrita local (síncrona).
-          queuePendingSale(uid, {
+          // A confirmação aguarda o journal local; a réplica Firestore pode sincronizar depois.
+          await queuePendingSale(uid, {
             saleId,
             clientId: selectedClient,
             products: cart.map((item) => ({ productId: item.product.id, quantity: item.quantity })),
@@ -475,18 +481,20 @@ export default function Sell() {
             discountValue,
             paymentType: "avista",
             paymentMethod,
-          }).catch((queueErr) => {
-            logError("offline_sale_queue_write_failed", queueErr instanceof Error ? queueErr.message : String(queueErr), {
-              context: { saleId, clientId: selectedClient },
-            });
           });
           setSavedOffline(true);
           setSuccess(true);
           notifySuccess("Sem conexão — venda salva. Será enviada quando a conexão voltar.");
           setTimeout(() => setLocation("/"), 2000);
           return;
-        } catch {
-          // não conseguiu nem guardar localmente — cai para o tratamento de erro normal abaixo.
+        } catch (queueError) {
+          const message = getOfflineQueueFailureMessage(queueError);
+          setSaveError(message);
+          notifyError(message);
+          logError("offline_sale_queue_write_failed", queueError instanceof Error ? queueError.message : String(queueError), {
+            context: { saleId },
+          });
+          return;
         }
       }
 
@@ -510,6 +518,7 @@ export default function Sell() {
         severity: "error",
       });
     } finally {
+      checkoutInFlightRef.current = false;
       setIsSaving(false);
     }
   };
