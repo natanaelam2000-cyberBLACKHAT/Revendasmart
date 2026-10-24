@@ -321,7 +321,7 @@ function run(): void {
   const syncOrderFnBody = paymentsSource.slice(syncOrderFnStart, syncOrderFnEnd);
   assert.match(syncOrderFnBody, /if \(snap\.data\(\)\?\.paymentStatus === "paid"\) return;/, "H: propagação para o pedido precisa ser um no-op quando já está paid — webhook repetido não reescreve");
   assert.match(syncOrderFnBody, /paymentStatus: "paid"/, "G: propagação real marca o pedido como paid");
-  assert.match(paymentsSource, /if \(newStatus === "paid" && charge\.orderId\) \{\s*\n\s*await syncOrderPaymentStatusFromCharge\(uid, charge\.orderId\);/, "G: sync do pedido só dispara quando a charge realmente virou paid E tem orderId vinculado");
+  assert.match(paymentsSource, /if \(committedCharge\.status === "paid" && committedCharge\.orderId\) \{\s*\n\s*await syncOrderPaymentStatusFromCharge\(uid, committedCharge\.orderId\);/, "G: sync do pedido exige estado paid efetivamente persistido e orderId vinculado");
 
   // K: fluxo de venda (handleCreateLink) não foi tocado — assinatura e corpo continuam usando saleId.
   assert.match(paymentsSource, /const externalReference = buildExternalReference\(body\.uid, chargeId, body\.saleId\);/, "K: create-link do vendedor continua chamando buildExternalReference exatamente como antes");

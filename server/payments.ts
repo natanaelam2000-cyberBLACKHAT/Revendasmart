@@ -248,9 +248,25 @@ async function updateCharge(
   uid: string,
   chargeId: string,
   updates: Partial<Charge>
-): Promise<void> {
+): Promise<Charge | null> {
   const ref = await getChargeRef(uid, chargeId);
-  await ref.update({ ...updates, updatedAt: now() });
+  const db = getFirebaseAdmin().firestore();
+  return db.runTransaction(async transaction => {
+    const snapshot = await transaction.get(ref);
+    if (!snapshot.exists) return null;
+    const current = { id: snapshot.id, ...snapshot.data() } as Charge;
+    // Re-read at commit time: a provider response fetched before an approval may
+    // arrive after it. Refunds are explicit financial transitions, not downgrades.
+    if ((current.status === "paid" && updates.status !== "paid" && updates.status !== "refunded")
+      || (current.status === "refunded" && updates.status !== "refunded")) return current;
+    if (updates.webhookLastEventId && current.webhookLastEventId === updates.webhookLastEventId) return current;
+    const next = Object.fromEntries(Object.entries(updates).filter(([, value]) => value !== undefined)) as Partial<Charge>;
+    if (current.paidAt) next.paidAt = current.paidAt;
+    if (current.refundedAt) next.refundedAt = current.refundedAt;
+    next.updatedAt = now();
+    transaction.update(ref, next);
+    return { ...current, ...next };
+  });
 }
 
 /** Fetch Charge from Firestore. Returns null if not found. */
@@ -391,12 +407,6 @@ async function syncPaymentFromMP(
     const rawStatus = (mpData as any).status ?? "pending";
     const newStatus = resolveChargeStatus(rawStatus);
 
-    // Idempotency: skip if this exact event was already processed
-    if (webhookEventId && charge.webhookLastEventId === webhookEventId) {
-      paymentInfo("[payments/sync] Event already processed — skipping");
-      return charge;
-    }
-
     const updates: Partial<Charge> = {
       providerRawStatus: rawStatus,
       status: newStatus,
@@ -418,16 +428,17 @@ async function syncPaymentFromMP(
       updates.refundedAt = now();
     }
 
-    await updateCharge(uid, chargeId, updates);
-    paymentInfo(`[payments/sync] Charge status updated: ${charge.status} → ${newStatus}`);
+    const committedCharge = await updateCharge(uid, chargeId, updates);
+    if (!committedCharge) return null;
+    paymentInfo(`[payments/sync] Charge status updated: ${charge.status} → ${committedCharge.status}`);
 
     // §6: propaga para o pedido do catálogo público quando esta charge tem um. A Charge (fonte de
     // verdade financeira) já está persistida no passo acima — isto é side-effect best-effort.
-    if (newStatus === "paid" && charge.orderId) {
-      await syncOrderPaymentStatusFromCharge(uid, charge.orderId);
+    if (committedCharge.status === "paid" && committedCharge.orderId) {
+      await syncOrderPaymentStatusFromCharge(uid, committedCharge.orderId);
     }
 
-    return { ...charge, ...updates } as Charge;
+    return committedCharge;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logPaymentError("sync_payment_from_mp", uid, msg, {

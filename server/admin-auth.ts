@@ -3,29 +3,16 @@
  * plataforma (rotas de admin já existentes em routes.ts, o novo endpoint de status, e o gate de
  * Anúncios Pro em marketing-pro.ts). Fonte de verdade: Firebase custom claim `admin` (definido
  * server-side via `firebase auth:set:custom-claims`), nunca UID/e-mail hardcoded no client, nunca
- * query param/localStorage como autoridade. O fallback de e-mail legado é o MESMO mecanismo de
- * migração que já existia em routes.ts antes desta tarefa — só foi movido para cá para poder ser
- * reaproveitado sem import circular (routes.ts já importa de marketing-pro.ts).
+ * query param/localStorage como autoridade. E-mail, mesmo verificado, nunca concede privilégios.
  */
 import type { NextFunction, Request, Response } from "express";
 import { getFirebaseAdmin } from "./firebase-admin-init";
 import { logError, logInfo, logWarn } from "./logger";
 
-// MIGRAÇÃO: lista temporária (será removida quando todos os admins tiverem a custom claim definida).
-// Definir via: firebase auth:set:custom-claims uid --custom-claims '{"admin": true}'
-const ADMIN_UIDS_LEGACY = new Set<string>([
-  "natanaelam2000@gmail.com",
-]);
-
 export async function isAdminUid(uid: string): Promise<boolean> {
   const admin = getFirebaseAdmin();
   const userRecord = await admin.auth().getUser(uid);
-  if (userRecord.customClaims?.["admin"] === true) return true;
-  if (ADMIN_UIDS_LEGACY.has(userRecord.email || "")) {
-    logWarn("admin_auth.legacy_email_fallback_used", { message: "MIGRATION: using legacy email check — set custom claim to remove fallback" });
-    return true;
-  }
-  return false;
+  return userRecord.disabled !== true && userRecord.customClaims?.["admin"] === true;
 }
 
 /** Middleware Express — usar depois de `requireAuth` (precisa de `req.firebaseUid` já resolvido). */

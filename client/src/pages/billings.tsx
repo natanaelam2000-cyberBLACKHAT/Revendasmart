@@ -1,15 +1,15 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { Layout } from "@/components/layout";
-import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import {
-  Receipt, Calendar, CheckCircle, Clock, AlertCircle, MessageSquare,
+  Receipt, Calendar, Clock, AlertCircle, MessageSquare,
   Download, Bell, Link2, Copy, Check, RefreshCw, ExternalLink, Plus
 } from "lucide-react";
 import { Installment, defaultSettings } from "@/lib/mock-data";
 import { format, isToday, isBefore, addDays, parseISO, isSameDay, startOfDay } from "@/lib/date-utils";
-import { getFirebaseAuth, logError, logEvent, logTelemetryEvent, trackAnalyticsEvent } from "@/lib/firebase";
-import { collection, query, onSnapshot, doc, updateDoc, orderBy, where, limit, startAfter, getDocs, getFirestore, documentId, type DocumentData, type QueryConstraint, type QueryDocumentSnapshot } from "firebase/firestore";
+import { getFirebaseAuth, logError, logTelemetryEvent, trackAnalyticsEvent } from "@/lib/firebase";
+import { collection, query, onSnapshot, orderBy, where, limit, startAfter, getDocs, getFirestore, documentId, type DocumentData, type QueryConstraint, type QueryDocumentSnapshot } from "firebase/firestore";
+import { payInstallment } from "@/lib/installment-payments";
 import { onAuthStateChanged } from "firebase/auth";
 import { useCharges, CHARGE_STATUS_LABELS, CHARGE_STATUS_COLORS, CHARGE_MODE_LABELS } from "@/hooks/useCharges";
 import { useUserSettings } from "@/providers/UserSettingsProvider";
@@ -293,12 +293,8 @@ export default function Billings() {
       }
 
       try {
-        const db = getFirestore();
-        await updateDoc(doc(db, "users", user.uid, "installments", id), {
-          status: "paid",
-          paidAmount: billing.amount,
-        });
-        logTelemetryEvent("installment_paid", { installmentId: id, amount: billing.amount }, user.uid);
+        const result = await payInstallment(user.uid, id, { kind: "full" }, () => auth.currentUser?.uid === user.uid);
+        if (result.applied) logTelemetryEvent("installment_paid", { installmentId: id, amount: result.paidAmount }, user.uid);
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Erro ao atualizar pagamento";
         setPaymentError(msg);
@@ -324,19 +320,12 @@ export default function Billings() {
     }
 
     try {
-      const db = getFirestore();
-      const newPaidAmount = billing.paidAmount + amount;
-      const newStatus = newPaidAmount >= billing.amount ? "paid" : "partial";
-
-      await updateDoc(doc(db, "users", user.uid, "installments", partialPaymentId), {
-        status: newStatus,
-        paidAmount: newPaidAmount,
-      });
-
-      logTelemetryEvent("installment_partial_payment", {
+      const result = await payInstallment(user.uid, partialPaymentId,
+        { kind: "partial", amount, expectedPaidAmount: billing.paidAmount }, () => auth.currentUser?.uid === user.uid);
+      if (result.applied) logTelemetryEvent("installment_partial_payment", {
         installmentId: partialPaymentId,
         amount,
-        totalPaid: newPaidAmount,
+        totalPaid: result.paidAmount,
       }, user.uid);
 
       setPartialPaymentId(null);
@@ -487,6 +476,7 @@ if (type === "reminder") {
   return (
     <Layout title="Cobranças" hideBottomNav={showPaymentModal}>
       <div className="p-6">
+        {paymentError && <p role="alert" className="mb-4 text-sm text-destructive">{paymentError}</p>}
         {/* Reminder banner */}
         {reminderInfo && (
           <div className="mb-6 p-4 bg-primary/10 border border-primary/20 rounded-2xl flex items-center gap-3 animate-in fade-in slide-in-from-top-4">

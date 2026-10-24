@@ -14,13 +14,9 @@ import { checkProductLimit, checkClientLimit, checkServiceLimit } from "../clien
 /**
  * PLAN-IMPL-02A — L1-L11/T1-T3.
  *
- * BQ1-BQ14 (booking monthly quota) are deliberately absent from this file: implementing them requires a
- * consistent tenant-wide definition of "month", and this ticket confirmed (server/service-availability-
- * commands.ts, ServiceResourceSchedule.timezone) that timezone is stored PER RESOURCE, not per tenant,
- * with no tenant-level timezone authority anywhere else in the app to fall back on. A tenant with two
- * resources in different timezones would have no non-arbitrary answer to "which month does this booking
- * belong to" for a single tenant-wide counter — exactly the STOP condition PLAN-IMPL-02A §13 anticipated.
- * See PLAN-IMPL-02A_REPORT for the full account; this was reported, not implemented or invented.
+ * This pure suite covers product/client/service limits. Monthly booking quota now
+ * has its own server-side tenant timezone and dedicated integration tests; those
+ * runtime scenarios are not executed or certified by this file.
  */
 
 function run(): void {
@@ -86,8 +82,8 @@ function run(): void {
   assert.equal(snapshot.products.overBy, 5);
   assert.equal(snapshot.clients.status, "overLimit");
   assert.equal(snapshot.services.status, "overLimit");
-  // §20 — bookingsCurrentMonth is deliberately null: the booking quota was stopped, not silently guessed.
-  assert.equal(snapshot.bookingsCurrentMonth, null, "PlanUsageSnapshot.bookingsCurrentMonth must stay null until the timezone STOP is resolved");
+  // No monthly booking usage was supplied to this snapshot; do not fabricate it.
+  assert.equal(snapshot.bookingsCurrentMonth, null, "a snapshot without monthly booking usage must not invent a count");
   // PLAN-IMPL-02B1 §28 — active/preserved counts and selectionRequired now exist on the snapshot.
   assert.equal(snapshot.products.active, 35);
   assert.equal(snapshot.products.preserved, 0);
@@ -127,48 +123,59 @@ function run(): void {
   assert.match(useCreateClientSource, /checkClientLimit\(activePlan, clientCountSnapshot\.data\(\)\.count\)/, "useCreateClient.ts (NewOrderSheet's quick-add) must be plan-limited");
 
   const servicesPersistenceSource = readFileSync("client/src/lib/services-persistence.ts", "utf-8");
-  assert.match(servicesPersistenceSource, /checkServiceLimit\(input\.activePlan, serviceCountSnapshot\.data\(\)\.count\)/, "createService() must be plan-limited at its one real creation function");
+  // RS-SERVICOS-01R extracted the advisory count check; creation itself is now
+  // server-authoritative. Guard the complete path rather than its old variable names.
+  assert.match(servicesPersistenceSource, /return runWithServiceQuotaPrecheck\(\s*input\.activePlan,\s*async \(\) => \(await getCountFromServer\(servicesCollection\(uid\)\)\)\.data\(\)\.count,/, "createService must pass its current plan and fresh count to the precheck");
+  assert.match(servicesPersistenceSource, /checkServiceLimit\(activePlan, await readCount\(\)\)/, "the extracted precheck must still enforce the actual service limit");
+  assert.match(servicesPersistenceSource, /apiRequest<[^>]+>\("\/api\/services",\s*\{\s*method: "POST",\s*auth: true,/, "service creation must use the authenticated server command");
+  const authoritativeSource = readFileSync("server/plan-authoritative-mutations.ts", "utf-8");
+  const createServiceCommand = authoritativeSource.slice(authoritativeSource.indexOf("export async function createServiceCommand"), authoritativeSource.indexOf("export async function createClientInTransaction"));
+  assert.match(createServiceCommand, /await ensureLifecycleForPlanSensitiveMutation\(db, uid\)/, "service creation must fail closed if plan lifecycle cannot be resolved");
+  assert.match(createServiceCommand, /await resolveServerPlan\(db, uid\)/, "the server must resolve the authoritative plan, not trust the caller's plan");
+  assert.match(createServiceCommand, /db\.runTransaction/, "quota and creation must share a transaction");
+  const quotaCheck = createServiceCommand.indexOf('assertWithinLimit("service", plan, usage.servicesCount)');
+  const serviceWrite = createServiceCommand.indexOf("tx.set(docRef, service)");
+  assert.ok(quotaCheck >= 0 && serviceWrite > quotaCheck, "the service quota check must precede the first creation write");
 
   const bookingCommandsSource = readFileSync("server/service-booking-commands.ts", "utf-8");
-  // RC-P0-CLIENT-LIMIT-01 §8/§9 — the product decision changed: a valid public booking must NEVER fail
-  // solely because the tenant's CRM Client quota is full. The old `throw new ServiceBookingCommandError(
-  // "CLIENT_LIMIT_REACHED", ...)` was removed; Client creation now reuses the SAME canonical quota
-  // authority as POST /api/clients (createClientInTransaction, resource-specific + concurrency-safe), and
-  // a PLAN_LIMIT_REACHED from it is swallowed — the booking proceeds without creating a new Client record
-  // rather than aborting. This replaces the old L-set assertion that required the opposite behavior.
+  // D2 (5a5a70a): public confirmation stores a contact snapshot and never creates
+  // a CRM Client. Client creation is now a separate authenticated command, where
+  // the canonical CRM quota must still be enforced. Scope guards to each command.
+  const confirmationStart = bookingCommandsSource.indexOf("export async function confirmServiceBookingHoldCommand");
+  const confirmationEnd = bookingCommandsSource.indexOf("export async function releaseServiceBookingHoldCommand", confirmationStart);
+  assert.ok(confirmationStart >= 0 && confirmationEnd > confirmationStart);
+  const confirmationSource = bookingCommandsSource.slice(confirmationStart, confirmationEnd);
   assert.doesNotMatch(
-    bookingCommandsSource,
+    confirmationSource,
     /throw new ServiceBookingCommandError\("CLIENT_LIMIT_REACHED"/,
     "confirmServiceBookingHoldCommand must never abort a booking solely because the Client quota is full",
   );
   assert.doesNotMatch(
-    bookingCommandsSource,
+    confirmationSource,
     /clientCountSnap/,
     "the booking transaction must no longer read its own independent Client-count aggregation — only the canonical planUsage/summary.clientsCount counter (via createClientInTransaction) may decide the quota",
   );
-  assert.match(
-    bookingCommandsSource,
-    /await createClientInTransaction\(tx, db, uid, options\.publicCustomerContact\.clientId/,
-    "public-booking client creation must reuse the same canonical quota authority as POST /api/clients (createClientInTransaction), not an independent check",
-  );
-  assert.match(
-    bookingCommandsSource,
-    /if \(!\(error instanceof PlanMutationError\) \|\| error\.code !== "PLAN_LIMIT_REACHED"\) throw error;/,
-    "a PLAN_LIMIT_REACHED from createClientInTransaction must be caught and swallowed (booking still succeeds without a new Client); any other error must still propagate and abort the transaction",
-  );
-  // The client-creation attempt must still happen strictly before any of the OTHER writes in this
-  // function (Booking/Work/locks/idempotency) — same all-or-nothing atomicity guarantee as before, just
-  // no longer able to reject the whole transaction on quota alone.
-  const clientCreateAttemptIndex = bookingCommandsSource.indexOf("await createClientInTransaction(tx, db, uid, options.publicCustomerContact.clientId", bookingCommandsSource.indexOf("confirmServiceBookingHoldCommand"));
-  const firstOtherWriteIndex = bookingCommandsSource.indexOf("tx.create(serviceWorkRef", bookingCommandsSource.indexOf("confirmServiceBookingHoldCommand"));
-  assert.ok(clientCreateAttemptIndex > 0 && firstOtherWriteIndex > 0 && clientCreateAttemptIndex < firstOtherWriteIndex, "the public-booking client-creation attempt must happen before the other transaction writes, keeping the whole transaction all-or-nothing");
+  assert.doesNotMatch(confirmationSource, /createClientInTransaction/, "public confirmation must not create a CRM Client as a side effect");
+  assert.match(confirmationSource, /const customerId = contact \? undefined : hold\.customerId/, "declared public contact must not become a fabricated CRM identity");
+  assert.match(confirmationSource, /assertValidBookingContactSnapshot\(\{ name: contact\.name, phone: contact\.phone \}\)/, "public contact must remain validated and preserved as a snapshot");
+  assert.match(confirmationSource, /isWithinBookingsMonthlyLimit\(plan, monthlyUsage\.confirmedCount\)/, "the separate booking quota remains enforced");
+  const explicitStart = bookingCommandsSource.indexOf("export async function createClientFromServiceBookingCommand");
+  const explicitEnd = bookingCommandsSource.indexOf("function sendServiceBookingCommandError", explicitStart);
+  assert.ok(explicitStart >= 0 && explicitEnd > explicitStart);
+  const explicitCreationSource = bookingCommandsSource.slice(explicitStart, explicitEnd);
+  assert.match(explicitCreationSource, /await createClientInTransaction\(tx, db, uid, customerId,/, "explicit CRM creation must use the canonical transactional quota authority");
+  assert.match(explicitCreationSource, /error instanceof PlanMutationError && error\.code === "PLAN_LIMIT_REACHED"/, "explicit creation must preserve CRM quota rejection");
+  assert.match(explicitCreationSource, /throw new ServiceBookingCommandError\("CLIENT_LIMIT_REACHED"/, "explicit creation reports the quota failure instead of swallowing it");
+  const clientCreateAttemptIndex = explicitCreationSource.indexOf("await createClientInTransaction(tx, db, uid, customerId");
+  const firstOtherWriteIndex = explicitCreationSource.indexOf("tx.update(bookingDocRef, patch)");
+  assert.ok(clientCreateAttemptIndex > 0 && firstOtherWriteIndex > clientCreateAttemptIndex, "CRM quota must be checked before any association writes");
 
   console.log(
     "PLAN-IMPL-02A limits tests passed: L1-L11 (product/client/service boundaries per tier, over-limit " +
     "detected as pure data never a deletion, over-limit blocks only new creation), T1-T3 (tenant " +
     "isolation, admin/internal override intact, invalid plan falls back safely), source-verified for " +
-    "all 4 real client-creation paths and the atomic public-booking client-limit check. Booking monthly " +
-    "quota (BQ1-BQ14) intentionally not implemented — see file header and PLAN-IMPL-02A_REPORT.",
+    "client creation paths, server-authoritative services and explicit booking-to-CRM creation. Monthly " +
+    "booking runtime scenarios are outside this pure suite.",
   );
 }
 

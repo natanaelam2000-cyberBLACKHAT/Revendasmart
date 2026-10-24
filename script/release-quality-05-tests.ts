@@ -45,18 +45,16 @@ function run(): void {
   assert.match(offlineQueueSource, /if \(code === "INSUFFICIENT_STOCK"\) return "INSUFFICIENT_STOCK";/, "INSUFFICIENT_STOCK do servidor precisa virar conflito, não falha genérica");
 
   const pendingSalesSyncSource = read("client/src/hooks/usePendingSalesSync.ts");
-  assert.match(pendingSalesSyncSource, /result\.outcome === "conflict"/, "o hook de sync precisa distinguir o outcome de conflito do outcome de falha genérica");
-  assert.match(pendingSalesSyncSource, /await markPendingSaleConflict\(user\.uid, item\.id, result\.reason, result\.message\)/, "conflito precisa ser persistido com o motivo, não só uma mensagem genérica");
+  assert.match(pendingSalesSyncSource, /await settlePendingSale\(user\.uid, item\.id, workerId\.current, result, isCurrent\)/, "o hook delega o resultado ao settlement transacional com identidade do worker e sessão");
+  const settlementSource = offlineQueueSource.slice(offlineQueueSource.indexOf("export async function settlePendingSale"), offlineQueueSource.indexOf("export function isNetworkFailure"));
+  assert.match(settlementSource, /conflictReason: result\.outcome === "conflict" \? result\.reason : deleteField\(\)/, "settlement preserva o motivo de conflito e separa-o de falha genérica");
   assert.match(pendingSalesSyncSource, /conflictCount: docs\.filter/, "estado exposto pelo hook precisa incluir uma contagem de conflitos, separada de pendentes/sincronizando/falhas");
   assert.match(pendingSalesSyncSource, /retryPendingSale|cancelPendingSale/, "hook precisa expor ações de retry/cancelamento para a UI agir sobre um conflito, não só mostrar e travar");
 
   // Nunca apaga a venda pendente sozinho por causa de um conflito — só remoção EXPLÍCITA (cancelPendingSale)
   // ou sucesso real (removePendingSale em outcome synced/already-exists) podem apagar o documento.
-  assert.doesNotMatch(
-    pendingSalesSyncSource.match(/if \(result\.outcome === "conflict"\)[\s\S]{0,120}/)?.[0] ?? "",
-    /removePendingSale/,
-    "marcar conflito NUNCA pode remover a venda pendente — dado não pode sumir silenciosamente",
-  );
+  assert.match(settlementSource, /if \(result\.outcome === "synced" \|\| result\.outcome === "already-exists"\) \{\s*transaction\.delete\(ref\);/, "somente confirmação ou replay confirmado pode apagar a fila no settlement");
+  assert.match(settlementSource, /record\.status !== "syncing" \|\| record\.syncOwner !== worker/, "worker antigo não pode remover nem sobrescrever a venda de outro worker");
 
   // ===== §10 — UI de conflito, sem texto cru do Firebase =====
   const connectivitySource = read("client/src/components/ConnectivityIndicator.tsx");

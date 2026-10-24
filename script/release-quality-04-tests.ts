@@ -106,9 +106,10 @@ function run(): void {
   assert.doesNotMatch(offlineQueueSource, /stock\s*[-+]?=|decrementStock|updateStock/i, "U: fila NUNCA decide/decrementa estoque no cliente — só o servidor (transaction) faz isso");
   assert.match(offlineQueueSource, /SALE_ALREADY_EXISTS/, "S: replay precisa tratar SALE_ALREADY_EXISTS (já existente no servidor) como sucesso, não duplicar");
   const pendingSalesSyncSource = read("client/src/hooks/usePendingSalesSync.ts");
-  assert.match(pendingSalesSyncSource, /result\.outcome === "synced" \|\| result\.outcome === "already-exists"/, "S: sucesso OU já-existe limpam a fila igualmente");
+  assert.match(offlineQueueSource, /result\.outcome === "synced" \|\| result\.outcome === "already-exists"/, "S: sucesso OU já-existe limpam a fila igualmente no settlement transacional");
+  assert.match(pendingSalesSyncSource, /await settlePendingSale\(user\.uid, item\.id, workerId\.current, result, isCurrent\)/, "S: o hook deve persistir o resultado pelo settlement com ownership e sessão");
   assert.match(pendingSalesSyncSource, /for \(const item of pending\)/, "F drain sequencial — nunca paralelo (evita duas tentativas concorrentes da mesma venda)");
-  assert.match(pendingSalesSyncSource, /await user\.getIdToken\(true\)/, "sync precisa forçar renovação do token — um token em cache pode ter expirado durante o período offline, e isso não pode virar falha permanente");
+  assert.match(pendingSalesSyncSource, /const token = await Promise\.race\(\[\s*user\.getIdToken\(true\)/, "sync renova o token dentro do prazo da tentativa, sem bloquear a recuperação indefinidamente");
 
   const firestoreRulesSource = read("firestore.rules");
   assert.match(firestoreRulesSource, /match \/pendingSales\/\{saleId\}/, "firestore.rules precisa ter uma regra explícita para pendingSales — sem ela, o catch-all nega a escrita e a venda offline é perdida silenciosamente ao sincronizar");

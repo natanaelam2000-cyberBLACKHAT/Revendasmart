@@ -12,8 +12,10 @@
  * já existente. Replay nunca duplica porque a própria rota já lança `SALE_ALREADY_EXISTS` quando o
  * mesmo `saleId` é reenviado — a fila só precisa tratar esse erro como sucesso.
  */
-import { doc, setDoc, deleteDoc, deleteField, getFirestore } from "firebase/firestore";
+import { doc, setDoc, deleteDoc, deleteField, getFirestore, runTransaction } from "firebase/firestore";
 import { getApiUrl } from "./api-config";
+import { isPendingSaleReady, PENDING_SALE_LEASE_MS } from "./pending-sale-state";
+export { isPendingSaleReady, PENDING_SALE_LEASE_MS } from "./pending-sale-state";
 
 export interface PendingSalePayload {
   saleId: string;
@@ -40,9 +42,59 @@ export interface PendingSaleDoc {
   updatedAt: string;
   errorMessage?: string;
   conflictReason?: PendingSaleConflictReason;
+  syncOwner?: string;
+  syncLeaseExpiresAt?: string;
 }
 
 const PENDING_SALES_COLLECTION = "pendingSales";
+/** One worker owns the retry. Firestore rechecks the claim on contention. */
+export async function claimPendingSale(
+  uid: string, saleId: string, worker: string,
+  isCurrent: () => boolean = () => true, nowMs = Date.now(),
+): Promise<PendingSaleDoc | null> {
+  const ref = doc(getFirestore(), "users", uid, PENDING_SALES_COLLECTION, saleId);
+  return runTransaction(getFirestore(), async transaction => {
+    if (!isCurrent()) return null;
+    const snapshot = await transaction.get(ref);
+    if (!isCurrent() || !snapshot.exists()) return null;
+    const record = snapshot.data() as PendingSaleDoc;
+    if (record.id !== saleId || record.payload?.saleId !== saleId
+      || record.payload.paymentType !== "avista" || !isPendingSaleReady(record, nowMs)) return null;
+    const lease = {
+      status: "syncing" as const, syncOwner: worker,
+      syncLeaseExpiresAt: new Date(nowMs + PENDING_SALE_LEASE_MS).toISOString(),
+      updatedAt: new Date(nowMs).toISOString(),
+    };
+    transaction.update(ref, lease);
+    return { ...record, ...lease };
+  });
+}
+
+/** A late worker cannot delete or overwrite a replacement worker's item. */
+export async function settlePendingSale(
+  uid: string, saleId: string, worker: string, result: SyncPendingSaleResult,
+  isCurrent: () => boolean = () => true,
+): Promise<void> {
+  const ref = doc(getFirestore(), "users", uid, PENDING_SALES_COLLECTION, saleId);
+  await runTransaction(getFirestore(), async transaction => {
+    if (!isCurrent()) return;
+    const snapshot = await transaction.get(ref);
+    if (!isCurrent() || !snapshot.exists()) return;
+    const record = snapshot.data() as PendingSaleDoc;
+    if (record.status !== "syncing" || record.syncOwner !== worker) return;
+    if (result.outcome === "synced" || result.outcome === "already-exists") {
+      transaction.delete(ref);
+      return;
+    }
+    transaction.update(ref, {
+      status: result.outcome === "retry" ? "pending" : result.outcome === "conflict" ? "conflict" : "failed",
+      errorMessage: "message" in result ? result.message : deleteField(),
+      conflictReason: result.outcome === "conflict" ? result.reason : deleteField(),
+      syncOwner: deleteField(), syncLeaseExpiresAt: deleteField(),
+      updatedAt: new Date().toISOString(),
+    });
+  });
+}
 
 /**
  * A queda de conexão NO MEIO de uma tentativa de venda não chega sempre como `TypeError` (falha crua
@@ -124,6 +176,7 @@ export async function removePendingSale(uid: string, saleId: string): Promise<vo
 export type SyncPendingSaleResult =
   | { outcome: "synced" }
   | { outcome: "already-exists" }
+  | { outcome: "retry" }
   | { outcome: "conflict"; reason: PendingSaleConflictReason; message: string }
   | { outcome: "failed"; message: string };
 
@@ -144,11 +197,12 @@ function resolveConflictReason(code: string): PendingSaleConflictReason | null {
  * (a própria rota já lança isso num saleId repetido) conta como sucesso: prova de que a venda já foi
  * processada antes, então a fila local só precisa se limpar, nunca tentar de novo.
  */
-export async function syncPendingSaleToServer(token: string, payload: PendingSalePayload): Promise<SyncPendingSaleResult> {
+export async function syncPendingSaleToServer(token: string, payload: PendingSalePayload, signal?: AbortSignal): Promise<SyncPendingSaleResult> {
   // Erro de rede aqui (ex.: caiu de novo no meio do sync) propaga pro chamador sem tratamento
   // especial — não é falha definitiva, ele decide colocar de volta em "pending" pra tentar de novo.
   const response = await fetch(getApiUrl("/api/sales/finalize"), {
     method: "POST",
+    signal,
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({
       saleId: payload.saleId,
@@ -164,6 +218,7 @@ export async function syncPendingSaleToServer(token: string, payload: PendingSal
     }),
   });
   if (response.ok) return { outcome: "synced" };
+  if (response.status >= 500 || response.status === 429 || response.status === 408) return { outcome: "retry" };
   const result = await response.json().catch(() => ({}) as Record<string, unknown>);
   const code = typeof result.code === "string" ? result.code : "";
   if (code === "SALE_ALREADY_EXISTS") return { outcome: "already-exists" };

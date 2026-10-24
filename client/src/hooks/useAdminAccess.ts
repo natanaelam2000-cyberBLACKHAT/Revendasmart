@@ -46,7 +46,7 @@ export function useAdminAccess(): AdminAccessState {
         setState({ isAdmin: false, loading: false });
         return;
       }
-      setState((current) => ({ ...current, loading: true }));
+      setState({ isAdmin: false, loading: true });
       void fetchIsAdmin(user).then((isAdmin) => {
         // Ignora respostas de uma troca de usuário anterior que chegou atrasada.
         if (requestIdRef.current !== requestId) return;
@@ -54,7 +54,7 @@ export function useAdminAccess(): AdminAccessState {
       });
     });
 
-    return () => unsubscribe();
+    return () => { requestIdRef.current += 1; unsubscribe(); };
   }, []);
 
   return state;
