@@ -53,7 +53,7 @@ jobs:
       - run: npm run build
       - run: npm run performance:bundle-check
       - name: Gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: npm run quality:knip
